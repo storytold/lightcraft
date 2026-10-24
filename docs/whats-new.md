@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-24
+
+### Export a look as a LUT
+- **File** > **Export Look as LUT…** saves the selected photo's colour and tone as a `.cube` file (sRGB in and out)
+  for video editors, image editors and other apps: its profile, white balance, exposure, contrast, whites and
+  blacks, curves, colour adjustments, colour grading and calibration. Settings a LUT can't hold (highlights and
+  shadows, texture, clarity, dehaze, sharpening, masks, crop and others) are left out and named.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts

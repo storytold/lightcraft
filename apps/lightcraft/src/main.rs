@@ -704,6 +704,14 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        save_lut_file: Some(Box::new(|name: &str| {
+            file_dialog()
+                .set_title(lightcraft_ui_egui::i18n::tr("Export Look as LUT"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("3D LUT"), &["cube"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         // atomic (temp file + sync + rename): a failed write never leaves a truncated file
         write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
         write: Some(Box::new(lightcraft_engine::export::write_file)),

@@ -286,4 +286,33 @@ mod tests {
         assert!(bare.run("file.importPresets", json!({})).is_err(), "no dialog on this platform");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Export Look as LUT bakes the photo that was active when it was chosen, even when another
+    /// photo is selected while its save dialog is up (the dialog replays the command later).
+    #[test]
+    fn export_look_as_lut_keeps_its_photo_across_the_dialog() {
+        let dir = std::env::temp_dir().join(format!("lc-pick-lut-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mut h, asked) = app_with_picker();
+        h.app.services.save_lut_file = Some(Box::new(|_: &str| None));
+        let ids: Vec<u64> = h.app.session.catalog.photos().map(|p| p.id.0).take(2).collect();
+        let (a, b) = (ids[0], ids[1]);
+        for (id, ev) in [(a, 1.5), (b, -1.5)] {
+            h.app.session.execute("library.select", &json!({"ids": [id]})).unwrap();
+            h.app.session.execute("develop.set", &json!({"control": "light.exposure", "value": ev})).unwrap();
+        }
+        h.app.session.execute("library.select", &json!({"ids": [a]})).unwrap();
+        assert_eq!(h.app.run("file.exportLut", json!({"size": 5})).unwrap(), Value::Null, "waits for its dialog");
+        // another photo becomes active while the dialog is up
+        h.app.session.execute("library.select", &json!({"ids": [b]})).unwrap();
+        let file = dir.join("A Look.cube");
+        asked.lock().unwrap()[0].1.send(vec![file.to_string_lossy().to_string()]).unwrap();
+        h.settle(SETTLE);
+        let got = std::fs::read_to_string(&file).expect("the LUT was written");
+        let want = dir.join("want.cube");
+        h.app.session.execute("profile.exportLut", &json!({"path": want.to_string_lossy(), "id": a, "size": 5, "title": "A Look"})).unwrap();
+        let body = |t: &str| t.lines().filter(|l| !l.starts_with('#')).map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(body(&got), body(&std::fs::read_to_string(&want).unwrap()), "the first photo's look, not the one selected later");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

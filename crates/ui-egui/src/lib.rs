@@ -273,6 +273,8 @@ pub struct Services {
     pub pick_slideshow_templates: Option<PickFiles>,
     /// Save dialog for an exported slideshow template (`.json`).
     pub save_slideshow_template: Option<SaveFile>,
+    /// Save dialog for a look exported as a 3D LUT (`.cube`; File ▸ Export Look as LUT…).
+    pub save_lut_file: Option<SaveFile>,
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,

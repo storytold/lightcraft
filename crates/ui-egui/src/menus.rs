@@ -237,6 +237,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
+    ("file.exportLut", "Export Look as LUT…", None, "File"),
     // Masking panel ▸ Effect menu
     ("dialog.saveMaskEffect", "Save Current Settings as New Effect Preset…", None, ""),
     ("dialog.manageMaskEffects", "Manage Effect Presets…", None, ""),
@@ -2095,6 +2096,55 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             return Some(r);
         }
+        "file.exportLut" => {
+            // the photo chosen when the command started: the save dialog runs in the background
+            // and replays the command with these params, by which time another photo may be active
+            let photo = match p.get("id").and_then(Value::as_u64) {
+                Some(n) => lightcraft_catalog::PhotoId(n),
+                None => match app.session.active() {
+                    Some(id) => id,
+                    None => return Some(Err("no photo selected".into())),
+                },
+            };
+            let mut p = p.clone();
+            p["id"] = json!(photo.0);
+            let p = &p;
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => {
+                    let stem = app
+                        .session
+                        .catalog
+                        .photo(photo)
+                        .map(|ph| ph.file_name.rsplit_once('.').map_or(ph.file_name.as_str(), |(s, _)| s).to_string());
+                    let name = format!("{} Look.cube", stem.unwrap_or_else(|| "LightCraft".into()));
+                    let req = PickRequest::save(crate::i18n::tr("Export Look as LUT"), crate::i18n::tr("3D LUT"), &["cube"], name.clone());
+                    match crate::pick::ask(app, id, p, "path", req, |s| s.save_lut_file.as_mut().map(|f| f(&name).into_iter().collect())) {
+                        Picked::Now(v) => v.into_iter().next(),
+                        Picked::Later => return Some(Ok(Value::Null)),
+                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
+                    }
+                }
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            let mut params = json!({"path": path, "id": photo.0});
+            for k in ["size", "title", "addProfile"] {
+                if let Some(v) = p.get(k) {
+                    params[k] = v.clone();
+                }
+            }
+            let r = app.session.execute("profile.exportLut", &params).map_err(|e| e.to_string());
+            if let Ok(v) = &r {
+                let left: Vec<&str> = v["skipped"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                let msg = if left.is_empty() {
+                    crate::i18n::tr("Exported the look as a LUT").to_string()
+                } else {
+                    format!("{} ({}: {})", crate::i18n::tr("Exported the look as a LUT"), crate::i18n::tr("left out"), left.join(", "))
+                };
+                app.toast(&ctx, msg);
+            }
+            return Some(r);
+        }
         "file.exportPresets" => {
             let group = p.get("group").and_then(Value::as_str).map(str::to_string);
             let path = match p.get("path").and_then(Value::as_str) {
@@ -2244,6 +2294,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "app.showInFolders" => show_in_folders_enabled(app, None),
         "app.openSamModelFolder" => app.session.segmenter.dir.is_some() && app.services.open_with.is_some(),
         "file.exportPresets" => app.session.presets.iter().any(|p| !p.builtin),
+        "file.exportLut" => app.session.active().is_some() && app.services.save_lut_file.is_some(),
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
         "dialog.saveMaskEffect" => app.session.active().is_some() && app.session.active_mask.is_some(),
         "file.exportCurvePresets" => !app.session.curve_presets.is_empty(),

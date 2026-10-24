@@ -83,6 +83,44 @@ impl Lut3d {
     }
 }
 
+impl Lut3d {
+    /// The identity table of `size` entries an axis (each entry maps to itself).
+    pub fn identity(size: usize) -> Lut3d {
+        let n = size.clamp(2, 256);
+        let s = (n - 1) as f32;
+        let data = (0..n * n * n).map(|i| [(i % n) as f32 / s, ((i / n) % n) as f32 / s, (i / (n * n)) as f32 / s]).collect();
+        Lut3d { size: n, data, domain_min: [0.0; 3], domain_max: [1.0; 3], title: None }
+    }
+
+    /// The table as a `.cube` file ([`Lut3d::parse_cube`] reads it back): `TITLE` when it has one,
+    /// `LUT_3D_SIZE`, the domain when it isn't 0..1, then the entries with red changing fastest.
+    /// `comments` are written as `#` lines at the top.
+    pub fn to_cube(&self, comments: &[String]) -> String {
+        use std::fmt::Write;
+        let mut out = String::with_capacity(self.data.len() * 28 + 256);
+        for c in comments {
+            for line in c.lines() {
+                let _ = writeln!(out, "# {line}");
+            }
+        }
+        if let Some(t) = self.title.as_deref().map(|t| t.replace(['"', '\n', '\r'], " ")).filter(|t| !t.trim().is_empty()) {
+            let _ = writeln!(out, "TITLE \"{}\"", t.trim());
+        }
+        let _ = writeln!(out, "LUT_3D_SIZE {}", self.size);
+        if self.domain_min != [0.0; 3] || self.domain_max != [1.0; 3] {
+            let [a, b, c] = self.domain_min;
+            let _ = writeln!(out, "DOMAIN_MIN {a} {b} {c}");
+            let [a, b, c] = self.domain_max;
+            let _ = writeln!(out, "DOMAIN_MAX {a} {b} {c}");
+        }
+        for v in &self.data {
+            let f = |x: f32| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
+            let _ = writeln!(out, "{:.6} {:.6} {:.6}", f(v[0]), f(v[1]), f(v[2]));
+        }
+        out
+    }
+}
+
 fn registry() -> &'static RwLock<HashMap<String, Arc<Lut3d>>> {
     static R: OnceLock<RwLock<HashMap<String, Arc<Lut3d>>>> = OnceLock::new();
     R.get_or_init(Default::default)
@@ -139,5 +177,28 @@ mod tests {
         assert!((v[0] - 0.8).abs() < 1e-5 && (v[2] - 0.1).abs() < 1e-5, "{v:?}");
         assert!(Lut3d::parse_cube("LUT_1D_SIZE 4\n0 0 0").is_err());
         assert!(Lut3d::parse_cube("LUT_3D_SIZE 2\n0 0 0\n").is_err(), "too few entries");
+    }
+
+    #[test]
+    fn cube_files_round_trip() {
+        let id = Lut3d::identity(5);
+        assert_eq!(id.data.len(), 125);
+        assert_eq!(id.data[1], [0.25, 0.0, 0.0], "red changes fastest");
+        assert_eq!(id.data[5], [0.0, 0.25, 0.0]);
+        assert_eq!(id.data[25], [0.0, 0.0, 0.25]);
+        let mut warm = Lut3d::identity(9);
+        warm.data.iter_mut().for_each(|c| c[0] = (c[0] * 1.2).min(1.0));
+        warm.title = Some("Warm \"look\"\nsecond line".into());
+        let text = warm.to_cube(&["made by a test".into(), "two\nlines".into()]);
+        assert!(text.starts_with("# made by a test\n# two\n# lines\nTITLE \"Warm  look  second line\"\nLUT_3D_SIZE 9\n"), "{}", &text[..120]);
+        let back = Lut3d::parse_cube(&text).unwrap();
+        assert_eq!(back.size, 9);
+        assert!(back.data.iter().zip(&warm.data).all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-5)));
+        let v = back.apply([0.5, 0.5, 0.5]);
+        assert!((v[0] - 0.6).abs() < 1e-4, "{v:?}");
+        // out-of-range or broken values are written as valid numbers
+        let mut odd = Lut3d::identity(2);
+        odd.data[0] = [f32::NAN, -1.0, 7.0];
+        assert!(Lut3d::parse_cube(&odd.to_cube(&[])).unwrap().data[0] == [0.0, 0.0, 1.0]);
     }
 }

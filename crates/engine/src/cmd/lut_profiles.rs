@@ -137,6 +137,53 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"imported": imported, "failed": failed}))
 }
 
+/// `profile.exportLut`: a photo's look as a `.cube` file (see [`crate::lut_export`]).
+fn export_lut(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "profile.exportLut";
+    let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "missing path"))?;
+    // always a .cube: `look` and `My.Look` become `look.cube` and `My.Look.cube`, and another
+    // extension is kept in the name rather than written over (`look.zip` → `look.zip.cube`), so
+    // addProfile never reads cube text back as a zip bundle or a folder
+    let path = match Path::new(path).extension() {
+        Some(x) if x.eq_ignore_ascii_case("cube") => PathBuf::from(path),
+        _ => PathBuf::from(format!("{path}.cube")),
+    };
+    let size = match p.get("size").filter(|v| !v.is_null()) {
+        None => crate::lut_export::DEFAULT_SIZE,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (2..=129).contains(n))
+            .map(|n| n as usize)
+            .ok_or_else(|| bad(C, "`size` must be an integer 2..129 (17, 33 or 65 are usual)"))?,
+    };
+    let id = match p.get("id").filter(|v| !v.is_null()) {
+        None => s.active().ok_or_else(|| bad(C, "no photo (select one, or pass id)"))?,
+        Some(v) => lightcraft_catalog::PhotoId(v.as_u64().ok_or_else(|| bad(C, "`id` must be a photo id"))?),
+    };
+    let photo = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
+    let stem = |f: &str| Path::new(f).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let title = str_param(p, "title").map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).unwrap_or_else(|| stem(&path.to_string_lossy()));
+    let settings = photo.develop.clone();
+    let source = photo.file_name.clone();
+    let (_, skipped) = crate::lut_export::lut_settings(&settings);
+    let mut lut = crate::lut_export::bake(&settings, size).map_err(|e| bad(C, e))?;
+    lut.title = Some(title.clone());
+    let mut notes = vec![format!("Made with LightCraft from the look of {source}"), "Input and output: sRGB (display-encoded)".to_string()];
+    if !skipped.is_empty() {
+        notes.push(format!("Not included (a LUT can't hold them): {}", skipped.join(", ")));
+    }
+    let target = path.to_string_lossy().to_string();
+    s.check_write_target(&target).map_err(|e| bad(C, e))?;
+    crate::export::write_file_durable(&target, lut.to_cube(&notes).as_bytes()).map_err(crate::EngineError::Other)?;
+    let mut out = json!({"path": target, "size": lut.size, "title": title, "skipped": skipped});
+    // also a profile in this library, ready to use on other photos
+    if p.get("addProfile").and_then(Value::as_bool).unwrap_or(false) {
+        let r = import(s, &json!({"paths": [target]}))?;
+        out["profile"] = r["imported"].get(0).cloned().unwrap_or(Value::Null);
+    }
+    Ok(out)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -147,6 +194,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{paths: [.cube file, folder or .zip]} — 3D LUTs become creative profiles (Amount 0–200 %; rendered on the CPU) in the profile browser's groups (folder / zip name, else Imported) → {imported: [{id, name, group}], failed}",
             always,
             import
+        ),
+        cmd!(
+            "profile.exportLut",
+            "Export Look as LUT",
+            [],
+            None,
+            "{path, id?: photo (default: the active one), size?: 2..129 entries an axis (default 33; 17 small, 65 finest), title?, addProfile?: also import it as a profile} — the photo's global colour and tone (profile, white balance, exposure, contrast, whites, blacks, curves, colour, mixer, point colour, B&W mix, grading, calibration) as a 3D LUT .cube file, sRGB in and out, for video editors and other apps; local settings (masks, highlights & shadows, texture / clarity / dehaze, sharpening, noise reduction, vignette, grain, crop, lens corrections…) can't be held by a LUT and are listed in `skipped` → {path, size, title, skipped: [names], profile?: {id, name, group}}",
+            always,
+            export_lut
         ),
         cmd!("profile.deleteImported", "Delete Imported Profile", [], None, "{id: lut:…}", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.deleteImported", "missing id"))?.to_string();
