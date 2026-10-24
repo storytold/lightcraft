@@ -47,6 +47,7 @@ impl<'de> serde::Deserialize<'de> for CameraTone {
 }
 
 impl CameraTone {
+    /// Constructs a [`CameraTone`] from 32 strictly increasing scene-luminance knots with non-decreasing display values in `0..1`.
     pub fn new(knots: [[f32; 2]; 32]) -> Option<Self> {
         let mut previous = [0.0, 0.0];
         for p in knots {
@@ -63,6 +64,7 @@ impl CameraTone {
         chroma.iter().all(|k| k.is_finite() && (0.0..=4.0).contains(k)).then_some(Self { chroma, ..self })
     }
 
+    /// The chroma scale nodes across display luminance `0..=1`.
     pub fn chroma(&self) -> &[f32; CHROMA_N] {
         &self.chroma
     }
@@ -72,23 +74,80 @@ impl CameraTone {
         &self.knots
     }
 
-    pub fn apply(&self, y: f32) -> f32 {
+    /// Tangents at each point (origin `[0.0, 0.0]` and 32 knots) according to the Fritsch-Carlson
+    /// monotone cubic Hermite algorithm. Preserves monotonicity with C^1 continuous smoothness,
+    /// eliminating Mach bands and kinks. Flat input segments remain flat.
+    pub fn tangents(&self) -> [f32; 33] {
+        let mut pts = [[0.0f32; 2]; 33];
+        pts[0] = [0.0, 0.0];
+        pts[1..33].copy_from_slice(&self.knots);
+
+        let mut h = [0.0f32; 32];
+        let mut delta = [0.0f32; 32];
+        for i in 0..32 {
+            h[i] = (pts[i + 1][0] - pts[i][0]).max(1e-9);
+            delta[i] = (pts[i + 1][1] - pts[i][1]) / h[i];
+        }
+
+        let mut d = [0.0f32; 33];
+        d[0] = delta[0];
+        d[32] = delta[31];
+        for i in 1..32 {
+            if delta[i - 1] * delta[i] <= 0.0 {
+                d[i] = 0.0;
+            } else {
+                d[i] = (delta[i - 1] + delta[i]) * 0.5;
+            }
+        }
+
+        for i in 0..32 {
+            if delta[i] == 0.0 {
+                d[i] = 0.0;
+                d[i + 1] = 0.0;
+            } else {
+                let alpha = d[i] / delta[i];
+                let beta = d[i + 1] / delta[i];
+                let s = alpha * alpha + beta * beta;
+                if s > 9.0 {
+                    let tau = 3.0 / s.sqrt();
+                    d[i] = tau * alpha * delta[i];
+                    d[i + 1] = tau * beta * delta[i];
+                }
+            }
+        }
+        d
+    }
+
+    /// Evaluates the curve smoothly using precomputed Fritsch-Carlson tangents.
+    pub fn apply_smooth(&self, y: f32, d: &[f32; 33]) -> f32 {
         if !y.is_finite() || y <= 0.0 {
             return 0.0;
         }
-        let mut previous = [0.0, 0.0];
-        for p in self.knots {
-            if y <= p[0] {
-                let t = (y - previous[0]) / (p[0] - previous[0]);
-                return previous[1] + t * (p[1] - previous[1]);
+        let mut pts = [[0.0f32; 2]; 33];
+        pts[0] = [0.0, 0.0];
+        pts[1..33].copy_from_slice(&self.knots);
+
+        for i in 0..32 {
+            if y <= pts[i + 1][0] {
+                let h = (pts[i + 1][0] - pts[i][0]).max(1e-9);
+                let t = ((y - pts[i][0]) / h).clamp(0.0, 1.0);
+                let t2 = t * t;
+                let t3 = t2 * t;
+                let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+                let h10 = t3 - 2.0 * t2 + t;
+                let h01 = -2.0 * t3 + 3.0 * t2;
+                let h11 = t3 - t2;
+                return h00 * pts[i][1] + h10 * h * d[i] + h01 * pts[i + 1][1] + h11 * h * d[i + 1];
             }
-            previous = p;
         }
-        let a = self.knots[30];
         let b = self.knots[31];
-        // Extend beyond observed (unclipped) highlights with a continuous, bounded shoulder.
-        let slope = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0);
+        let slope = d[32].clamp(0.1, 16.0);
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
+    }
+
+    /// Evaluates the camera tone curve at scene luminance `y`.
+    pub fn apply(&self, y: f32) -> f32 {
+        self.apply_smooth(y, &self.tangents())
     }
 }
 
@@ -102,6 +161,7 @@ pub struct ToneMap {
 }
 
 impl ToneMap {
+    /// Builds an SDR [`ToneMap`] from a fitted [`CameraTone`] curve and slider adjustments.
     pub fn camera(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64) -> ToneMap {
         ToneMap::camera_hdr(curve, contrast, whites, blacks, 1.0)
     }
@@ -115,10 +175,11 @@ impl ToneMap {
         let adjustment = Self::display(contrast, whites, blacks);
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
         let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
+        let tangents = curve.tangents();
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
-                let y = curve.apply(GREY * 2f32.powf(ev));
+                let y = curve.apply_smooth(GREY * 2f32.powf(ev), &tangents);
                 let o = if neutral { y } else { adjustment.apply(y) };
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })

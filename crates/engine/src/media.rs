@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 69;
+pub const RENDER_CACHE_VERSION: u64 = 70;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -240,7 +240,11 @@ impl DecodedSource {
     /// decoder only sees the level it decoded.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
         match &self.info {
-            Some(info) => SourceInfo { native_long: info.native_long.or(header.native_long), ..info.clone() },
+            Some(info) => SourceInfo {
+                native_long: info.native_long.or(header.native_long),
+                lens: info.lens.or(header.lens),
+                ..info.clone()
+            },
             None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
         }
     }
@@ -1217,6 +1221,24 @@ pub fn content_key(p: &Photo) -> String {
     }
 }
 
+/// Hash of the photo's effective lens state so changes to lens metadata, provenance, or embedded
+/// lens tables invalidate both in-memory and persistent render caches.
+fn photo_lens_key(p: &Photo) -> u64 {
+    if !p.develops_raw() {
+        return 0;
+    }
+    let mut h = Hasher128::new();
+    h.str(&p.meta.lens)
+        .u64(u64::from(p.meta.lens_from_spec))
+        .str(&p.meta.camera)
+        .u64(u64::from(p.meta.focal_mm.unwrap_or(0.0).to_bits()))
+        .u64(u64::from(p.meta.aperture.unwrap_or(0.0).to_bits()));
+    if let Ok(json) = serde_json::to_string(&p.embedded_lens) {
+        h.str(&json);
+    }
+    h.finish().0 as u64
+}
+
 pub fn source_info(p: &Photo) -> SourceInfo {
     // Procedural demo scenes are scene-referred HDR (like raw files): use the filmic tone map.
     // (They are drawn afresh at every size, so they have no original size.)
@@ -1228,17 +1250,26 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     SourceInfo { native_long, ..header_info(p) }
 }
 
+/// Builds [`SourceInfo`] from the catalog photo header (white balance and resolved lens profile).
 fn header_info(p: &Photo) -> SourceInfo {
     // A raw shown from its embedded preview is a rendered (display-referred) JPEG: relative white
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
         let relative = p.relative_wb();
         let (temp, tint) = if relative { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
+        let lens = crate::lens_profiles::resolve_photo_lens(
+            p.embedded_lens,
+            &p.meta.lens,
+            p.meta.lens_from_spec,
+            &p.meta.camera,
+            p.meta.focal_mm,
+            p.meta.aperture,
+        );
         SourceInfo {
             raw: true,
             as_shot_temp: temp,
             as_shot_tint: tint,
-            lens: p.embedded_lens,
+            lens,
             relative_wb: relative,
             // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
             legacy_relative_wb: p.fitted_look() && !relative,
@@ -1294,6 +1325,7 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
+        let lens_key = photo_lens_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -1301,10 +1333,17 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            ^ lens_key;
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            k.str(&content_key)
+                .u64(settings_hash)
+                .u64(b as u64)
+                .u64(RENDER_CACHE_VERSION)
+                .u64(crate::camera_profiles::cache_key())
+                .u64(crate::lens_profiles::cache_key())
+                .u64(lens_key);
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -1351,6 +1390,8 @@ impl crate::Session {
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
+            .u64(crate::lens_profiles::cache_key())
+            .u64(photo_lens_key(p))
             .finish()
     }
 
@@ -1467,6 +1508,8 @@ impl crate::Session {
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
+            .u64(crate::lens_profiles::cache_key())
+            .u64(photo_lens_key(p))
             .finish()
     }
 
@@ -1507,6 +1550,7 @@ impl crate::Session {
         self.region_job_of(id, full_w, full_h, window, apply_crop, true)
     }
 
+    /// Builds a windowed render job for `id` over `window` within a `full_w × full_h` frame.
     fn region_job_of(
         &mut self,
         id: PhotoId,
@@ -1520,12 +1564,25 @@ impl crate::Session {
         // what the window's spots and Auto Mask strokes read must fit in one render: else the
         // caller keeps the whole-frame render (a window alone would come out wrong)
         let p = self.catalog.photo(id)?;
+        let lens = p
+            .develops_raw()
+            .then(|| {
+                crate::lens_profiles::resolve_photo_lens(
+                    p.embedded_lens,
+                    &p.meta.lens,
+                    p.meta.lens_from_spec,
+                    &p.meta.camera,
+                    p.meta.focal_mm,
+                    p.meta.aperture,
+                )
+            })
+            .flatten();
         let frame = lightcraft_pipeline::geometry::Frame::with_lens(
             p.width.max(1) as usize,
             p.height.max(1) as usize,
             &job.settings,
             apply_crop,
-            p.embedded_lens.as_ref(),
+            lens.as_ref(),
         );
         let ppl = frame.px_per_long(full_w);
         lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
@@ -1545,7 +1602,13 @@ impl crate::Session {
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {
-            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
+            (Source::File { path }, Some(l))
+                if p.kind == MediaKind::Raw
+                    && crate::import::has_import_look(p)
+                    && !p.develop.optics.lens_profile =>
+            {
+                Some((path.clone(), l.clone()))
+            }
             _ => None,
         }
     }

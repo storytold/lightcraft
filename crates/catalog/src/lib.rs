@@ -563,7 +563,11 @@ impl Catalog {
 
     // ---- writes
 
+    /// Mutable borrow of photo `id`, recording a touch for the current operation when the photo exists.
     fn photo_mut(&mut self, id: PhotoId) -> Result<&mut Photo> {
+        if !self.photos.contains_key(&id) {
+            return Err(CatalogError::NoPhoto(id));
+        }
         self.touch(id);
         self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))
     }
@@ -1031,6 +1035,9 @@ impl Catalog {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
                 Arc::make_mut(p).id = *id;
             }
+            if !p.meta.lens_from_spec && lightcraft_meta::is_lens_spec_name(&p.meta.lens) {
+                Arc::make_mut(p).meta.repair_lens_provenance();
+            }
         }
         for (id, a) in self.albums.iter_mut() {
             if a.id != *id {
@@ -1121,6 +1128,11 @@ impl Catalog {
                     break;
                 }
                 Err(e) => return Err(CatalogError::Corrupt(format!("log line {}: {e}", i + 1))),
+            }
+        }
+        for p in self.photos.values_mut() {
+            if !p.meta.lens_from_spec && lightcraft_meta::is_lens_spec_name(&p.meta.lens) {
+                Arc::make_mut(p).meta.repair_lens_provenance();
             }
         }
         Ok(n)

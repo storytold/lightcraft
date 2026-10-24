@@ -157,13 +157,20 @@ impl LensDb {
         self.cameras.is_empty() && self.lenses.is_empty()
     }
 
-    /// The camera with this EXIF make and model.
+    /// The camera with this EXIF make and model (or a combined `"Make Model"` string when `make` is empty).
     pub fn find_camera(&self, make: &str, model: &str) -> Option<&Camera> {
         let (mk, md) = (tokens(make), tokens(model));
         if md.is_empty() {
             return None;
         }
-        self.cameras.iter().find(|c| tokens(&c.model) == md && maker_matches(&tokens(&c.maker), &mk))
+        self.cameras.iter().find(|c| {
+            let cm = tokens(&c.model);
+            if mk.is_empty() {
+                cm == md || tokens(&format!("{} {}", c.maker, c.model)) == md
+            } else {
+                cm == md && maker_matches(&tokens(&c.maker), &mk)
+            }
+        })
     }
 
     /// The best profile for an EXIF lens model (and lens make, when the file has one), preferring lenses for the

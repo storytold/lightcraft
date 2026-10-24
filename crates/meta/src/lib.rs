@@ -346,6 +346,20 @@ pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
     Some(format!("{focal} mm f/{aperture}"))
 }
 
+/// Whether `s` has the `<focal> mm f/<aperture>` shape written by [`lens_spec_name`].
+pub fn is_lens_spec_name(s: &str) -> bool {
+    let Some((focal, aperture)) = s.trim().split_once(" mm f/") else { return false };
+    let is_num_or_range = |part: &str| {
+        let mut pieces = part.split('-');
+        let Some(first) = pieces.next() else { return false };
+        let second = pieces.next();
+        pieces.next().is_none()
+            && first.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0)
+            && second.is_none_or(|b| b.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0))
+    };
+    is_num_or_range(focal) && is_num_or_range(aperture)
+}
+
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
 pub(crate) fn parse_number(s: &str) -> Option<f64> {
     let s = s.trim();

@@ -169,6 +169,10 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 pub struct Meta {
     pub camera: String,
     pub lens: String,
+    /// Whether `lens` was formatted from a numeric lens specification (`Exif.Photo.LensSpecification`)
+    /// because the file carried no lens model name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lens_from_spec: bool,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
     pub shutter: String,
@@ -204,6 +208,16 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+}
+
+impl Meta {
+    /// Restores `lens_from_spec` when an older snapshot carries a specification-formatted `lens`
+    /// without the `lens_from_spec` flag.
+    pub fn repair_lens_provenance(&mut self) {
+        if !self.lens_from_spec && lightcraft_meta::is_lens_spec_name(&self.lens) {
+            self.lens_from_spec = true;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

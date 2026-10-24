@@ -232,6 +232,9 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     }
     if m.lens.is_empty() {
         m.lens = src.lens.clone();
+        m.lens_from_spec = src.lens_from_spec;
+    } else if !m.lens_from_spec && (src.lens_from_spec && m.lens == src.lens || lightcraft_meta::is_lens_spec_name(&m.lens)) {
+        m.lens_from_spec = true;
     }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
