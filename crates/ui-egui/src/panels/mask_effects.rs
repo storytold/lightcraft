@@ -688,7 +688,7 @@ pub fn manage_body(
 pub fn import_toast(v: &Value) -> String {
     let rows: Vec<&Value> = v["effects"].as_array().or_else(|| v["imported"].as_array()).into_iter().flatten().collect();
     let n = rows.len();
-    let mut msg = crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", if n == 1 { "" } else { "s" }, e = n);
+    let mut msg = crate::i18n::tr_format!("Imported {e} mask effect{} (Masking → Effect)", if n == 1 { "" } else { "s" }, e = n);
     let mut groups: Vec<&str> = rows.iter().filter_map(|r| r["group"].as_str()).filter(|g| !g.is_empty()).collect();
     groups.sort_unstable();
     groups.dedup();

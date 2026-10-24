@@ -1239,7 +1239,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
                 app.toast(
                     ui.ctx(),
-                    crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
+                    crate::i18n::tr_format!("{n} similar photo{} · View → Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
                 );
             }
             Err(e) => app.toast(ui.ctx(), e),

@@ -162,7 +162,7 @@ fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: bool) -> Op
 fn gpu_crash_notice(what: &str) -> String {
     format!(
         "LightCraft closed unexpectedly while starting the GPU last time ({what}), so GPU rendering is now off and photos render on the CPU. \
-         To try the GPU again, turn on Settings ▸ Performance ▸ Use the GPU for rendering; to try another graphics backend, start LightCraft with \
+         To try the GPU again, turn on Settings → Performance → Use the GPU for rendering; to try another graphics backend, start LightCraft with \
          LIGHTCRAFT_GPU_BACKEND=dx12, vulkan or off (see docs/gpu-pipeline.md → Troubleshooting)."
     )
 }
@@ -201,7 +201,7 @@ fn gpu_lost_check_at(marker: Option<&std::path::Path>, in_memory: bool) -> Optio
     }
     Some(format!(
         "LightCraft stopped last time after the graphics driver reset the GPU ({}) while photos rendered on it, so GPU rendering \
-         is now off and photos render on the CPU. To try the GPU again, turn on Settings ▸ Performance ▸ Use the GPU for rendering; \
+         is now off and photos render on the CPU. To try the GPU again, turn on Settings → Performance → Use the GPU for rendering; \
          an up-to-date graphics driver may help.",
         reason.trim()
     ))
@@ -814,7 +814,7 @@ fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Optio
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
                 notices
-                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File ▸ Import Photos…"));
+                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File → Import Photos…"));
             }
             None => {}
         }
@@ -1085,7 +1085,7 @@ fn stopped_text(error: &str, lost: Option<&str>) -> String {
     match lost {
         Some(reason) => format!(
             "{error}. The graphics driver reset the GPU ({reason}). LightCraft renders on the CPU from its next start; \
-             Settings ▸ Performance ▸ Use the GPU for rendering turns the GPU back on"
+             Settings → Performance → Use the GPU for rendering turns the GPU back on"
         ),
         None => error.to_string(),
     }
