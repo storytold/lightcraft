@@ -304,7 +304,9 @@ fn inside_said(inside: &[String]) -> Option<String> {
 /// do something (a keyword never goes inside itself), and a release there does it: nests the
 /// keyword inside this one, or gives this keyword to the photos.
 fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &str) {
-    let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    // a dragged keyword drops on any button's release (it began with any button); photos only on the primary's
+    let (pointer, released) =
+        ui.input(|i| (i.pointer.latest_pos(), i.pointer.primary_released() || (app.ui.dragging_keyword.is_some() && i.pointer.any_released())));
     if !shown_under(ui, rect, pointer) {
         return;
     }
