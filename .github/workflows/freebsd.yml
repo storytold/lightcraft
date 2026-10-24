@@ -28,4 +28,4 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
     with:
       require-craft-fonts: true
-      craft-fonts-ref: a71c20e30af613287c504f7e685ca8fad77752bc
+      craft-fonts-ref: a71c20e30af613287c504f7e685ca8fad77752bc # Hebrew: repin once storytold/craft-fonts#12 is on main
