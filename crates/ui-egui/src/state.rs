@@ -458,6 +458,10 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// The Info panel's metadata fields with several photos selected: false shows the active
+    /// photo's values (Target Photo), true shows the values the selected photos share and marks
+    /// each field where they differ (Selected Photos) (`view.infoSelectedPhotos`).
+    pub info_selected_photos: bool,
     /// Filmstrip: file names above the thumbnails.
     pub film_names: bool,
     /// Filmstrip: rating / flag / edited badges on the thumbnails.
@@ -526,6 +530,7 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            info_selected_photos: false,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,

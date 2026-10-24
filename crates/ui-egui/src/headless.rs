@@ -2902,6 +2902,151 @@ mod tests {
         assert_eq!(meta(&h).title, "Wedding in Sintra");
     }
 
+    /// With several photos selected the Info panel offers Target Photo / Selected Photos. Target
+    /// Photo (the default) shows the active photo's values. Selected Photos leaves a field whose
+    /// values differ empty, so what is typed there is what every selected photo gets, and keeps
+    /// the value of a field they share; leaving a mixed field untouched saves nothing.
+    #[test]
+    fn info_shows_metadata_for_the_selected_photos() {
+        let mut h = demo([1300.0, 1000.0]);
+        let t = Duration::from_secs(10);
+        let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+            let r = h.request(method, params.clone(), t);
+            assert_eq!(r["ok"], true, "{method} {params}: {r}");
+            h.step();
+            h.step();
+            r
+        };
+        let exec = |h: &mut Headless, command: &str, params: serde_json::Value| {
+            ask(h, "engine.execute", json!({"command": command, "params": params}))["result"].clone()
+        };
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+        let (a, b) = (lightcraft_catalog::PhotoId(ids[0]), lightcraft_catalog::PhotoId(ids[1]));
+        let meta = |h: &Headless, id| h.app.session.catalog.photo(id).unwrap().meta.clone();
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "title": "Dawn", "copyrightStatus": "copyrighted"}));
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "title": "Dusk"}));
+        exec(&mut h, "photo.setMeta", json!({"ids": ids, "creator": "Ana"}));
+        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
+        h.settle(SETTLE);
+        let buttons = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "infoFor"}), t)["result"].to_string();
+        assert!(buttons(&mut h).contains("button:infoFor-selected"), "the choice shows with two photos selected");
+        assert!(!h.app.ui.settings.info_selected_photos, "Target Photo by default");
+        // Target Photo: the title field holds the active photo's title, and what is typed after it
+        // goes to both photos
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:title"}));
+        ask(&mut h, "ui.key", json!({"key": "End"}));
+        ask(&mut h, "ui.text", json!({"text": "!"}));
+        ask(&mut h, "ui.key", json!({"key": "Tab"}));
+        h.settle(SETTLE);
+        assert_eq!((meta(&h, a).title, meta(&h, b).title), ("Dawn!".into(), "Dawn!".into()));
+        // Selected Photos, from its button
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "title": "Dusk"}));
+        ask(&mut h, "ui.clickWidget", json!({"id": "button:infoFor-selected"}));
+        assert!(h.app.ui.settings.info_selected_photos);
+        // a mixed field left untouched saves nothing
+        let undo = h.app.session.undo.len();
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:title"}));
+        ask(&mut h, "ui.key", json!({"key": "Tab"}));
+        h.settle(SETTLE);
+        assert_eq!((meta(&h, a).title, meta(&h, b).title, h.app.session.undo.len()), ("Dawn!".into(), "Dusk".into(), undo));
+        // neither does switching the choice while a field is being edited, either way
+        for on in [false, true] {
+            ask(&mut h, "ui.clickWidget", json!({"id": "field:title"}));
+            exec(&mut h, "view.infoSelectedPhotos", json!({"on": on}));
+            ask(&mut h, "ui.key", json!({"key": "Tab"}));
+            h.settle(SETTLE);
+            assert_eq!((meta(&h, a).title, meta(&h, b).title, h.app.session.undo.len()), ("Dawn!".into(), "Dusk".into(), undo), "{on}");
+        }
+        // the mixed title starts empty; the shared creator keeps its value
+        for (key, typed, want) in [("title", "Harbor", "Harbor"), ("creator", " Silva", "Ana Silva")] {
+            ask(&mut h, "ui.clickWidget", json!({"id": format!("field:{key}")}));
+            ask(&mut h, "ui.key", json!({"key": "End"}));
+            ask(&mut h, "ui.text", json!({"text": typed}));
+            ask(&mut h, "ui.key", json!({"key": "Tab"}));
+            h.settle(SETTLE);
+            let got = |h: &Headless, id| if key == "title" { meta(h, id).title } else { meta(h, id).creator };
+            assert_eq!((got(&h, a), got(&h, b)), (want.to_string(), want.to_string()), "{key}");
+        }
+        // a mixed field typed in and left empty clears it on every selected photo
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "caption": "Old"}));
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "caption": "Other"}));
+        h.settle(SETTLE);
+        ask(&mut h, "ui.clickWidget", json!({"id": "field:caption"}));
+        ask(&mut h, "ui.text", json!({"text": "x"}));
+        ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+        ask(&mut h, "ui.key", json!({"key": "Tab"}));
+        h.settle(SETTLE);
+        assert_eq!((meta(&h, a).caption, meta(&h, b).caption), (String::new(), String::new()));
+        // GPS: one photo's place and Show on Map only while the selected photos share it
+        let map = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "showOnMap"}), t)["result"].to_string().contains("showOnMap");
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "gps": [41.15, -8.61]}));
+        exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "gps": [38.72, -9.14]}));
+        h.settle(SETTLE);
+        assert!(!map(&mut h), "places differ");
+        exec(&mut h, "photo.setMeta", json!({"ids": ids, "gps": [41.15, -8.61]}));
+        h.settle(SETTLE);
+        assert!(map(&mut h), "a shared place");
+        // the command: refuses a value that isn't true or false, and turns Target Photo back on
+        let r = h.request("engine.execute", json!({"command": "view.infoSelectedPhotos", "params": {"on": "yes"}}), t);
+        assert_ne!(r["ok"], true, "{r}");
+        assert!(h.app.ui.settings.info_selected_photos);
+        assert_eq!(exec(&mut h, "view.infoSelectedPhotos", json!({"on": false}))["on"], false);
+        assert!(!h.app.ui.settings.info_selected_photos);
+        assert_eq!(exec(&mut h, "view.infoSelectedPhotos", json!({}))["on"], true, "no params toggles");
+        // the choice is saved with the app settings; settings saved before it read as Target Photo
+        let saved = serde_json::to_value(&h.app.ui.settings).unwrap();
+        assert_eq!(saved["infoSelectedPhotos"], true);
+        let read: crate::state::AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(read.info_selected_photos);
+        let old: crate::state::AppSettings = serde_json::from_value(json!({"filmNames": false})).unwrap();
+        assert!(!old.info_selected_photos);
+        // one photo selected: no choice to make
+        exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+        h.settle(SETTLE);
+        assert!(!buttons(&mut h).contains("infoFor-"), "{}", buttons(&mut h));
+    }
+
+    /// The fields the Info panel marks as mixed: each text field, the copyright status and GPS
+    /// where a selected photo differs from the photo the panel shows, and none for one photo.
+    #[test]
+    fn info_mixed_fields_are_the_ones_that_differ() {
+        let mut s = lightcraft_engine::Session::with_demo();
+        let ids: Vec<u64> = s.visible_cloned().iter().take(3).map(|p| p.0).collect();
+        let all = |key: &str, v: serde_json::Value| json!({"ids": ids, key: v});
+        // (every field the panel compares starts the same on the three photos)
+        let fields = [
+            "title",
+            "caption",
+            "altText",
+            "extendedDescription",
+            "copyright",
+            "usageTerms",
+            "copyrightUrl",
+            "creator",
+            "location",
+            "state",
+            "country",
+        ];
+        for key in fields {
+            s.execute("photo.setMeta", &all(key, json!(""))).unwrap();
+        }
+        for (key, v) in
+            [("title", json!("Same")), ("city", json!("Porto")), ("copyrightStatus", json!("copyrighted")), ("gps", json!([41.15, -8.61]))]
+        {
+            s.execute("photo.setMeta", &all(key, v)).unwrap();
+        }
+        let photos: Vec<lightcraft_catalog::PhotoId> = ids.iter().map(|&i| lightcraft_catalog::PhotoId(i)).collect();
+        let shown = s.catalog.photo(photos[0]).unwrap().meta.clone();
+        assert!(crate::panels::right::mixed_meta(&s.catalog, &photos, &shown).is_empty());
+        assert!(crate::panels::right::mixed_meta(&s.catalog, &photos[..1], &shown).is_empty());
+        s.execute("photo.setMeta", &json!({"ids": [ids[2]], "city": "Lisbon", "caption": "x", "gps": [38.72, -9.14]})).unwrap();
+        s.execute("photo.setMeta", &json!({"ids": [ids[1]], "copyrightStatus": "publicDomain"})).unwrap();
+        let mut mixed = crate::panels::right::mixed_meta(&s.catalog, &photos, &shown);
+        mixed.sort_unstable();
+        assert_eq!(mixed, ["caption", "city", "copyrightStatus", "gps"]);
+    }
+
     /// Local: a folder's photos show without joining the library; the breadcrumb, Include
     /// subfolders and Add to My Photos work from the grid header.
     #[test]

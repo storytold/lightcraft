@@ -139,6 +139,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("local.addRoot", "Add Folder to Local", None, ""),
     ("local.hide", "Remove from Local", None, ""),
     ("local.restoreHidden", "Show Hidden Local Locations", None, ""),
+    // {on?}: the Info panel's Target Photo / Selected Photos choice (on = Selected Photos)
+    ("view.infoSelectedPhotos", "Show Metadata for Selected Photos", None, ""),
     ("view.fullScreenPreview", "Full Screen Preview", Some("F"), "View"),
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
     ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
@@ -1113,6 +1115,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.maskPins" => {
             app.ui.mask_pins = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_pins);
             Ok(json!({"maskPins": app.ui.mask_pins}))
+        }
+        "view.infoSelectedPhotos" => {
+            // {on?}; no params toggles. On: the Info panel shows what the selected photos share.
+            let on = match p.get("on") {
+                None | Some(Value::Null) => !app.ui.settings.info_selected_photos,
+                Some(Value::Bool(on)) => *on,
+                Some(v) => return Some(Err(format!("view.infoSelectedPhotos: `on` must be true or false, not {v}"))),
+            };
+            app.ui.settings.info_selected_photos = on;
+            Ok(json!({"on": on}))
         }
         "view.toolOverlay" => {
             use crate::state::ToolOverlay;

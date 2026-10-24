@@ -675,7 +675,15 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     divider(ui);
     let m = p.meta.clone();
+    // with several photos selected: Target Photo shows this photo's values, Selected Photos what
+    // the selection shares (a field where they differ is empty and says Mixed)
+    let selected = app.session.selected();
+    let several = selected.len() > 1;
+    let mixed = if several && app.ui.settings.info_selected_photos { mixed_meta(&app.session.catalog, &selected, &m) } else { Vec::new() };
     padded(ui, |ui| {
+        if several {
+            metadata_for(app, ui);
+        }
         for (label, key, value, lines) in [
             ("Title", "title", &m.title, 1),
             ("Caption", "caption", &m.caption, 2),
@@ -683,15 +691,15 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("Extended Description", "extendedDescription", &m.extended_description, 3),
             ("Copyright", "copyright", &m.copyright, 1),
         ] {
-            meta_field(app, ui, label, key, value, lines);
+            meta_field(app, ui, label, key, value, lines, mixed.contains(&key));
         }
-        copyright_status(app, ui, m.copyright_status);
+        copyright_status(app, ui, m.copyright_status, mixed.contains(&"copyrightStatus"));
         for (label, key, value, lines) in [
             ("Rights Usage Terms", "usageTerms", &m.usage_terms, 2),
             ("Copyright Info URL", "copyrightUrl", &m.copyright_url, 1),
             ("Creator", "creator", &m.creator, 1),
         ] {
-            meta_field(app, ui, label, key, value, lines);
+            meta_field(app, ui, label, key, value, lines, mixed.contains(&key));
         }
         // file: name (rename), path (reveal), capture time (edit)
         let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
@@ -740,28 +748,33 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("State / Province", "state", &m.state),
             ("Country", "country", &m.country),
         ] {
-            meta_field(app, ui, label, key, value, 1);
+            meta_field(app, ui, label, key, value, 1, mixed.contains(&key));
         }
         // GPS: typed as "lat, lon" (or degrees / minutes / seconds); empty clears it
-        let gps = m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default();
+        let gps_mixed = mixed.contains(&"gps");
+        let gps = if gps_mixed { String::new() } else { m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default() };
         let gid = egui::Id::new("info-gps");
         ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
-        let mut text: String = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| gps.clone());
-        let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(crate::i18n::tr("latitude, longitude")).desired_width(f32::INFINITY));
+        let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed));
+        let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
+        let r = ui.add(egui::TextEdit::singleline(&mut edit.text).hint_text(hint).desired_width(f32::INFINITY));
         crate::widgets::screen_reader_name(ui.ctx(), r.id, "GPS");
         register(ui.ctx(), "field:gps", r.rect);
+        edit.typed |= edit.text != edit.start;
         if r.has_focus() {
-            ui.data_mut(|d| d.insert_temp(gid, text.clone()));
+            ui.data_mut(|d| d.insert_temp(gid, edit.clone()));
         } else {
-            ui.data_mut(|d| d.remove::<String>(gid));
+            ui.data_mut(|d| d.remove::<FieldEdit>(gid));
         }
+        let text = edit.text.trim();
         if r.lost_focus()
-            && text.trim() != gps
-            && let Err(e) = app.run("photo.setMeta", json!({"gps": text.trim()}))
+            && (text != edit.start || edit.clears())
+            && let Err(e) = app.run("photo.setMeta", json!({"gps": text}))
         {
             app.toast(ui.ctx(), e);
         }
-        if let Some((la, lo)) = m.gps {
+        // (one photo's place: not shown while the selected photos' places differ)
+        if let Some((la, lo)) = m.gps.filter(|_| !gps_mixed) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
@@ -896,15 +909,117 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// A labelled metadata text field: the typed text lives in egui memory while focused and is
-/// saved (photo.setMeta `key`) when the field loses focus.
-/// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`).
-fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus) {
+/// What a metadata field shows while the selected photos' values differ (Selected Photos).
+const MIXED: &str = "Mixed";
+
+/// An Info panel field's edit under way, kept in egui memory between frames. A field saves when
+/// its text is not the text the edit started from, so a field left as it was saves nothing, even
+/// when what the panel shows changed during the edit.
+#[derive(Clone)]
+struct FieldEdit {
+    text: String,
+    start: String,
+    /// The field said Mixed when the edit started.
+    mixed: bool,
+    /// Something was typed or deleted since.
+    typed: bool,
+}
+
+impl FieldEdit {
+    fn new(value: &str, mixed: bool) -> Self {
+        FieldEdit { text: value.to_string(), start: value.to_string(), mixed, typed: false }
+    }
+
+    /// A Mixed field that was typed in and left empty: it clears the field on every selected photo.
+    fn clears(&self) -> bool {
+        self.mixed && self.typed
+    }
+}
+
+/// The Info panel's text fields, by their `photo.setMeta` key.
+const META_TEXT_KEYS: [&str; 12] = [
+    "title",
+    "caption",
+    "altText",
+    "extendedDescription",
+    "copyright",
+    "usageTerms",
+    "copyrightUrl",
+    "creator",
+    "location",
+    "city",
+    "state",
+    "country",
+];
+
+/// The value of one of [`META_TEXT_KEYS`].
+fn meta_text<'a>(m: &'a lightcraft_catalog::Meta, key: &str) -> Option<&'a str> {
+    Some(match key {
+        "title" => &m.title,
+        "caption" => &m.caption,
+        "altText" => &m.alt_text,
+        "extendedDescription" => &m.extended_description,
+        "copyright" => &m.copyright,
+        "usageTerms" => &m.usage_terms,
+        "copyrightUrl" => &m.copyright_url,
+        "creator" => &m.creator,
+        "location" => &m.location,
+        "city" => &m.city,
+        "state" => &m.state,
+        "country" => &m.country,
+        _ => return None,
+    })
+}
+
+/// The Info panel fields (`photo.setMeta` keys, plus `copyrightStatus` and `gps`) where one of
+/// the photos `ids` has a value other than `shown`'s, the metadata the panel draws.
+pub(crate) fn mixed_meta(catalog: &lightcraft_catalog::Catalog, ids: &[PhotoId], shown: &lightcraft_catalog::Meta) -> Vec<&'static str> {
+    let mut mixed = Vec::new();
+    for m in ids.iter().filter_map(|&id| catalog.photo(id)).map(|p| &p.meta) {
+        for key in META_TEXT_KEYS {
+            if !mixed.contains(&key) && meta_text(m, key) != meta_text(shown, key) {
+                mixed.push(key);
+            }
+        }
+        if !mixed.contains(&"copyrightStatus") && m.copyright_status != shown.copyright_status {
+            mixed.push("copyrightStatus");
+        }
+        if !mixed.contains(&"gps") && m.gps != shown.gps {
+            mixed.push("gps");
+        }
+        if mixed.len() == META_TEXT_KEYS.len() + 2 {
+            break;
+        }
+    }
+    mixed
+}
+
+/// Target Photo / Selected Photos: whose metadata the fields below show while several photos
+/// are selected (`view.infoSelectedPhotos`).
+fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(crate::i18n::tr("Show Metadata For")).size(11.5).color(t.text_dim));
+    ui.horizontal_wrapped(|ui| {
+        let on = app.ui.settings.info_selected_photos;
+        for (id, label, selected) in [("infoFor-target", "Target Photo", false), ("infoFor-selected", "Selected Photos", true)] {
+            if text_button(ui, id, label, on == selected).clicked() && on != selected {
+                let _ = app.run("view.infoSelectedPhotos", json!({"on": selected}));
+            }
+        }
+    });
+    ui.add_space(6.0);
+}
+
+/// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`). `mixed`: the
+/// selected photos' statuses differ, and any status picked is given to all of them.
+fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(crate::i18n::tr(current.label())).show_ui(ui, |ui| {
+    let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
+    let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
         for st in lightcraft_catalog::CopyrightStatus::ALL {
-            if ui.selectable_label(st == current, crate::i18n::tr(st.label())).clicked() && st != current {
+            let on = !mixed && st == current;
+            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
                 let _ = app.run("photo.setMeta", json!({"copyrightStatus": st.id()}));
             }
         }
@@ -913,27 +1028,34 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     ui.add_space(6.0);
 }
 
-fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {
+/// A labeled metadata text field: the typed text lives in egui memory while focused and is
+/// saved (photo.setMeta `key`) when the field loses focus. `mixed`: the selected photos' values
+/// differ, so the field starts empty and says so, and is saved only when it was typed in (left
+/// empty, it clears the field on every selected photo).
+fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize, mixed: bool) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
     let id = egui::Id::new(("info-field", key));
-    let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| value.to_string());
+    let value = if mixed { "" } else { value };
+    let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed));
     let widget = format!("field:{key}");
     let field = if lines > 1 {
-        crate::text_field::TextField::multiline(&widget, &mut text).rows(lines)
+        crate::text_field::TextField::multiline(&widget, &mut edit.text).rows(lines)
     } else {
-        crate::text_field::TextField::singleline(&widget, &mut text)
+        crate::text_field::TextField::singleline(&widget, &mut edit.text)
     };
+    let field = if mixed { field.hint(crate::i18n::tr(MIXED)) } else { field };
     let r = field.label(crate::i18n::tr(label)).width(f32::INFINITY).show(ui);
+    edit.typed |= edit.text != edit.start;
     // the typed text outlives frames while it is edited (the photo's value is drawn otherwise)
     if r.editing {
-        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+        ui.data_mut(|d| d.insert_temp(id, edit.clone()));
     } else {
-        ui.data_mut(|d| d.remove::<String>(id));
+        ui.data_mut(|d| d.remove::<FieldEdit>(id));
     }
     // Return (one line) or leaving saves; Esc gives the edit up
-    if r.committed() && text != value {
-        let _ = app.run("photo.setMeta", json!({key: text}));
+    if r.committed() && (edit.text != edit.start || edit.clears()) {
+        let _ = app.run("photo.setMeta", json!({key: edit.text}));
     }
     ui.add_space(6.0);
 }

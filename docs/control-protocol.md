@@ -135,6 +135,12 @@ x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when
 file, on a background job (activity kind `focus`); `wait: true` returns the run's counts when done. The app calls
 `focus.pump {pace}` every frame to drive it.
 
+With several photos selected, the Info panel's Show Metadata For is `view.infoSelectedPhotos {on?}` (no `on`, or
+`on: null`, toggles; any other value that is not true or false is refused; replies `{on}`;
+`settings.infoSelectedPhotos`): off (Target Photo, the default) shows the active photo's values, on (Selected Photos)
+shows the values the selected photos share, leaves each text field and GPS where they differ empty with a Mixed hint,
+and shows Mixed as the Copyright Status when the statuses differ.
+
 The interface theme is `view.appearance {mode?: "auto" | "light" | "dark"}` (no mode: the next one,
 Auto → Light → Dark → Auto, like the top bar's `icon:appearance` button) and `view.theme {theme:
 "charcoal" | "midnight" | "silver" | "paper"}`, which picks a theme and fixes the mode to its family.
