@@ -6,7 +6,7 @@ use lightcraft_catalog::{Album, AlbumId, Photo, PhotoId};
 use lightcraft_develop::{CONTROLS, controls};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, cmd, has_active};
+use super::{CommandSpec, always, bad, cmd, filter_keys, has_active};
 use crate::{LibrarySource, Session};
 
 pub fn photo_summary(p: &Photo) -> Value {
@@ -81,6 +81,9 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "catalog.query", "Query Photos", [], None, "{filter?: Filter, sort?: Sort, offset?, limit?} — omit filter to list the current view", always, |s, p| {
             let ids = if p.get("filter").is_some() || p.get("sort").is_some() {
+                if let Some(f) = p.get("filter") {
+                    filter_keys(f, "catalog.query")?;
+                }
                 let f = p.get("filter").map(|f| serde_json::from_value(f.clone())).transpose().map_err(|e| bad("catalog.query", e.to_string()))?.unwrap_or_default();
                 let so = p.get("sort").map(|f| serde_json::from_value(f.clone())).transpose().map_err(|e| bad("catalog.query", e.to_string()))?.unwrap_or_default();
                 s.catalog.query(&f, &so)
