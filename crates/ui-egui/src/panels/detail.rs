@@ -2954,14 +2954,15 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     if let Some(q) = resp.interact_pointer_pos()
-        && (resp.drag_started() || resp.dragged() || resp.clicked() || resp.drag_stopped())
+        // the release ends the stroke where it is, but only the left button's: a middle drag pans
+        && (resp.drag_started() || resp.dragged() || resp.clicked() || resp.drag_stopped_by(egui::PointerButton::Primary))
     {
         let n = map.norm(q);
         match &mut app.gesture {
             // a point every r/4 of movement; a held pointer stores nothing, and the release adds where it ended
             Some(Gesture::Spot { points }) => {
                 let last = points.last().map(|l| map.screen(*l));
-                if last.is_none_or(|l| spot_outline::adds_point(l, q, r, resp.drag_stopped())) {
+                if last.is_none_or(|l| spot_outline::adds_point(l, q, r, resp.drag_stopped_by(egui::PointerButton::Primary))) {
                     points.push(n);
                 }
             }
