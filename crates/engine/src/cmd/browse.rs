@@ -481,9 +481,26 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
     // a library folder chosen at or below it follows too, as a source or as a filter
     follow_library_folder(&mut s.library_folder, from, to);
+    for other in &mut s.also_library_folders {
+        let mut chosen = Some(std::mem::take(other));
+        follow_library_folder(&mut chosen, from, to);
+        *other = chosen.unwrap_or_default();
+    }
     follow_library_folder(&mut s.filter.library_folder, from, to);
     if let Some(f) = s.shelved_filter.as_mut() {
         follow_library_folder(&mut f.library_folder, from, to);
+    }
+    for other in &mut s.filter.library_folders {
+        let mut chosen = Some(std::mem::take(other));
+        follow_library_folder(&mut chosen, from, to);
+        *other = chosen.unwrap_or_default();
+    }
+    if let Some(f) = s.shelved_filter.as_mut() {
+        for other in &mut f.library_folders {
+            let mut chosen = Some(std::mem::take(other));
+            follow_library_folder(&mut chosen, from, to);
+            *other = chosen.unwrap_or_default();
+        }
     }
     if let Some(b) = &mut s.browse
         && let Ok(rel) = Path::new(&b.path).strip_prefix(from)

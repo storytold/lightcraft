@@ -95,6 +95,25 @@ fn smart_album_view_keeps_the_filter_bar_over_a_stale_rule() {
     assert!(r.rule_set.is_some(), "and so do the album's own rules");
 }
 
+/// A view of several albums with a smart one among them can't be saved: the refusal names it.
+#[test]
+fn saving_a_view_of_several_albums_with_a_smart_one_names_the_smart_album() {
+    let mut s = Session::with_demo();
+    let plain = s.execute("album.create", &json!({"name": "Plain", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let smart = s.execute("album.createSmart", &json!({"name": "Picks", "rules": {"flag": "pick"}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("library.source", &json!({"kind": "album", "ids": [plain, smart]})).unwrap();
+    let before = s.catalog.to_snapshot();
+    let e = s.execute("album.createSmart", &json!({"name": "Both"})).unwrap_err().to_string();
+    assert!(e.contains("\"Picks\" is a smart album"), "{e}");
+    let e = s.execute("album.setRules", &json!({"id": smart, "fromView": true})).unwrap_err().to_string();
+    assert!(e.contains("\"Picks\" is a smart album"), "{e}");
+    assert_eq!(s.catalog.to_snapshot(), before, "nothing was saved");
+    // plain albums alone still save
+    let other = s.execute("album.create", &json!({"name": "Other", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    s.execute("library.source", &json!({"kind": "album", "ids": [plain, other]})).unwrap();
+    s.execute("album.createSmart", &json!({"name": "Both"})).unwrap();
+}
+
 #[test]
 fn virtual_copies_are_independent_and_persist() {
     let dir = temp_dir("vc");

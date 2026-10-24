@@ -67,7 +67,13 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         let value = if matches!(prefix, "Flag" | "Type") {
             tr(value).to_string()
         } else if prefix == "Date" {
-            filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+            // every date of the chip, as the engine's label lists them
+            let dates = filter.dates_wanted();
+            if dates.is_empty() {
+                value.to_string()
+            } else {
+                dates.iter().map(|date| date_group_label(date, false)).collect::<Vec<_>>().join(&format!(" {} ", tr("or")))
+            }
         } else if prefix == "Imported" {
             filter.imported.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
         } else {

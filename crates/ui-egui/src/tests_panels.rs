@@ -2585,3 +2585,19 @@ fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
     // and the shadow one keeps the same inset from its edge
     assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
 }
+
+/// A date chip that names several dates (`date` with `dates`) names all of them in another
+/// language too, not only the first.
+#[test]
+fn a_date_chip_names_every_date_in_another_language() {
+    use crate::i18n::{Locale, date_group_label, set_language};
+    let s = lightcraft_engine::Session::new();
+    let filter = lightcraft_catalog::Filter { date: Some("2026-01-05".into()), dates: vec!["2026-01-02".into()], ..Default::default() };
+    let chips = lightcraft_engine::filter_chips(&filter, &s.catalog);
+    assert_eq!(chips.len(), 1);
+    set_language(Locale::De);
+    let label = crate::panels::chips::display_label(&chips[0], &filter, &s.catalog);
+    let dates = ["2026-01-05", "2026-01-02"].map(|d| date_group_label(d, false));
+    set_language(Locale::En);
+    assert!(dates.iter().all(|d| label.contains(d.as_str())), "{label} names {dates:?}");
+}
