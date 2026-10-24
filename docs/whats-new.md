@@ -48,6 +48,30 @@
 
 ## 2026-10-21
 
+### Large libraries
+- The catalog on disk is several times smaller: a photo's record states only what was set (no empty fields, no default
+  develop settings), about 0.4 to 0.6 kB for an unedited photo where it was 3.4 to 3.7 kB. Edits, history steps and
+  versions are stored as what differs from the defaults.
+- Saving follows what changed, not the size of the library: the catalog is compacted while you work when the log of
+  changes is long (2000 records or 16 MB) and has grown to a quarter of what a compaction would rewrite (`catalog.snap`,
+  the segments holding changed photos, and a sixteenth of the catalog for looking through it), or when it reaches
+  256 MB; on quit, a log is compacted when the rewrite is up to 64 MB or, above that, when the log is long (2000 records or 16 MB). It used to be
+  rewritten every 2000 changes. Importing 100,000
+  photos rewrote it 50 times (9.4 GB written); it is now 15 times (0.25 GB). Quitting no longer rewrites a large
+  catalog for a handful of changes.
+- The catalog's photos are saved in segment files (JSON files in `segments/` beside `catalog.snap`), and saving rewrites only the
+  segments whose photos changed: after edits in one place, 2 MB where it was the whole catalog (about 60 ms where it was 2 s,
+  for 3.5 million photos). Opening reads the segments on several threads: 0.15 s where it was 0.5 s for 300,000 photos,
+  1.7 s where it was 6.1 s for 3.5 million. A damaged segment is named when the library is opened, and nothing is
+  modified.
+- Libraries are upgraded when first opened (catalog format 11) and can't be opened by earlier versions afterwards. The
+  photos of a library in a folder on disk are split into segments only once the segments written read back the same.
+  Copy or back up the whole library folder: `catalog.snap` alone no longer holds the photos. (The browser build keeps
+  its photos in `catalog.snap`.)
+  The library as it was is kept beside it (`catalog.snap.v<format>-<seq>`, `catalog.log.v<format>-<seq>`): to go back, see
+  `docs/catalog-persistence.md`.
+  Numbers and the measurements behind them: `docs/catalog-persistence.md`.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
