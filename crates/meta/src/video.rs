@@ -364,12 +364,12 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                         let (ts, dur, creat) = if ver == 0 {
                             let creat = be32(child.body, 4).map(u64::from);
                             let ts = be32(child.body, 12);
-                            let dur = be32(child.body, 16).map(u64::from);
+                            let dur = be32(child.body, 16).filter(|&d| d != u32::MAX).map(u64::from);
                             (ts, dur, creat)
                         } else {
                             let creat = be64(child.body, 4);
                             let ts = be32(child.body, 20);
-                            let dur = be64(child.body, 24);
+                            let dur = be64(child.body, 24).filter(|&d| d != u64::MAX);
                             (ts, dur, creat)
                         };
 
@@ -404,7 +404,11 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                         for grand in read_boxes(child.body, &mut budget) {
                             if &grand.kind == b"mehd" {
                                 let ver = grand.body.first().copied().unwrap_or(0);
-                                let d = if ver == 0 { be32(grand.body, 4).map(u64::from) } else { be64(grand.body, 4) };
+                                let d = if ver == 0 {
+                                    be32(grand.body, 4).filter(|&d| d != u32::MAX).map(u64::from)
+                                } else {
+                                    be64(grand.body, 4).filter(|&d| d != u64::MAX)
+                                };
                                 if let Some(d) = d.filter(|d| *d > 0) {
                                     fragment_duration = Some(d);
                                 }
@@ -623,6 +627,11 @@ mod tests {
         let meta = probe_video(&zero).expect("a video track makes a valid video");
         assert_eq!(meta.duration, None);
         assert_eq!(meta.width, 640);
+
+        // ISO/IEC 14496-12 all-ones sentinel duration (0xFFFFFFFF in v0) is unknown
+        let ones = synthetic_mp4(1000, u32::MAX, 640, 360, 0);
+        let meta_ones = probe_video(&ones).expect("valid video");
+        assert_eq!(meta_ones.duration, None);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (video: MP4/MOV/M4V import and cataloguing, with duration badges and a loupe card; no playback, trim, edits or export; Video 0% → 10% breadth and readiness; headline numbers unchanged; Print: Japanese photo and postcard paper sizes) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (video: MP4/MOV/M4V import and cataloguing, with duration badges and a loupe card; no playback, trim, edits, presets or export; Video 0% → 10% breadth and readiness; headline numbers unchanged; Print: Japanese photo and postcard paper sizes) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
