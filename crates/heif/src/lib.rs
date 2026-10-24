@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod census;
 mod orient;
 /// Lossless synthetic HEIF files for tests, here and in the crates above (feature `testdata`).
 #[cfg(any(test, feature = "testdata"))]
@@ -149,6 +150,7 @@ pub fn probe(bytes: &[u8]) -> Result<Info, Error> {
 }
 
 fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
+    census::cap(bytes)?;
     let info = heic_rs::probe(bytes).map_err(|e| match e {
         // No `meta` box: no still image, only a `moov` image sequence (a video track).
         heic_rs::Error::MissingBox("meta") => Error::Unsupported(SEQUENCE),
@@ -156,13 +158,36 @@ fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
     })?;
     let ctx = Context::open(bytes).map_err(err)?;
     let id = ctx.meta.primary;
-    let coded = match ctx.grid(id).map_err(err)? {
+    let mut coded = match ctx.grid(id).map_err(err)? {
         Some((_, tiles)) => tiles,
         None => vec![id],
     };
+    // A `dimg` listing may name the same tile more than once; reconstrutable (`iloc`
+    // construction method 2) items are moreover rebuilt for every extent that references
+    // them in heic-rs 0.1.4, so our probe would pay the reconstruction again per tile. Each
+    // unique item only once, then the total reconstruction (all of it assembled from `bytes`
+    // by heic-rs) is held below one copy of the file — above that a repeat or chain wants
+    // more bytes than exist (CodeRabbit #21/#50 on this sweep). Order doesn't matter here:
+    // this only checks that every tile's bytes lie in the file.
+    coded.sort_unstable();
+    coded.dedup();
+    // heic-rs 0.1.4 caps the size of what it assembles, not the work: an item built from other
+    // items (`iloc` construction method 2) is rebuilt once per extent, so a chain of such items
+    // multiplies at every level while each result stays small. Count those visits from the
+    // `iloc` table before reconstructing anything.
+    let mut visits = 0_usize;
+    for &item in &coded {
+        item_visits(&ctx, item, 0, &mut visits)?;
+    }
+    let mut reconstructed = 0_usize;
     for item in coded {
-        // Borrowed from `bytes` unless split across extents: cheap.
-        ctx.item_data(item).map_err(err)?;
+        reconstructed = reconstructed.saturating_add(ctx.item_data(item).map_err(err)?.len());
+        if reconstructed > bytes.len() {
+            return Err(Error::Limit(format!(
+                "the container holds {reconstructed} bytes of item data, over the {} bytes of the file itself",
+                bytes.len()
+            )));
+        }
     }
     Ok(Info {
         width: info.width,
@@ -172,6 +197,36 @@ fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
         has_alpha: info.has_alpha,
         bit_depth: info.bit_depth,
     })
+}
+
+/// Most extent visits heic-rs may spend reconstructing the primary image's coded items; real
+/// files need one per tile (plus a few for the rare derived item).
+const MAX_ITEM_VISITS: usize = 4096;
+/// Deepest chain of items built from items we follow (heic-rs refuses beyond eight itself).
+const MAX_ITEM_CHAIN: u32 = 8;
+
+/// Adds to `visits` the extents heic-rs would read to reconstruct `id`, following items built
+/// from other items, and fails once that passes [`MAX_ITEM_VISITS`] or the chain is too deep.
+fn item_visits(ctx: &Context<'_>, id: u32, depth: u32, visits: &mut usize) -> Result<(), Error> {
+    use heic_rs::meta::iloc::Construction;
+    if depth > MAX_ITEM_CHAIN {
+        return Err(Error::Limit(format!("items built from items nest deeper than {MAX_ITEM_CHAIN} levels")));
+    }
+    let Some(loc) = ctx.meta.location(id) else { return Ok(()) };
+    *visits = visits.saturating_add(loc.extents.len().max(1));
+    if *visits > MAX_ITEM_VISITS {
+        return Err(Error::Limit(format!("reconstructing the image takes over {MAX_ITEM_VISITS} item extent reads")));
+    }
+    if loc.construction == Construction::Item {
+        for e in &loc.extents {
+            if let Ok(source) = u32::try_from(e.index)
+                && source != id
+            {
+                item_visits(ctx, source, depth + 1, visits)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Decodes the primary image, with its metadata.
@@ -232,6 +287,13 @@ fn decode_unguarded(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
 /// `with_alpha` and the item has an alpha auxiliary image.
 fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) -> Result<Decoded, Error> {
     let p = ctx.props(id).map_err(err)?;
+    // heic-rs 0.1.4 keeps every associated transform and its [`orient::apply`] allocates the
+    // full picture again for each: a file could chain the repetition and multiply decode CPU
+    // without changing any checked size. Real files carry at most one `clap`, `irot` and
+    // `imir`, so refuse anything approaching [`MAX_TRANSFORMS`] (CodeRabbit #44).
+    if p.transforms.len() > MAX_TRANSFORMS {
+        return Err(Error::Limit(format!("the image carries {} transform properties, over the {MAX_TRANSFORMS}-property cap", p.transforms.len())));
+    }
     let limit = options.max_pixels;
     // The declared sizes are refused before anything is decoded or allocated.
     let (cw, ch) = ctx.coded_size(id, &p).map_err(err)?;
@@ -245,6 +307,14 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
     let signal = ycc::Signal { matrix: colour.matrix, full_range: colour.full_range };
     let alpha_id = if with_alpha { ctx.alpha_item(id).map_err(err)? } else { None };
     let (w, h) = planes.size();
+    // A grid's canvas dimensions come from its payload, not the checked `ispe` (CodeRabbit
+    // #48): check the real one, before [`ycc::to_rgb16`] allocates for it.
+    match (u32::try_from(w), u32::try_from(h)) {
+        (Ok(wu), Ok(hu)) => {
+            heic_rs::image::check_pixels(wu, hu, limit).map_err(err)?;
+        }
+        _ => return Err(Error::Limit(format!("the image canvas is {w}x{h}, beyond the {limit}-pixel limit"))),
+    }
     let mode = if options.apply_transforms && orient::odd_crop(w, h, &p.transforms)? { ycc::Upsampling::Bilinear } else { ycc::Upsampling::Nearest };
     let mut data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
         .ok_or_else(|| Error::Malformed("the decoded pictures don't cover the image".into()))?;
@@ -280,6 +350,10 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
 /// How many times `max_pixels` the coded pictures of one item may hold together: a grid's tiles
 /// cover its canvas rounded up to whole tiles, so legitimate grids sit near 1.
 const GRID_BUDGET: u64 = 2;
+
+/// The most transform properties (`clap`/`irot`/`imir`) one item may carry. Real files have at
+/// most one of each, so anything approaching this is a reordered or hostile association list.
+const MAX_TRANSFORMS: usize = 12;
 
 /// The decoded pictures of an item: one, or a grid's tiles in `dimg` order.
 struct Coded<'a> {
