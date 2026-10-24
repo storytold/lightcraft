@@ -87,13 +87,47 @@ fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, id
         log::warn!("control connection closed: could not set idle read timeout: {e}");
         return;
     }
-    serve_lines(&stream, &stream, |method, params| {
+    serve_stream(stream, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
         let state = Arc::clone(&req.state);
         tx.send(req).ok()?;
         ctx.request_repaint();
         Some(await_reply(&rrx, &state, || ctx.cumulative_pass_nr(), || ctx.request_repaint(), NO_FRAMES_AFTER, REPLY_TIMEOUT))
     });
+}
+
+/// The longest a closing connection is drained, however slowly its peer keeps sending.
+const DRAIN_TIME: Duration = Duration::from_secs(1);
+
+/// [`serve_lines`] on a socket, then close it so the peer reads every reply.
+fn serve_stream(stream: TcpStream, handle: impl FnMut(String, Value) -> Option<Value>) {
+    serve_lines(&stream, &stream, handle);
+    close_gracefully(&stream);
+}
+
+/// Close a connection the server is done with without destroying its last reply. A socket closed
+/// while the peer's later lines are unread, or arrive after it, answers them with a reset, and a
+/// reset can discard the replies the peer has not read yet (on Windows it does): the client sees
+/// "connection reset" instead of why. Send FIN, then read and drop what is left (at most
+/// [`MAX_LINE`] bytes, 500 ms per read and [`DRAIN_TIME`] in all) before closing. From #1970
+/// (LochLogic).
+fn close_gracefully(stream: &TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let start = std::time::Instant::now();
+    let mut sink = [0u8; 8192];
+    let mut left = MAX_LINE;
+    let mut reader = stream;
+    while left > 0 {
+        // a peer that keeps trickling bytes must not hold the connection slot past DRAIN_TIME
+        let wait = DRAIN_TIME.saturating_sub(start.elapsed()).min(Duration::from_millis(500));
+        if wait.is_zero() || stream.set_read_timeout(Some(wait)).is_err() {
+            break;
+        }
+        match reader.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left = left.saturating_sub(n),
+        }
+    }
 }
 
 /// Wait for a request's reply. While the app has not picked the request up and `frames` (its
@@ -495,18 +529,52 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let read = s.try_clone().unwrap();
-            serve_lines(read, s, |_, _| Some(json!({"ok": true})));
+            serve_stream(s, |_, _| Some(json!({"ok": true})));
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n{\"method\":\"y\"}\n").unwrap();
-        let mut text = String::new();
-        c.read_to_string(&mut text).unwrap(); // returns at EOF: the server closed the connection
+        c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n").unwrap();
+        let mut replies = BufReader::new(c.try_clone().unwrap());
+        let (mut first, mut second) = (String::new(), String::new());
+        replies.read_line(&mut first).unwrap();
+        replies.read_line(&mut second).unwrap();
+        assert!(first.contains("\"id\":7"), "{first}");
+        assert!(second.contains("closing the connection"), "{second}");
+        // A client that keeps sending after the junk: its next line reaches the server after the
+        // rejection. A socket closed by then answers that line with a reset, which the client reads
+        // as "connection reset" (os error 10053 / 10054 on Windows) instead of the end of the
+        // replies. The pause lets a reset arrive before the read.
+        c.write_all(b"{\"method\":\"y\"}\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let mut rest = String::new();
+        let read = replies.read_to_string(&mut rest);
         server.join().unwrap();
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "{text}");
-        assert!(lines[0].contains("\"id\":7"));
-        assert!(lines[1].contains("closing the connection"));
+        assert!(read.is_ok(), "the close must be clean, not a reset: {read:?}");
+        assert_eq!(rest, "", "nothing follows the rejection");
+    }
+
+    #[test]
+    fn a_closing_connection_is_not_held_open_by_a_trickling_peer() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_done = Arc::clone(&done);
+        let server = std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let t0 = std::time::Instant::now();
+            close_gracefully(&s);
+            server_done.store(true, Ordering::SeqCst);
+            t0.elapsed()
+        });
+        let mut c = TcpStream::connect(addr).unwrap();
+        // one byte every 100 ms: each read returns well within its 500 ms timeout
+        for _ in 0..100 {
+            if done.load(Ordering::SeqCst) || c.write_all(b"x").is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let drained = server.join().unwrap();
+        assert!(drained < DRAIN_TIME + Duration::from_secs(1), "drained for {drained:?}");
     }
 }
