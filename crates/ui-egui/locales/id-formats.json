@@ -297,7 +297,6 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}: resolusi penuhnya ({full}) memerlukan memori melebihi kapasitas komputer ini",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}, resolusi maksimum untuk panorama (resolusi penuhnya {full})",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
   "Added {n} photo{}": "{n} foto ditambahkan{:.0}",
   "Could not read {name}: {e}": "Tidak dapat membaca {name}: {e}",
   "Drop to import {n} item{}": "Jatuhkan untuk mengimpor {n} item{:.0}",
@@ -305,5 +304,6 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Listing folders — folders: {folders}, files: {files}": "Mendata folder — folder: {folders}, file: {files}"
 }
