@@ -42,6 +42,9 @@ winit = { version = "0.30", default-features = false, features = ["x11"] }
 rfd = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# GNOME/Wayland controls without an embedded title font.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita-notitle"] }
+
 zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

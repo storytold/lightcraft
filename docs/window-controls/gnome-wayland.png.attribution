@@ -1,0 +1,9 @@
+asset:        docs/window-controls/gnome-wayland.png
+title:        LightCraft window controls on GNOME Wayland
+author:       @danielmigueltejedor with Codex
+source:       original work; isolated compositor, synthetic demo content or empty home screen
+license:      MIT OR Apache-2.0
+license-file: LICENSE-MIT
+added:        2026-10-21 by @danielmigueltejedor
+notes:        No personal documents or desktop content. Screenshot includes only the application window.
+sha256:       9ba99ad4a7868086984a627cd56261d5faa5189123c6c6d6a279bdb10ed04e0d
