@@ -4634,6 +4634,53 @@ mod tests {
         assert_eq!(h.app.ui.settings.loupe_info.info2, [F::Camera, F::None, F::FileName], "a refused change changes nothing");
     }
 
+    /// View Options' Show Briefly When Photo Changes: a tick box under each Info (ticking one
+    /// unticks the other) and `view.viewOptions {briefly}`; with the overlay off, the loupe shows
+    /// the chosen Info after → changes the photo, and hides it again a few seconds later.
+    #[test]
+    fn show_briefly_when_photo_changes_in_view_options() {
+        use crate::state::{BRIEF_INFO_SECS, InfoOverlay};
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        assert_eq!(h.request("ui.key", json!({"key": "j", "cmd": true}), t)["ok"], true);
+        h.step();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "check:viewOptions.briefly2"}), t)["ok"], true);
+        h.step();
+        assert_eq!(h.app.ui.settings.loupe_info.briefly, InfoOverlay::Exposure);
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "check:viewOptions.briefly1"}), t)["ok"], true);
+        h.step();
+        assert_eq!(h.app.ui.settings.loupe_info.briefly, InfoOverlay::Basic, "one Info at most");
+        h.app.ui.dialog = None;
+        h.step();
+
+        let overlay = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "canvas:infoOverlay");
+        assert_eq!(h.app.ui.info_overlay, InfoOverlay::Off);
+        h.time += BRIEF_INFO_SECS + 1.0;
+        h.step();
+        h.step();
+        assert!(!overlay(&h), "hidden once the time has passed");
+        let before = h.app.session.active();
+        h.request("ui.key", json!({"key": "right"}), t);
+        assert_ne!(h.app.session.active(), before);
+        h.step();
+        assert!(overlay(&h), "shown after → changes the photo");
+        h.time += BRIEF_INFO_SECS + 1.0;
+        h.step();
+        h.step();
+        assert!(!overlay(&h), "and hidden again");
+
+        let r = h.request("engine.execute", json!({"command": "view.viewOptions", "params": {"briefly": "off"}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["result"]["loupeInfo"]["briefly"], "off", "{r}");
+        h.request("ui.key", json!({"key": "right"}), t);
+        h.step();
+        assert!(!overlay(&h), "off: nothing shows when the photo changes");
+        let r = h.request("engine.execute", json!({"command": "view.viewOptions", "params": {"briefly": "info3"}}), t);
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(h.app.ui.settings.loupe_info.briefly, InfoOverlay::Off, "a refused change changes nothing");
+    }
+
     /// A click on the image zooms to the chosen click-zoom ratio (1:1 by default), animating the
     /// loupe while rendering once at the final size; Z uses the same ratio; a second click returns to Fit.
     #[test]

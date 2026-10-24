@@ -75,6 +75,18 @@ fn switching_libraries_dismisses_the_previous_lightroom_result() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Photo IDs are local to a library: the brief info overlay's last photo is forgotten, so a photo
+/// in the new library with the same ID shows the info again.
+#[test]
+fn switching_libraries_restarts_the_brief_info_overlay() {
+    let dir = temp("switch-brief-info");
+    let mut app = app_in(&dir);
+    app.ui.brief_info = crate::state::BriefInfo { photo: Some(lightcraft_catalog::PhotoId(1)), since: 5.0, shown: true };
+    app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Second"})).unwrap();
+    assert_eq!(app.ui.brief_info, crate::state::BriefInfo::default());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn recent_submenu(app: &LightcraftApp) -> Vec<crate::menubar::MenuNode> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(app);

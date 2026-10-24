@@ -870,8 +870,8 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
-/// which, and the three lines each of Info 1 and Info 2 shows (`view.viewOptions`). Changes apply
-/// as they are made.
+/// which, the three lines each of Info 1 and Info 2 shows, and which of them shows briefly when the
+/// photo changes (`view.viewOptions`). Changes apply as they are made.
 pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
     heading(ui, t, crate::i18n::tr("Loupe View"));
@@ -905,6 +905,12 @@ pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
         register(ui.ctx(), format!("button:viewOptionsDefaults{n}"), r.rect);
         if r.clicked() {
             *lines = defaults;
+        }
+        // one Info at most shows briefly: ticking one unticks the other
+        let info = if n == 1 { I::Basic } else { I::Exposure };
+        let mut briefly = app.ui.settings.loupe_info.briefly == info;
+        if check(ui, &format!("viewOptions.briefly{n}"), &mut briefly, "Show briefly when photo changes") {
+            app.ui.settings.loupe_info.briefly = if briefly { info } else { I::Off };
         }
     }
 }
@@ -1343,6 +1349,7 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     // or failed switch reopens the same catalog, so its pins stay).
     app.ui.reference = None;
     app.ui.compare = None;
+    app.ui.brief_info = crate::state::BriefInfo::default();
     if app.ui.view == crate::state::ViewMode::Reference {
         app.ui.view = crate::state::ViewMode::PhotoGrid;
     }

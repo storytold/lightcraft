@@ -749,7 +749,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"infoOverlay": app.ui.info_overlay}))
         }
         "view.viewOptions" => {
-            // `info1` / `info2` set the lines for an agent; without them the window opens
+            // `info1` / `info2` set the lines, and `briefly` sets the Info that Show Briefly When Photo
+            // Changes shows, for an agent; without them the window opens
             let mut info = app.ui.settings.loupe_info;
             let mut set = false;
             for (key, lines) in [("info1", &mut info.info1), ("info2", &mut info.info2)] {
@@ -759,6 +760,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     Err(_) => {
                         return Some(Err(format!("`{key}`: three of none|fileName|captureDate|dimensions|exposure|camera|lens|cameraAndLens")));
                     }
+                }
+                set = true;
+            }
+            if let Some(v) = p.get("briefly") {
+                match serde_json::from_value(v.clone()) {
+                    Ok(v) => info.briefly = v,
+                    Err(_) => return Some(Err("`briefly`: off|basic|exposure (neither, Info 1 or Info 2)".into())),
                 }
                 set = true;
             }

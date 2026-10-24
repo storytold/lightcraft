@@ -361,6 +361,25 @@ fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
     r
 }
 
+/// View Options' Show Briefly When Photo Changes: note when the loupe changes to photo `id`, and
+/// whether the brief info overlay shows this frame (until [`BRIEF_INFO_SECS`] have passed; a
+/// repaint is asked for then, so it hides without input).
+///
+/// [`BRIEF_INFO_SECS`]: crate::state::BRIEF_INFO_SECS
+fn brief_info(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
+    let now = ctx.input(|i| i.time);
+    let brief = &mut app.ui.brief_info;
+    if brief.photo != Some(id) {
+        brief.photo = Some(id);
+        brief.since = now;
+    }
+    let left = crate::state::BRIEF_INFO_SECS - (now - brief.since);
+    brief.shown = app.ui.settings.loupe_info.briefly != crate::state::InfoOverlay::Off && left > 0.0;
+    if brief.shown {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+    }
+}
+
 /// Whether an overlay can be rendered on a region tile without changing what the tile means. Mask (one or all)
 /// overlays are evaluated from the same mask alpha as the full render; Point Color range and Visualize
 /// HDR act pixel by pixel (the HDR rendition is rendered for the same window); Visualize Spots' high
@@ -499,6 +518,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         return;
     };
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
+    brief_info(app, ui.ctx(), id);
     let d = (*photo.develop).clone();
     // the full-screen preview shows the photo only: no tool overlays
     let right = if fullscreen { RightPanel::None } else { app.ui.right };
@@ -1062,7 +1082,10 @@ fn info_overlay_top(app: &LightcraftApp, t: &Tokens) -> f32 {
 /// The info overlay's lines for `photo`, or `None` when it is off.
 fn info_overlay_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Option<Vec<String>> {
     use crate::state::InfoOverlay;
-    let fields = match app.ui.info_overlay {
+    // with the overlay off, Show Briefly When Photo Changes shows its Info for a moment
+    let brief = app.ui.info_overlay == InfoOverlay::Off && app.ui.brief_info.shown;
+    let mode = if brief { app.ui.settings.loupe_info.briefly } else { app.ui.info_overlay };
+    let fields = match mode {
         InfoOverlay::Off => return None,
         InfoOverlay::Basic => &app.ui.settings.loupe_info.info1,
         InfoOverlay::Exposure => &app.ui.settings.loupe_info.info2,
@@ -3526,6 +3549,38 @@ mod info_overlay_tests {
         assert_eq!(copies.len(), 2, "the file name and its shadow: {copies:?}");
         assert_eq!(copies[1], Color32::WHITE, "the text on top");
         assert!(copies[0].r() < 64 && copies[0].a() > 0, "the shadow under it is dark: {:?}", copies[0]);
+    }
+
+    /// View Options' Show Briefly When Photo Changes: with the overlay off, the chosen Info shows
+    /// for `BRIEF_INFO_SECS` after the loupe changes photo, then hides; an overlay that is on stays.
+    #[test]
+    fn show_briefly_shows_the_info_after_the_photo_changes() {
+        use crate::state::{BRIEF_INFO_SECS, InfoOverlay};
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let photos: Vec<lightcraft_catalog::Photo> = app.session.catalog.photos().take(2).map(|p| (**p).clone()).collect();
+        assert_eq!(photos.len(), 2, "the demo catalog has two photos");
+        let ctx = egui::Context::default();
+        // the loupe shows photo `i` at `time`: the lines the overlay paints then
+        let at = |app: &mut LightcraftApp, i: usize, time: f64| {
+            let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, time, vec![]);
+            let mut out = ctx.run_ui(raw, |ui| brief_info(app, ui.ctx(), photos[i].id));
+            out.textures_delta.clear();
+            painted_lines(app, &photos[i])
+        };
+        let name = |i: usize| photos[i].file_name.clone();
+        assert!(at(&mut app, 0, 1.0).is_empty(), "off by default");
+        app.ui.settings.loupe_info.briefly = InfoOverlay::Exposure;
+        let info2 = at(&mut app, 1, 2.0);
+        assert_eq!(info2.first(), Some(&name(1)), "Info 2 shows when the photo changes: {info2:?}");
+        assert!(!at(&mut app, 1, 2.0 + BRIEF_INFO_SECS - 0.5).is_empty(), "still up");
+        assert!(at(&mut app, 1, 2.0 + BRIEF_INFO_SECS + 0.1).is_empty(), "then hidden");
+        assert_eq!(at(&mut app, 0, 10.0).first(), Some(&name(0)), "and shown again for the next photo");
+        app.ui.settings.loupe_info.briefly = InfoOverlay::Basic;
+        let info1 = at(&mut app, 1, 20.0);
+        assert_eq!(info1.len(), 3, "Info 1's three lines: {info1:?}");
+        assert_ne!(info1, info2, "Info 1, not Info 2");
+        app.ui.info_overlay = InfoOverlay::Exposure;
+        assert_eq!(at(&mut app, 1, 30.0), info2, "an overlay that is on shows its own Info, and stays");
     }
 
     /// The lines the overlay paints, top to bottom (each once: the shadow copies left out).

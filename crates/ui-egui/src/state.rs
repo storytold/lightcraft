@@ -259,12 +259,31 @@ impl LoupeInfoField {
 }
 
 /// The three lines each mode of the info overlay shows: Info 1 ([`InfoOverlay::Basic`]) and
-/// Info 2 ([`InfoOverlay::Exposure`]).
+/// Info 2 ([`InfoOverlay::Exposure`]), and which of them Show Briefly When Photo Changes shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LoupeInfo {
     pub info1: [LoupeInfoField; 3],
     pub info2: [LoupeInfoField; 3],
+    /// Show Briefly When Photo Changes: while the info overlay is off, this Info shows for
+    /// [`BRIEF_INFO_SECS`] each time the loupe changes to another photo ([`InfoOverlay::Off`]:
+    /// neither).
+    pub briefly: InfoOverlay,
+}
+
+/// How long Show Briefly When Photo Changes shows the info overlay (seconds).
+pub const BRIEF_INFO_SECS: f64 = 3.0;
+
+/// When the loupe last changed photo, for Show Briefly When Photo Changes
+/// ([`LoupeInfo::briefly`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BriefInfo {
+    /// The photo the loupe showed last.
+    pub photo: Option<lightcraft_catalog::PhotoId>,
+    /// When the loupe changed to it (seconds on egui's clock).
+    pub since: f64,
+    /// The brief info overlay shows this frame.
+    pub shown: bool,
 }
 
 impl LoupeInfo {
@@ -276,7 +295,7 @@ impl LoupeInfo {
 
 impl Default for LoupeInfo {
     fn default() -> Self {
-        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2 }
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2, briefly: InfoOverlay::Off }
     }
 }
 
@@ -1022,6 +1041,9 @@ pub struct UiState {
     pub slideshow: Option<Box<crate::panels::slideshow::Run>>,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
+    /// When the loupe last changed photo (View Options' Show Briefly When Photo Changes).
+    #[serde(skip)]
+    pub brief_info: BriefInfo,
     /// The loupe's layout image overlay (View ▸ Loupe Overlay).
     pub layout_image: LayoutImage,
     /// Navigator mini map in the loupe while zoomed in.
@@ -1555,6 +1577,7 @@ impl Default for UiState {
             keyword_list_selected: None,
             dragging_keyword: None,
             info_overlay: InfoOverlay::Off,
+            brief_info: BriefInfo::default(),
             layout_image: LayoutImage::default(),
             navigator: true,
             settings: AppSettings::default(),
@@ -1702,13 +1725,19 @@ mod loupe_info_tests {
     fn view_options_lines_are_saved_with_the_settings() {
         let mut settings = AppSettings::default();
         settings.loupe_info.info2 = [LoupeInfoField::Lens, LoupeInfoField::None, LoupeInfoField::FileName];
+        settings.loupe_info.briefly = InfoOverlay::Exposure;
         let saved = serde_json::to_value(&settings).unwrap();
         assert_eq!(saved["loupeInfo"]["info2"], serde_json::json!(["lens", "none", "fileName"]));
+        assert_eq!(saved["loupeInfo"]["briefly"], "exposure");
         let read: AppSettings = serde_json::from_value(saved).unwrap();
         assert_eq!(read.loupe_info, settings.loupe_info);
 
         let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
         assert_eq!(old.loupe_info, LoupeInfo::default());
+        // lines saved before Show Briefly When Photo Changes existed are kept, with it off
+        let lines: AppSettings = serde_json::from_value(serde_json::json!({"loupeInfo": {"info2": ["lens", "none", "fileName"]}})).unwrap();
+        assert_eq!(lines.loupe_info.info2, settings.loupe_info.info2);
+        assert_eq!(lines.loupe_info.briefly, InfoOverlay::Off);
         let newer: AppSettings =
             serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
         assert_eq!(newer.loupe_info, LoupeInfo::default());
