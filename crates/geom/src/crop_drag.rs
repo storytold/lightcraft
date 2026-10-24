@@ -114,7 +114,10 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
             };
             // straightened, go to the nearest place that fits, so the frame slides along tilted edges (#2299)
             let nearest = if base.angle != 0.0 {
-                let from = |r: Rect| nearest_move(r, base.angle, w, h, Vec2::new(dx, dy)).map(|v| r.translate(v)).filter(|r| feasible(*r));
+                let from = |r: Rect| {
+                    let corners = r.corners().map(|c| (c, Vec2::new(1.0, 1.0)));
+                    nearest_offset(&corners, &[], base.angle, w, h, Vec2::new(dx, dy)).map(|v| r.translate(v)).filter(|r| feasible(*r))
+                };
                 // a frame at the tolerance's edge on opposite sides moves only once it is inside it
                 from(sr).or_else(|| shrunk_inside(sr, base.angle, w, h).and_then(from))
             } else {
@@ -138,8 +141,14 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                 let at = |t: f64| lerp_rect(cur, target, t);
                 at(bisect(0.0, 1.0, |t| feasible(at(t))))
             };
-            let cur = grow(sr, dx, 0.0);
-            grow(cur, 0.0, dy)
+            // straightened, a free corner goes to the nearest place that fits, growing both sides (#2308)
+            let corner = (mx0 || mx1) && (my0 || my1);
+            let nearest =
+                if base.angle != 0.0 && corner { nearest_corner(sr, mx0, my0, base.angle, (w, h), min_side, Vec2::new(dx, dy)) } else { None };
+            match nearest.filter(|r| feasible(*r)) {
+                Some(r) => r,
+                None => grow(grow(sr, dx, 0.0), 0.0, dy),
+            }
         }
         (hd, Some(a)) => {
             let (mx0, _, my0, _) = sides(hd);
@@ -212,20 +221,22 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
     if [rect.x0, rect.y0, rect.x1, rect.y1].iter().all(|v| v.is_finite()) { CropGeometry { rect, angle: base.angle } } else { start }
 }
 
-/// The translation (pixels) nearest `want` that keeps the frame `r` inside a `w × h` image turned by `angle` degrees.
-fn nearest_move(r: Rect, angle: f64, w: f64, h: f64, want: Vec2) -> Option<Vec2> {
+/// The offset `v` (pixels) nearest `want` that keeps each `p + m ⊙ v` inside a `w × h` image turned by `angle`
+/// degrees and meets the `extra` half-planes `n · v <= b`.
+fn nearest_offset(points: &[(Point, Vec2)], extra: &[(Vec2, f64)], angle: f64, w: f64, h: f64, want: Vec2) -> Option<Vec2> {
     let back = Affine::rotate_about(-angle.to_radians(), Point::new(w / 2.0, h / 2.0));
     let (ex, ey) = (back.apply_vec(Vec2::new(1.0, 0.0)), back.apply_vec(Vec2::new(0.0, 1.0)));
-    let (nx, ny) = (Vec2::new(ex.x, ey.x), Vec2::new(ex.y, ey.y));
     // never tighter than where the frame is, plus a slack so a zero-width strip survives rounding
     let (sx, sy) = (1e-9 * w, 1e-9 * h);
-    let mut planes = Vec::with_capacity(16);
-    for c in r.corners() {
-        let q = back.apply(c);
+    let mut planes = Vec::with_capacity(4 * points.len() + extra.len());
+    for (p, m) in points {
+        let q = back.apply(*p);
+        let (nx, ny) = (Vec2::new(ex.x * m.x, ey.x * m.y), Vec2::new(ex.y * m.x, ey.y * m.y));
         for (n, b, s) in [(nx, w - q.x, sx), (-nx, q.x, sx), (ny, h - q.y, sy), (-ny, q.y, sy)] {
             planes.push((n, b.max(0.0) + s));
         }
     }
+    planes.extend_from_slice(extra);
     if planes.iter().all(|(n, b)| n.dot(want) <= *b) {
         return Some(want);
     }
@@ -259,6 +270,26 @@ fn shrunk_inside(r: Rect, angle: f64, w: f64, h: f64) -> Option<Rect> {
     };
     let lo = 1.0 - 1e-5;
     inside(lo).then(|| scaled(bisect_range(lo, 1.0, inside)))
+}
+
+/// The frame `r` (pixels) with a corner dragged by `want`, the opposite one held, at the nearest place that fits.
+fn nearest_corner(r: Rect, left: bool, top: bool, angle: f64, (w, h): (f64, f64), min_side: f64, want: Vec2) -> Option<Rect> {
+    let anchor = Point::new(if left { r.x1 } else { r.x0 }, if top { r.y1 } else { r.y0 });
+    let corner = Point::new(if left { r.x0 } else { r.x1 }, if top { r.y0 } else { r.y1 });
+    let points =
+        [(corner, Vec2::new(1.0, 1.0)), (Point::new(corner.x, anchor.y), Vec2::new(1.0, 0.0)), (Point::new(anchor.x, corner.y), Vec2::new(0.0, 1.0))];
+    let (sx, sy) = (if left { -1.0 } else { 1.0 }, if top { -1.0 } else { 1.0 });
+    // at least `min_side`, and per axis only between where it is and where the pointer asks
+    let extra = [
+        (Vec2::new(-sx, 0.0), sx * (corner.x - anchor.x) - min_side),
+        (Vec2::new(0.0, -sy), sy * (corner.y - anchor.y) - min_side),
+        (Vec2::new(1.0, 0.0), want.x.max(0.0)),
+        (Vec2::new(-1.0, 0.0), (-want.x).max(0.0)),
+        (Vec2::new(0.0, 1.0), want.y.max(0.0)),
+        (Vec2::new(0.0, -1.0), (-want.y).max(0.0)),
+    ];
+    let v = nearest_offset(&points, &extra, angle, w, h, want)?;
+    Some(Rect::from_points(anchor, corner + v))
 }
 
 /// The part of the convex polygon `poly` where `n · v <= b`.
@@ -636,5 +667,69 @@ mod tests {
             assert!(g.is_within_image(W, H) && g.rect.x0 < 0.01, "{:?}", g.rect);
         }
         assert!(b.rect.y0 > a.rect.y0 + 0.01 && a.rect.y0 > start.rect.y0, "{:?} then {:?}", a.rect, b.rect);
+    }
+
+    //   Scenario: a free corner dragged diagonally out on a straightened photo (issue #2308)
+    #[test]
+    fn given_straightened_photo_when_a_free_corner_is_dragged_out_diagonally_then_both_sides_grow() {
+        for angle in [6.0, 12.0] {
+            let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle };
+            let g = drag(start, BottomRight, p(0.6, 0.6), p(1.2, 1.2), None);
+            assert!(g.is_within_image(W, H), "{angle}: {:?}", g.rect);
+            assert!(near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{angle}: the anchor corner stays: {:?}", g.rect);
+            // both sides grow (main stops at y1 0.600)
+            assert!(g.rect.x1 > 0.9 && g.rect.y1 > 0.9, "{angle}: one side only: {:?}", g.rect);
+            let further = drag(g, BottomRight, p(g.rect.x1, g.rect.y1), p(1.2, 1.2), None);
+            assert!((further.rect.x1 - g.rect.x1).abs() < 1e-4 && (further.rect.y1 - g.rect.y1).abs() < 1e-4, "{angle}: {:?}", further.rect);
+        }
+        let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle: 8.0 };
+        for (hd, from, to) in [(TopLeft, p(0.3, 0.3), p(-0.5, -0.5)), (TopRight, p(0.6, 0.3), p(1.5, -0.5)), (BottomLeft, p(0.3, 0.6), p(-0.5, 1.5))]
+        {
+            let g = drag(start, hd, from, to, None);
+            assert!(g.is_within_image(W, H), "{hd:?}: {:?}", g.rect);
+            assert!(g.rect.width() > 0.5 && g.rect.height() > 0.45, "{hd:?}: one side only: {:?}", g.rect);
+            let (ax, ay) = (if from.x < 0.5 { g.rect.x1 } else { g.rect.x0 }, if from.y < 0.5 { g.rect.y1 } else { g.rect.y0 });
+            assert!(near(ax, if from.x < 0.5 { 0.6 } else { 0.3 }) && near(ay, if from.y < 0.5 { 0.6 } else { 0.3 }), "{hd:?}: {:?}", g.rect);
+        }
+    }
+
+    //   Scenario: a free corner pushed along one axis past a tilted edge on a straightened photo
+    #[test]
+    fn given_straightened_photo_when_a_free_corner_is_pushed_sideways_past_an_edge_then_the_other_side_keeps_its_size() {
+        for angle in [6.0, 12.0, -8.0] {
+            let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle };
+            let g = drag(start, BottomRight, p(0.6, 0.6), p(1.3, 0.6), None);
+            assert!(g.is_within_image(W, H), "{angle}: {:?}", g.rect);
+            assert!(near(g.rect.y1, 0.6) && near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{angle}: the height changed: {:?}", g.rect);
+            assert!(g.rect.x1 > 0.85, "{angle}: it stopped short of the edge: {:?}", g.rect);
+            let g = drag(start, BottomRight, p(0.6, 0.6), p(0.6, 1.3), None);
+            assert!(near(g.rect.x1, 0.6) && g.rect.y1 > 0.8, "{angle}: the width changed: {:?}", g.rect);
+        }
+    }
+
+    //   Scenario: a free corner of a crop under the minimum size on a straightened photo
+    #[test]
+    fn given_straightened_photo_when_a_corner_of_a_too_small_crop_is_dragged_then_it_reaches_the_minimum() {
+        let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.3 + 2.0 / W, 0.6), angle: 6.0 };
+        let g = drag(start, BottomRight, p(start.rect.x1, 0.6), p(start.rect.x1 + 2.0 / W, 0.62), None);
+        assert!(g.rect.width() * W >= MIN_CROP_FRACTION * H - EPS, "{:?}", g.rect);
+        assert!(g.is_within_image(W, H) && near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{:?}", g.rect);
+    }
+
+    //   Scenario: a free corner moved inside, or across its anchor, on a straightened photo
+    #[test]
+    fn given_straightened_photo_when_a_free_corner_moves_inside_then_it_follows_and_keeps_a_minimum_size() {
+        let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle: 8.0 };
+        let g = drag(start, BottomRight, p(0.6, 0.6), p(0.7, 0.55), None);
+        assert!(near(g.rect.x1, 0.7) && near(g.rect.y1, 0.55) && near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{:?}", g.rect);
+        let z = drag(start, BottomRight, p(0.6, 0.6), p(0.6, 0.6), None).rect;
+        assert!(near(z.x1, 0.6) && near(z.y1, 0.6), "a click moves nothing: {z:?}");
+        let crossed = drag(start, BottomRight, p(0.6, 0.6), p(0.0, 0.0), None);
+        assert!(near(crossed.rect.x0, 0.3) && near(crossed.rect.y0, 0.3), "{:?}", crossed.rect);
+        assert!(
+            crossed.rect.width() * W >= MIN_CROP_FRACTION * H - EPS && crossed.rect.height() * H >= MIN_CROP_FRACTION * H - EPS,
+            "{:?}",
+            crossed.rect
+        );
     }
 }
