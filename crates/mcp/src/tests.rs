@@ -344,6 +344,104 @@ fn set_develop_values_and_settings() {
 }
 
 #[test]
+fn auto_develop_scopes_auto_sync_and_undo_to_one_photo() {
+    for adjustment in ["tone", "white_balance"] {
+        let mut b = Headless::demo();
+        let ids = b.session.visible_cloned();
+        let (first, second) = (ids[0], ids[1]);
+        assert!(!call_tool(&mut b, "set_develop", &json!({"id": second.0, "values": {"light.exposure": -2.0, "wb.tint": 30.0}})).is_error);
+        let before = b.session.execute("develop.get", &json!({"id": second.0})).unwrap();
+        let untouched = b.session.execute("develop.get", &json!({"id": first.0})).unwrap();
+        b.session.execute("library.select", &json!({"ids": [first.0, second.0], "active": first.0})).unwrap();
+        b.session.execute("develop.autoSync", &json!({"on": true})).unwrap();
+
+        let r = call_tool(&mut b, "auto_develop", &json!({"id": second.0, "adjustment": adjustment}));
+        assert!(!r.is_error, "{r:?}");
+        let result = r.structured.unwrap();
+        assert_eq!(result["id"], second.0);
+        assert_eq!(result["before"], before);
+        assert_eq!(result["after"], b.session.execute("develop.get", &json!({"id": second.0})).unwrap());
+        assert_ne!(result["before"], result["after"]);
+        // one request names the photo: the user's selection and active photo stay as they were
+        assert_eq!((b.session.selection.ids.clone(), b.session.selection.active), (vec![first, second], Some(first)));
+        assert!(b.session.auto_sync, "keep the user's Auto Sync preference");
+        assert_eq!(untouched, b.session.execute("develop.get", &json!({"id": first.0})).unwrap());
+        if adjustment == "tone" {
+            assert_eq!(result["before"]["wb"], result["after"]["wb"]);
+        } else {
+            assert_eq!(result["before"]["light"], result["after"]["light"]);
+        }
+        b.session.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(before, b.session.execute("develop.get", &json!({"id": second.0})).unwrap(), "one undo restores the target");
+        assert_eq!(untouched, b.session.execute("develop.get", &json!({"id": first.0})).unwrap());
+    }
+}
+
+#[test]
+fn auto_develop_rejects_missing_or_unknown_arguments_before_selecting() {
+    let mut b = Headless::demo();
+    let id = b.session.visible_cloned()[1].0;
+    let before = b.session.execute("library.state", &json!({})).unwrap();
+    for args in [
+        json!({}),
+        json!({"adjustment": "tone"}),
+        json!({"id": id}),
+        json!({"id": id, "adjustment": "all"}),
+        json!({"id": id, "adjustment": true}),
+        json!({"id": 999999, "adjustment": "tone"}),
+    ] {
+        let r = call_tool(&mut b, "auto_develop", &args);
+        assert!(r.is_error, "{args}: {r:?}");
+        assert_eq!(before, b.session.execute("library.state", &json!({})).unwrap());
+    }
+}
+
+#[test]
+fn auto_develop_keeps_a_pending_slider_edit_as_a_separate_undo_step() {
+    let mut b = Headless::demo();
+    let id = b.session.active().unwrap().0;
+    let original = b.session.execute("develop.get", &json!({"id": id})).unwrap();
+    b.session.execute("develop.beginInteraction", &json!({"label": "Exposure"})).unwrap();
+    b.session.execute("develop.set", &json!({"control": "light.exposure", "value": -2.0})).unwrap();
+    let edited = b.session.execute("develop.get", &json!({"id": id})).unwrap();
+    let r = call_tool(&mut b, "auto_develop", &json!({"id": id, "adjustment": "tone"}));
+    assert!(!r.is_error, "{r:?}");
+    assert_eq!(r.structured.unwrap()["before"], edited);
+    b.session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(b.session.execute("develop.get", &json!({"id": id})).unwrap(), edited);
+    b.session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(b.session.execute("develop.get", &json!({"id": id})).unwrap(), original);
+}
+
+#[test]
+fn malformed_photo_ids_never_reach_the_backend() {
+    for name in ["auto_develop", "set_develop", "get_develop", "crop", "render_photo", "render_preview", "export"] {
+        for id in [json!("1"), json!(-1), json!(1.5), json!(true), json!(null), json!(0), json!([]), json!({})] {
+            let mut b = Recorder(vec![]);
+            let r = call_tool(&mut b, name, &json!({"id": id, "adjustment": "tone", "values": {"light.exposure": 1.0}, "reset": true}));
+            assert!(r.is_error, "{name} {id}: {r:?}");
+            assert!(b.0.is_empty(), "{name} {id} must not read, edit, render or export the active photo");
+        }
+    }
+}
+
+#[test]
+fn workflow_is_readable_without_a_running_app() {
+    let mut s = Server::new(Box::new(crate::Remote::lazy("127.0.0.1:0"))).with_command_tools(false);
+    let r = rpc(&mut s, 1, "resources/read", json!({"uri": crate::server::PHOTO_EDITING_URI}));
+    assert!(r["error"].is_null(), "{r}");
+    assert_eq!(r["result"]["contents"][0]["text"], include_str!("../../../skills/lightcraft-photo-editing/SKILL.md"));
+    let r = rpc(&mut s, 2, "tools/list", json!({}));
+    let auto = r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "auto_develop").unwrap();
+    assert_eq!(auto["inputSchema"]["required"], json!(["id", "adjustment"]));
+    assert_eq!(auto["inputSchema"]["properties"]["adjustment"]["enum"], json!(["tone", "white_balance"]));
+    assert_eq!(auto["annotations"]["readOnlyHint"], false);
+    assert_eq!(auto["annotations"]["idempotentHint"], false);
+    let r = rpc(&mut s, 3, "tools/call", json!({"name": "auto_develop", "arguments": {"id": 1, "adjustment": "tone", "unknown": 1}}));
+    assert_eq!(r["error"]["code"], -32602);
+}
+
+#[test]
 fn crop_needs_a_rect_angle_or_reset() {
     let mut b = Headless::demo();
     let first = b.session.visible_cloned()[0];
@@ -368,12 +466,18 @@ fn resources() {
     let mut s = server();
     let r = rpc(&mut s, 1, "resources/list", json!({}));
     let list = r["result"]["resources"].as_array().unwrap();
-    assert_eq!(list.len(), 7);
+    assert_eq!(list.len(), 8);
     for (i, res) in list.iter().enumerate() {
         let uri = res["uri"].as_str().unwrap();
         let r = rpc(&mut s, 10 + i as u64, "resources/read", json!({"uri": uri}));
         let text = r["result"]["contents"][0]["text"].as_str().unwrap_or_else(|| panic!("{uri}: {r}"));
-        serde_json::from_str::<Value>(text).unwrap();
+        if res["mimeType"] == "text/markdown" {
+            assert_eq!(uri, crate::server::PHOTO_EDITING_URI);
+            assert_eq!(r["result"]["contents"][0]["mimeType"], "text/markdown");
+            assert_eq!(text, include_str!("../../../skills/lightcraft-photo-editing/SKILL.md"));
+        } else {
+            serde_json::from_str::<Value>(text).unwrap();
+        }
     }
     assert_eq!(rpc(&mut s, 99, "resources/read", json!({"uri": "lightcraft://nope"}))["error"]["code"], -32002);
 }

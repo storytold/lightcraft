@@ -267,6 +267,10 @@ lightcraft --control 7980 ~/Pictures/trip
   claude mcp add lightcraft -- "$PWD/target/release/lightcraft-cli" mcp ~/Pictures/shoot          # headless
   claude mcp add lightcraft-app -- "$PWD/target/release/lightcraft-cli" mcp --connect 127.0.0.1:7980  # live app
   ```
+- **Agent photo correction.** The bundled [photo-editing skill](skills/lightcraft-photo-editing/SKILL.md)
+  guides exposure, white balance, color, batch consistency and visual review. MCP clients can read it at
+  `lightcraft://workflows/photo-editing`; `auto_develop` applies tone or white-balance correction to an
+  explicit photo with before/after settings and Undo. See [setup and workflow](docs/mcp.md#agent-photo-correction).
 - **Scriptable CLI:** `lightcraft-cli run --import in.dng develop.set control=light.exposure value=0.7 app.export
   path=out.jpg longEdge=2048` runs any chain of commands (headless, on a saved library, or against the running app)
   and prints one JSON result per command; `lightcraft-cli render in.dng -o out.jpg --set light.exposure=0.7 --preset …`.
