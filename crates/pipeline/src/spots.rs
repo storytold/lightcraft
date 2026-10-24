@@ -206,7 +206,9 @@ pub fn window_for_reads_checked(
     // refine the stroke over a couple of radii: each dab matters to pixels within 2.5 radii
     let mut dab_boxes: Vec<[f64; 4]> = Vec::new();
     for st in autos {
-        let dabs = crate::masks::brush_dabs(st, frame, full_w, full_h);
+        // One more than the window takes, so a stroke past it is still recognised as past it
+        // without the other 1.8 million dabs being built first (#1520).
+        let dabs = crate::masks::brush_dabs_within(st, frame, full_w, full_h, MAX_DABS_CONSIDERED + 1);
         let r = dabs.r;
         if dabs.dabs.len() > MAX_DABS_CONSIDERED {
             continue;

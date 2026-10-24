@@ -1012,7 +1012,19 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                     Some(3)
                 }
                 MaskShape::Brush { strokes } => {
-                    let dabs: Vec<_> = strokes.iter().map(|st| lightcraft_pipeline::masks::brush_dabs(st, frame, w, h)).collect();
+                    // The kernel takes at most MAX_DABS across the whole mask, so no more than
+                    // that (plus one, to tell "at it" from "past it") is ever built: each stroke
+                    // may otherwise construct two million dabs before the sum below rejects them
+                    // all (#1520).
+                    let mut room = MAX_DABS + 1;
+                    let dabs: Vec<_> = strokes
+                        .iter()
+                        .map(|st| {
+                            let d = lightcraft_pipeline::masks::brush_dabs_within(st, frame, w, h, room);
+                            room -= d.dabs.len().min(room);
+                            d
+                        })
+                        .collect();
                     // pen pressure varies radius and flow per dab, which the kernel doesn't take: the CPU rasterizes it
                     if dabs.iter().map(|d| d.dabs.len()).sum::<usize>() > MAX_DABS || dabs.iter().any(|d| !d.pressure.is_empty()) {
                         None
