@@ -298,6 +298,8 @@
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} förminskade för att rymmas i enhetens minne",
+  "Photos · {n}": "Foton · {n}",
   "Added {n} photo{}": "{n} foto tillagda{:.0}",
   "Could not read {name}: {e}": "Kunde inte läsa {name}: {e}",
   "Drop to import {n} item{}": "Släpp för att importera {n} objekt{:.0}",

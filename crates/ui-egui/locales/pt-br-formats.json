@@ -1,6 +1,8 @@
 {
   " ({} in Recently Deleted)": " ({} em Excluídos recentemente)",
   " · {skipped} skipped (file exists)": " · {skipped} ignorada(s) (arquivo existente)",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} reduzida(s) para caber na memória deste dispositivo",
+  "Photos · {n}": "Fotos · {n}",
   " · {} duplicate{} skipped": " · {} duplicada(s) ignorada(s){:.0}",
   " · {} failed: {}": " · {} falhou: {}",
   " · {} moved": " · {} movida(s)",

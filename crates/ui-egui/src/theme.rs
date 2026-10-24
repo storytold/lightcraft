@@ -264,6 +264,18 @@ impl Tokens {
     }
 }
 
+/// Fonts the host adds as the last fallback of every family (see [`add_fallback_font`]).
+static HOST_FALLBACKS: std::sync::Mutex<Vec<(String, Arc<FontData>)>> = std::sync::Mutex::new(Vec::new());
+
+/// Add `font` as the last fallback of every family, from the next [`install_fonts`] on: e.g. a
+/// phone's system CJK font, so text typed in a script the bundled fonts don't cover (Korean,
+/// or any CJK without craft-fonts) shows instead of boxes.
+pub fn add_fallback_font(name: &str, font: FontData) {
+    let mut v = HOST_FALLBACKS.lock().unwrap_or_else(|e| e.into_inner());
+    v.retain(|(n, _)| n != name);
+    v.push((name.to_string(), Arc::new(font)));
+}
+
 pub fn install_fonts(ctx: &egui::Context) {
     install_fonts_with_chinese(ctx, None);
 }
@@ -337,7 +349,18 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
         mono_fallback.push(WEB_CHINESE_FONT.into());
     }
     mono.extend(mono_fallback);
+    add_host_fallbacks(&mut fonts, &HOST_FALLBACKS.lock().unwrap_or_else(|e| e.into_inner()));
     fonts
+}
+
+/// Add the host's fallback fonts (see [`add_fallback_font`]) as the last face of every family.
+fn add_host_fallbacks(fonts: &mut FontDefinitions, host: &[(String, Arc<FontData>)]) {
+    for (name, font) in host {
+        fonts.font_data.insert(name.clone(), font.clone());
+        for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+    }
 }
 
 /// The font families used by this app instance, including the browser's separately loaded face.
@@ -445,14 +468,34 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.spacing.button_padding = egui::vec2(8.0, 3.0);
-        s.spacing.interact_size.y = 22.0;
+        s.spacing.button_padding = BUTTON_PADDING;
+        s.spacing.interact_size.y = INTERACT_H;
         s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(13.0));
         s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
         s.animation_time = 0.08;
     });
+}
+
+/// Widget height and button padding: a mouse's, and a finger's (a phone, where a 22 pt button is
+/// hard to hit).
+const INTERACT_H: f32 = 22.0;
+const BUTTON_PADDING: egui::Vec2 = egui::vec2(8.0, 3.0);
+const FINGER_INTERACT_H: f32 = 30.0;
+const FINGER_BUTTON_PADDING: egui::Vec2 = egui::vec2(10.0, 6.0);
+
+/// Size buttons, fields, checkboxes and menu items for fingers (`on`) or for a mouse. Takes effect
+/// from the next frame.
+pub fn finger_sizes(ctx: &egui::Context, on: bool) {
+    let (h, padding) = if on { (FINGER_INTERACT_H, FINGER_BUTTON_PADDING) } else { (INTERACT_H, BUTTON_PADDING) };
+    if ctx.global_style().spacing.interact_size.y != h {
+        ctx.global_style_mut(|s| {
+            s.spacing.interact_size.y = h;
+            s.spacing.button_padding = padding;
+        });
+        ctx.request_repaint();
+    }
 }
 
 #[cfg(test)]
@@ -708,6 +751,24 @@ mod tests {
             let strong = definitions.families.get(&semibold_family()).expect("strong family");
             assert_eq!(regular.get(1..), strong.get(1..));
             assert_eq!(definitions.font_data.len(), FontDefinitions::default().font_data.len() + 2 + craft.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    #[test]
+    fn host_fallback_fonts_come_last_in_every_family() {
+        // (Inter's bytes under another name; not added to the process-wide list, which other tests
+        // count fonts from)
+        let host = [("test fallback".to_string(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))))];
+        let mut defs = font_definitions(&[]);
+        add_host_fallbacks(&mut defs, &host);
+        assert!(defs.font_data.contains_key("test fallback"));
+        for family in [FontFamily::Proportional, FontFamily::Name(FONT_SEMIBOLD.into()), FontFamily::Monospace] {
+            assert_eq!(defs.families[&family].last().map(String::as_str), Some("test fallback"), "{family:?}");
         }
     }
 }

@@ -172,6 +172,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "library.selectAll",
             "library.selectNone",
+            "view.selectMode",
             "@Select by",
             "---",
             "view.focusSearch",
@@ -241,6 +242,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "compare.swap",
             "compare.makeSelect",
+            "compare.previous",
+            "compare.next",
             "---",
             "view.viewOptions",
         ],
@@ -416,6 +419,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.beforeAfter" => Some(u.before_after == crate::state::BeforeAfter::SideBySide),
         "view.beforeAfterSplit" => Some(u.before_after == crate::state::BeforeAfter::Split),
         "view.autoAdvance" => Some(u.auto_advance),
+        "view.selectMode" => Some(u.select_mode),
         "view.filterBar" => Some(u.filter_bar),
         "library.toggleFilters" => Some(!app.session.filters_off()),
         "view.soloSections" => Some(u.single_panel),
@@ -993,7 +997,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let total: f32 = widths.iter().sum();
     let mut clicked: Option<(String, Value)> = None;
     let start = ui.cursor().left();
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    // ⌘ on Apple keyboards: a Mac's and an iPad's (see `hid`)
+    let mac = matches!(ui.ctx().os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
     // Menus hang below the whole top bar and never grow past the window (#189): a tall menu
     // scrolls instead of egui sliding it up over the titles.
     let bar_bottom = Some(ui.max_rect().bottom());
@@ -1094,11 +1099,8 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
 /// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
 /// label), and while its submenu is open it is the anchor the next frame's room is measured from.
 fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
-    let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
-    crate::widgets::register(ui.ctx(), format!("menusub:{label}"), r.response.rect);
-    if r.inner.is_some() {
-        crate::menu_level::set_anchor(ui.ctx(), depth + 1, r.response.rect);
-    }
+    let r = crate::menu_level::submenu(ui, depth, bar_bottom, text, children);
+    crate::widgets::register(ui.ctx(), format!("menusub:{label}"), r.rect);
 }
 
 /// `depth` is 1 for a top-level menu's rows; `bar_bottom` is where the menu bar ends.

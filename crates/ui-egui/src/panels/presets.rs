@@ -92,7 +92,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.painter().text(pos2(hr.left() + 24.0, hr.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Presets"), t.semibold(15.0), t.text);
         let mut hdr = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(pos2(hr.right() - 80.0, hr.top()), hr.right_bottom()))
+                // the "+" glyph as far from the right edge as the title from the left (its 28 pt
+                // button draws it about 9 pt inside)
+                .max_rect(Rect::from_min_max(pos2(hr.right() - 96.0, hr.top()), pos2(hr.right() - 16.0, hr.bottom())))
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
         if icon_button(
@@ -193,7 +195,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.data_mut(|d| d.insert_temp(open_id, !open));
                 }
                 if !favorites {
-                    crate::widgets::context_menu(&resp, |ui| {
+                    crate::menu_level::context_menu(&resp, |ui| {
                         if ui.button(crate::i18n::tr("Export Group…")).clicked() {
                             let _ = app.run("file.exportPresets", json!({"group": g}));
                         }
@@ -258,7 +260,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
-                    crate::widgets::context_menu(&resp, |ui| {
+                    crate::menu_level::context_menu(&resp, |ui| {
                         if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
                             let _ = app.run("preset.favorite", json!({"id": pid}));
                         }

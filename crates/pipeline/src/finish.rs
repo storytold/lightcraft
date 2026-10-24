@@ -176,8 +176,12 @@ pub struct FinishParams {
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
     pub oh: f64,
+    /// Size of the whole output, and where this render's top-left pixel is in it (a tile of a
+    /// tiled render; otherwise 0, 0).
     pub w: usize,
     pub h: usize,
+    pub x0: usize,
+    pub y0: usize,
     pub px_per_long: f64,
     /// The window's offset and the whole output's size (pixels): `(0, 0, w, h)` unless windowed.
     pub view: [f32; 4],
@@ -244,11 +248,26 @@ impl FinishParams {
             oh: frame.oh,
             w,
             h,
+            x0: 0,
+            y0: 0,
             px_per_long,
-            view: frame.view.map_or([0.0, 0.0, w as f32, h as f32], |v| [v.x as f32, v.y as f32, v.full_w as f32, v.full_h as f32]),
+            // a tile of a tiled render is a window of the whole output too
+            view: match (frame.tile, frame.view) {
+                (Some(t), _) => [t.x0 as f32, t.y0 as f32, t.gw as f32, t.gh as f32],
+                (None, Some(v)) => [v.x as f32, v.y as f32, v.full_w as f32, v.full_h as f32],
+                (None, None) => [0.0, 0.0, w as f32, h as f32],
+            },
         }
     }
 
+    /// [`FinishParams::new`] for rendering `p` in `frame` (a whole output, or one tile of it).
+    fn of(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, space: OutputSpace, proof: Option<crate::Proof>) -> FinishParams {
+        let (w, h, x0, y0) = frame.tile.map_or((p.img.width, p.img.height, 0, 0), |t| (t.gw, t.gh, t.x0, t.y0));
+        let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+        (fp.x0, fp.y0) = (x0, y0);
+        fp.proof = proof.map(|pr| pr.params(space));
+        fp
+    }
     /// Render into a display's primaries (sRGB curve) instead of the output space, soft proof
     /// included (see [`crate::DisplaySpace`]).
     pub fn for_display(&mut self, d: &crate::DisplaySpace, proof: Option<crate::Proof>) {
@@ -288,8 +307,7 @@ pub(crate) fn finish(
     proof: Option<crate::Proof>,
 ) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
-    fp.proof = proof.map(|pr| pr.params(space));
+    let mut fp = FinishParams::of(p, s, frame, info, space, proof);
     if let Some(d) = display {
         fp.for_display(d, proof);
     }
@@ -317,8 +335,7 @@ pub(crate) fn finish_deep(
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
-    fp.proof = proof.map(|pr| pr.params(space));
+    let fp = FinishParams::of(p, s, frame, info, space, proof);
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {

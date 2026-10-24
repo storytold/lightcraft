@@ -108,7 +108,7 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
         .default_width(440.0)
         .show(ctx, |ui| {
             // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-            ui.set_width(420.0);
+            ui.set_width(super::compact::dialog_width(ui.ctx(), 420.0, 18.0));
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
             ui.add_space(4.0);

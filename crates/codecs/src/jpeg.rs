@@ -456,6 +456,18 @@ mod tests {
         assert_eq!(scaled_request(100, 100, 256, 256), (100, 100));
     }
 
+    /// "No limit" arrives as a huge box (a full-resolution decode): comparing against twice it
+    /// overflowed (a panic in debug builds, "malformed Jpeg data: decoder panicked").
+    #[test]
+    fn a_huge_size_limit_decodes_at_full_size() {
+        let img = lightcraft_raster::Rgba8 { width: 64, height: 48, data: vec![[120, 80, 40, 255]; 64 * 48] };
+        let bytes =
+            crate::encode_jpeg(&crate::EncodeImage::rgba8(&img), 90, crate::ChromaSubsampling::default(), &crate::EncodeMeta::default()).unwrap();
+        let opts = DecodeOptions { max_size: Some((u32::MAX, u32::MAX)), ..Default::default() };
+        let d = decode(&bytes, &opts).unwrap();
+        assert_eq!((d.width, d.height), (64, 48));
+    }
+
     #[test]
     fn find_ff_matches_a_plain_search() {
         let mut b: Vec<u8> = (0..300u32).map(|i| (i * 7 % 255) as u8).collect();

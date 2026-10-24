@@ -62,6 +62,30 @@ pub fn level_room(screen: Rect, bar_bottom: Option<f32>, depth: usize, anchor: O
     if room.is_finite() { room.max(4.0 * ARROW) } else { 4.0 * ARROW }
 }
 
+/// `resp`'s context menu (right-click, or a long press on a touch screen), bounded by the window
+/// like the menu bar's menus: when its rows don't fit they scroll, with a finger too. Submenus
+/// in it use [`submenu`] at depth 1.
+pub fn context_menu(resp: &egui::Response, rows: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
+    crate::widgets::context_menu(resp, |ui| level(ui, 1, None, rows))
+}
+
+/// A submenu row showing `text` in a menu level at `depth`, whose rows `children` draws one
+/// level deeper, bounded like every level. While its submenu is open the row is the anchor the
+/// next frame's room is measured from.
+pub fn submenu<'a>(
+    ui: &mut Ui,
+    depth: usize,
+    bar_bottom: Option<f32>,
+    text: impl egui::IntoAtoms<'a>,
+    children: impl FnOnce(&mut Ui),
+) -> egui::Response {
+    let r = crate::widgets::menu_button(ui, text, |ui| level(ui, depth + 1, bar_bottom, children));
+    if r.inner.is_some() {
+        set_anchor(ui.ctx(), depth + 1, r.response.rect);
+    }
+    r.response
+}
+
 /// Is the pointer over `rect` on this ui's layer (not under a submenu drawn on top)?
 fn pointer_on(ui: &Ui, rect: Rect) -> bool {
     ui.ctx().pointer_hover_pos().is_some_and(|p| rect.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id()))
@@ -70,7 +94,8 @@ fn pointer_on(ui: &Ui, rect: Rect) -> bool {
 /// Draw one level of a menu, bounded by the window: when its rows don't fit the room below the
 /// menu bar they scroll, with scroll arrows at the top and bottom. `depth` is 1 for a top-level
 /// menu; `bar_bottom` is where the menu bar ends. The level's rect is registered as
-/// `menu-level:<depth>` for the control channel and tests.
+/// `menu-level:<depth>` and its rows' (scrolled) rect as `menu-rows:<depth>`, for the control
+/// channel and tests.
 pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOnce(&mut Ui)) {
     let ctx = ui.ctx().clone();
     let screen = ctx.content_rect();
@@ -99,6 +124,9 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
     let down = over.then(|| ui.allocate_exact_size(vec2(0.0, ARROW), Sense::hover()).0);
     ctx.data_mut(|d| d.insert_temp(key, out.content_size.y));
     crate::widgets::register(&ctx, format!("menu-level:{depth}"), ui.min_rect());
+    // all of its rows, scrolled out of view or not
+    let rows = Rect::from_min_size(out.inner_rect.min - out.state.offset, out.content_size);
+    crate::widgets::register(&ctx, format!("menu-rows:{depth}"), rows);
     let (Some(up), Some(down)) = (up, down) else { return };
     let t = crate::theme::Tokens::get(&ctx);
     let x = ui.min_rect().x_range();

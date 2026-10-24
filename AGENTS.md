@@ -43,6 +43,11 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   allocator pages to macOS after raw decodes). Every other production crate root has `#![forbid(unsafe_code)]`. A new
   unsafe need goes in an isolated, well-tested helper crate like it: `// SAFETY:` on every block, a safe API, a safe
   fallback where possible, and a line here naming it.
+  - **`apps/lightcraft-mobile`** (iOS / Android shells only, not built on desktop): the platform calls the OS gives no
+    safe binding for: Objective-C / UIKit messages and class definitions (`ios_*.rs`, via `objc2`) and JNI
+    (`android_jni.rs`). Kept to those modules (`#![allow(unsafe_code)]` each; the workspace denies it elsewhere), a
+    `// SAFETY:` on every block (`clippy::undocumented_unsafe_blocks` is denied), and the rest of the shell and the
+    shared crates call them through safe functions.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
   arithmetic on them; checked/saturating math for lengths, offsets and counts; no division by zero, NaN/inf or negative
   casts to `usize`; cap allocations sized by input; slice strings only at char boundaries.

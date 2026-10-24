@@ -631,7 +631,9 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // row under the plot
     let hdr = hist.as_ref().and_then(|h| h.hdr);
     let legend = if hdr.is_some() { 26.0 } else { 0.0 };
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
+    // lower in the compact layout's sheet, which has little height for the sliders
+    let h = if super::compact::is_compact(ui.ctx()) { 64.0 } else { 118.0 };
+    let (r, resp) = ui.allocate_exact_size(vec2(w, h + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui.ctx(), "histogram", r);
     let p = ui.painter();
@@ -1082,7 +1084,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
                     _ => "Blue channel",
                 };
                 let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
-                if resp.double_clicked() {
+                if crate::widgets::double_clicked(ui, &resp) {
                     app.ui.curve_channel = ch.into();
                     let _ = app.run("curve.reset", json!({"channel": ch}));
                 } else if resp.clicked() {
@@ -1096,13 +1098,14 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     });
     let ch = app.ui.curve_channel.clone();
     let w = ui.available_width();
-    let side = (w - 48.0).max(80.0);
+    // between the panel's 24 / 22 pt margins, like the sliders
+    let side = (w - 24.0 - 22.0).max(80.0);
     let (outer, _) = ui.allocate_exact_size(vec2(w, side + 12.0), Sense::hover());
     let r = Rect::from_min_size(pos2(outer.left() + 24.0, outer.top() + 6.0), vec2(side, side));
     let resp = ui.interact(r, egui::Id::new(("curve", &ch)), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Tone Curve"));
     register(ui.ctx(), "curve", r);
-    crate::widgets::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
+    crate::menu_level::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
     let p = ui.painter();
     p.rect_filled(r, 2.0, t.canvas);
     if let Some(hist) = preview_histogram(app, id) {
@@ -1168,15 +1171,18 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
     let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
-    let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
-    if dragging.is_some() {
+    let reach = crate::widgets::grab_radius(ui.ctx(), 10.0);
+    let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < reach).map(|(i, _)| i);
+    // the point being dragged as drawn: none once the finger / button is up (no repaint follows)
+    let live = dragging.filter(|_| !resp.drag_stopped());
+    if live.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if hovered.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     for (i, q) in pts.iter().enumerate() {
         let c = to_screen(q.x, q.y);
-        if dragging == Some(i) || (dragging.is_none() && hovered == Some(i)) {
+        if live == Some(i) || (live.is_none() && hovered == Some(i)) {
             p.circle_filled(c, 5.5, color);
             p.circle_stroke(c, 5.5, Stroke::new(1.0, t.canvas));
         } else {
@@ -1184,7 +1190,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         }
     }
     // input / output readout of the point being dragged (0–255 like the histogram)
-    if let Some(q) = dragging.and_then(|i| pts.get(i)) {
+    if let Some(q) = live.and_then(|i| pts.get(i)) {
         p.text(
             r.left_top() + vec2(6.0, 4.0),
             egui::Align2::LEFT_TOP,
@@ -1194,10 +1200,10 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         );
     }
     let mut new_pts = None;
-    if resp.double_clicked()
+    if crate::widgets::double_clicked(ui, &resp)
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((i, dist)) = nearest(q)
-        && dist < 10.0
+        && dist < reach
         && i != 0
         && i != pts.len() - 1
     {
@@ -1210,7 +1216,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         // pick the point under the press, not where the pointer is once the drag threshold passed
         let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
         match nearest(q) {
-            Some((i, dist)) if dist < 10.0 => dragging = Some(i),
+            Some((i, dist)) if dist < reach => dragging = Some(i),
             _ => {
                 let (x, y) = from_screen(q);
                 let mut v = pts.clone();
@@ -1253,7 +1259,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
-        && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
+        && nearest(q).is_none_or(|(_, dist)| dist >= reach)
     {
         let (x, y) = from_screen(q);
         let mut v = pts.clone();
@@ -1304,7 +1310,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                         ui.close();
                     }
                     if !p.builtin {
-                        crate::widgets::context_menu(&r, |ui| {
+                        crate::menu_level::context_menu(&r, |ui| {
                             if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
                                 let _ = app.run("curve.deletePreset", json!({"name": p.name}));
                                 ui.close();
@@ -1320,11 +1326,18 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
                 }
-                if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
+                if ui
+                    .add_enabled(
+                        app.services.pick_curve_preset_files.is_some() || app.services.picker.is_some(),
+                        egui::Button::new(crate::i18n::tr("Import Presets…")),
+                    )
+                    .clicked()
+                {
                     let _ = app.run("file.importCurvePresets", json!({}));
                     ui.close();
                 }
-                let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
+                let can_export =
+                    (app.services.save_curve_preset_file.is_some() || app.services.picker.is_some()) && !app.session.curve_presets.is_empty();
                 if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
                     let _ = app.run("file.exportCurvePresets", json!({}));
                     ui.close();
@@ -1715,7 +1728,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     {
         give_pointer_back(ui.ctx(), held.origin);
     }
-    if resp.double_clicked() {
+    if crate::widgets::double_clicked(ui, &resp) {
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
     }
     // hue and saturation readout: centred above the wheel, shown like the eye (no fade)

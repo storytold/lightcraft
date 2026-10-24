@@ -220,6 +220,20 @@ fn sidebar_sections_collapse_and_remember_it() {
     assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
 }
 
+/// The tool rail's bottom icons keep the top icons' margin and spacing (a fixed 96 pt box left a
+/// wider gap under Info).
+#[test]
+fn the_tool_rail_is_spaced_the_same_at_both_ends() {
+    let h = demo([1194.0, 834.0], json!({"view": "detail"}));
+    let t = crate::theme::Tokens::default();
+    let (presets, edit) = (widget(&h, "icon:presets"), widget(&h, "icon:edit"));
+    let (keywords, info) = (widget(&h, "icon:keywords"), widget(&h, "icon:info"));
+    let top = presets.top() - t.top_bar_h;
+    let bottom = 834.0 - info.bottom();
+    assert!((top - bottom).abs() <= 1.5, "margin above the first icon {top}, below the last {bottom}");
+    assert!(((edit.top() - presets.bottom()) - (info.top() - keywords.bottom())).abs() <= 0.5, "same gap between icons");
+}
+
 /// Given a settings file from before sections could be arranged (it lists the folded ones as
 /// `collapsedSidebar`), when it is loaded, then those sections are still folded, and what is
 /// saved from then on is the arrangement alone.

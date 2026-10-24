@@ -191,6 +191,10 @@ pub(super) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 }
 
 pub(super) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let add = match super::compact::stacked_row(ui, RichText::new(crate::i18n::tr(label)).color(t.text_label), add) {
+        Ok(r) => return r,
+        Err(add) => add,
+    };
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);
@@ -637,21 +641,24 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let _ = app.run("library.clearPreviews", json!({}));
         }
     });
-    heading(ui, t, crate::i18n::tr("Local folders"));
-    row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
-        let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
-        let mut v = app.session.forget_local_days;
-        if choices(ui, "settingsForgetLocal", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"forgetLocalDays": v}));
-        }
-    });
-    hint(
-        ui,
-        t,
-        crate::i18n::tr(
-            "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.",
-        ),
-    );
+    // (only where there is a Local to browse folders in)
+    if crate::sidebar::SidebarSection::Local.available() {
+        heading(ui, t, crate::i18n::tr("Local folders"));
+        row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
+            let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
+            let mut v = app.session.forget_local_days;
+            if choices(ui, "settingsForgetLocal", &opts, &mut v) {
+                let _ = app.run("library.preferences", json!({"forgetLocalDays": v}));
+            }
+        });
+        hint(
+            ui,
+            t,
+            crate::i18n::tr(
+                "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.",
+            ),
+        );
+    }
     #[cfg(not(target_arch = "wasm32"))]
     smart_previews(app, ui, t);
 }
