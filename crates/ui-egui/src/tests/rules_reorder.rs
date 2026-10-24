@@ -189,6 +189,50 @@ fn a_drop_keeps_the_focus_on_the_moved_rule() {
     }
 }
 
+/// Given a grip has the focus and ↓ moves its row, when the key repeats in the very next frame
+/// (before the focus lock of the new place applies), the same row moves again: egui doesn't take
+/// the repeat for the focus moving to a neighbor.
+#[test]
+fn a_repeated_arrow_key_right_after_a_move_moves_the_same_row() {
+    let mut h = editor(vec![rule(1), rule(2), rule(3), rule(4)]);
+    focus(&mut h, "rules-0");
+    let press = |h: &mut Headless, repeat: bool| {
+        h.events.push(Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat, modifiers: Modifiers::NONE });
+        h.step();
+    };
+    press(&mut h, false);
+    press(&mut h, true);
+    press(&mut h, true);
+    h.settle(SETTLE);
+    assert_eq!(shape(&h), "2 3 4 1", "three presses, three places, all the same row");
+    assert!(focused_is(&h, "rules-3"));
+}
+
+/// Given a rule whose number is outside what its field allows (a rating of 9 written by an agent)
+/// and the person has clicked into that field, when they drag another row's grip, the drag goes on:
+/// the field handing back its focus doesn't make the rules look edited, and the drop moves the row.
+#[test]
+fn a_drag_survives_a_number_field_that_loses_focus() {
+    let mut h = editor(vec![json!({"field": "rating", "op": "is", "value": 9}), rule(2), rule(3)]);
+    let field = widget(&h, "ruleField:rules-0");
+    let value = pos2(field.right() + 142.0, field.center().y);
+    pointer(&mut h, value, Some(true));
+    h.step();
+    pointer(&mut h, value, Some(false));
+    h.step();
+    h.settle(SETTLE);
+    let on = h.view.ctx.memory(|m| m.focused());
+    assert!(on.is_some() && on != Some(grip_id("rules-0")), "the number field has the focus: {on:?}");
+    let from = grip(&h, "rules-2").center();
+    // the dialog changes height when the field hands its text back: aim at the top of the list
+    let to = above(grip(&h, "rules-0"));
+    hold(&mut h, from, to);
+    assert!(drop_line(&h).is_some(), "the drop line shows where the rule would land");
+    release(&mut h, to);
+    let order = shape(&h);
+    assert!(order.starts_with("3 ") && order.ends_with(" 2"), "the dragged rule went first: {order}");
+}
+
 /// Dropping a rule where it already is changes nothing and shows no line.
 #[test]
 fn dropping_a_rule_where_it_is_does_nothing() {
