@@ -23,7 +23,7 @@ pub enum Format {
     /// TIFF-structured camera raw (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, 3FR, IIQ, ERF, …):
     /// route to `lightcraft-raw`.
     RawTiffLike,
-    /// Non-TIFF camera raw containers (CR3, RAF, CRW, MRW, X3F): route to `lightcraft-raw`.
+    /// Non-TIFF camera raw containers (CR3, RAF, CRW, MRW, X3F, LRI): route to `lightcraft-raw`.
     RawOther,
 }
 
@@ -111,7 +111,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.starts_with(b"8BPS") && b.len() >= 6 && matches!(u16::from_be_bytes([b[4], b[5]]), 1 | 2) {
         return Some(Format::Psd);
     }
-    if b.starts_with(b"FUJIFILMCCD-RAW") || b.starts_with(b"\0MRM") || b.starts_with(b"FOVb") {
+    if b.starts_with(b"FUJIFILMCCD-RAW") || b.starts_with(b"\0MRM") || b.starts_with(b"FOVb") || b.starts_with(b"LELR") {
         return Some(Format::RawOther);
     }
     if b.len() >= 14 && &b[0..2] == b"II" && &b[6..14] == b"HEAPCCDR" {
@@ -233,6 +233,7 @@ mod tests {
         assert_eq!(sniff(&[0xFF, 0x0A, 0xFA, 0x7F]), Some(Format::Jxl));
         assert_eq!(sniff(b"8BPS\0\x01\0\0\0\0\0\0"), Some(Format::Psd));
         assert_eq!(sniff(b"FUJIFILMCCD-RAW 0201"), Some(Format::RawOther));
+        assert_eq!(sniff(b"LELR \0\x10\x05\0\0\0\0"), Some(Format::RawOther));
         assert_eq!(sniff(b"II*\0\x08\0\0\0\0\0"), Some(Format::Tiff));
         assert_eq!(sniff(b"II*\0\x10\0\0\0CR\x02\0"), Some(Format::RawTiffLike));
         assert_eq!(sniff(b"IIRO\x08\0\0\0"), Some(Format::RawTiffLike));
