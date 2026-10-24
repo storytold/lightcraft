@@ -399,6 +399,7 @@ mod tests {
                         Err(e) => panic!("accept: {e}"),
                     }
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = stream;

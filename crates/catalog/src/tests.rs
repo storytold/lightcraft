@@ -330,6 +330,8 @@ fn preview_only_survives_serde_and_set_content_undo() {
         id: a,
         width: 6000,
         height: 4000,
+        source_width: None,
+        source_height: None,
         file_size: 1,
         content_hash: None,
         preview_only: Some("Nikon Huffman-compressed NEF".into()),
@@ -339,8 +341,17 @@ fn preview_only_survives_serde_and_set_content_undo() {
     assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
     // Reload: the file decodes now → cleared, with its stamp; undo (through the journal's JSON)
     // restores both
-    let op =
-        Op::SetContent { id: a, width: 6016, height: 4000, file_size: 1, content_hash: None, preview_only: None, preview_checked: String::new() };
+    let op = Op::SetContent {
+        id: a,
+        width: 6016,
+        height: 4000,
+        source_width: None,
+        source_height: None,
+        file_size: 1,
+        content_hash: None,
+        preview_only: None,
+        preview_checked: String::new(),
+    };
     let inv = c.apply(op).unwrap();
     assert!(c.photo(a).unwrap().develops_raw());
     assert_eq!(c.photo(a).unwrap().preview_checked, "");
@@ -349,6 +360,54 @@ fn preview_only_survives_serde_and_set_content_undo() {
     assert_eq!(c.photo(a).unwrap().preview_only.as_deref(), Some("Nikon Huffman-compressed NEF"));
     assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
     assert_eq!(c.photo(a).unwrap().width, 6000);
+}
+
+#[test]
+fn legacy_set_content_preserves_source_dimensions_and_explicit_zero_clears_them() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut photo = Photo::new(id, Source::File { path: "/x/raw.dng".into() }, "raw.dng", "DNG", 6000, 4000, "2026-10-01T00:00:00");
+    photo.kind = MediaKind::Raw;
+    photo.source_width = 6048;
+    photo.source_height = 4032;
+    c.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+
+    // A journal record written before source_width/source_height existed omits both fields.
+    let legacy: Op = serde_json::from_value(serde_json::json!({
+        "op": "setContent",
+        "id": id,
+        "width": 6000,
+        "height": 4000,
+        "file_size": 123,
+        "content_hash": null,
+        "preview_only": null,
+        "preview_checked": ""
+    }))
+    .unwrap();
+    c.apply(legacy).unwrap();
+    let current = c.photo(id).unwrap();
+    assert_eq!((current.source_width, current.source_height), (6048, 4032));
+
+    let inverse = c
+        .apply(Op::SetContent {
+            id,
+            width: 6000,
+            height: 4000,
+            source_width: Some(0),
+            source_height: Some(0),
+            file_size: 123,
+            content_hash: None,
+            preview_only: None,
+            preview_checked: String::new(),
+        })
+        .unwrap();
+    let current = c.photo(id).unwrap();
+    assert_eq!((current.source_width, current.source_height), (0, 0));
+    assert!(matches!(&inverse, Op::SetContent { source_width: Some(6048), source_height: Some(4032), .. }));
+    let inverse: Op = serde_json::from_str(&serde_json::to_string(&inverse).unwrap()).unwrap();
+    c.apply(inverse).unwrap();
+    let current = c.photo(id).unwrap();
+    assert_eq!((current.source_width, current.source_height), (6048, 4032));
 }
 
 /// Equivalent spellings of one folder (separators, trailing or doubled separators, `.`/`..`,

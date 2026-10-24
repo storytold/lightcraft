@@ -1123,6 +1123,8 @@ mod thumbnail_tests {
                 id: PhotoId(1),
                 width: 6000,
                 height: 4000,
+                source_width: None,
+                source_height: None,
                 file_size: 99,
                 content_hash: Some("changed".into()),
                 preview_only: None,

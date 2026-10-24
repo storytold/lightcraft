@@ -936,6 +936,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             );
             if ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
                 p.kind = lightcraft_catalog::MediaKind::Raw;
+                p.source_width = 0;
+                p.source_height = 0;
             }
             p
         };
@@ -1240,6 +1242,7 @@ mod tests {
         assert_eq!(r["imported"], 2, "the offline master and virtual copy both count as added");
         assert_eq!(r["missing"].as_array().unwrap().len(), 1);
         let master = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+        assert_eq!((master.kind, master.source_width, master.source_height), (lightcraft_catalog::MediaKind::Raw, 0, 0));
         assert_eq!(master.rating, 5);
         assert_eq!(master.flag, Flag::Pick);
         assert_eq!(master.meta.keywords, vec!["Travel|Goa"]);

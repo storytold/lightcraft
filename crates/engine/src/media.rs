@@ -1726,6 +1726,11 @@ impl crate::Session {
 pub struct ProbeInfo {
     pub width: u32,
     pub height: u32,
+    /// Decoder input dimensions before a raw's default crop; rendered images use their native
+    /// dimensions. Import stores these separately from `width` and `height`, which describe the
+    /// cropped, oriented frame used by Photo Merge.
+    pub source_width: u32,
+    pub source_height: u32,
     pub format: String,
     pub kind: MediaKind,
     pub file_size: u64,
@@ -1834,6 +1839,8 @@ mod thumbnail_hash_tests {
                 id: PhotoId(1),
                 width: 6000,
                 height: 4000,
+                source_width: None,
+                source_height: None,
                 file_size: 99,
                 content_hash: Some("replacement".into()),
                 preview_only: None,
