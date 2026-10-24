@@ -33,6 +33,7 @@ pub const FIELDS: &[&str] = &[
     "noise",
     "moire",
     "defringe",
+    "lens_blur",
     "color_hue",
     "color_sat",
 ];
@@ -118,10 +119,11 @@ pub fn get(a: &LocalAdjustments, k: &str) -> f64 {
     serde_json::to_value(a).ok().and_then(|v| v.get(k).and_then(Value::as_f64)).unwrap_or(0.0)
 }
 
-/// `a` with field `k` set to `v` (unchanged for an unknown name).
+/// `a` with field `k` set to `v` (unchanged for an unknown name). A [`FIELDS`] slider counts as
+/// known also while its JSON leaves it out at 0 (`lens_blur`).
 pub fn set(a: &LocalAdjustments, k: &str, v: f64) -> LocalAdjustments {
     let Ok(Value::Object(mut o)) = serde_json::to_value(a) else { return *a };
-    if !o.contains_key(k) || !v.is_finite() {
+    if !(o.contains_key(k) || FIELDS.contains(&k)) || !v.is_finite() {
         return *a;
     }
     o.insert(k.into(), json!(v));
@@ -705,6 +707,22 @@ mod tests {
         assert_eq!((out.exposure, out.shadows, out.clarity, out.amount), (0.5, 30.0, 10.0, 70.0));
         assert!(e.matches(&out));
         assert!(!e.matches(&LocalAdjustments { amount: 100.0, ..out }), "Amount counts when carried");
+    }
+
+    /// A partial effect sets Lens Blur on a mask without any yet (its JSON leaves `lens_blur` out
+    /// at 0); a name no slider has still changes nothing.
+    #[test]
+    fn partial_effects_set_lens_blur_from_zero() {
+        let e = MaskEffect {
+            name: "Bokeh".into(),
+            adjust: LocalAdjustments { lens_blur: 60.0, ..Default::default() },
+            fields: vec!["lens_blur".into()],
+            ..Default::default()
+        };
+        let out = e.apply(&LocalAdjustments::default());
+        assert_eq!(out.lens_blur, 60.0);
+        assert!(e.matches(&out));
+        assert_eq!(set(&LocalAdjustments::default(), "bogus", 5.0), LocalAdjustments::default());
     }
 
     #[test]

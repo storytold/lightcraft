@@ -333,9 +333,116 @@ pub fn merge(out: &Output, threshold: f32) -> Option<Prediction> {
     merged.map(|logits| Prediction { logits, score: best })
 }
 
+/// Share of the largest candidate's area another needs to count among the photo's main subjects
+/// (people in front, not the crowd behind them).
+pub const PROMINENT: f32 = 0.25;
+
+/// Which candidates are the photo's subject, given each one's area (cells it selects) and, when the
+/// camera recorded where it focused, whether it covers that point. The focus decides: the
+/// candidates it falls on, with the others about as large either way (a group at the same
+/// distance); a focus on none of them means the subject is something else (empty: the caller
+/// selects what is at the point).
+/// Without a focus: the largest, and the others about as large.
+pub fn pick_prominent(areas: &[usize], on_focus: Option<&[bool]>) -> Vec<usize> {
+    let largest = |ks: &mut dyn Iterator<Item = usize>| ks.filter_map(|k| areas.get(k).copied()).max().unwrap_or(0);
+    let near = |a: usize, of: usize| of > 0 && a as f32 >= PROMINENT * of as f32;
+    match on_focus {
+        Some(hit) => {
+            let focused: Vec<usize> = (0..areas.len()).filter(|k| hit.get(*k).copied().unwrap_or(false) && areas[*k] > 0).collect();
+            if focused.is_empty() {
+                return Vec::new();
+            }
+            // about as large as what is in focus, either way: much larger is nearer the camera
+            // than the focus, so out of focus too
+            let of = largest(&mut focused.iter().copied());
+            let alike = |a: usize| near(a, of) && (a as f32) * PROMINENT <= of as f32;
+            (0..areas.len()).filter(|k| focused.contains(k) || alike(areas[*k])).collect()
+        }
+        None => {
+            let of = largest(&mut (0..areas.len()));
+            (0..areas.len()).filter(|k| near(areas[*k], of)).collect()
+        }
+    }
+}
+
+/// The instances of several detector outputs (one per concept: "person", "animal") above
+/// `threshold` that [`pick_prominent`] keeps, each with its share of its concept's semantic mask,
+/// merged into one mask. `focus`: where the camera focused (normalized). `None` when nothing is kept.
+pub fn subject(outs: &[Output], threshold: f32, focus: Option<(f32, f32)>) -> Option<Prediction> {
+    let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+    // (mask, score, concept)
+    let mut cands: Vec<(Vec<f32>, f32, usize)> = Vec::new();
+    for (c, out) in outs.iter().enumerate() {
+        let presence = s(out.presence);
+        for (i, l) in out.logits.iter().enumerate() {
+            let p = s(*l) * presence;
+            if p > threshold
+                && let Some(m) = out.masks.i(i).ok().and_then(|t| to_vec(&t).ok())
+            {
+                cands.push((m, p, c));
+            }
+        }
+    }
+    let n = cands.first()?.0.len();
+    let side = (n as f64).sqrt() as usize;
+    if side == 0 || side * side != n || cands.iter().any(|c| c.0.len() != n) {
+        return None;
+    }
+    let areas: Vec<usize> = cands.iter().map(|c| c.0.iter().filter(|l| **l > 0.0).count()).collect();
+    let cell = focus.filter(|(x, y)| x.is_finite() && y.is_finite()).map(|(x, y)| {
+        let at = |v: f32| ((v.clamp(0.0, 1.0) * side as f32) as usize).min(side - 1);
+        at(y) * side + at(x)
+    });
+    let hits: Option<Vec<bool>> = cell.map(|i| cands.iter().map(|c| c.0.get(i).is_some_and(|l| *l > 0.0)).collect());
+    let keep = pick_prominent(&areas, hits.as_deref());
+    if keep.is_empty() {
+        return None;
+    }
+    let best = keep.iter().filter_map(|k| cands.get(*k)).map(|c| c.1).fold(0f32, f32::max);
+    let mut merged: Option<Vec<f32>> = None;
+    for (c, out) in outs.iter().enumerate() {
+        let mut masks: Vec<Vec<f32>> = keep.iter().filter_map(|k| cands.get(*k)).filter(|x| x.2 == c).map(|x| x.0.clone()).collect();
+        if masks.is_empty() {
+            continue;
+        }
+        share(&mut masks, &out.semantic);
+        for m in masks {
+            merged = Some(match merged {
+                Some(acc) => acc.iter().zip(&m).map(|(a, b)| a.max(*b)).collect(),
+                None => m,
+            });
+        }
+    }
+    merged.map(|logits| Prediction { logits, score: best })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A group in front is kept, the crowd behind isn't; the camera's focus decides: on a person,
+    /// that person and the others as large; on nobody, nothing (the object there is the subject).
+    #[test]
+    fn prominent_subjects() {
+        // four people in front, two small ones far behind
+        let areas = [900, 1000, 800, 950, 60, 40];
+        assert_eq!(pick_prominent(&areas, None), vec![0, 1, 2, 3]);
+        // focused on the first: the group
+        let hit = [true, false, false, false, false, false];
+        assert_eq!(pick_prominent(&areas, Some(&hit)), vec![0, 1, 2, 3]);
+        // focused on someone small behind: that one and whoever is about as large, not the
+        // (much larger, so nearer and out of focus) group in front
+        let hit = [false, false, false, false, true, false];
+        assert_eq!(pick_prominent(&areas, Some(&hit)), vec![4, 5]);
+        // a product in front of people: the focus is on none of them
+        assert!(pick_prominent(&areas, Some(&[false; 6])).is_empty());
+        // nobody at all, or empty masks
+        assert!(pick_prominent(&[], None).is_empty());
+        assert!(pick_prominent(&[0, 0], None).is_empty());
+        assert!(pick_prominent(&[0, 5], Some(&[true, false])).is_empty());
+        // a mismatched focus list is read as "not on it"
+        assert_eq!(pick_prominent(&[10, 9], Some(&[true])), vec![0, 1]);
+    }
 
     /// Two people side by side on a row of cells, each only weakly sure of themself and both fading where
     /// they touch; the semantic mask is sure of both and runs across. Each takes the semantic logits where

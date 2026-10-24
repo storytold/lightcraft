@@ -93,6 +93,12 @@ impl Mattes {
         self.mattes.iter().filter(|(k, _)| kinds.contains(k)).map(|(_, m)| m).collect()
     }
 
+    /// Whether a mask of the photo's Subject comes from these mattes (a person, or a person's
+    /// parts) rather than from the saliency heuristic.
+    pub fn selects_subject(&self) -> bool {
+        !self.for_shape(&MaskShape::Subject).is_empty()
+    }
+
     /// The mattes a shape uses instead of its heuristic (empty: none fits).
     fn for_shape(&self, shape: &MaskShape) -> Vec<&Image<u8>> {
         use MatteKind::*;
