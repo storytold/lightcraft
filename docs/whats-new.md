@@ -21,6 +21,11 @@
 
 ## 2026-10-23
 
+### Merge previews after a failed one
+- The HDR, Panorama and HDR Panorama dialogs make a new preview each time they open (issue #2708). After a preview
+  had failed once, for example because a photo's file was missing, opening the dialog again with the same options
+  showed neither a preview nor an error until an option was changed.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

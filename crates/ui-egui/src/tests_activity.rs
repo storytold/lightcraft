@@ -414,6 +414,31 @@ fn merge_dialog_remembers_the_last_settings_per_kind() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Issue #2708: a preview that failed (a photo's file missing) is tried again when the dialog opens again; it used to
+/// show neither a preview nor an error until an option changed.
+#[test]
+fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
+    let (mut h, dir) = bracket("merge-retry");
+    let (file, away) = (dir.join("IMG_1.dng"), dir.join("IMG_1.away"));
+    std::fs::rename(&file, &away).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(h.step_until(T, |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.error.is_some(), "the preview failed");
+    h.app.ui.dialog = None;
+    h.step();
+    // the file is back (a drive reconnected); the same photos and options again
+    std::fs::rename(&away, &file).unwrap();
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    h.step();
+    assert!(h.app.merge.preview_task.is_some() || h.app.merge.error.is_some(), "the dialog shows a preview being made, or why not");
+    assert!(h.step_until(T, |h| h.app.merge.preview_task.is_none()));
+    assert!(h.app.merge.preview.is_some(), "{:?}", h.app.merge.error);
+    h.app.ui.dialog = None;
+    h.step();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// HDR for Each Bracket Set runs the merges one after the other, each with its activity row; cancelling one stops the
 /// rest.
 #[test]
