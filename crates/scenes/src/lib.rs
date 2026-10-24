@@ -13,7 +13,7 @@ mod paint;
 use lightcraft_raster::Rgb32f;
 use serde::Serialize;
 
-pub use paint::render_srgb_linear;
+pub use paint::{Label, render_labels, render_srgb_linear};
 
 /// Kinds of scene the generator knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -78,6 +78,11 @@ impl Scene {
     pub fn render_fit_serial(&self, max_edge: usize) -> Rgb32f {
         let (w, h) = self.fit(max_edge);
         paint::render_serial(self.kind, self.seed, w, h)
+    }
+
+    /// The scene's reference labels at `w × h` ([`render_labels`]).
+    pub fn labels(&self, w: usize, h: usize) -> Vec<[f32; 4]> {
+        paint::render_labels(self.kind, self.seed, w, h)
     }
 
     fn fit(&self, max_edge: usize) -> (usize, usize) {

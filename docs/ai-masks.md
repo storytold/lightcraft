@@ -46,6 +46,69 @@ The result is stored with the mask: the model's 288 × 288 mask logits over the 
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
 
+## Sky, Subject, Background and Landscape without a model
+
+These masks don't use SAM 3. A photo that carries its own mattes (DNG semantic masks, e.g.
+iPhone ProRAW) uses them. Otherwise the app analyses the whole photo once per look
+(`crates/pipeline/src/auto_mask.rs`). It works on a 256 px proxy of the uncropped, oriented,
+white-balanced photo, keeps the result cached, and samples it at any size, crop or zoom window,
+then snaps it to the photo's edges with a guided filter:
+
+- **Sky:** a colour model seeded from smooth, sky-coloured pixels near the top and refitted twice.
+  Each column ends the sky at the row that best separates sky-like pixels above from the rest
+  below, with smooth gradients carrying the sky on and a bonus for ending at an edge.
+- **Subject** (Background is its inverse): colours unlike the frame's border, sharper than
+  their surroundings and near the centre, thresholded with Otsu and kept to the main regions.
+- **Landscape:** `sky`, `water` (below the sky line, smooth, sky-hued or blue-green) and
+  `vegetation` (green). Mountains, architecture and the ground classes select nothing.
+
+**Evaluation.** The procedural demo scenes know what each pixel shows (`lightcraft_scenes::Label`). That
+makes every demo photo a labelled reference: `cargo test -p lightcraft-pipeline --release mask_eval --
+--nocapture` prints a soft IoU per scene. Set `MASK_EVAL_DUMP=<dir>` to also write the photo,
+the mask and the reference side by side.
+
+| Mask | Scenes | Before (per-pixel heuristic) | After |
+|---|---|---|---|
+| Sky | 21 | 0.649 | 0.787 |
+| Subject | 3 (macro) | 0.396 | 0.881 |
+| Landscape water | 12 | 0.000 | 0.321 |
+
+The demo scenes are synthetic, so these numbers can't show quality on real photos. Weak cases:
+a calm sea under a sunset sky (0.43–0.64), aurora rays (0.50–0.55, textured sky) and a sea the
+same blue as the sky (0.60–0.67). Real photos need a CC0 set with hand-made reference masks in
+`corpus/`, which doesn't exist yet.
+
+### Model options (decision for the maintainer)
+
+Weight licences were checked as published by their authors. Verify them again before shipping
+anything:
+
+- **BiRefNet** (MIT code and weights): high-quality salient-object / subject matting. It is the
+  strongest candidate for Subject and Background. It needs a candle port (Swin backbone + decoder,
+  ~200 MB of f32 weights, ~1–2 s per photo on CPU), downloaded on request like SAM 3. Its weights
+  can be mirrored without a gated licence.
+- **U²-Net** (Apache-2.0, weights included): a smaller (4.7 MB / 176 MB) salient-object model.
+  It is weaker than BiRefNet and quick to port.
+- **MODNet** (Apache-2.0): portrait matting, a candidate for People (whole person only, no
+  parts).
+- **Mask2Former / OneFormer** (MIT code and checkpoints) trained on ADE20K: this would cover Sky
+  and every Landscape class. Check the ADE20K terms that apply to derived weights first. It is a
+  large port.
+- **Rejected:** SegFormer (NVIDIA licence, non-commercial), and anything trained only on
+  non-commercial data or released under GPL / CC-BY-NC.
+
+Which model to adopt, and who hosts its weights, is the maintainer's decision. Until then the
+analysis above runs.
+
+### SAM 3 mirror
+
+The mirror mechanism is finished in code: `<PREFIX>_SAM3_MIRRORS`, the `sam3-mirrors.txt`
+file, and the built-in `DEFAULT_MIRRORS`, with SHA-256 pinning. What's missing isn't code but a
+host. Someone has to redistribute Meta's SAM Materials under the SAM License (with the licence
+next to the files) and add that URL, together with pinned `vocab.json` / `merges.txt` hashes.
+Only the maintainer can decide that. Hugging Face's `facebook/sam3` is gated and can't be a
+default.
+
 ## Remote Metal inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while

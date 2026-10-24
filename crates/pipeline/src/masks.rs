@@ -57,7 +57,10 @@ impl MatteKind {
 /// person) are combined with max.
 #[derive(Clone, Default, PartialEq)]
 pub struct Mattes {
-    mattes: Vec<(MatteKind, Image<u8>)>,
+    mattes: Vec<(MatteKind, std::sync::Arc<Image<u8>>)>,
+    /// Selections computed from the photo itself ([`crate::auto_mask`]), used by shapes no
+    /// matte fits.
+    pub auto: Option<std::sync::Arc<crate::auto_mask::AutoMasks>>,
 }
 
 impl std::fmt::Debug for Mattes {
@@ -70,12 +73,12 @@ impl Mattes {
     /// Add a matte (empty ones are ignored).
     pub fn push(&mut self, kind: MatteKind, matte: Image<u8>) {
         if matte.width > 0 && matte.height > 0 && matte.data.len() == matte.width * matte.height {
-            self.mattes.push((kind, matte));
+            self.mattes.push((kind, std::sync::Arc::new(matte)));
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.mattes.is_empty()
+        self.mattes.is_empty() && self.auto.is_none()
     }
 
     /// Memory held (bytes).
@@ -90,7 +93,7 @@ impl Mattes {
     }
 
     fn of(&self, kinds: &[MatteKind]) -> Vec<&Image<u8>> {
-        self.mattes.iter().filter(|(k, _)| kinds.contains(k)).map(|(_, m)| m).collect()
+        self.mattes.iter().filter(|(k, _)| kinds.contains(k)).map(|(_, m)| &**m).collect()
     }
 
     /// The mattes a shape uses instead of its heuristic (empty: none fits).
@@ -208,9 +211,24 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 /// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    // Background is the complement of Subject, whichever source (embedded matte or automatic grid) Subject uses
+    if matches!(shape, MaskShape::Background) {
+        let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev, mattes);
+        s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        return s;
+    }
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
         return matte_alpha(&fitting, frame, w, h);
+    }
+    if let Some(auto) = mattes.and_then(|m| m.auto.as_deref()) {
+        let grid = auto.for_shape(shape);
+        if let Some(grid) = grid.filter(|_| crate::auto_mask::wants(shape)) {
+            let coarse = crate::auto_mask::sample(grid, frame, w, h);
+            // snap the coarse grid's edges to the photo's (radius: a grid cell)
+            let cell = (frame_px(frame, w) / crate::auto_mask::EDGE as f32).max(1.0);
+            return guided_cross(log_l, &coarse, 1.5 * cell, 0.01);
+        }
     }
     let mut out = Plane::new(w, h);
     let to_long = |p: Point| frame.norm_to_long(p);
@@ -1190,5 +1208,27 @@ mod tests {
         assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
         let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
         assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+    }
+
+    /// An embedded person matte outranks the automatic grid for Subject, and Background stays its
+    /// complement (not the inverse of the automatic grid).
+    #[test]
+    fn background_follows_the_embedded_matte_over_the_auto_grid() {
+        use crate::auto_mask::AutoMasks;
+        let (w, h) = (40, 20);
+        let img = Rgb32f::filled(w, h, [0.2; 3]);
+        let l = img.map(crate::local::log_lum);
+        let mut mattes = Mattes::default();
+        mattes.push(MatteKind::Person, Image::filled(w, h, 255));
+        mattes.auto = Some(std::sync::Arc::new(AutoMasks {
+            sky: Plane::new(w, h),
+            subject: Plane::new(w, h),
+            water: Plane::new(w, h),
+            vegetation: Plane::new(w, h),
+        }));
+        let f = frame(w, h);
+        let eval = |shape: &MaskShape| shape_alpha(shape, &f, w, h, &img, &l, 0.0, Some(&mattes));
+        assert!(eval(&MaskShape::Subject).get(20, 10) > 0.99);
+        assert!(eval(&MaskShape::Background).get(20, 10) < 0.01);
     }
 }

@@ -407,3 +407,18 @@ fn auto_mask_strokes_match_the_whole_render() {
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
 }
+
+// Given a Sky or Subject mask without a stored segmentation, a window selects what the whole
+// frame does: the photo is analysed whole (crate::auto_mask), not the window's pixels
+#[test]
+fn automatic_ai_masks_do_not_depend_on_the_window() {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+    for shape in [MaskShape::Sky, MaskShape::Subject] {
+        let mut s = DevelopSettings::default();
+        let mut m =
+            Mask { components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: shape.clone() }], ..Default::default() };
+        m.adjust.exposure = -2.0;
+        s.masks.push(m);
+        check(&format!("{shape:?}"), &s, PixelWindow { x: 100, y: 0, w: 400, h: 300 }, 40, 2.0);
+    }
+}

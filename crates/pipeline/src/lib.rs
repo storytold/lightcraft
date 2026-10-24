@@ -24,6 +24,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod auto;
+pub mod auto_mask;
 pub mod blemish;
 pub mod colorops;
 pub mod cull;
@@ -450,12 +451,20 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local_tone::enabled(info, s),
         src_long,
     ));
+    // AI masks without a model: analysed once per photo look on the whole frame (cached)
+    let mattes = if auto_mask::needed(s) {
+        let mut m = info.mattes.as_deref().cloned().unwrap_or_default();
+        m.auto = Some(auto_mask::for_source(src, info, s));
+        Some(Arc::new(m))
+    } else {
+        info.mattes.clone()
+    };
     let lin_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -732,6 +741,8 @@ mod tests_geometry;
 mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
+#[cfg(test)]
+mod tests_mask_eval;
 #[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]
