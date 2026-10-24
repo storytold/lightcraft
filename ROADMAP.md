@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (video: MP4/MOV/M4V import and cataloguing, with duration badges and a loupe card; no playback, trim, edits, presets or export; Video 0% → 10% breadth and readiness; headline numbers unchanged; Print: Japanese photo and postcard paper sizes) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -72,7 +72,7 @@ Hours are calibrated on this repo's PR history; see
 | Merge and HDR | 60% | 85% | 20–35 h |
 | Views, compare, zoom, culling | 70% | 90% | 15–30 h |
 | Classic output modules (Map, Book, Slideshow, Print, publish, tethering) | 10% | 15% | 90–150 h |
-| Video | 0% | 0% | 25–45 h |
+| Video | 10% | 10% | 20–40 h |
 
 Weights and evidence: [target-app-parity.md](docs/target-app-parity.md#features).
 
@@ -191,6 +191,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Video: MP4/MOV/M4V import and cataloguing (duration, dimensions, date, camera/GPS), grid badges and a loupe card; Video 0% → 10% breadth and readiness, 25–45 → 20–40 h |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |
 | 2026-10-19 | minor | Indonesian interface (`id`): every plain and formats message, plus 69 command labels, locale, menu command and tests; What's New left in English; Localization ~55% → ~64% (mean of the 12 key languages), 8 of 12 present |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |

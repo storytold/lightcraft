@@ -40,7 +40,8 @@ pub const EXTENSIONS: &[&str] = &[
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
     "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
-    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
+    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef", // Video containers catalogued by kind and duration
+    "mp4", "mov", "m4v",
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -177,6 +178,9 @@ pub struct ImportCandidate {
     /// A raw variant that can't be decoded yet (why): it imports as preview only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_only: Option<String>,
+    /// Video duration in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -637,6 +641,7 @@ fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> Has
                 captured: p.captured.clone(),
                 duplicate: Some("path".into()),
                 existing: Some(p.id.0),
+                duration: p.duration,
                 ..Default::default()
             };
             by_path.insert(PathBuf::from(path), (p.id, c));
@@ -761,8 +766,8 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         let mut c = ImportCandidate { path: f.clone(), name, ..Default::default() };
         match probes.remove(&f) {
             Some(Ok(info)) => {
-                (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
-                    (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
+                (c.format, c.kind, c.width, c.height, c.file_size, c.captured, c.duration) =
+                    (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone(), info.duration);
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
@@ -1142,6 +1147,8 @@ impl ImportJob {
                     // the templates see the photo as it will be catalogued (undated: the import time)
                     let own = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
+                    q.kind = info.kind;
+                    q.duration = info.duration;
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
                     let name = opts.rename.as_deref().filter(|t| !t.trim().is_empty()).map(|t| {
@@ -1465,6 +1472,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
                 p.kind = info.kind;
+                p.duration = info.duration;
                 p.file_size = info.file_size;
                 p.captured = info.captured;
                 p.meta = info.meta;
@@ -1585,12 +1593,13 @@ impl Session {
     /// A thumbnail for an import candidate (not in the catalog): a raw's embedded preview, else a
     /// small render of the file. `slot` makes the job's photo id unique (`u64::MAX - slot`).
     pub fn candidate_thumb_job(&mut self, c: &ImportCandidate, edge: usize, slot: u64) -> Option<crate::media::QuickJob> {
-        if c.error.is_some() {
+        if c.error.is_some() || c.kind == MediaKind::Video {
             return None;
         }
         let id = PhotoId(u64::MAX - slot);
         let mut p = Photo::new(id, Source::File { path: c.path.clone() }, &c.name, &c.format, c.width.max(1), c.height.max(1), "");
         p.kind = c.kind;
+        p.duration = c.duration;
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
             p.embedded_lens = info.embedded_lens;
