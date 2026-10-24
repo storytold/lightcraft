@@ -340,7 +340,7 @@ mod contact_sheet_tests {
         let ctx = egui::Context::default();
         crate::pick::poll(&mut app, &ctx);
         assert!(app.pending_picks.is_empty());
-        assert!(app.export.is_some(), "picker did not start export: {:?}", app.ui.toast);
+        assert!(app.export.is_some(), "picker did not start export: {:?}", app.ui.toasts);
         // a hang guard, not a speed check: the render queues behind other tests' demo scenes (generated one at a
         // time process-wide), which on a loaded machine takes minutes
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -353,7 +353,7 @@ mod contact_sheet_tests {
             assert!(Instant::now() < deadline, "export did not finish");
             std::thread::sleep(Duration::from_millis(10));
         }
-        let result = app.last_export_result.as_ref().unwrap_or_else(|| panic!("export failed: {:?}", app.ui.toast));
+        let result = app.last_export_result.as_ref().unwrap_or_else(|| panic!("export failed: {:?}", app.ui.toasts));
         let req = asked.lock().unwrap();
         assert_eq!(req[0].kind, PickKind::Save);
         assert_eq!(req[0].filter.as_ref().unwrap().1, &["pdf"]);
