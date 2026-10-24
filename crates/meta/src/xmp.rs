@@ -332,19 +332,31 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>) {
+/// Total bytes of property keys one packet may produce. Each key spells out its full struct path, so long
+/// names nested deep under many leaves would otherwise multiply a small packet into gigabytes (#2120).
+const MAX_KEY_BYTES: usize = 64 << 20;
+
+/// `prefix` + `name`, charged against the packet's key budget.
+fn budget_key(prefix: &str, name: &str, budget: &mut usize) -> Result<String, XmpError> {
+    let len = prefix.len().saturating_add(name.len());
+    *budget = budget.checked_sub(len).ok_or(XmpError::TooComplex)?;
+    Ok(format!("{prefix}{name}"))
+}
+
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) -> Result<(), XmpError> {
     for (k, v) in &d.attrs {
         if !is_rdf_meta_attr(k) {
-            props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
+            props.entry(budget_key(prefix, k, budget)?).or_default().push(v.clone());
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props);
+        collect_property(c, prefix, props, budget)?;
     }
+    Ok(())
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>) {
-    let key = format!("{prefix}{}", p.name);
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) -> Result<(), XmpError> {
+    let key = budget_key(prefix, &p.name, budget)?;
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
             .children
@@ -358,28 +370,28 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
             items.sort_by_key(|(default, _)| !*default);
         }
         props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
-        return;
+        return Ok(());
     }
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props);
+            collect_property(c, &struct_prefix, props, budget)?;
         }
-        return;
+        return Ok(());
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props);
-        return;
+        return collect_description(d, &struct_prefix, props, budget);
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
-            props.entry(format!("{struct_prefix}{k}")).or_default().push(v.clone());
+            props.entry(budget_key(&struct_prefix, k, budget)?).or_default().push(v.clone());
         }
-        return;
+        return Ok(());
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
     props.entry(key).or_default().push(v);
+    Ok(())
 }
 
 fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
@@ -497,8 +509,9 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    let mut key_budget = MAX_KEY_BYTES;
     for d in descs {
-        collect_description(d, "", &mut props);
+        collect_description(d, "", &mut props, &mut key_budget)?;
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
         }
@@ -892,6 +905,28 @@ mod tests {
         assert_eq!(read(r#"exif:ISOSpeedRatings="-100""#), None);
         assert_eq!(read(r#"exif:ISOSpeedRatings="0""#), None);
         assert_eq!(read(r#"exif:ISOSpeedRatings="200""#), Some(200));
+    }
+
+    #[test]
+    fn long_nested_struct_names_hit_the_key_budget() {
+        // 58 nested 2000-char struct names over 20 000 leaves: every leaf key would copy the ~116 KB path,
+        // ~2.3 GB of keys from a packet under 300 KB (#2120).
+        let name = format!("a:{}", "n".repeat(2000));
+        let mut x =
+            String::from(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:a="urn:a" xmlns:b="urn:b">"#);
+        for _ in 0..58 {
+            x.push_str(&format!(r#"<{name} rdf:parseType="Resource">"#));
+        }
+        for i in 0..20_000 {
+            x.push_str(&format!("<b:{i}/>"));
+        }
+        for _ in 0..58 {
+            x.push_str(&format!("</{name}>"));
+        }
+        x.push_str("</rdf:Description></rdf:RDF>");
+        let start = std::time::Instant::now();
+        assert!(matches!(parse_xmp(&x), Err(XmpError::TooComplex)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
     }
 
     #[test]
