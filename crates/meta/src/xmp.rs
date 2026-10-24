@@ -203,8 +203,10 @@ fn entity(name: &str) -> Option<char> {
         _ => {
             let n = name.strip_prefix('#')?;
             let v = match n.strip_prefix(['x', 'X']) {
-                Some(h) => u32::from_str_radix(h, 16).ok()?,
-                None => n.parse().ok()?,
+                Some(h) if h.bytes().all(|b| b.is_ascii_hexdigit()) => u32::from_str_radix(h, 16).ok()?,
+                Some(_) => return None,
+                None if n.bytes().all(|b| b.is_ascii_digit()) => n.parse().ok()?,
+                None => return None,
             };
             char::from_u32(v).filter(|&c| is_xml_char(c))?
         }
@@ -1170,5 +1172,13 @@ mod tests {
         assert_eq!(entity("#xFFFE"), None);
         assert_eq!(entity("#x41"), Some('A'));
         assert_eq!(entity("#9"), Some('\t'));
+    }
+
+    #[test]
+    fn entity_rejects_signed_numeric_references() {
+        assert_eq!(entity("#+65"), None);
+        assert_eq!(entity("#x+41"), None);
+        assert_eq!(entity("#65"), Some('A'));
+        assert_eq!(entity("#x41"), Some('A'));
     }
 }
