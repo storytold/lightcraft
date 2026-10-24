@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** patch (typed GPS input now rejects malformed coordinates before metadata changes; no ranked-gap or readiness-count changes; earlier: gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -84,6 +84,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | patch | Typed GPS input now validates the complete coordinate expression, rejecting unknown text, wrong-axis or conflicting hemispheres, and invalid DMS minutes/seconds before changing metadata; ranked gaps, estimates and readiness counts unchanged |
 | 2026-10-23 | minor | Gap 13: before a Lightroom catalog import the app asks whether it merges into the open library or goes into a new one (opt-out in Settings, #2672); hours unchanged |
 | 2026-10-22 | patch | Gap 28: View shows the current grid-cycle key beside Photo Grid and Square Grid (#2500); no new binding and no change to the remaining shortcut gap or hours |
 | 2026-10-22 | minor | Gap 15: the Print page setup and PDF gain the Japanese photo and postcard paper sizes (L判 89×127, 2L判 127×178, KG判 102×152, はがき 100×148, 往復はがき 148×200, 六切 203×254, 四切 254×305, 名刺 55×91 mm), by their customary names; gap not closed |
