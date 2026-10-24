@@ -618,7 +618,8 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing:
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
-    let sc = sc.resolve_label(labels);
+    // (what was left in the file at import is no news: the library never had it)
+    let sc = crate::import::ReadFromPhotos::but(p.left_in_file).of_the_sidecar(sc).resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
     (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop) != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop)
@@ -860,6 +861,10 @@ impl SyncCommit {
             SyncStep::Sidecars(read) => {
                 let mut ops = Vec::new();
                 for (id, path, sc) in read {
+                    // (a changed sidecar is read for what the library has of the photo: what was
+                    // left in the file at import stays there)
+                    let left = s.catalog.photo(id).map(|p| p.left_in_file).unwrap_or_default();
+                    let sc = sc.map(|sc| crate::import::ReadFromPhotos::but(left).of_the_sidecar(sc));
                     match sc.map_err(EngineError::Other).and_then(|sc| s.sidecar_op(id, sc)) {
                         Ok(op) => ops.push(op),
                         Err(e) => report.failed.push((path, e.to_string())),
