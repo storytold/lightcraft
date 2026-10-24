@@ -12,7 +12,7 @@ the installation self-test. Synthetic networks are generated in Rust for tests.
 
 Run `cargo test -p lightcraft-denoise --features runtime`. The CPU backend is optional;
 featureless and web builds keep the model metadata and cache format without faer/GEMM.
-The `rawnind-model` feature enables the otherwise empty download catalog and requires
-an explicit release-policy decision. Real-model tests are ignored by default and
+The `rawnind-model` feature enables the otherwise empty download catalog; the desktop
+app and the CLI turn it on by default. Real-model tests are ignored by default and
 require an explicitly supplied local model. The GPU twin is `lightcraft-gpu::nn`;
 model management, background jobs and export integration live in `lightcraft-engine`.
