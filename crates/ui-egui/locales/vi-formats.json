@@ -298,12 +298,13 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more",
+  "…and {more} more": "…và {more} nữa",
   "Added {n} photo{}": "Đã thêm {n} ảnh{:.0}",
   "Could not read {name}: {e}": "Không thể đọc {name}: {e}",
   "Drop to import {n} item{}": "Thả để nhập {n} mục{:.0}",
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "{all:.1} s, image encoder {encoder:.1} s": "{all:.1} giây, bộ mã hóa ảnh {encoder:.1} giây"
 }
