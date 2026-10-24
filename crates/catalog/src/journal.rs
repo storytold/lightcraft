@@ -32,6 +32,17 @@
 //!   `<= N` are skipped as stale;
 //! - after the log rewrite: the new snapshot + exactly the records `> N`.
 //!
+//! **When to compact** ([`SnapshotPolicy`]): a snapshot rewrites the whole catalog, so it is due
+//! when the log has grown to a share of the snapshot's size, not after a fixed number of changes.
+//! Writing then stays proportional to what changed: an import rewrites a few times the final
+//! snapshot in all, where compacting every 2000 records rewrote it once per 2000 photos. (That
+//! holds up to a snapshot of four times [`SnapshotPolicy::log_cap_bytes`], 1 GB; beyond it the log
+//! reaches the cap first, and the snapshot is rewritten once per 256 MB of log.)
+//!
+//! Closing a library compacts its log too, unless the snapshot is large and the log still short
+//! ([`Journal::wants_snapshot_on_close`]): quitting after a few changes doesn't rewrite a large
+//! catalog, and after a quit a log is never left long.
+//!
 //! At most one snapshot is in flight; a synchronous [`Journal::snapshot`] and dropping the journal
 //! first wait for it, so an older snapshot can never replace a newer one.
 //!
@@ -79,15 +90,50 @@ const FORMAT: &str = "lightcraft-catalog";
 pub const VERSION: u32 = 9;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
+///
+/// The log is worth compacting once it is long (`max_records` or `max_bytes`) **and** has grown
+/// to `1 / snapshot_share` of the snapshot it would replace; or, whatever the snapshot's size,
+/// once it reaches `log_cap_bytes` (what opening the library has to replay stays bounded).
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotPolicy {
     pub max_records: u64,
     pub max_bytes: u64,
+    /// The log must also have reached this share of the snapshot's size: 4 = a quarter of it.
+    /// 0: no such condition (a long log is compacted whatever the snapshot's size).
+    pub snapshot_share: u64,
+    /// A log this large is compacted in any case.
+    pub log_cap_bytes: u64,
+    /// Closing the library compacts whatever log there is while the snapshot is at most this
+    /// large (rewriting it is quick, and the next open has nothing to replay). A larger snapshot
+    /// is rewritten on close only once the log is long (`max_records` or `max_bytes`): after a
+    /// quit, a log is never longer than that, so what a damaged record in it can cost stays what
+    /// it was. (A session that ends without a quit leaves the log as long as it had grown.)
+    pub close_bytes: u64,
 }
 
 impl Default for SnapshotPolicy {
     fn default() -> Self {
-        SnapshotPolicy { max_records: 2000, max_bytes: 16 << 20 }
+        SnapshotPolicy { max_records: 2000, max_bytes: 16 << 20, snapshot_share: 4, log_cap_bytes: 256 << 20, close_bytes: 64 << 20 }
+    }
+}
+
+impl SnapshotPolicy {
+    /// Whether a log of `records` records and `bytes` bytes is due for compaction into a snapshot
+    /// that is now `snapshot_bytes` long.
+    pub fn due(&self, records: u64, bytes: u64, snapshot_bytes: u64) -> bool {
+        if bytes >= self.log_cap_bytes {
+            return true;
+        }
+        let share = match self.snapshot_share {
+            0 => true,
+            n => bytes >= snapshot_bytes / n,
+        };
+        self.long(records, bytes) && share
+    }
+
+    /// A log of this length is long (`max_records` or `max_bytes`), whatever the snapshot's size.
+    pub fn long(&self, records: u64, bytes: u64) -> bool {
+        records >= self.max_records || bytes >= self.max_bytes
     }
 }
 
@@ -182,6 +228,11 @@ pub struct Journal {
     /// `seq` of the last durable op.
     seq: u64,
     snapshot_seq: u64,
+    /// Size of `catalog.snap` (0: none yet).
+    snapshot_bytes: u64,
+    /// The snapshot in the store is in an older format than this build's: the upgrade at open
+    /// could not write it. Closing writes it then, whatever the log's length.
+    behind: bool,
     log_records: u64,
     log_bytes: u64,
     pub policy: SnapshotPolicy,
@@ -345,6 +396,7 @@ impl Journal {
         let snap = store.read(SNAPSHOT).map_err(io)?;
         let log = store.read(LOG).map_err(io)?;
         report.created = snap.is_none() && log.is_none();
+        let snapshot_bytes = snap.as_ref().map_or(0, |b| b.len() as u64);
         let (mut catalog, snapshot_seq, snapshot_version) = match snap {
             Some(bytes) => {
                 // the header first: a newer snapshot may not parse as this version's catalog
@@ -374,6 +426,8 @@ impl Journal {
             store,
             seq: snapshot_seq,
             snapshot_seq,
+            snapshot_bytes,
+            behind: false,
             log_records: 0,
             log_bytes: 0,
             policy: SnapshotPolicy::default(),
@@ -477,11 +531,15 @@ impl Journal {
         if report.created {
             // tiny: written directly, not counted as a compaction
             let empty = format!("{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
-            if let Err(e) = j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
-                log::warn!("catalog: can't write the new library's snapshot: {e}");
+            match j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
+                Ok(()) => j.snapshot_bytes = empty.len() as u64,
+                Err(e) => log::warn!("catalog: can't write the new library's snapshot: {e}"),
             }
         } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
             report.upgraded_from = Some(snapshot_version.unwrap_or(0));
+            // (until a snapshot is written: one that was written clears it, also when only the
+            // log could not be emptied after it)
+            j.behind = true;
             match j.snapshot(&catalog) {
                 Ok(()) => {
                     if let Some(v) = report.upgraded_from {
@@ -569,6 +627,8 @@ impl Journal {
         // the snapshot is durable: it holds every op up to `seq`
         self.seq = seq;
         self.snapshot_seq = seq;
+        self.snapshot_bytes = timing.bytes;
+        self.behind = false;
         let t2 = web_time::Instant::now();
         // A crash here leaves old records in the log; they are skipped by seq on load.
         self.store.write_atomic(LOG, b"").map_err(io)?;
@@ -656,6 +716,8 @@ impl Journal {
         // Keep exactly the ones appended since (a crash before this rewrite skips the stale ones).
         let t1 = web_time::Instant::now();
         self.snapshot_seq = p.seq;
+        self.snapshot_bytes = timing.bytes;
+        self.behind = false;
         if let Err(e) = self.store.write_atomic(LOG, &p.tail) {
             // the log stays whole (stale records are skipped on load); compact again later
             self.retry_at_records = self.log_records + self.policy.max_records;
@@ -676,6 +738,7 @@ impl Journal {
     }
 
     fn record_snapshot(&mut self, t: SnapshotTiming) {
+        self.snapshot_bytes = t.bytes;
         self.stats.snapshots += 1;
         self.stats.last_snapshot = t;
         self.stats.max_snapshot_ms = self.stats.max_snapshot_ms.max(t.total_ms);
@@ -702,9 +765,23 @@ impl Journal {
 
     /// The log is long enough to be worth compacting.
     pub fn wants_snapshot(&self) -> bool {
-        self.pending.is_none()
-            && self.log_records >= self.retry_at_records
-            && (self.log_records >= self.policy.max_records || self.log_bytes >= self.policy.max_bytes)
+        self.pending.is_none() && self.log_records >= self.retry_at_records && self.policy.due(self.log_records, self.log_bytes, self.snapshot_bytes)
+    }
+
+    /// Whether closing the library should compact the log: the snapshot is in an older format
+    /// than this build's (an upgrade at open could not write it), or there is a log and the
+    /// snapshot is small enough to rewrite in passing ([`SnapshotPolicy::close_bytes`]) or the log is long
+    /// ([`SnapshotPolicy::long`]; during a session it may grow further, to its share of the
+    /// snapshot, but after a quit it isn't left that long). Nothing is lost either way: what
+    /// isn't compacted stays in the log and is replayed on open.
+    pub fn wants_snapshot_on_close(&self) -> bool {
+        self.behind
+            || (self.log_records > 0 && (self.snapshot_bytes <= self.policy.close_bytes || self.policy.long(self.log_records, self.log_bytes)))
+    }
+
+    /// Size of `catalog.snap` as last written or loaded (0: none yet).
+    pub fn snapshot_bytes(&self) -> u64 {
+        self.snapshot_bytes
     }
 
     pub fn seq(&self) -> u64 {

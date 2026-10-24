@@ -697,9 +697,11 @@ impl Session {
         ops.or(presets).map(|why| (n, why))
     }
 
-    /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
+    /// Flush everything and compact the log into a snapshot (on quit). Ends an open interaction
+    /// first. A large catalog with only a short log keeps the log instead (see
+    /// [`Journal::wants_snapshot_on_close`]): everything is saved, and the next open replays it.
     ///
-    /// The snapshot is written even when appending the queued ops fails: it is a fresh file
+    /// The snapshot is always written when appending the queued ops fails: it is a fresh file
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
     /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
     pub fn close_library(&mut self) -> Result<()> {
@@ -712,7 +714,20 @@ impl Session {
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
-        let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
+        let saved = unlogged == 0 && persisted.is_ok();
+        if saved {
+            // a compaction that is under way (the save above may have started it) finishes first:
+            // it empties the log, and the catalog isn't written a second time below
+            if let Err(e) = lib.journal.wait() {
+                log::error!("library: compaction: {e}");
+            }
+        }
+        let snapshot = if !saved || lib.journal.wants_snapshot_on_close() {
+            lib.journal.snapshot_with_unlogged(&self.catalog, unlogged)
+        } else {
+            // everything is in the log, which is short: the next open replays it
+            Ok(())
+        };
         if unlogged > 0 && lib.journal.seq() == before + unlogged {
             // the snapshot holds the queued ops: they are saved, never append them again
             log::info!("library: {unlogged} queued change(s) saved in the closing snapshot");
