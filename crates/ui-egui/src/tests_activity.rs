@@ -529,3 +529,81 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
 }
+
+/// Photo ▸ Auto Settings (⇧A) on several photos runs in the background in the app: a row in the stack while the
+/// pictures are read, then every photo's values in one undo step (#1752).
+#[test]
+fn auto_settings_on_a_selection_run_in_the_background() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    h.app.session.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    let undo = h.app.session.undo.len();
+    let r = h.app.run("develop.auto", json!({})).unwrap();
+    assert_eq!(r["background"], true, "{r}");
+    assert!(h.app.session.activity.list().iter().any(|t| t.kind == "autoSettings" && t.cancellable));
+    let t0 = std::time::Instant::now();
+    while h.app.session.auto_settings.is_some() {
+        assert!(t0.elapsed() < T, "the run never ended");
+        h.step();
+    }
+    let edited = |h: &Headless, id: u64| !h.app.session.develop_of(lightcraft_catalog::PhotoId(id)).unwrap_or_default().is_unedited();
+    assert!(ids.iter().all(|id| edited(&h, *id)), "every selected photo");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    assert!(h.app.session.activity.list().iter().all(|t| t.kind != "autoSettings"));
+}
+
+/// A scripted `develop.auto` over the control channel (`engine.execute`) sets the values inline and returns them,
+/// as the command documents, unless it asks for `background`; the menu's stand-in `ui.menu.invoke` keeps the app's
+/// background default, like the menu, the shortcut and the Edit panel.
+#[test]
+fn scripted_auto_settings_run_inline_unless_asked_for_background() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    h.app.session.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    let ctx = h.view.ctx.clone();
+    let call = |h: &mut Headless, method: &str, p: serde_json::Value| {
+        let (req, _) = crate::control::ControlRequest::new(method, p);
+        match crate::control::handle(&mut h.app, &ctx, &req) {
+            crate::control::Outcome::Done(reply) => reply,
+            _ => panic!("expected a reply"),
+        }
+    };
+    let finish = |h: &mut Headless| {
+        let t0 = std::time::Instant::now();
+        while h.app.session.auto_settings.is_some() {
+            assert!(t0.elapsed() < T, "the run never ended");
+            h.step();
+        }
+    };
+    let undo = h.app.session.undo.len();
+    let r = call(&mut h, "engine.execute", json!({"command": "develop.auto", "params": {"ids": ids}}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(r["result"].get("background").is_none() && r["result"].get("exposure").is_some(), "the values, inline: {r}");
+    assert!(h.app.session.auto_settings.is_none(), "no background run");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "set before the reply, one undo step");
+    // asked for, a script gets the background run too
+    let r = call(&mut h, "engine.execute", json!({"command": "develop.auto", "params": {"ids": ids, "background": true}}));
+    assert_eq!(r["result"]["background"], true, "{r}");
+    finish(&mut h);
+    // the menu's stand-in keeps the app's default
+    let r = call(&mut h, "ui.menu.invoke", json!({"command": "develop.auto"}));
+    assert_eq!(r["result"]["background"], true, "{r}");
+    finish(&mut h);
+}
+
+/// The Edit panel's Auto button says "applied" only when it applied something: refused while a background run is
+/// going, it says why instead, for long enough to read.
+#[test]
+fn auto_button_refused_during_a_background_run_says_why() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    h.app.session.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    assert_eq!(h.app.run("develop.auto", json!({})).unwrap()["background"], true);
+    h.app.ui.toast = None;
+    // (no frame in between: the run is still going)
+    let ctx = h.view.ctx.clone();
+    crate::panels::edit::auto_clicked(&mut h.app, &ctx);
+    let (text, until, _) = h.app.ui.toast.clone().expect("a toast");
+    assert!(text.contains("already running"), "{text}");
+    assert!(until - ctx.input(|i| i.time) > 5.0, "an error toast stays up");
+}

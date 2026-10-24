@@ -1712,12 +1712,17 @@ impl crate::Session {
     pub fn source_now(&mut self, id: PhotoId, level: SourceLevel) -> Result<Arc<Rgb32f>, String> {
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let r = self.media.source_ref(&p, level).load_source()?;
+        Ok(self.keep_source(id, level, r))
+    }
+
+    /// Take in a source loaded on another thread for a pixel-statistics command, as [`Self::source_now`] does.
+    pub(crate) fn keep_source(&mut self, id: PhotoId, level: SourceLevel, r: DecodedSource) -> Arc<Rgb32f> {
         let image = r.image.clone();
         if let Some(info) = &r.info {
             self.learn_as_shot_wb(id, info);
         }
         self.media.insert_source(id, level, r);
-        Ok(image)
+        image
     }
 }
 
