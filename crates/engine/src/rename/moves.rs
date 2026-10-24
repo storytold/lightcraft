@@ -149,6 +149,16 @@ pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::resu
     Ok(())
 }
 
+/// `op` with every `SetFile` a `Relink`: the same change to the catalog, but undo and redo move no file for it. For what is
+/// left of a rollback when the files it would move are already back where it puts the photos.
+pub(crate) fn without_file_moves(op: Op) -> Op {
+    match op {
+        Op::Batch { ops } => Op::Batch { ops: ops.into_iter().map(without_file_moves).collect() },
+        Op::SetFile { id, file_name, source } => Op::Relink { id, file_name, source, format: None },
+        op => op,
+    }
+}
+
 /// Final `SetFile` per photo (nested batches included), filtered by destination only afterward.
 pub(super) fn set_file_ops_to(op: &Op, to: &HashSet<&str>, out: &mut Vec<Op>) {
     let mut pending = vec![op];

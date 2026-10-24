@@ -2,7 +2,7 @@ use super::fs::{MoveFs, RealFs, folded_path};
 use super::moves::{BatchMoveError, move_all, set_file_ops_to};
 use super::sidecar::{PacketVersion, retry_sidecars, retry_sidecars_for_paths};
 use super::tokens::{expand, split_ext};
-use super::{EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
+use super::{CatalogError, EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
 
 /// The photos among `ids` a rename handles, in order: photos sharing one file (virtual copies)
 /// rename once. No file-system calls.
@@ -210,6 +210,12 @@ impl Session {
             let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
             if let Err(e) = move_all(fs, &back) {
                 return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
+            }
+            if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                && let Some(step) = self.undo.last_mut()
+            {
+                // (the files are back: what is left of the rollback must point the photos at them, not move them)
+                step.op = without_file_moves(std::mem::replace(&mut step.op, Op::Batch { ops: Vec::new() }));
             }
             return Err(err);
         }

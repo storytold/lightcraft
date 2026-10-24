@@ -216,3 +216,118 @@ fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
     assert!(s.unsaved().is_none(), "written once the disk works again");
     assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
 }
+
+/// A batch that fails and whose rollback then fails halfway leaves the catalog changed. The change must reach the
+/// journal (a restart finds what the session had) and the person must be able to take it back.
+#[test]
+fn a_batch_that_cannot_be_rolled_back_whole_is_journaled_and_undoable() {
+    use lightcraft_catalog::{CatalogError, Op, PhotoId, Stack};
+
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+    let stack = s.catalog.alloc_stack_id();
+    s.commit("Stack", Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    s.persist().unwrap();
+    let before = s.catalog.to_snapshot();
+
+    // the photo goes, then its stack, then an op fails: putting the stack back needs the photo, which comes later
+    let batch =
+        Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+    let undo_steps = s.undo.len();
+    let e = s.execute_fn("test.batch", |s| s.commit("Delete", batch).map(|()| json!({}))).unwrap_err();
+    assert!(matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })), "{e:?}");
+    assert!(e.to_string().contains("partly"), "the error says the change stayed in part: {e}");
+    let torn = s.catalog.to_snapshot();
+    assert_ne!(torn, before, "the rollback went only part of the way");
+    assert!(s.catalog.photo(ids[0]).is_some() && s.catalog.stack(stack).is_none());
+
+    // a restart in the middle finds what the session had
+    assert_eq!(open(&store.crash_copy(), true).catalog.to_snapshot(), torn, "the journal and the memory agree");
+    assert_eq!(s.undo.len(), undo_steps + 1, "what is left of the batch is one undo step");
+
+    // undo finishes the rollback, and that too is journaled
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), before);
+    assert_eq!(open(&store.crash_copy(), true).catalog.to_snapshot(), before);
+}
+
+/// An undo whose catalog step fails and cannot be rolled back whole is journaled as well, and what is left of it is a
+/// step on the other stack that takes it back.
+#[test]
+fn an_undo_step_that_cannot_be_rolled_back_whole_is_journaled_and_can_be_taken_back() {
+    use lightcraft_catalog::{CatalogError, Op, PhotoId, Stack};
+
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+    let stack = s.catalog.alloc_stack_id();
+    s.commit("Stack", Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    s.persist().unwrap();
+    let before = s.catalog.to_snapshot();
+    let torn =
+        Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+    s.undo.push(crate::UndoEntry { label: "Broken".into(), op: torn, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+    let (undo_len, redo_len) = (s.undo.len(), s.redo.len());
+
+    let e = s.execute("edit.undo", &json!({})).unwrap_err();
+    assert!(matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })), "{e:?}");
+    let torn_state = s.catalog.to_snapshot();
+    assert_ne!(torn_state, before);
+    assert_eq!((s.undo.len(), s.redo.len()), (undo_len - 1, redo_len + 1), "the step is not left to fail again");
+    assert_eq!(open(&store.crash_copy(), true).catalog.to_snapshot(), torn_state, "the journal and the memory agree");
+
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), before);
+    assert_eq!(open(&store.crash_copy(), true).catalog.to_snapshot(), before);
+}
+
+/// A folder step whose catalog part is only partly taken back keeps the folder move in its undo step.
+#[test]
+fn a_partly_applied_folder_step_keeps_its_folder_move() {
+    use lightcraft_catalog::{CatalogError, Op, PhotoId, Stack};
+
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+    let stack = s.catalog.alloc_stack_id();
+    s.commit("Stack", Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let torn =
+        || Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+
+    // the folder was renamed before the commit: the step that takes the change back renames it back
+    let folder = crate::FolderMove { from: "/new".into(), to: "/old".into() };
+    let e = s.commit_with_folder("Rename Folder", torn(), folder.clone()).unwrap_err();
+    assert!(matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })), "{e:?}");
+    assert_eq!(s.undo.last().and_then(|u| u.folder.clone()), Some(folder));
+    // (a failure that changed nothing leaves no step, so no folder to put on one)
+    let steps = s.undo.len();
+    assert!(
+        s.commit_with_folder(
+            "Rename Folder",
+            Op::SetRating { id: PhotoId(9_999), rating: 1 },
+            crate::FolderMove { from: "/a".into(), to: "/b".into() }
+        )
+        .is_err()
+    );
+    assert_eq!(s.undo.len(), steps);
+}
+
+/// An undo step that fails part-way keeps the inverses of the path corrections it carried: they follow what is left,
+/// as when a step succeeds.
+#[test]
+fn a_partly_applied_undo_step_keeps_its_retry_inverses() {
+    use lightcraft_catalog::{Op, PhotoId, Stack};
+
+    let mut s = open(&Flaky::default(), true);
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+    let fix = Op::SetRating { id: ids[1], rating: 4 };
+    let stack = s.catalog.alloc_stack_id();
+    s.commit("Stack", Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let step =
+        Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+    s.undo.push(crate::UndoEntry { label: "Broken".into(), op: step, folder: None, retry_inverse: vec![fix.clone()], retry_sidecars: Vec::new() });
+    assert!(s.execute("edit.undo", &json!({})).is_err());
+    let Some(Op::Batch { ops }) = s.redo.last().map(|r| r.op.clone()) else { panic!("the step that takes it back is a batch") };
+    assert_eq!(ops.last(), Some(&fix));
+}
