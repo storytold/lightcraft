@@ -58,8 +58,24 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
 /// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
 /// reopened the menu at the pointer and closed it again on the same frame, a one-frame flash.
 /// The click that opens (or moves) the menu is not the one that closes it.
+///
+/// While photos are carried (dragged from the grid, the primary button still held) a right-click
+/// opens nothing here: a menu is not what the person is doing with the pointer.
 pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
+    if response.secondary_clicked() && carrying(&response.ctx) {
+        return None;
+    }
     egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(add_contents)
+}
+
+/// Record whether photos are being carried as the frame starts, for [`context_menu`] to read. A
+/// drag left over without its button (full screen skips the code that ends it) is not carrying.
+pub fn set_carrying(ctx: &egui::Context, carrying: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("lc-carrying"), carrying));
+}
+
+fn carrying(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new("lc-carrying"))).unwrap_or(false)
 }
 
 /// How a context menu on `response` closes this frame: `default`, except on the frame of the

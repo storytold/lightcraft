@@ -19,6 +19,10 @@
   photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
   Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
 
+### A right-click while you carry photos opens no menu
+- While you drag photos from the grid, a right-click opens no context menu, on an album, folder or keyword row in
+  the sidebar or anywhere else. Before, the menu opened on the row the photos were over.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
