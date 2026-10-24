@@ -220,6 +220,21 @@ fn a_drag_started_before_full_screen_ends_with_the_button_and_esc_leaves() {
     assert!(!h.app.ui.fullscreen, "Esc leaves full screen");
 }
 
+/// In full screen no drop target reads the release, so the release frame ends the drag itself rather
+/// than leaving it standing for one more frame (where the shortcuts no longer hold Esc back for it).
+#[test]
+fn esc_the_frame_after_a_release_in_full_screen_leaves_full_screen() {
+    let mut h = app();
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    let target = drag_photos(&mut h, &outside, &format!("source:album:{GARDEN}"));
+    key(&mut h, egui::Key::F);
+    assert!(h.app.ui.fullscreen, "F opened the full-screen preview");
+    pointer(&mut h, target, Some(false));
+    assert_eq!(h.app.ui.dragging_photos, None, "the release frame ended the drag");
+    key(&mut h, egui::Key::Escape);
+    assert!(!h.app.ui.fullscreen, "and Esc then leaves full screen");
+}
+
 #[test]
 fn esc_during_a_drag_leaves_a_dialog_open() {
     let mut h = app();
