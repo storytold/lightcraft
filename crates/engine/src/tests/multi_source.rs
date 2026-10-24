@@ -259,6 +259,55 @@ fn several_keywords_follow_a_rename_and_lose_a_deleted_one() {
 }
 
 #[test]
+fn deleting_every_keyword_of_a_filter_put_aside_leaves_filtering_on() {
+    let mut s = Session::new();
+    let ids = photos(&mut s, 3);
+    tag(&mut s, ids[0], &["alps"]);
+    tag(&mut s, ids[1], &["beach"]);
+    s.execute("library.filter", &json!({"keywords": ["alps", "beach"]})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("keyword.delete", &json!({"keyword": "alps"})).unwrap();
+    assert!(s.filters_off(), "one keyword is still put aside");
+    s.execute("keyword.delete", &json!({"keyword": "beach"})).unwrap();
+    assert!(!s.filters_off(), "an empty filter is not left put aside");
+}
+
+#[test]
+fn a_filter_put_aside_with_other_criteria_survives_its_keywords_going() {
+    let mut s = Session::new();
+    let ids = photos(&mut s, 2);
+    tag(&mut s, ids[0], &["alps"]);
+    s.execute("library.filter", &json!({"keywords": ["alps"], "rating": 3})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("keyword.delete", &json!({"keyword": "alps"})).unwrap();
+    assert!(s.filters_off());
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(s.filter.rating, 3);
+}
+
+#[test]
+fn a_rating_operator_put_aside_survives_a_keyword_delete_that_does_not_touch_it() {
+    let mut s = Session::new();
+    let ids = photos(&mut s, 2);
+    tag(&mut s, ids[0], &["alps"]);
+    s.execute("library.filter", &json!({"ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("keyword.delete", &json!({"keyword": "alps"})).unwrap();
+    assert!(s.filters_off(), "the filter put aside held no keyword, so the delete leaves it alone");
+}
+
+#[test]
+fn a_rating_operator_without_stars_does_not_keep_the_emptied_filter_put_aside() {
+    let mut s = Session::new();
+    let ids = photos(&mut s, 2);
+    tag(&mut s, ids[0], &["alps"]);
+    s.execute("library.filter", &json!({"keywords": ["alps"], "ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("keyword.delete", &json!({"keyword": "alps"})).unwrap();
+    assert!(!s.filters_off(), "only an operator with no stars is left: nothing to bring back");
+}
+
+#[test]
 fn several_dates_show_the_photos_of_any_of_them() {
     let mut s = Session::new();
     let ids = photos(&mut s, 5);
