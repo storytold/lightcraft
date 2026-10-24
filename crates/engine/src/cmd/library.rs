@@ -694,7 +694,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.end_interaction()?;
                 match mode {
                     "replace" => {
-                        s.selection = Selection { ids: ids.clone(), active: active.or(ids.first().copied()) };
+                        // a repeated id is one photo: keep the first of each, in the order given
+                        let mut seen = std::collections::HashSet::with_capacity(ids.len());
+                        let ids: Vec<PhotoId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+                        s.selection = Selection { active: active.or(ids.first().copied()), ids };
                     }
                     "add" => {
                         for id in ids {

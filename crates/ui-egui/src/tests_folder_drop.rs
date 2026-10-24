@@ -150,6 +150,21 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A selection set with a repeated id holds each photo once, so the drag carries it once.
+#[test]
+fn a_drag_after_selecting_with_a_repeated_id_carries_each_photo_once() {
+    let (root, trip, home) = folders("dedupe");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    h.app.run("library.select", json!({"ids": [beach, garden, beach], "active": beach})).unwrap();
+    let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
+    press(&mut h, from);
+    glide(&mut h, from, from + egui::vec2(60.0, 60.0));
+    assert_eq!(h.app.ui.dragging_photos, Some(vec![beach, garden]));
+    release(&mut h, from);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn local_photos_are_refused_with_the_reason() {
     let (root, trip, home) = folders("local");
