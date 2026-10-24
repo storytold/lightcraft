@@ -1366,6 +1366,8 @@ mod tests_album_remove;
 #[cfg(test)]
 mod tests_albums_local;
 #[cfg(test)]
+mod tests_batch_sidebar;
+#[cfg(test)]
 mod tests_color;
 #[cfg(test)]
 mod tests_constrain_crop;
