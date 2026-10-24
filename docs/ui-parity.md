@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (budgeted native-original reuse for RAW browsing; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -126,6 +126,60 @@ unnamed was in the way.
 Not done: brush strokes and red-eye ellipses still need a pointer. Nobody has tried the app with
 a real screen reader on any platform yet.
 
+## Budgeted native RAW browsing
+
+Detail, Compare and Reference reuse decoded originals within the existing shared cache byte
+budget instead of discarding them at one-/two-original count limits. Source pixels, decoder
+facts and denoised twins stay together. The current original is protected from late background
+completion; while the foreground has no native source, the newest original remains the single oversize fallback.
+The protected original's pinned bytes, including denoised twins and their reserved mix, are
+excluded from the eviction budget whether it is the foreground or the previous-photo fallback.
+Switching to a photo with no native source at Fit therefore keeps affordable previews and
+thumbnails instead of repeatedly evicting them. Leaving Detail releases originals that cannot
+fit the budget; recent originals that fit remain reusable across views.
+
+Detail prepares adjacent native sources only when a sharp zoom window is needed and the cache
+budget can accommodate the current photo, neighbours and preview rendering. Prefetched views
+remain preview-sized, and tight crops cannot force native preparation at Fit or a low budget.
+The memory settings and automatic budget policy are unchanged. This improves prepared/revisited
+photos, not first uncached RAW development or uninterrupted rapid scrolling.
+
+The 2026-10-15 integration with main passed 90 targeted Linux ARM64 engine, preview/window and
+Compare tests (one profiling test ignored). A separate public-API smoke decoded three original
+procedural PNG fixtures once each and reused all three on revisits; oversized fallback replacement
+and release outside Detail also passed. These are correctness checks, not new RAW timing or
+hardware-GPU measurements. No native desktop executable was launched or full workspace CI claimed.
+
+### Cache-only native measurement (2026-10-11)
+
+Unmodified upstream `76b5377868d912db69a777bda253a5b1b96b22bd` and the cache-only branch were
+run sequentially with the same isolated three-photo catalog and fresh preferences on Windows:
+Sony ILCE-7RM4 9504 × 6336 RAWs, RTX 5080 DX12, 8192 MiB budget, 100% zoom, 1600 × 1000 window.
+The selection order was A, B, C, A, B, C, B, A, with 5 seconds idle after each selection. Timing
+ends when `ui.inspect` reports the selected photo's loupe and native window are no longer pending;
+the full decode counts come from `LIGHTCRAFT_PROFILE=1` native RAW-source log entries.
+
+| Five revisits after A/B/C | Unmodified upstream | Cache-only branch |
+|---|---:|---:|
+| Median selection to settled native window | 2563 ms | 494 ms |
+| Full RAW decodes on revisits | 5 | 0 |
+| Originals retained after the sequence | 1 | 3 |
+
+The cache-only first selection took 6788 ms versus 2516 ms upstream in this run: this is not a
+cold-load improvement. Latency varies with background work; decoded-source reuse is the invariant.
+At 1536 MiB only one original fit and all eight selections decoded. Fit browsing decoded no
+native originals. Compare and Reference panning each reused both native originals without another
+full decode. No personal RAW files or source paths are part of the contribution.
+
+Verification covers engine source reuse, cross-cache eviction, budget shrink, late completion,
+denoise-twin accounting, content reload rejection and preview-only preparation boundaries, plus
+the existing preview/window and Compare interaction regressions. Native Windows smoke used the
+running app and control channel with an isolated library; window captures did not fall back to
+headless rendering. Formatting, parity references, layers and asset attribution checks passed.
+`cargo xtask ci` stops at unchanged upstream clippy findings on Rust 1.99.0 / Windows:
+`pipeline/src/spots.rs:250` (`chunks_exact_to_as_chunks`) and the test-only unused
+`catalog/src/lock.rs:140` `descriptor_copy`. Full workspace tests, HEIF CI and WASM were not reached.
+
 ## Reference view lifecycle
 
 Escape leaves Reference for Detail, preserving the active photo and its edits; a second Escape
@@ -151,6 +205,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-15 | patch | Context menus: a right-click elsewhere on the same widget while its menu is open moves the menu to the pointer; before it flashed at the new spot and closed (issue #1877); every site uses `widgets::context_menu`; 70% unchanged |
 | 2026-10-23 | patch | KEYC-RATING: ⌘L / Ctrl+L (Library ▸ Enable Filters) switches the filter off and on, restoring it as it was |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); ⌘L is the filter-bar key left |
+| 2026-10-15 | minor | Integrated native-original reuse with upstream soft-proofing zoom windows and keyboard accessibility; retained the native-size and stale-content safeguards |
 | 2026-10-14 | minor | Zoom row: diagnostic overlays render zoom windows too |
 | 2026-10-14 | patch | Shortcuts: Visualize HDR loses its default ⇧H, which cycles the Tool Overlay (issue #224); both PRs had claimed it |
 | 2026-10-12 | minor | Accessibility: crop handles, spots, gradient handles and mask pins operable by keyboard with AccessKit names and values; Tab order test for the right panels; hand-drawn icons and rows named; 55% → 75%; UI remaining 34–58 h → 32–54 h |
@@ -160,6 +215,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-13 | minor | Shortcuts: Home / End and Shift+Left / Right in the two library grids, Cmd+O (Open Library…) and Shift+H (Visualize HDR) get bindings and keyboard tests; percentages and the dated counts above are unchanged |
 | 2026-10-14 | minor | Zoom row: soft proofing gets zoom windows; LR-VIEW-ZOOM gap closed |
 | 2026-10-12 | minor | Accessibility: an AccessKit tree audit test over every view, Develop tool and 13 dialogs; unnamed fields, slider ranges and the Auto Stack slider fixed; 30% → 55%; UI remaining 40–70 h → 34–58 h |
+| 2026-10-11 | minor | Native sources share the cache byte budget; sharp-zoom neighbour preparation is budget-qualified, with Fit and cold-load limits unchanged |
 | 2026-10-21 | minor | Reference Escape exits to Detail; catalog-local pins and missing/deleted reference handling verified with regressions and native Windows smoke |
 | 2026-10-11 | minor | Zoom row: Compare and Reference get zoom windows; what remains of LR-VIEW-ZOOM is overlays and soft proofing |
 | 2026-10-10 | major | Created: measured command and shortcut counts, assessment by area, estimates; moved the shortcut conflicts section here from the checklist |

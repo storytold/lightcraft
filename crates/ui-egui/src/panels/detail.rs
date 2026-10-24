@@ -660,14 +660,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }),
         _ => None,
     };
-    // once this photo is on screen: prepare its neighbours in filmstrip order (source decoded and
-    // kept, view render cached) so stepping to them is instant
+    // drawn whole (no window past its preview): an earlier photo's original needn't stay pinned
+    if plan.window_edge.is_none() {
+        app.session.media.foreground_fits(id);
+    }
+    // Once this photo is on screen, prepare its neighbours in filmstrip order. Warm their native
+    // sources at sharp zoom only when the shared memory budget has room; keep view renders small.
     if !interacting && !app.renderer.is_pending(Slot::Main) && app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id) {
         let ids = app.session.visible_cloned();
         if let Some(i) = ids.iter().position(|p| *p == id) {
             let next = ids.get(i + 1).copied();
             let prev = i.checked_sub(1).and_then(|j| ids.get(j)).copied();
-            for (n, nid) in [next, prev].into_iter().enumerate() {
+            for (n, (nid, beside)) in [(next, prev), (prev, next)].into_iter().enumerate() {
                 let Some(nid) = nid else { continue };
                 let Some(np) = app.session.catalog.photo(nid).cloned() else { continue };
                 let nf = Frame::with_lens(np.width.max(1) as usize, np.height.max(1) as usize, &np.develop, !crop_tool, np.embedded_lens.as_ref());
@@ -676,7 +680,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let nw =
                     app.ui.settings.prefetch_edge(nr.width().max(nr.height()) * ppp, output_px(&nf).into_iter().max().unwrap_or(1), texture_side);
                 let (w, h) = if na >= 1.0 { (nw, (nw as f32 / na) as usize) } else { ((nw as f32 * na) as usize, nw) };
-                if let Some(job) = app.session.loupe_job(nid, w.max(8), h.max(8), !crop_tool) {
+                if let Some(job) = app.session.prefetch_job(nid, w.max(8), h.max(8), !crop_tool, plan.window_edge.is_some(), beside) {
                     app.renderer.prefetch(Slot::Prefetch(n as u8), job, PREFETCH_PRIORITY);
                 }
             }

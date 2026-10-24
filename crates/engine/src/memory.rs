@@ -235,7 +235,7 @@ pub struct MemoryReport {
     pub thumb_sources: Usage,
     /// Decoded preview-level sources (≤ 2560 px, linear float) of the current and prefetched photos.
     pub preview_sources: Usage,
-    /// The last full-resolution original (exports, 1:1).
+    /// Full-resolution originals retained within the shared cache budget (exports, 1:1).
     pub full_source: Usage,
     /// Rendered thumbnails and view renders (8-bit) in memory.
     pub rendered: Usage,

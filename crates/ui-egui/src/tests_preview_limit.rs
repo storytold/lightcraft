@@ -38,8 +38,9 @@ fn render_sizes_move_in_steps() {
     assert_ne!(s.loupe_edge(3008.0, 6000, BIG), s.loupe_edge(3009.0, 6000, BIG));
 }
 
-// Neighbour prefetch and hover / before stand-ins stay at the preview level: a full-size decode
-// would evict the open photo's single full-resolution source (review of #323)
+// Neighbour prefetch and hover / before stand-ins render at the preview level: a neighbour's
+// original is warmed only through the engine's budget check (`Session::prefetch_job`), never by
+// asking for a full-size render (review of #323)
 #[test]
 fn prefetch_and_stand_ins_never_ask_for_the_full_source_level() {
     use lightcraft_engine::SourceLevel;
@@ -1049,7 +1050,7 @@ mod in_the_loupe {
     }
 
     // Given Compare at 1:1, when I zoom back to fit or go back to Detail, then the windows' textures
-    // are freed, and back in Detail only one original is kept decoded
+    // are freed; decoded sources follow the shared budget, independently of those textures.
     #[test]
     fn leaving_a_zoomed_compare_frees_its_windows() {
         let mut h = compare_at(crate::state::Zoom::Percent(100.0));
@@ -1065,7 +1066,6 @@ mod in_the_loupe {
         h.settle(SETTLE);
         assert_eq!(h.app.compare_windows, [None, None]);
         assert!(!h.app.renderer.textures.contains_key(&Slot::CompareRegion(0)) && !h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)));
-        assert!(h.app.session.media.usage().2.count <= 1, "one original in Detail");
     }
 
     // A pane's window is drawn where it belongs: its pixels agree with the pane's whole-frame render

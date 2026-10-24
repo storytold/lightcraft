@@ -850,11 +850,11 @@ impl Renderer {
                     self.discarded += 1;
                     continue;
                 }
-                session.accept(&r);
+                session.accept_shown(&r);
                 None // superseded successful drafts have no failure diagnostic
             } else {
                 let source = self.requests.remove(&slot).and_then(|request| request.source);
-                session.accept(&r);
+                session.accept_shown(&r);
                 source
             };
             if slot.is_view() {

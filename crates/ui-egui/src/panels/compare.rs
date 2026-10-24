@@ -450,10 +450,9 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, pane: u8, id: PhotoId, lo
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
-/// Per frame, before the central view is shown: Compare and Reference keep two photos' originals
-/// decoded (their windows are cut from both); other views keep one and free the panes' windows.
-/// The Detail view's photo keeps its original even over the memory budget (a zoomed 64 MP raw);
-/// other views free the Detail view's windows (while one is shown the GPU copy of its original stays).
+/// Free the panes' windows outside Compare and Reference. Decoded originals remain reusable
+/// across views while they fit the shared byte budget. Other views release Detail's windows,
+/// so a zoomed original's GPU copy can be trimmed once it is no longer on screen.
 pub fn prepare(app: &mut LightcraftApp) {
     let shown = if app.ui.view == ViewMode::Detail { app.session.active() } else { None };
     app.session.media.set_on_screen(shown);
@@ -467,7 +466,6 @@ pub fn prepare(app: &mut LightcraftApp) {
     // Reference with no live pin draws no panes: release them as other views do.
     let reference_shown = app.ui.reference.is_some_and(|r| live(app, PhotoId(r)));
     if app.ui.view == ViewMode::Compare || (app.ui.view == ViewMode::Reference && reference_shown) {
-        app.session.media.set_full_capacity(WINDOW_PANES as usize);
         return;
     }
     if app.ui.view == ViewMode::Reference {
@@ -475,7 +473,6 @@ pub fn prepare(app: &mut LightcraftApp) {
         app.renderer.release(Slot::Compare(0));
         app.renderer.release(Slot::Compare(1));
     }
-    app.session.media.set_full_capacity(1);
     for i in 0..WINDOW_PANES {
         if app.compare_windows[i as usize].take().is_some() || app.renderer.textures.contains_key(&Slot::CompareRegion(i)) {
             app.renderer.release(Slot::CompareRegion(i));

@@ -811,6 +811,17 @@
 - Compare and Reference View panes say "Rendering…" (or that the photo can't be opened) the same way, so a
   magnified preview isn't taken for the photo when checking focus at 1:1.
 
+### Revisit large RAW photos without decoding them again
+- Full-resolution originals now share the memory cache's byte budget instead of being limited to
+  one in Detail or two in Compare/Reference. Recent originals remain reusable while they fit;
+  a late background result cannot evict the current photo's original.
+- When Detail needs a sharp zoom window and the budget has room, it prepares native sources for
+  adjacent filmstrip photos. Fit browsing and insufficient-budget preparation stay at preview
+  resolution. First uncached loads and low-memory cache misses still require RAW development.
+- A protected previous-photo original no longer evicts affordable previews and thumbnails when
+  the newly selected photo has no native source, including at Fit. Its complete pinned cost is
+  excluded just like the foreground's; oversized originals are still released outside Detail.
+
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
   under Optics ▸ Enable Lens Corrections, on by default for newly imported photos. On 33 photos shot with the camera's
