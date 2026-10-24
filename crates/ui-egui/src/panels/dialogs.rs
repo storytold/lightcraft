@@ -872,7 +872,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                     }
                     if rendered {
-                        export_size(ui, full_size, resize, &mut opts.ppi);
+                        export_size(ui, full_size, resize, &mut opts.ppi, &mut opts.resample, &mut opts.resample_linear);
                     }
                     if rendered {
                     choices(
@@ -2015,8 +2015,17 @@ const SIZE_PCT: ControlSpec = spec("export.sizePercent", "Percent", 1.0, 400.0, 
 const START_NUMBER: ControlSpec = spec("export.startNumber", "Start number", 1.0, 9999.0, 1.0, 1.0);
 const PPI: ControlSpec = spec("export.ppi", "Resolution (ppi)", 1.0, 1200.0, 240.0, 1.0);
 
-/// Image Sizing: full size, or a resize mode and its value(s), don't enlarge, ppi.
-fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::export::Resize, ppi: &mut u16) {
+/// Image Sizing: full size, or a resize mode and its value(s), don't enlarge, the resampling
+/// filter (and whether it filters in linear light), ppi.
+fn export_size(
+    ui: &mut egui::Ui,
+    full: &mut bool,
+    r: &mut lightcraft_engine::export::Resize,
+    ppi: &mut u16,
+    resample: &mut lightcraft_engine::export::Resample,
+    resample_linear: &mut bool,
+) {
+    use lightcraft_engine::export::Resample;
     use lightcraft_engine::export::ResizeMode as R;
     const MODES: [(R, &str); 8] = [
         (R::LongEdge, "Long Edge"),
@@ -2071,6 +2080,24 @@ fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::ex
         }
         let c = ui.checkbox(&mut r.dont_enlarge, crate::i18n::tr("Don't enlarge"));
         crate::widgets::register(ui.ctx(), "check:exportDontEnlarge", c.rect);
+        field(ui, "Resampling", |ui| {
+            let c = crate::widgets::combo_box("exportResample").width(170.0).selected_text(crate::i18n::tr(resample.label())).show_ui(ui, |ui| {
+                for m in Resample::all() {
+                    ui.selectable_value(resample, m, crate::i18n::tr(m.label()));
+                }
+            });
+            crate::widgets::register(ui.ctx(), "combo:exportResample", c.response.rect);
+            c.response.on_hover_text(crate::i18n::tr(
+                "Automatic renders straight at the output size (fastest). A filter renders the photo at full size, then scales it with that filter: Lanczos is sharpest, Mitchell balanced, B-Spline smoothest, Nearest Neighbor keeps hard pixels.",
+            ));
+        });
+        if matches!(resample, Resample::Filter(_)) {
+            let c = ui.checkbox(resample_linear, crate::i18n::tr("Resample in linear light"));
+            crate::widgets::register(ui.ctx(), "check:exportResampleLinear", c.rect);
+            c.on_hover_text(crate::i18n::tr(
+                "Filter the light itself, so fine detail and edges keep their brightness. Off: filter the encoded values, as many editors do.",
+            ));
+        }
     }
     let mut p = *ppi as f64;
     if num(ui, &PPI, &mut p) {

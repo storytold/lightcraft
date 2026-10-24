@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-24
+
+### Choose how exports are resized
+- Export has a **Resampling** list when an export is resized: **Automatic** (as before), **Lanczos 2**, **3** and
+  **4**, **Spline16** and **Spline36**, **Mitchell-Netravali**, **Bicubic (Catmull-Rom)**, **Hermite**,
+  **B-Spline**, **Gaussian**, **Bilinear**, **Box (Area Average)** and **Nearest Neighbor**. A named filter renders
+  the photo at full size and resizes the finished picture with it: sharper enlargements and reductions, or hard
+  pixel edges for pixel art. **Resample in linear light** (on by default) keeps fine detail at its brightness.
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts

@@ -268,7 +268,19 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "addToPhotos": {"type": "boolean", "description": "macOS: after writing the files, add them to Apple Photos (Apple Events to Photos' import; the first time, macOS asks the user to allow LightCraft to control Photos). The outcome is `applePhotos` in the result, the import job: {job, running, requested, album, imported?, ids?, warning?, error?}; headless waits for Photos, the desktop app returns the running job (outcome: command export.photosImports {job}). The files are written either way. An error before exporting on other platforms, or while another import is reserved or running"},
                 "photosAlbum": {"type": "string", "description": "With addToPhotos: the album to add them to, a top-level Photos album of exactly this name, made when missing (several of that name: nothing is added); default none"},
                 "watermark": {"description": "Text, or {text, vertical (boolean; defaults to false: upright columns right to left), size (text height as a fraction of the short edge, 0.005..0.5; default 0.035), opacity (0..1; default 0.7), anchor (topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight), insetX (margin from the left or right edge as a fraction of the short edge, 0..0.4; default 0.025), insetY (margin from the top or bottom edge, same units), inset (sets both), rotation (degrees clockwise: 0|90|180|270; default 0; the watermark is sized before it is turned), color [r,g,b] (sRGB 0..255), shadow (boolean), image (path of a graphic drawn instead of the text), imageWidth (fraction of the photo's width, 0.01..1; default 0.2)}. Unknown keys and out-of-range sizes are errors"}
-            }),
+            })
+            .as_object()
+            .cloned()
+            .map(|mut props| {
+                // added outside the literal: one more enum there passes `json!`'s recursion limit
+                props.insert("resample".into(), export_resample_schema());
+                props.insert(
+                    "resampleLinear".into(),
+                    json!({"type": "boolean", "description": "With a resample filter: filter in linear light (default true) or on the display-encoded values (false)"}),
+                );
+                Value::Object(props)
+            })
+            .unwrap_or_default(),
             &[],
         ),
     ];
@@ -747,6 +759,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                         "bitDepth",
                         "hdr",
                         "hdrTransfer",
+                        "resample",
+                        "resampleLinear",
                         "preset",
                         "background",
                         "resize",
@@ -789,4 +803,16 @@ pub(crate) fn doc_inspect(b: &mut dyn Backend) -> Result<Value, String> {
     let library = exec(b, "library.state", json!({}))?;
     let stats = exec(b, "catalog.stats", json!({}))?;
     Ok(json!({"library": library, "stats": stats}))
+}
+
+/// The `resample` property of the `export` tool: `auto` or one of the engine's filters.
+fn export_resample_schema() -> Value {
+    // the aliases `Resample::parse` reads too, so clients that check against the schema pass them
+    let mut ids = lightcraft_engine::export::Resample::ids();
+    ids.extend(["bicubic", "lanczos", "linear", "area"]);
+    json!({
+        "type": "string",
+        "enum": ids,
+        "description": "How a resized export is scaled (default auto: rendered straight at the output size, fastest). A filter renders at full size and scales the finished picture with that kernel: nearest (hard pixels), box (area average), bilinear, hermite, catmullRom (bicubic), mitchell, bSpline (smoothest), gaussian, lanczos2/3/4 (sharpest, more ringing), spline16/36 (Lanczos-like, less ringing). Also accepts bicubic, lanczos, linear, area"
+    })
 }

@@ -429,6 +429,15 @@ fn core_tools_have_hints_and_reject_unknown_keys() {
         for key in lightcraft_engine::export::OPTION_PARAMS.iter().chain(lightcraft_engine::export::TARGET_PARAMS) {
             assert!(export["inputSchema"]["properties"].get(*key).is_some(), "missing export argument {key}");
         }
+        // every value the schema allows is one the export reads, aliases included
+        let resample = export["inputSchema"]["properties"]["resample"]["enum"].as_array().unwrap();
+        for v in resample {
+            let v = v.as_str().unwrap();
+            assert!(lightcraft_engine::export::Resample::parse(v).is_some(), "schema allows `{v}`, which the export rejects");
+        }
+        for alias in ["bicubic", "lanczos", "linear", "area", "lanczos3", "auto"] {
+            assert!(resample.iter().any(|x| x == alias), "schema is missing `{alias}`");
+        }
         let before = rpc(&mut s, 2, "resources/read", json!({"uri":"lightcraft://library"}));
         let image = rpc(&mut s, 2, "tools/call", json!({"name":"render_preview","arguments":{"max_side":64}}));
         assert_eq!(image["result"]["isError"], false, "{image}");

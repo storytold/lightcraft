@@ -30,6 +30,33 @@ fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
 }
 
 #[test]
+fn every_resample_filter_exports_at_the_requested_size() {
+    use crate::export::Resample;
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let auto = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"longEdge": 300, "format": "png"})), 1).unwrap();
+    for r in Resample::all() {
+        // enlarging renders big: a few kernels are enough to prove that path
+        let sizes: &[(u32, bool)] = if matches!(r.id(), "auto" | "nearest" | "lanczos3") { &[(300, false), (3000, true)] } else { &[(300, false)] };
+        for &(edge, enlarge) in sizes {
+            let o = ExportOptions::from_params(&json!({"longEdge": edge, "dontEnlarge": !enlarge, "format": "png", "resample": r.id()})).unwrap();
+            let e = export_photo(&mut s, id, &o, 1).unwrap();
+            if !enlarge {
+                assert_eq!((e.width, e.height), (auto.width, auto.height), "{}: same size as auto", r.id());
+            } else {
+                assert_eq!(e.width.max(e.height), 3000, "{}: enlarged", r.id());
+            }
+            let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap().image;
+            assert_eq!((d.width, d.height), (e.width, e.height), "{}: the file holds that size", r.id());
+        }
+    }
+    // a 16-bit TIFF goes through the high-bit-depth path
+    let o = ExportOptions::from_params(&json!({"longEdge": 256, "format": "tiff", "bitDepth": 16, "resample": "lanczos4"})).unwrap();
+    let e = export_photo(&mut s, id, &o, 1).unwrap();
+    assert_eq!(e.width.max(e.height), 256);
+}
+
+#[test]
 fn original_export_copies_the_file_and_writes_its_edits_beside_it() {
     let dir = temp_dir("export-orig");
     let src = dir.join("Shot.dng");
