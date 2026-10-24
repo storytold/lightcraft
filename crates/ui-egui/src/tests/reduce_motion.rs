@@ -263,6 +263,23 @@ fn follow_true_is_refused_where_there_is_no_system_setting_and_changes_nothing()
 }
 
 #[test]
+fn follow_true_is_refused_while_the_system_gives_no_answer_and_changes_nothing() {
+    let system = std::rc::Rc::new(std::cell::Cell::new(None));
+    let mut h = with_system(system.clone());
+    run(&mut h, "view.reduceMotion", json!({"on": true}));
+    let r = h.request("engine.execute", json!({"command": "view.reduceMotion", "params": {"follow": true}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(h.app.ui.settings.reduce_motion, Some(true), "the choice made stays");
+    // once the system answers, following is accepted
+    system.set(Some(false));
+    for _ in 0..90 {
+        h.step();
+    }
+    let r = run(&mut h, "view.reduceMotion", json!({"follow": true}));
+    assert_eq!(r["followsSystem"], json!(true));
+}
+
+#[test]
 fn the_sync_spinner_is_a_still_dot_when_reduced() {
     let ctx = egui::Context::default();
     let shapes = |reduced: bool| {
