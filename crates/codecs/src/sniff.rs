@@ -183,14 +183,13 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
     if has(b"qt  ") {
         return Some(Format::Mov);
     }
-    if [&b"isom"[..], b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash", b"avc1", b"M4V ", b"M4A ", b"mp71", b"XAVC", b"xavc"]
+    if [&b"isom"[..], b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash", b"avc1", b"M4V ", b"mp71", b"XAVC", b"xavc"]
         .iter()
         .any(|x| has(x))
     {
         return Some(Format::Mp4);
     }
-    // Any other BMFF container with an ftyp box is a video container
-    Some(Format::Mp4)
+    None
 }
 
 /// Heuristic camera-raw detection for classic TIFF: DNGVersion, the CR2 signature, CFA/LinearRaw
@@ -261,6 +260,8 @@ mod tests {
         assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some(Format::Heif));
         assert_eq!(sniff(b"\0\0\0\x18ftypcrx \0\0\0\x01crx isom"), Some(Format::RawOther));
         assert_eq!(sniff(b"\0\0\0\x18ftypmp42\0\0\0\0mp41isom"), Some(Format::Mp4));
+        assert_eq!(sniff(b"\0\0\0\x14ftypM4A \0\0\0\0"), None);
+        assert_eq!(sniff(b"\0\0\0\x14ftypxxxx\0\0\0\0"), None);
         assert_eq!(sniff(b"\0\0\0\x14ftypqt  \0\0\0\0"), Some(Format::Mov));
         assert_eq!(sniff(b"\0\0\0\x08moov\0\0\0\0"), Some(Format::Mov));
         assert_eq!(sniff(b"\0\0\0\x08wide\0\0\0\0"), Some(Format::Mov));

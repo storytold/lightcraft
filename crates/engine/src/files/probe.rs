@@ -183,15 +183,11 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         {
             std::mem::swap(&mut w, &mut h);
         }
-        let (v_meta, v_captured) = meta_of(&v.metadata);
+        // The container tags fill what the XMP (if any) left empty; user-authored XMP still wins.
+        let mut md = m;
+        md.fill_missing(&v.metadata);
+        let (meta, v_captured) = meta_of(&md);
         let captured = v_captured.or(v.captured).or(captured);
-        let mut meta = meta;
-        if !v_meta.camera.is_empty() {
-            meta.camera = v_meta.camera;
-        }
-        if meta.gps.is_none() {
-            meta.gps = v_meta.gps;
-        }
         let format = match ext_upper(name).as_str() {
             "MP4" | "MOV" | "M4V" => ext_upper(name),
             _ => fmt.map(|f| format!("{f:?}").to_uppercase()).unwrap_or_else(|| "MP4".to_string()),
@@ -227,7 +223,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     let format = match ext_upper(name).as_str() {
         "JPG" | "JPEG" => "JPEG".to_string(),
-        "" => format!("{fmt:?}").to_uppercase(),
+        "" | "MP4" | "MOV" | "M4V" => format!("{fmt:?}").to_uppercase(),
         e => e.to_string(),
     };
     Ok(ProbeInfo {

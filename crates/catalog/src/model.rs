@@ -233,7 +233,8 @@ pub struct Photo {
     pub height: u32,
     #[serde(default)]
     pub file_size: u64,
-    /// ISO 8601 local capture time.
+    /// ISO 8601 capture time: the camera's local wall-clock time, with its UTC offset when the file
+    /// records one; a video with only its container's UTC `mvhd` time ends in `Z`.
     #[serde(default)]
     pub captured: Option<String>,
     pub imported: String,
@@ -469,15 +470,6 @@ impl Photo {
     pub fn extension(&self) -> &str {
         self.file_name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map_or("", |(_, ext)| ext)
     }
-    /// A video clip (an MP4, a MOV, …), which the image decoders can't read. Besides the kind, the
-    /// format and the extension count: a Lightroom catalog lists its videos with the format `VIDEO`,
-    /// and libraries made before they were imported as videos hold them as images.
-    pub fn is_video(&self) -> bool {
-        const EXTENSIONS: [&str; 12] = ["mp4", "mov", "m4v", "avi", "mts", "m2ts", "3gp", "mkv", "webm", "wmv", "mpg", "mpeg"];
-        self.kind == MediaKind::Video
-            || self.format.eq_ignore_ascii_case("VIDEO")
-            || EXTENSIONS.iter().any(|e| self.extension().eq_ignore_ascii_case(e))
-    }
     /// Width and height in pixels as the photo is shown: turned by its orientation and cut by its
     /// crop. Straightening and Constrain Crop shrink the crop without changing its shape, so the
     /// aspect is exact and the edges can read a little larger than an export.
@@ -516,6 +508,32 @@ impl Photo {
     /// In the library: not deleted and not only browsed (Local).
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
+    }
+    /// Whether this record is a video clip.
+    ///
+    /// Three signals, because a library can hold clips from before video import existed: this
+    /// build's [`MediaKind::Video`], a Lightroom catalog's `VIDEO` format, and a video container
+    /// extension on the file name or path. Guards that would decode or render the pixels (the
+    /// engine's render jobs, exports, smart previews) and the UI's video presentation all use this
+    /// one check, so an old entry cannot reach a decoder by having the wrong `kind`.
+    pub fn is_video(&self) -> bool {
+        const EXTENSIONS: [&str; 12] = ["mp4", "mov", "m4v", "avi", "mts", "m2ts", "3gp", "mkv", "webm", "wmv", "mpg", "mpeg"];
+        let video_extension = |name: &str| {
+            std::path::Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+        };
+        if self.kind == MediaKind::Video || self.format.eq_ignore_ascii_case("video") {
+            return true;
+        }
+        // a record the probe read as another format is that format, whatever its name says (a JPEG
+        // saved as .mp4 is an image)
+        if self.kind == MediaKind::Image && !self.format.is_empty() && !EXTENSIONS.iter().any(|e| self.format.eq_ignore_ascii_case(e)) {
+            return false;
+        }
+        let path = match &self.source {
+            Source::File { path } => Some(path.as_str()),
+            Source::Demo { .. } => None,
+        };
+        video_extension(&self.file_name) || path.is_some_and(video_extension)
     }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
@@ -566,6 +584,32 @@ impl Album {
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+
+    /// A clip is recognised by its kind, by a Lightroom catalog's `VIDEO` format, and by a video
+    /// container extension on an old record that predates `MediaKind::Video`.
+    #[test]
+    fn clips_are_recognised_however_the_record_named_them() {
+        let still = Photo::new(PhotoId(1), Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 10, 10, "2026-10-01T00:00:00");
+        assert!(!still.is_video());
+
+        let mut by_kind = still.clone();
+        by_kind.kind = MediaKind::Video;
+        assert!(by_kind.is_video());
+
+        let by_format = Photo::new(PhotoId(2), Source::File { path: "/p/old.mov".into() }, "old.mov", "VIDEO", 10, 10, "2026-10-01T00:00:00");
+        assert!(by_format.is_video());
+
+        let by_extension = Photo::new(PhotoId(3), Source::File { path: "/p/OLD.MOV".into() }, "OLD.MOV", "MOV", 10, 10, "2026-10-01T00:00:00");
+        assert!(by_extension.is_video(), "a catalog from before video import may say Image");
+
+        let m4v = Photo::new(PhotoId(4), Source::File { path: "/p/a.m4v".into() }, "a.m4v", "", 10, 10, "2026-10-01T00:00:00");
+        assert!(m4v.is_video());
     }
 }
 

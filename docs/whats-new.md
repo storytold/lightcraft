@@ -260,6 +260,15 @@
 
 ## 2026-10-24
 
+### Videos join the library
+- MP4, MOV and M4V clips are found by folder import and catalogued like photos: LightCraft reads the container's
+  duration, display size (including a phone's rotation), capture date, camera and GPS from the movie header and
+  QuickTime metadata, and the grid's Videos filter lists them with their length and container. The loupe shows a card
+  naming the clip instead of a broken-photo error, and Info lists its Duration.
+- A clip cannot be played, trimmed or edited yet, and it has no still to render: a JPEG, print, contact sheet or
+  rendered slideshow leaves it out and says so per file (Original format still copies the clip). Edits to a
+  catalogued clip are kept, but nothing decodes its frames until the player lands.
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works

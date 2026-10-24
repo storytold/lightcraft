@@ -95,6 +95,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     let guard = app.session.original_guard();
     let prepared = lightcraft_engine::contact_sheet::prepare(&mut app.session, params)?;
     let total = prepared.len();
+    let skipped: Vec<Value> = prepared.skipped().iter().map(|(file, warning)| json!({"file": file, "warning": warning})).collect();
     let write = app.services.write_shared.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -117,7 +118,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
                     Some(write) => write(&path, &doc.bytes)?,
                     None => lightcraft_engine::export::write_file(&path, &doc.bytes)?,
                 }
-                Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true})])
+                Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true, "skipped": skipped})])
             });
         // a PDF isn't something Photos imports: contact sheets never add to Apple Photos
         let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
@@ -146,13 +147,14 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     let ids = app.session.targets(params).map_err(|e| e.to_string())?;
     let prepared = compose::prepare(&mut app.session, &settings, &ids)?;
     let total = prepared.len();
+    let skipped: Vec<Value> = prepared.skipped().iter().map(|(file, warning)| json!({"file": file, "warning": warning})).collect();
     let title = std::path::Path::new(&path).file_stem().and_then(|n| n.to_str()).unwrap_or("Print").to_string();
     let write = app.services.write_shared.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (p, c) = (progress.clone(), cancel.clone());
     let (tx, rx) = channel();
-    let photos = ids.len();
+    let photos = prepared.photos();
     let work = move || {
         let result = prepared
             .run(&mut |done, name| {
@@ -171,7 +173,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
                     Some(write) => write(&path, &bytes)?,
                     None => lightcraft_engine::export::write_file(&path, &bytes)?,
                 }
-                Ok(vec![json!({"path": path, "pages": pages.len(), "photos": photos, "bytes": bytes.len(), "print": true})])
+                Ok(vec![json!({"path": path, "pages": pages.len(), "photos": photos, "bytes": bytes.len(), "print": true, "skipped": skipped})])
             });
         let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
     };
@@ -237,7 +239,11 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     let sheet = files.first().filter(|f| f["contactSheet"] == true);
     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
-    let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
+    // (a conflict leaves `skipped` as the taken path; a print or contact sheet reports its
+    // skipped photos as an array of {file, warning})
+    let skipped = files.iter().filter(|f| f.get("skipped").is_some_and(|v| !v.is_array())).count();
+    let warned = files.iter().filter(|f| f.get("warning").is_some()).count()
+        + files.iter().filter_map(|f| f.get("skipped").and_then(Value::as_array)).map(Vec::len).sum::<usize>();
     let mut m = crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
     if let Some(sheet) = sheet {
         m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
@@ -247,6 +253,9 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     }
     if skipped > 0 {
         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
+    }
+    if warned > 0 {
+        m += &format!(" · {warned} {}", crate::i18n::tr("not exported"));
     }
     if let Some(first) = failed.first() {
         m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));

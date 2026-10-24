@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, MediaKind, PhotoId, SortKey, StackId};
+use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, PhotoId, SortKey, StackId};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -852,7 +852,7 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
 /// A catalogued clip: it has no decoded frame yet (playback and trim come in a later update), so its
 /// cell is a placeholder tile with the container and running time, never a failed image.
 fn is_clip(photo: &lightcraft_catalog::Photo) -> bool {
-    photo.kind == MediaKind::Video || photo.duration.is_some()
+    photo.is_video() || photo.duration.is_some()
 }
 
 fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) {

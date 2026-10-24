@@ -32,7 +32,12 @@ pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, 
 /// Render photo `id` at the requested size and encode it (or copy / convert its original for
 /// [`ExportFormat::Original`] / [`ExportFormat::Dng`]).
 pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoId, o: &ExportOptions, seq: usize) -> Result<Exported, String> {
-    prepare_export(session, id, o, seq)?.run()
+    let prepared = prepare_export(session, id, o, seq)?;
+    let name = prepared.file_name.clone();
+    match prepared.run()? {
+        Ran::Exported(e) => Ok(e),
+        Ran::Skipped(why) => Err(format!("{name}: {why}")),
+    }
 }
 
 /// One photo's export, set up from the session ([`prepare_export`]). [`PreparedExport::run`] does
@@ -50,6 +55,15 @@ pub struct PreparedExport {
     /// Estimated working memory of [`Self::run`] (bytes), held from [`crate::memory::export_gate`]
     /// while it runs beside other photos of a batch.
     pub(super) weight: usize,
+}
+
+/// What running a prepared export produced: the bytes to write, or a photo the batch leaves out
+/// with the reason (a video in a rendered format, which has no decoded frame yet).
+pub enum Ran {
+    /// The photo's encoded file and its sidecars.
+    Exported(Exported),
+    /// A photo the batch leaves out, and the warning its entry carries.
+    Skipped(String),
 }
 
 struct RenderWork {
@@ -77,6 +91,9 @@ enum Work {
         label: String,
         size: (usize, usize),
     },
+    /// A photo this batch leaves out, with the reason for its per-file warning (a video in a
+    /// rendered format: there is no frame to render yet, and only Original copies the clip).
+    Skip(String),
 }
 
 /// Set up the export of photo `id` at 1-based position `seq` of a batch. (For a whole batch use
@@ -116,6 +133,14 @@ fn prepare_guarded(
         o
     };
     let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
+    // A video has no frame decoder yet, so only Original can export it (it copies the file). Any
+    // other format leaves it out with a warning on its own entry of the batch's result, rather
+    // than failing every other photo with "no such photo".
+    if p.is_video() && o.format != ExportFormat::Original {
+        let work = Work::Skip("a video: not exported (choose Original format to copy the clip)".into());
+        // the source's name, not the file the export would have written: nothing is written
+        return Ok(PreparedExport { photo: id, file_name: p.file_name.clone(), source_dir, work, guard, weight: 0 });
+    }
     let (work, weight) = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
         let (nw, nh) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
@@ -199,9 +224,10 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
 }
 
 impl PreparedExport {
-    pub fn run(self) -> Result<Exported, String> {
+    pub fn run(self) -> Result<Ran, String> {
         let file_name = self.file_name;
         match self.work {
+            Work::Skip(why) => Ok(Ran::Skipped(why)),
             Work::Render(w) => {
                 let RenderWork { job, hdr_job, meta, opts } = *w;
                 let result = job.run();
@@ -215,7 +241,7 @@ impl PreparedExport {
                     }
                     None => encode_rendered(&r, &opts, meta.as_ref())?,
                 };
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                Ok(Ran::Exported(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback }))
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
@@ -246,14 +272,14 @@ impl PreparedExport {
                             ));
                         }
                     }
-                    return Ok(Exported {
+                    return Ok(Ran::Exported(Exported {
                         file_name,
                         bytes,
                         width: size.0,
                         height: size.1,
                         sidecars: vec![("xmp", packet.into_bytes())],
                         gpu_fallback: None,
-                    });
+                    }));
                 };
                 if lightcraft_raw::probe(&bytes).is_none() {
                     return Err(format!("{label}: DNG export needs a raw photo"));
@@ -271,7 +297,7 @@ impl PreparedExport {
                 };
                 let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None })
+                Ok(Ran::Exported(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None }))
             }
         }
     }

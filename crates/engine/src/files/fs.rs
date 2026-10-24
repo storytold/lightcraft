@@ -66,7 +66,26 @@ pub fn fs_pair_loader() -> PairLoader {
     })
 }
 
-/// Read metadata boxes (ftyp, moov, meta) of an ISO-BMFF container into a bounded buffer
+/// Whether the first bytes of `path` are an ISO-BMFF box header: a size (0, 1 or ≥ 8) and a box
+/// type a movie starts with. A `.mp4` whose bytes are another format (a renamed image) is not
+/// taken down the video path; a clip cut off before its `moov` is, and stays bounded.
+fn looks_like_bmff(path: &str) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+    if n < 8 {
+        return false;
+    }
+    let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+    if size != 0 && size != 1 && size < 8 {
+        return false;
+    }
+    let kind: &[u8] = &head[4..8];
+    [&b"ftyp"[..], b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot", b"uuid", b"moof", b"mfra", b"sidx", b"styp", b"emsg", b"prft", b"meta"]
+        .contains(&kind)
+}
+
+/// Read metadata boxes (ftyp, moov, meta, uuid) of an ISO-BMFF container into a bounded buffer
 /// without reading large media payloads (mdat). Capped at 64 MB.
 fn read_video_metadata_boxes(path: &str, file_len: u64) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -103,12 +122,14 @@ fn read_video_metadata_boxes(path: &str, file_len: u64) -> Result<Vec<u8>, Strin
             _ => break,
         };
 
-        if &kind == b"moov" || &kind == b"ftyp" || &kind == b"meta" {
-            if total_len > MAX_BOX_SIZE {
-                return Err(format!("{path}: video metadata box exceeds 64MB limit"));
+        if &kind == b"moov" || &kind == b"ftyp" || &kind == b"meta" || &kind == b"uuid" {
+            let box_len = usize::try_from(total_len).map_err(|_| format!("{path}: video metadata box is too large"))?;
+            // Per box and in all: many small boxes must not add up past the working-memory cap.
+            if total_len > MAX_BOX_SIZE || out.len().saturating_add(box_len) > MAX_BOX_SIZE as usize {
+                return Err(format!("{path}: video metadata boxes exceed 64MB limit"));
             }
             f.seek(SeekFrom::Start(at)).map_err(|e| format!("{path}: {e}"))?;
-            let mut box_data = vec![0u8; total_len as usize];
+            let mut box_data = vec![0u8; box_len];
             f.read_exact(&mut box_data).map_err(|e| format!("{path}: {e}"))?;
             out.extend_from_slice(&box_data);
         }
@@ -148,15 +169,12 @@ fn probe_video_file(path: &str, file_len: u64) -> Result<ProbeInfo, String> {
     {
         std::mem::swap(&mut w, &mut h);
     }
-    let (v_meta, v_captured) = meta_of(&v.metadata);
+    // Everything the boxes hold: XMP in a top-level uuid box, mdta keys/ilst and the QuickTime
+    // atoms, then the movie header as the fallback for what they leave out.
+    let mut md = lightcraft_meta::extract(&meta_bytes);
+    md.fill_missing(&v.metadata);
+    let (meta, v_captured) = meta_of(&md);
     let captured = v_captured.or(v.captured);
-    let mut meta = Meta::default();
-    if !v_meta.camera.is_empty() {
-        meta.camera = v_meta.camera;
-    }
-    if v_meta.gps.is_some() {
-        meta.gps = v_meta.gps;
-    }
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     let format = match ext_upper(&name).as_str() {
         "MP4" | "MOV" | "M4V" => ext_upper(&name),
@@ -197,20 +215,15 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
         let meta = file.metadata().ok();
         let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
-        // A video container is read box by box, capped at 64 MB, instead of whole; one that can't
-        // be read that way falls back to probing its bytes.
-        let is_video = matches!(ext_upper(path).as_str(), "MP4" | "MOV" | "M4V");
-        let weight = if is_video { len.min(64 * 1024 * 1024) } else { len };
+        // A video container is read box by box, never whole: a clip cut off before its moov (or
+        // with a moov over the cap) is an error, not a multi-gigabyte read. A file merely named
+        // .mp4 whose bytes are another format is probed as what it is.
+        let ext = ext_upper(path);
+        let bounded_video = matches!(ext.as_str(), "MP4" | "MOV" | "M4V") && looks_like_bmff(path);
+        let weight = if bounded_video { len.min(64 * 1024 * 1024) } else { len };
         let _permit = crate::memory::work_gate().acquire(weight);
-        let mut info = if is_video {
-            match probe_video_file(path, u64::try_from(len).unwrap_or(u64::MAX)) {
-                Ok(info) => info,
-                Err(_) => {
-                    let mut bytes = Vec::new();
-                    file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-                    probe_bytes(path, &bytes)?
-                }
-            }
+        let mut info = if bounded_video {
+            probe_video_file(path, u64::try_from(len).unwrap_or(u64::MAX))?
         } else {
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;

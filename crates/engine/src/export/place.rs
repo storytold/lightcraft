@@ -1,6 +1,7 @@
 use super::ExportOptions;
 use super::options::{Conflict, DestinationMode};
-use super::prepare::{Destination, Exported};
+use super::prepare::Destination;
+use super::*;
 
 /// Write an exported or rendered file on disk: its folder is created if needed, and the file is
 /// replaced atomically ([`lightcraft_catalog::safe_file::write_atomic_nosync`]: a temp file
@@ -100,9 +101,18 @@ impl<'a> Placer<'a> {
         name: String,
         source_dir: Option<&str>,
         guard: &crate::originals::OriginalGuard,
-        e: Result<Exported, String>,
+        e: Result<Ran, String>,
     ) -> Result<(), String> {
         use serde_json::json;
+        // a photo the batch leaves out (a video in a rendered format) still reports on its entry
+        let e = match e {
+            Ok(Ran::Exported(e)) => Ok(e),
+            Ok(Ran::Skipped(why)) => {
+                self.out.push(json!({"photo": photo.0, "file": name, "warning": why}));
+                return Ok(());
+            }
+            Err(err) => Err(err),
+        };
         // an exact file path needs no folder
         let dir = if self.to.exact.is_some() && self.single { Ok(String::new()) } else { self.folder_for(&name, source_dir) };
         let (o, exists) = (self.o, self.exists);

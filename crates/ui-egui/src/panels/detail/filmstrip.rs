@@ -121,7 +121,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             let thumb = app.renderer.thumb(*id);
-            let is_video = app.session.catalog.photo(*id).is_some_and(|p| p.kind == lightcraft_catalog::MediaKind::Video);
+            let is_video = app.session.catalog.photo(*id).is_some_and(|p| p.is_video());
             if thumb.is_none() {
                 p.rect_filled(img_area, 0.0, if is_video { Color32::from_gray(30) } else { t.skeleton });
                 if failed && !is_video {
@@ -166,7 +166,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             }
             // A catalogued video has no frame yet: its icon and running time read it at a glance
             // in the strip too (the grid and the loupe show the same badges and card).
-            if let Some(ph) = app.session.catalog.photo(*id).filter(|p| p.kind == lightcraft_catalog::MediaKind::Video) {
+            if let Some(ph) = app.session.catalog.photo(*id).filter(|p| p.is_video()) {
                 if !has_thumb {
                     crate::icons::paint(p, Rect::from_center_size(img_area.center(), vec2(24.0, 24.0)), crate::icons::Icon::Video, t.text_dim);
                 }

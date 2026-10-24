@@ -57,14 +57,16 @@ fn be64(b: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
 }
 
-/// Convert Apple 1904-epoch seconds to ISO 8601 UTC string (`YYYY-MM-DDTHH:MM:SS`).
+/// Convert Apple 1904-epoch seconds to ISO 8601 UTC string (`YYYY-MM-DDTHH:MM:SSZ`).
 fn mac_time_to_iso(secs: u64) -> Option<String> {
     if secs <= MAC_EPOCH_OFFSET_SECONDS {
         return None;
     }
     let unix_secs = i64::try_from(secs.checked_sub(MAC_EPOCH_OFFSET_SECONDS)?).ok()?;
     let dt = chrono::DateTime::from_timestamp(unix_secs, 0)?;
-    Some(dt.format("%Y-%m-%dT%H:%M:%S").to_string())
+    // `mvhd` times are UTC (ISO/IEC 14496-12); the suffix says so, so a later reader does not take
+    // them for the local wall-clock time a camera records in Exif/XMP.
+    Some(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
 }
 
 /// Parse ISO 6709 geolocation string (e.g. `+37.7749-122.4194/` or `+35.6586+139.7454+035.100/`).
@@ -152,10 +154,12 @@ fn orientation_from_matrix(matrix: &[u8]) -> Option<Orientation> {
     let c = i32::from_be_bytes([*matrix.get(12)?, *matrix.get(13)?, *matrix.get(14)?, *matrix.get(15)?]);
     let d = i32::from_be_bytes([*matrix.get(16)?, *matrix.get(17)?, *matrix.get(18)?, *matrix.get(19)?]);
 
-    // Threshold around 1.0 (0x10000 = 65536) allowing minor fixed-point rounding
-    let is_one = |v: i32| (v - 0x10000).abs() < 0x200;
-    let is_neg_one = |v: i32| (v + 0x10000).abs() < 0x200;
-    let is_zero = |v: i32| v.abs() < 0x200;
+    // Threshold around 1.0 (0x10000 = 65536) allowing minor fixed-point rounding. The entries
+    // come from the file: checked arithmetic, so an `i32::MIN`/`i32::MAX` entry is simply not a
+    // rotation instead of an overflow (never-crash rule).
+    let is_one = |v: i32| v.checked_sub(0x10000).is_some_and(|d| d.unsigned_abs() < 0x200);
+    let is_neg_one = |v: i32| v.checked_add(0x10000).is_some_and(|d| d.unsigned_abs() < 0x200);
+    let is_zero = |v: i32| v.unsigned_abs() < 0x200;
 
     if is_one(a) && is_one(d) && is_zero(b) && is_zero(c) {
         Some(Orientation::Normal)
@@ -230,9 +234,12 @@ fn read_udta_text(body: &[u8]) -> Option<String> {
         let data_payload = body.get(16..size.min(body.len()))?;
         return String::from_utf8(data_payload.to_vec()).ok();
     }
-    // Classic QuickTime atom: skip 2 bytes length and 2 bytes language
+    // Classic QuickTime atom: a 16-bit text length, a 16-bit language, then the text (the length
+    // says where the text ends, so trailing bytes of the box are not part of the value)
     if body.len() >= 4 {
-        let str_bytes = body.get(4..)?;
+        let declared = body.get(..2).map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])));
+        let end = declared.and_then(|n| 4usize.checked_add(n)).filter(|e| *e <= body.len()).unwrap_or(body.len());
+        let str_bytes = body.get(4..end)?;
         return String::from_utf8(str_bytes.to_vec()).ok().or_else(|| Some(String::from_utf8_lossy(str_bytes).into_owned()));
     }
     None
@@ -296,8 +303,78 @@ fn parse_udta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget
             }
             b"meta" => {
                 // QuickTime `meta` atom inside `udta` has 4 bytes version/flags before child boxes
-                let child_bytes = b.body.get(4..).unwrap_or(b.body);
-                parse_udta(child_bytes, meta, xmp, budget, depth + 1);
+                parse_meta(b.body, meta, xmp, budget, depth + 1);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Apply one QuickTime metadata key (mdta) value to the file's metadata.
+fn apply_mdta(key: &str, value: &str, meta: &mut Metadata) {
+    if value.is_empty() {
+        return;
+    }
+    match key {
+        // ISO 8601 with an offset, e.g. `2026-05-04T21:00:00-0400`: the local capture time.
+        "com.apple.quicktime.creationdate" => {
+            if let Some(dt) = DateTime::parse_iso(value).or_else(|| DateTime::parse_exif(value)) {
+                meta.capture_time = Some(dt);
+            }
+        }
+        "com.apple.quicktime.make" => meta.make = Some(value.to_string()),
+        "com.apple.quicktime.model" => meta.model = Some(value.to_string()),
+        "com.apple.quicktime.software" => meta.software = Some(value.to_string()),
+        "com.apple.quicktime.location.ISO6709" => {
+            if let Some(gps) = parse_iso6709(value) {
+                meta.gps = Some(gps);
+            }
+        }
+        "com.apple.quicktime.artist" => meta.artist = Some(value.to_string()),
+        "com.apple.quicktime.title" => meta.title = Some(value.to_string()),
+        "com.apple.quicktime.comment" => meta.caption = Some(value.to_string()),
+        _ => {}
+    }
+}
+
+/// Parse a QuickTime/ISO `meta` box: its `keys` name the fields and its `ilst` items, numbered by
+/// the key they belong to, hold the values. Apple's MOVs record the capture time, make, model,
+/// software and location here (mdta) rather than in `udta`; the time carries its offset.
+fn parse_meta(body: &[u8], meta: &mut Metadata, _xmp: &mut Option<String>, budget: &mut usize, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    // a FullBox: version and flags before the child boxes
+    let body = body.get(4..).unwrap_or(body);
+    let mut keys: Vec<Option<String>> = Vec::new();
+    for b in read_boxes(body, budget) {
+        match &b.kind {
+            b"keys" => {
+                // FullBox header, entry count, then each key: size (namespace included) and name
+                let count = be32(b.body, 4).unwrap_or(0).min(4096) as usize;
+                let mut at = 8usize;
+                for _ in 0..count {
+                    let Some(size) = be32(b.body, at).map(|s| s as usize).filter(|s| *s >= 8) else { break };
+                    let Some(name) = b.body.get(at.saturating_add(8)..at.saturating_add(size)) else { break };
+                    keys.push(std::str::from_utf8(name).ok().map(str::to_owned));
+                    at = at.saturating_add(size);
+                }
+            }
+            b"ilst" => {
+                for item in read_boxes(b.body, budget) {
+                    let index = u32::from_be_bytes(item.kind) as usize;
+                    let Some(Some(key)) = keys.get(index.saturating_sub(1)) else { continue };
+                    for data in read_boxes(item.body, budget) {
+                        if &data.kind != b"data" {
+                            continue;
+                        }
+                        // `data` is a type and a locale before the value (type 1: UTF-8 text)
+                        let Some(bytes) = data.body.get(8..) else { continue };
+                        if let Ok(value) = std::str::from_utf8(bytes) {
+                            apply_mdta(key, value.trim(), meta);
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -421,6 +498,9 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     b"udta" => {
                         parse_udta(child.body, &mut meta, &mut xmp, &mut budget, 0);
                     }
+                    b"meta" => {
+                        parse_meta(child.body, &mut meta, &mut xmp, &mut budget, 0);
+                    }
                     b"uuid" if child.uuid == Some(XMP_UUID) => {
                         if let Ok(s) = std::str::from_utf8(child.body) {
                             xmp = Some(s.to_string());
@@ -429,6 +509,9 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     _ => {}
                 }
             }
+        }
+        if &b.kind == b"meta" {
+            parse_meta(b.body, &mut meta, &mut xmp, &mut budget, 0);
         }
     }
 
@@ -598,9 +681,8 @@ mod tests {
     /// Probing synthetic MP4 bytes correctly extracts duration, dimensions, orientation, and capture date.
     #[test]
     fn synthetic_mp4_probes_duration_dimensions_and_date() {
-        // Mac timestamp for 2026-08-14T10:00:00 UTC:
-        // 2026-08-14 is 56 years + 225 days after 1970-01-01.
-        // Unix secs for 2026-08-14T10:00:00Z: 1786692000
+        // 1_786_692_000 Unix seconds = 2026-08-14T07:20:00Z; in the Mac 1904 epoch that is
+        // 1_786_692_000 + MAC_EPOCH_OFFSET_SECONDS.
         let unix_secs = 1_786_692_000u64;
         let mac_secs = (unix_secs + MAC_EPOCH_OFFSET_SECONDS) as u32;
 
@@ -612,7 +694,7 @@ mod tests {
         assert_eq!(meta.width, 1920);
         assert_eq!(meta.height, 1080);
         assert_eq!(meta.orientation, Some(Orientation::Normal));
-        assert_eq!(meta.captured, Some("2026-08-14T07:20:00".to_string()));
+        assert_eq!(meta.captured, Some("2026-08-14T07:20:00Z".to_string()));
         assert_eq!(meta.metadata.width, Some(1920));
         assert_eq!(meta.metadata.height, Some(1080));
     }
@@ -665,6 +747,81 @@ mod tests {
     }
 
     /// 90-degree matrix rotation in the display matrix is detected and mapped to EXIF orientation.
+    /// Append child boxes to the synthetic file's `moov` (the `meta` box, for the mdta test).
+    fn with_moov_children(bytes: &[u8], children: &[u8]) -> Vec<u8> {
+        let ftyp_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let moov_len = u32::from_be_bytes([bytes[ftyp_len], bytes[ftyp_len + 1], bytes[ftyp_len + 2], bytes[ftyp_len + 3]]) as usize;
+        let mut body = bytes[ftyp_len + 8..ftyp_len + moov_len].to_vec();
+        body.extend_from_slice(children);
+        let mut out = bytes[..ftyp_len].to_vec();
+        write_box(&mut out, b"moov", &body);
+        out
+    }
+
+    /// A QuickTime `meta` box (mdta): `keys` names the fields, `ilst` items hold their values.
+    fn mdta_meta_box(fields: &[(&str, &str)]) -> Vec<u8> {
+        let mut keys = vec![0u8; 4];
+        keys.extend_from_slice(&(fields.len() as u32).to_be_bytes());
+        for (key, _) in fields {
+            keys.extend_from_slice(&((8 + key.len()) as u32).to_be_bytes());
+            keys.extend_from_slice(b"mdta");
+            keys.extend_from_slice(key.as_bytes());
+        }
+        let mut ilst = Vec::new();
+        for (i, (_, value)) in fields.iter().enumerate() {
+            let mut data = 1u32.to_be_bytes().to_vec();
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data.extend_from_slice(value.as_bytes());
+            let mut data_box = Vec::new();
+            write_box(&mut data_box, b"data", &data);
+            let size = (data_box.len() + 8) as u32;
+            ilst.extend_from_slice(&size.to_be_bytes());
+            ilst.extend_from_slice(&u32::try_from(i + 1).expect("few fields").to_be_bytes());
+            ilst.extend_from_slice(&data_box);
+        }
+        let mut body = vec![0u8; 4];
+        let mut keys_box = Vec::new();
+        write_box(&mut keys_box, b"keys", &keys);
+        body.extend_from_slice(&keys_box);
+        let mut ilst_box = Vec::new();
+        write_box(&mut ilst_box, b"ilst", &ilst);
+        body.extend_from_slice(&ilst_box);
+        let mut out = Vec::new();
+        write_box(&mut out, b"meta", &body);
+        out
+    }
+
+    #[test]
+    fn mdat_before_moov_and_a_64_bit_mdat_size() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        let ftyp_len = u32::from_be_bytes([file[0], file[1], file[2], file[3]]) as usize;
+        let mut out = file[..ftyp_len].to_vec();
+        // a 64-bit `mdat` between ftyp and moov: the reader seeks over it, not through it
+        let payload = [0u8; 64];
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(b"mdat");
+        out.extend_from_slice(&((16 + payload.len()) as u64).to_be_bytes());
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&file[ftyp_len..]);
+        let meta = probe_video(&out).expect("valid video");
+        assert_eq!((meta.duration, meta.width, meta.height), (Some(10.0), 1920, 1080));
+    }
+
+    #[test]
+    fn quicktime_creation_date_and_camera_come_from_mdta() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        let meta_box = mdta_meta_box(&[
+            ("com.apple.quicktime.creationdate", "2026-05-04T21:00:00-0400"),
+            ("com.apple.quicktime.make", "Apple"),
+            ("com.apple.quicktime.model", "iPhone 17 Pro"),
+        ]);
+        let bytes = with_moov_children(&file, &meta_box);
+        let meta = probe_video(&bytes).expect("valid video");
+        assert_eq!(meta.captured.as_deref(), Some("2026-05-04T21:00:00-04:00"), "the local time and its offset");
+        assert_eq!(meta.metadata.make.as_deref(), Some("Apple"));
+        assert_eq!(meta.metadata.model.as_deref(), Some("iPhone 17 Pro"));
+    }
+
     #[test]
     fn rotated_90_degrees_matrix_detected() {
         let mut bytes = synthetic_mp4(1000, 5000, 1920, 1080, 0);
@@ -685,6 +842,33 @@ mod tests {
     }
 
     /// Truncated or corrupted video buffers never panic during box parsing.
+    #[test]
+    fn quicktime_text_stops_at_its_declared_length() {
+        let mut body = vec![0, 5, 0, 0];
+        body.extend_from_slice(b"HelloTRAILING");
+        assert_eq!(read_udta_text(&body).as_deref(), Some("Hello"));
+        // a length past the box falls back to what the box holds
+        let mut bogus = vec![0xff, 0xff, 0, 0];
+        bogus.extend_from_slice(b"ok");
+        assert_eq!(read_udta_text(&bogus).as_deref(), Some("ok"));
+    }
+
+    /// A matrix entry read from a hostile file is never negated in a way that overflows: the
+    /// extreme values are "not a rotation", not a panic (debug) or a misread (release).
+    #[test]
+    fn hostile_matrix_entries_do_not_overflow_or_panic() {
+        for value in [i32::MIN, i32::MAX, i32::MIN + 0x10000, i32::MAX - 0x10000] {
+            let mut bytes = synthetic_mp4(1000, 5000, 1920, 1080, 0);
+            let tkhd_pos = bytes.windows(4).position(|w| w == b"tkhd").expect("has tkhd");
+            let matrix_pos = tkhd_pos + 4 + 40;
+            for i in 0..9 {
+                bytes[matrix_pos + i * 4..matrix_pos + i * 4 + 4].copy_from_slice(&value.to_be_bytes());
+            }
+            let meta = probe_video(&bytes).expect("still a video");
+            assert_eq!(meta.orientation, None, "{value:#x} is not a rotation");
+        }
+    }
+
     #[test]
     fn corrupted_and_truncated_buffers_do_not_panic() {
         assert_eq!(probe_video(b""), None);

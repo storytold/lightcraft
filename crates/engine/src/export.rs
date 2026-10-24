@@ -41,7 +41,7 @@ pub use params::{
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
 pub use prepare::{
-    AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
+    AfterExport, Destination, DngCompression, Exported, PreparedExport, Ran, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };
 #[cfg(test)]
 use prepare::{render_weight, too_big_for_memory};

@@ -42,8 +42,14 @@ fn state(s: &Session, photos: usize) -> Value {
     out
 }
 
+/// The number of printable (non-video) targets in `p`.
+fn printable_count(s: &Session, p: &Value) -> Result<usize> {
+    Ok(s.targets(p)?.into_iter().filter(|id| s.catalog.photo(*id).is_none_or(|p| !p.is_video())).count())
+}
+
+/// The print module's current state with the active selection's printable count.
 fn reply(s: &Session) -> Result<Value> {
-    Ok(state(s, s.targets(&Value::Null)?.len()))
+    Ok(state(s, printable_count(s, &Value::Null)?))
 }
 
 /// Applies `patch` over `dst`: objects merge key by key, anything else replaces.
@@ -64,7 +70,8 @@ fn merge(dst: &mut Value, patch: &Value, depth: usize) {
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
-    Ok(state(s, s.targets(p)?.len()))
+    // a video has no frame to print: it does not take a cell or a page (print.exportPdf skips it)
+    Ok(state(s, printable_count(s, p)?))
 }
 
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
@@ -252,6 +259,8 @@ fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let title = std::path::Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("Print").to_string();
     let work = crate::print::compose::prepare(s, &settings, &ids).map_err(|e| bad(ID, e))?;
     let total = work.len() as u64;
+    let photos = work.photos();
+    let skipped: Vec<Value> = work.skipped().iter().map(|(file, warning)| json!({"file": file, "warning": warning})).collect();
     let row = s.activity.start("export", "Printing to PDF", crate::activity::Cancel::No);
     row.progress(0, total);
     let pages = work
@@ -264,7 +273,7 @@ fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = crate::print::output::write(&pages, &settings.job, &title).map_err(|e| bad(ID, e))?;
     s.check_write_target(path).map_err(|e| bad(ID, e))?;
     crate::export::write_file(path, &bytes).map_err(|e| bad(ID, e))?;
-    Ok(json!({"path": path, "pages": pages.len(), "photos": ids.len(), "bytes": bytes.len()}))
+    Ok(json!({"path": path, "pages": pages.len(), "photos": photos, "bytes": bytes.len(), "skipped": skipped}))
 }
 
 // ---- templates ------------------------------------------------------------------------------

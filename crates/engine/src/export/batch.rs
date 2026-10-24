@@ -1,6 +1,7 @@
 use super::ExportOptions;
 use super::place::Placer;
-use super::prepare::{Destination, Exported, PreparedExport};
+use super::prepare::{Destination, PreparedExport};
+use super::*;
 
 /// Run prepared exports in order: pick each one's path, and hand the bytes (and sidecars) to
 /// `write`. `exists` tells whether a path is taken. The conflict policy applies to a file and its
@@ -99,7 +100,7 @@ impl Drop for StopOnDrop<'_> {
 
 /// Run one photo's export holding its working memory from [`crate::memory::export_gate`]; a panic
 /// becomes that photo's error, not the batch's end.
-fn run_gated(item: PreparedExport) -> Result<Exported, String> {
+fn run_gated(item: PreparedExport) -> Result<Ran, String> {
     let _held = crate::memory::export_gate().acquire(item.weight);
     let what = format!("exporting {}", item.file_name);
     crate::guard::catch(&what, || item.run()).and_then(|r| r)
@@ -121,7 +122,7 @@ struct Lane {
     /// Photos handed to the placer so far.
     placed: usize,
     stop: bool,
-    done: std::collections::HashMap<usize, Result<Exported, String>>,
+    done: std::collections::HashMap<usize, Result<Ran, String>>,
 }
 
 impl Lane {
@@ -142,7 +143,7 @@ impl Queue {
         self.cv.wait(g).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn finish(&self, i: usize, r: Result<Exported, String>) {
+    fn finish(&self, i: usize, r: Result<Ran, String>) {
         self.lock().done.insert(i, r);
         self.cv.notify_all();
     }
@@ -169,7 +170,7 @@ impl Queue {
     }
 
     /// Photo `i`'s result, waiting for it; run here when no lane has started it yet.
-    fn result(&self, i: usize) -> Result<Exported, String> {
+    fn result(&self, i: usize) -> Result<Ran, String> {
         let mut l = self.lock();
         loop {
             if let Some(r) = l.done.remove(&i) {

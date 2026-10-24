@@ -2894,7 +2894,7 @@ fn video_files_import_with_duration_and_kind() {
     assert_eq!(c.width, 1920);
     assert_eq!(c.height, 1080);
     assert_eq!(c.duration, Some(84.5));
-    assert_eq!(c.captured.as_deref(), Some("2026-05-04T10:00:00"));
+    assert_eq!(c.captured.as_deref(), Some("2026-05-04T10:00:00+00:00"));
 
     // Import into library
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
@@ -2907,7 +2907,7 @@ fn video_files_import_with_duration_and_kind() {
     assert_eq!(photo.format, "MP4");
     assert_eq!(photo.width, 1920);
     assert_eq!(photo.height, 1080);
-    assert_eq!(photo.captured.as_deref(), Some("2026-05-04T10:00:00"));
+    assert_eq!(photo.captured.as_deref(), Some("2026-05-04T10:00:00+00:00"));
 
     let _ = std::fs::remove_dir_all(&src);
 
@@ -2998,6 +2998,101 @@ fn video_smart_collections_and_rule_matching() {
 
 /// Verify catalogued videos are never scheduled for render, thumbnail, variant, or smart preview jobs.
 #[test]
+fn the_bounded_video_reader_skips_an_mdat_before_moov() {
+    let src = temp_dir("video-mdat-first");
+    let file = synthetic_mp4(1000, 84_500, 640, 360, 0);
+    let ftyp_len = u32::from_be_bytes([file[0], file[1], file[2], file[3]]) as usize;
+    let mut bytes = file[..ftyp_len].to_vec();
+    // a 64-bit `mdat` between ftyp and moov: the reader seeks over the payload
+    let payload = vec![0u8; 4096];
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    bytes.extend_from_slice(b"mdat");
+    bytes.extend_from_slice(&((16 + payload.len()) as u64).to_be_bytes());
+    bytes.extend_from_slice(&payload);
+    bytes.extend_from_slice(&file[ftyp_len..]);
+    std::fs::write(src.join("clip.mp4"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let candidates = crate::import::scan(&mut s, &[src.to_string_lossy().into_owned()]);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].kind, lightcraft_catalog::MediaKind::Video);
+    assert_eq!(candidates[0].duration, Some(84.5));
+    assert!(candidates[0].error.is_none(), "{:?}", candidates[0].error);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn a_moov_over_the_metadata_cap_is_refused_without_reading_it() {
+    let src = temp_dir("video-big-moov");
+    let path = src.join("big.mp4");
+    const CAP: u64 = 64 * 1024 * 1024;
+    let total = CAP + 16;
+    let mut f = std::fs::File::create(&path).unwrap();
+    let mut header = Vec::new();
+    header.extend_from_slice(&1u32.to_be_bytes()); // 64-bit box size
+    header.extend_from_slice(b"moov");
+    header.extend_from_slice(&total.to_be_bytes());
+    std::io::Write::write_all(&mut f, &header).unwrap();
+    f.set_len(total).unwrap(); // sparse: the test does not write 64 MiB
+    drop(f);
+
+    let (_, probe) = crate::files::fs_hooks();
+    let err = probe(&path.to_string_lossy()).expect_err("a moov over the cap is an error");
+    assert!(err.contains("64MB"), "{err}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn a_file_named_mp4_that_is_not_a_container_is_probed_as_what_it_is() {
+    let src = temp_dir("video-misnamed");
+    write_png(&src.join("really-a-photo.mp4"), 7);
+    let mut s = Session::new().with_fs();
+    let candidates = crate::import::scan(&mut s, &[src.to_string_lossy().into_owned()]);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].kind, lightcraft_catalog::MediaKind::Image, "{:?}", candidates[0].error);
+    assert_eq!(candidates[0].format, "PNG");
+    assert_eq!((candidates[0].width, candidates[0].height), (48, 32));
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let p = s.catalog.photos().next().unwrap();
+    assert!(!p.is_video(), "an image misnamed .mp4 is not a video in the catalog");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn a_clip_carries_its_top_level_xmp_into_the_catalog() {
+    // Some cameras and editors write XMP in a top-level `uuid` box: the bounded reader keeps it,
+    // and its title and keywords reach the photo (the web build's full-byte probe already did).
+    let src = temp_dir("video-xmp");
+    let mut bytes = synthetic_mp4(1000, 30_000, 640, 360, 0);
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">"#,
+        r#"<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Sunset clip</rdf:li></rdf:Alt></dc:title>"#,
+        r#"<dc:subject><rdf:Bag><rdf:li>beach</rdf:li></rdf:Bag></dc:subject>"#,
+        r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    const XMP_UUID: [u8; 16] = [0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac];
+    bytes.extend_from_slice(&((8 + 16 + xmp.len()) as u32).to_be_bytes());
+    bytes.extend_from_slice(b"uuid");
+    bytes.extend_from_slice(&XMP_UUID);
+    bytes.extend_from_slice(xmp.as_bytes());
+    std::fs::write(src.join("xmp.mp4"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let candidates = crate::import::scan(&mut s, &[src.to_string_lossy().into_owned()]);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].kind, lightcraft_catalog::MediaKind::Video, "{:?}", candidates[0].error);
+    assert!(candidates[0].error.is_none(), "{:?}", candidates[0].error);
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let photo = s.catalog.photos().next().unwrap();
+    assert_eq!(photo.meta.title, "Sunset clip");
+    assert_eq!(photo.meta.keywords, vec!["beach".to_string()]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {
     use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
     let lib = temp_dir("video-smart-previews");
@@ -3012,6 +3107,12 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     }
     let video = PhotoId(1);
     let still = PhotoId(2);
+    // an old entry (a Lightroom catalog's `VIDEO` format, kind Image) is a video too
+    let mut legacy =
+        Photo::new(PhotoId(3), Source::File { path: "/lightcraft-video-jobs/old.mov".into() }, "old.mov", "VIDEO", 1920, 1080, "2026-05-04T10:00:00");
+    legacy.kind = MediaKind::Image;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(legacy) }).unwrap();
+    let legacy = PhotoId(3);
     assert!(s.catalog.photo(video).is_some(), "video remains catalogued in the open library");
     // There is no frame decoder yet: nothing to render, and a job would read the whole file to
     // fail (the UI draws its own video placeholder and card).
@@ -3020,7 +3121,12 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     assert!(s.loupe_job(video, 1600, 1600, true).is_none());
     assert!(s.quick_view_job(video, 1600, true).is_none());
     assert!(s.variant_job(video, &lightcraft_develop::DevelopSettings::default(), 256).is_none());
+    let face = lightcraft_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 };
+    assert!(s.face_job(video, face, 256).is_none(), "no face tile of a video");
     assert_eq!(s.source_now(video, crate::media::SourceLevel::Thumb).unwrap_err(), "a video has no frame to sample");
+    assert!(s.thumb_job(legacy, 512).is_none(), "an old VIDEO entry gets no thumbnail decode either");
+    assert!(s.render_job(legacy, 1600, 1600, false, true).is_none());
+    assert!(s.face_job(legacy, face, 256).is_none());
     assert!(s.thumb_job(still, 512).is_some(), "a still still renders");
 
     // Smart previews skip catalogued videos

@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use crate::Session;
-use crate::export::{ExportFormat, ExportOptions, export_photo};
+use crate::export::{Destination, ExportFormat, ExportOptions, export_photo};
 use crate::tests_xmp::{synthetic_dng_with, synthetic_psd_with_metadata, temp_dir};
 
 fn jpeg_with_xmp(metadata: &lightcraft_meta::Metadata) -> Vec<u8> {
@@ -12,6 +12,43 @@ fn jpeg_with_xmp(metadata: &lightcraft_meta::Metadata) -> Vec<u8> {
     let xmp = lightcraft_meta::write_xmp(metadata, None);
     let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(&xmp), ..Default::default() };
     lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap()
+}
+
+/// A catalogued clip (a real file is not needed: nothing renders it).
+fn add_video(s: &mut Session, name: &str) -> lightcraft_catalog::PhotoId {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: format!("/lightcraft-video-export/{name}") }, name, "MP4", 1920, 1080, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    p.duration = Some(84.0);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    id
+}
+
+/// A video in a selection does not fail a rendered export batch: it keeps its place with a
+/// per-file warning, and every other photo is written.
+#[test]
+fn a_video_in_an_export_batch_is_skipped_with_a_warning() {
+    let mut s = Session::with_demo();
+    let still = s.visible()[0];
+    let video = add_video(&mut s, "clip.mp4");
+    let o = ExportOptions::from_json(&json!({"format": "png", "width": 64}));
+    let items = crate::export::prepare_batch(&mut s, &[still, video], &o).unwrap();
+    assert_eq!(items.len(), 2, "the clip keeps its place so its warning is reported");
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut written = 0;
+    let mut write = |_: &str, _: &[u8]| {
+        written += 1;
+        Ok(())
+    };
+    let files = crate::export::run_batch(items, &o, &to, &mut write, &|_| false, true, &mut |_, _| true).unwrap();
+    assert_eq!(written, 1, "the still is written, the clip is not");
+    let warning = files.iter().find(|f| f.get("warning").is_some()).expect("the clip's warning");
+    assert_eq!(warning["file"], "clip.mp4");
+    assert!(warning["warning"].as_str().unwrap_or_default().contains("not exported"), "{warning}");
+    // one photo alone says why, instead of "no such photo"
+    let err = export_photo(&mut s, video, &o, 1).err().expect("a video is not rendered");
+    assert!(err.contains("video") && !err.contains("no such photo"), "{err}");
 }
 
 #[test]

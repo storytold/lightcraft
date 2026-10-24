@@ -510,6 +510,33 @@ fn every_print_command_is_registered_with_a_description() {
 }
 
 #[test]
+fn a_video_in_the_print_is_skipped_with_a_warning() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    let mut s = Session::with_demo();
+    let still = s.visible()[0].0;
+    let video = s.catalog.alloc_photo_id();
+    let mut p =
+        Photo::new(video, Source::File { path: "/lightcraft-print-video/clip.mp4".into() }, "clip.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = run(&mut s, "print.exportPdf", json!({"path": temp_pdf("video-skip"), "ids": [still, video.0]}));
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(r["skipped"][0]["file"], "clip.mp4", "{r}");
+    assert!(r["skipped"][0]["warning"].as_str().unwrap_or_default().contains("not printed"), "{r}");
+    // only clips: a clear error, not an empty PDF
+    let e = fails(&mut s, "print.exportPdf", json!({"path": temp_pdf("video-only"), "ids": [video.0]}));
+    assert!(e.contains("videos"), "{e}");
+
+    // print.get and print.set report the same printable count (excluding the video)
+    let still_id = lightcraft_catalog::PhotoId(still);
+    s.selection = crate::Selection { ids: vec![still_id, video], active: Some(still_id) };
+    let g = run(&mut s, "print.get", json!({}));
+    let reply = run(&mut s, "print.set", json!({"page": {"pageNumbers": false}}));
+    assert_eq!(g["photos"], 1);
+    assert_eq!(reply["photos"], 1);
+}
+
+#[test]
 fn page_options_are_print_settings_and_template_fields() {
     let mut s = Session::with_demo();
     let g = run(&mut s, "print.get", json!({}));

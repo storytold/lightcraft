@@ -1915,6 +1915,7 @@
   "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).": "Per passare invece a questo editor il file originale (il raw, senza copia: ad esempio DxO PhotoLab), fai clic destro su una foto → Modifica in → Apri l'originale nell'altro editor (RAW, senza copia).",
   "Angle": "Angolo",
   "Video": "Video",
+  "not exported": "non esportati",
   "Video catalogued — playback and trim are coming in a later update": "Video catalogato — riproduzione e trim arriveranno in un prossimo aggiornamento",
   "Copyrighted": "Protetta da copyright",
   "Public Domain": "Pubblico dominio",

@@ -323,7 +323,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // A catalogued video has no frame to decode or show yet (playback, trim and cover frames come
     // in a later update): its card stands in for the picture in every view mode, instead of the
     // error a broken photo shows or a blank pane.
-    let video_only = photo.kind == lightcraft_catalog::MediaKind::Video
+    let video_only = photo.is_video()
         && app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
         && app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != id);
     if video_only {

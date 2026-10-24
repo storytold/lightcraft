@@ -1807,6 +1807,8 @@
   "Click to type a value, drag to change it": "クリックして値を入力、ドラッグして変更",
   "Angle": "角度",
   "Video": "動画",
+  "not exported": "エクスポートされませんでした",
+  "Video catalogued — playback and trim are coming in a later update": "動画をカタログ化しました — 再生とトリミングは今後のアップデートで対応します",
   "Copyrighted": "著作権あり",
   "Public Domain": "パブリックドメイン",
   "Unknown": "不明",
