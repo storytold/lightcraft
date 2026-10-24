@@ -493,6 +493,56 @@ mod tests {
         }
     }
 
+    /// A fixture tile re-declared grey: its colour encoding's colour space goes from RGB to Grey and,
+    /// as a grey encoding has no primaries, the 6-bit BT.2100 primaries field is dropped (ISO/IEC 18181-1
+    /// ColourEncoding; the bits after it move up and the header's zero padding to the frame grows by 6).
+    /// The XYB frame data is untouched, so the codestream is one grey plane coded as three XYB channels
+    /// whose colour is the gradient's, like Lightroom Classic's merged monochrome DNGs.
+    fn as_grey(tile: &[u8]) -> Vec<u8> {
+        // bit offset of the colour space, read LSB first, and the frame's first byte in these fixture tiles
+        const AT: usize = 42;
+        const FRAME: usize = 8;
+        let mut bits: Vec<u8> = tile.iter().flat_map(|b| (0..8).map(move |i| (b >> i) & 1)).collect();
+        // colour space Rgb (selector 0), white point D65 (selector 1), primaries Bt2100 (selector 2 + 4 bits of 7)
+        assert_eq!(bits[AT..AT + 10], [0, 0, 1, 0, 0, 1, 1, 1, 1, 0], "the fixture's colour encoding");
+        bits[AT] = 1; // colour space Grey (selector 1)
+        bits.drain(AT + 4..AT + 10);
+        bits.splice(FRAME * 8 - 6..FRAME * 8 - 6, [0; 6]);
+        bits.as_chunks::<8>().0.iter().map(|b| b.iter().enumerate().fold(0, |a, (i, v)| a | v << i)).collect()
+    }
+
+    #[test]
+    fn lossy_grey_tiles_decode_to_the_luminance_of_their_colour() {
+        let srgb_eotf = |v: f32| if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        let y = rgb_to_xyz(BT2100)[1].map(|v| v as f32);
+        for (name, tile, curve) in [("linear", LINEAR_TILE, Curve::Linear), ("sRGB", SRGB_TILE, Curve::Srgb)] {
+            let grey = as_grey(tile);
+            // the decoder still renders three unequal channels: the restore must reduce them, not pick one
+            let mut img = JxlImage::builder().read(std::io::Cursor::new(&grey)).unwrap();
+            assert!(img.image_header().metadata.grayscale(), "{name}: declared grey");
+            img.request_color_encoding(EnumColourEncoding::srgb_linear(RenderingIntent::Relative));
+            let render = img.render_frame(0).unwrap();
+            let fb = render.image_all_channels();
+            assert_eq!(fb.channels(), 3, "{name}");
+            assert!((fb.buf()[2] - fb.buf()[0]).abs() > 0.1, "{name}: the rendered channels differ");
+
+            let ChunkPx::U16(px) = decode(&grey, 16, 16, 16, 16, 1, 16, false).unwrap() else { panic!("{name}: integer samples") };
+            assert_eq!(px.len(), 256, "{name}: one plane");
+            let (mut sum, mut worst) = (0.0f32, 0.0f32);
+            for (i, got) in px.iter().enumerate() {
+                // the gradient's samples are coded in the tile's curve: back to linear for the luminance
+                let rgb = gradient(i % 16, i / 16).map(|v| if curve == Curve::Srgb { srgb_eotf(v / 65535.0) } else { v / 65535.0 });
+                let want = curve.encode(y[0] * rgb[0] + y[1] * rgb[1] + y[2] * rgb[2]) * 65535.0;
+                let err = (f32::from(*got) - want).abs();
+                sum += err;
+                worst = worst.max(err);
+            }
+            let mean = sum / px.len() as f32;
+            assert!(mean < 0.02 * 65535.0, "{name}: mean error {mean}");
+            assert!(worst < 0.1 * 65535.0, "{name}: worst error {worst}");
+        }
+    }
+
     #[test]
     fn lossy_data_that_cannot_be_restored_is_unsupported() {
         let bad = |xyb_planes: usize, e: ColourEncoding, it: f32| matches!(output_for(true, &e, it, xyb_planes), Err(RawError::Unsupported(_)));
