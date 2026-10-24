@@ -1221,6 +1221,24 @@ pub fn content_key(p: &Photo) -> String {
     }
 }
 
+/// Hash of the photo's effective lens state so changes to lens metadata, provenance, or embedded
+/// lens tables invalidate both in-memory and persistent render caches.
+fn photo_lens_key(p: &Photo) -> u64 {
+    if !p.develops_raw() {
+        return 0;
+    }
+    let mut h = Hasher128::new();
+    h.str(&p.meta.lens)
+        .u64(u64::from(p.meta.lens_from_spec))
+        .str(&p.meta.camera)
+        .u64(u64::from(p.meta.focal_mm.unwrap_or(0.0).to_bits()))
+        .u64(u64::from(p.meta.aperture.unwrap_or(0.0).to_bits()));
+    if let Ok(json) = serde_json::to_string(&p.embedded_lens) {
+        h.str(&json);
+    }
+    h.finish().0 as u64
+}
+
 pub fn source_info(p: &Photo) -> SourceInfo {
     // Procedural demo scenes are scene-referred HDR (like raw files): use the filmic tone map.
     // (They are drawn afresh at every size, so they have no original size.)
@@ -1307,6 +1325,7 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
+        let lens_key = photo_lens_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -1314,7 +1333,8 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            ^ lens_key;
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key)
@@ -1322,7 +1342,8 @@ impl crate::Session {
                 .u64(b as u64)
                 .u64(RENDER_CACHE_VERSION)
                 .u64(crate::camera_profiles::cache_key())
-                .u64(crate::lens_profiles::cache_key());
+                .u64(crate::lens_profiles::cache_key())
+                .u64(lens_key);
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -1370,6 +1391,7 @@ impl crate::Session {
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
             .u64(crate::lens_profiles::cache_key())
+            .u64(photo_lens_key(p))
             .finish()
     }
 
@@ -1487,6 +1509,7 @@ impl crate::Session {
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
             .u64(crate::lens_profiles::cache_key())
+            .u64(photo_lens_key(p))
             .finish()
     }
 

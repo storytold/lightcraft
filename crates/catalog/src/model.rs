@@ -210,6 +210,16 @@ pub struct Meta {
     pub focus: Option<lightcraft_meta::FocusPoint>,
 }
 
+impl Meta {
+    /// Restores `lens_from_spec` when an older snapshot carries a specification-formatted `lens`
+    /// without the `lens_from_spec` flag.
+    pub fn repair_lens_provenance(&mut self) {
+        if !self.lens_from_spec && lightcraft_meta::is_lens_spec_name(&self.lens) {
+            self.lens_from_spec = true;
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,

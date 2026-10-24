@@ -1035,6 +1035,9 @@ impl Catalog {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
                 Arc::make_mut(p).id = *id;
             }
+            if !p.meta.lens_from_spec && lightcraft_meta::is_lens_spec_name(&p.meta.lens) {
+                Arc::make_mut(p).meta.repair_lens_provenance();
+            }
         }
         for (id, a) in self.albums.iter_mut() {
             if a.id != *id {
@@ -1125,6 +1128,11 @@ impl Catalog {
                     break;
                 }
                 Err(e) => return Err(CatalogError::Corrupt(format!("log line {}: {e}", i + 1))),
+            }
+        }
+        for p in self.photos.values_mut() {
+            if !p.meta.lens_from_spec && lightcraft_meta::is_lens_spec_name(&p.meta.lens) {
+                Arc::make_mut(p).meta.repair_lens_provenance();
             }
         }
         Ok(n)
