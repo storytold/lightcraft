@@ -58,3 +58,47 @@ fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
     assert!(h.app.session.catalog.stack(StackId(1)).unwrap().collapsed, "a second click collapses it");
     assert!(!h.app.session.visible_cloned().contains(&member));
 }
+
+/// The strokes a filmstrip cell paints around its photo: the rectangles stroked in `color`
+/// that lie inside the cell.
+fn rings_in(h: &Headless, id: lightcraft_catalog::PhotoId, color: egui::Color32) -> Vec<egui::Rect> {
+    let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("cell drawn");
+    h.view
+        .painted_shapes()
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Rect(r) if r.stroke.color == color && r.stroke.width > 0.0 && cell.expand(2.0).contains_rect(r.rect) => Some(r.rect),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Until its thumbnail arrives, the active photo's cell and a selected one's still carry
+/// the white and gray rings of the loaded cells, around the same placeholder the grid draws.
+#[test]
+fn filmstrip_rings_selected_cells_whose_thumbnail_is_not_loaded() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    let vis = session.visible_cloned();
+    let (active, other) = (vis[0], vis[1]);
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    // renders are held: the thumbnails stay unloaded however fast the machine is
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(std::rc::Rc::new(std::cell::Cell::new(false)))));
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [active.0, other.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.selection.active, Some(active));
+    assert!(h.app.renderer.thumb(active).is_none() && h.app.renderer.thumb(other).is_none(), "thumbnails are still loading");
+    let white = rings_in(&h, active, egui::Color32::WHITE);
+    let gray = rings_in(&h, other, egui::Color32::from_gray(170));
+    assert_eq!(white.len(), 1, "the active cell has a white ring: {white:?}");
+    assert_eq!(gray.len(), 1, "the other selected cell has a gray ring: {gray:?}");
+    let cell = |id: lightcraft_catalog::PhotoId| h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).unwrap();
+    let placeholder = egui::Rect::from_min_max(cell(active).min + egui::vec2(10.0, 22.0), cell(active).max - egui::vec2(10.0, 8.0));
+    assert!(white[0].expand(1.0).contains_rect(placeholder), "the ring surrounds the placeholder: {:?} vs {placeholder:?}", white[0]);
+    assert!(rings_in(&h, vis[2], egui::Color32::WHITE).is_empty(), "an unselected cell has no ring");
+    assert!(rings_in(&h, vis[2], egui::Color32::from_gray(170)).is_empty(), "an unselected cell has no gray ring");
+}
