@@ -629,7 +629,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-WB | White-balance selector — W | P0 | ✅ | `cmd:tool.wbPicker` | |
 | KEY-FILMSTRIP | Filmstrip — / | P0 | ✅ | `cmd:view.filmstrip` | |
 | KEY-SHOWORIGINAL | Show original — \ | P0 | ✅ | `cmd:view.showOriginal` | |
-| KEY-TOGGLEZOOM | Toggle zoom — Space | P0 | ✅ | `cmd:view.zoomToggle` | Space is a secondary binding (primary Z) |
+| KEY-TOGGLEZOOM | Toggle zoom — Space | P0 | ✅ | `cmd:view.zoomToggle`, `crates/ui-egui/src/space_hand.rs`, `crates/ui-egui/src/tests_space_hand.rs` | Space is a secondary binding (primary Z); held, it toggles once (the key's auto-repeat no longer flips the zoom back and forth). With a tool on the photo (Crop, Masking, Remove, Red Eye, the white-balance / colour-range / point-colour pickers, a targeted adjustment) held Space is the view's hand until the key is up, as in Lightroom: a click zooms to the click-zoom ratio at the point clicked (or back to Fit), a drag pans the zoomed photo (grab cursor; zoom-in cursor at Fit), and the tool gets neither; a tap (under 0.4 s, no click) toggles the zoom on its release (issue #1895) |
 | KEY-MASKCOLOR | Cycle mask colour — ⇧O | P1 | ✅ | `cmd:view.maskOverlayColor`, `crates/ui-egui/src/shortcuts.rs` | ⇧O while masking cycles the overlay colour (while cropping: the guides' orientation); the overlay mode is in View ▸ Cycle Mask Overlay Mode |
 | KEY-EXPORTPREV | Export with previous — ⌘E | P0 | ✅ | `cmd:app.exportPrevious` | ⌘E (alias) and ⌥⇧⌘E (Classic) |
 | KEY-EXPORTDIALOG | Export dialog — ⇧E | P0 | ✅ | `cmd:dialog.export` | secondary binding (primary ⌘⇧E) |
@@ -843,6 +843,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-13 | minor | LRC-LIB-KEYWORDS: the Keyword List marks a keyword that has an applied keyword inside it (a dot in its box); status unchanged |
 | 2026-10-12 | minor | LR-IMP-FORMATS: folder discovery includes SR2/SRF; MCP and CLI reuse the engine extension list. DSC-F828 remains preview-only; decoder support and row status unchanged |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); status unchanged (🟡) |
+| 2026-10-16 | minor | KEY-TOGGLEZOOM: Space held over a tool on the photo is the view's hand (click zooms, drag pans, the tool gets neither), a tap still toggles; a held Space toggles once (issue #1895); status unchanged |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama's DNG takes its `AsShotNeutral` from the median of its frames' vendor white-balance multipliers (CR2, NEF, ARW…) instead of the first frame's tags, and frames now carry the multipliers (issue #1144); status unchanged (✅) |

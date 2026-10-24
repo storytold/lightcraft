@@ -291,8 +291,17 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.key" => {
             let Some(k) = s("key").and_then(key_from) else { return err("unknown or missing `key`") };
             let m = modifiers(p);
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
+            // {action?: "press" | "down" | "up"}: down … up holds the key across other input (Space
+            // held over a drag); a press is both in one frame
+            let (down, up) = match s("action").unwrap_or("press") {
+                "press" => (true, true),
+                "down" => (true, false),
+                "up" => (false, true),
+                other => return err(format!("ui.key: action {other:?} (press, down or up)")),
+            };
+            for pressed in [down.then_some(true), up.then_some(false)].into_iter().flatten() {
+                app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: m });
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }

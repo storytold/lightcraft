@@ -27,7 +27,7 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Crop, Upright, transform handles | handles, aspect lock, angle, overlays (O / ⇧O), guided Upright | ✅ all of them; overlay cycle on ⇧O | 85% | crop opacity of cut-out area (15.5) |
 | Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 60% | brush live preview (#517 / #518), no pen pressure, no depth range, AI masks, Feather / Edge controls (15.5) |
 | Remove / heal | content-aware remove, heal, clone, visualize spots | heal, clone, auto source, visualize spots, red / pet eye | 65% | content-aware (patch synthesis) remove, generative remove, detect distractions |
-| Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like; every view, mask and diagnostic overlays (Visualize Spots, Point Color range, HDR range) and soft proofing included, is sharp at 1:1–8:1 | 60% | zoom stops at 800 % (Adobe's reference goes to 11:1) |
+| Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like, Space-held hand over tools; every view, mask and diagnostic overlays (Visualize Spots, Point Color range, HDR range) and soft proofing included, is sharp at 1:1–8:1 | 60% | zoom stops at 800 % (Adobe's reference goes to 11:1) |
 | Library culling and metadata | ratings, flags, labels with keys, painter, keywording, metadata panel, filter bar | ratings / flags / labels and advance, keyword list and sets, keywording box, metadata fields, smart albums, filter bar | 85% | painter tool, quick collection, some Classic keys |
 | Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap with Classic additions, editable | 85% | deliberate differences below; no Classic keymap layer |
 | Context menus | everywhere | 31 sites (grid, filmstrip, albums, folders, keywords, masks, presets, text fields…), all through `widgets::context_menu` (`crates/ui-egui/src/widgets.rs`): a right-click elsewhere while a menu is open closes it and opens the menu there, also on the same widget (issue #1877: that one flashed at the new spot and closed, as egui counts the opening click as a click while open) | 70% | unaudited against Lightroom's menus item by item |
@@ -50,6 +50,11 @@ Compared `plan/lightroom/06-shortcuts.md` (desktop part) with our bindings: comm
 Export dialog, Space Toggle zoom, ⇧M Create Version, ⇧X Reject + advance, ⇧U Unflag + advance. `⇧Y` fired both
 Before/After Split and the History panel; History lost the binding. `W` and `⇧⌘I` also fired the engine command
 under the UI command that wraps it (a no-op error); the UI command now wins.
+
+**Fixed (#1895):** Space held over a tool on the photo (Crop, Masking, Remove, Red Eye, a picker) is the view's hand
+until the key is up, as Lightroom's temporary Hand / Zoom: a click zooms at the point clicked (or back to Fit), a drag
+pans, the tool gets neither; a tap still toggles the zoom (on its release). A held Space toggles once; its
+auto-repeat used to flip the zoom back and forth (`crates/ui-egui/src/space_hand.rs`).
 
 **Deliberate differences (our key → Lightroom desktop key)** — each is a conflict with another binding we have:
 
@@ -151,6 +156,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-15 | patch | Context menus: a right-click elsewhere on the same widget while its menu is open moves the menu to the pointer; before it flashed at the new spot and closed (issue #1877); every site uses `widgets::context_menu`; 70% unchanged |
 | 2026-10-23 | patch | KEYC-RATING: ⌘L / Ctrl+L (Library ▸ Enable Filters) switches the filter off and on, restoring it as it was |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); ⌘L is the filter-bar key left |
+| 2026-10-24 | minor | Shortcuts: Space held over a tool on the photo pans and click-zooms (Lightroom's temporary hand), a tap still toggles, auto-repeat no longer toggles (issue #1895) |
 | 2026-10-14 | minor | Zoom row: diagnostic overlays render zoom windows too |
 | 2026-10-14 | patch | Shortcuts: Visualize HDR loses its default ⇧H, which cycles the Tool Overlay (issue #224); both PRs had claimed it |
 | 2026-10-12 | minor | Accessibility: crop handles, spots, gradient handles and mask pins operable by keyboard with AccessKit names and values; Tab order test for the right panels; hand-drawn icons and rows named; 55% → 75%; UI remaining 34–58 h → 32–54 h |

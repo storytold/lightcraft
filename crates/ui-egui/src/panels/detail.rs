@@ -948,6 +948,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+    // Space held over a tool: the view's hand takes the pointer from it (#1895)
+    crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then(|| (areas[0], before_img)));
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
     let nav = navigator(app, ui, canvas, img_rect, id);
     // what is on screen isn't the render on its way (a stand-in, the last render after an edit,
@@ -1651,8 +1653,19 @@ fn general_interaction(
         }
         return;
     }
-    // click toggles Fit ↔ the chosen click-zoom ratio at the clicked point; drag pans when zoomed
-    let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
+    click_zoom_and_pan(app, resp, img, canvas);
+    let _ = (native, aspect);
+}
+
+/// The photo `img` reaches past its pane `canvas`: a drag pans it.
+pub(crate) fn zoomed(img: Rect, canvas: Rect) -> bool {
+    img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0
+}
+
+/// The loupe's own click and drag (also Space's hand over a tool, `space_hand`): a click toggles
+/// Fit ↔ the chosen click-zoom ratio at the clicked point, a drag pans when zoomed.
+pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, canvas: Rect) {
+    let zoomed = zoomed(img, canvas);
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
@@ -1668,7 +1681,6 @@ fn general_interaction(
     if zoomed && resp.dragged() {
         pan_image(app, canvas, img, resp.drag_delta());
     }
-    let _ = (native, aspect);
 }
 
 // ------------------------------------------------------------------------ crop
