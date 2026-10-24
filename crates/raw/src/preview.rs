@@ -16,12 +16,13 @@ pub enum PreviewColorSpace {
 
 /// The colour space the raw says its embedded JPEG is in, for a JPEG that declares none itself (no ICC profile,
 /// no EXIF), first available first: the Nikon maker-note ColorSpace (0x001e: 1 = sRGB, 2 = Adobe RGB, per Nikon
-/// tag documentation); the raw's own EXIF ColorSpace (0xA001: 1 = sRGB), or Uncalibrated (0xFFFF) with the
-/// Interoperability IFD's InteropIndex "R03", the DCF option file for Adobe RGB (as a Sony body shot in Adobe RGB
-/// writes, issue #778; per the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
+/// tag documentation); for a Canon CR2 or CR3, the Canon maker-note ColorSpace (0x00b4: 1 = sRGB, 2 = Adobe RGB);
+/// the raw's own EXIF ColorSpace (0xA001: 1 = sRGB), or Uncalibrated (0xFFFF) with the Interoperability IFD's
+/// InteropIndex "R03", the DCF option file for Adobe RGB (as a Sony body shot in Adobe RGB writes, issue #778; per
+/// the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
 /// declaration takes precedence.
 pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
-    let tiff = Tiff::parse(bytes).ok()?;
+    let Ok(tiff) = Tiff::parse(bytes) else { return cr3_color_space(bytes) };
     let make = tiff.ifds.first()?.string(t::MAKE).unwrap_or_default();
     let exif = tiff.exif()?;
     if make.to_ascii_uppercase().starts_with("NIKON")
@@ -33,9 +34,39 @@ pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
     if tiff.ifds.first()?.contains(t::DNG_VERSION) {
         return None;
     }
+    if make.to_ascii_uppercase().starts_with("CANON")
+        && let Some(e) = exif.get(t::MAKER_NOTE)
+        && let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)
+        && let Some(space) = canon_color_space(&mn.ifd)
+    {
+        return Some(space);
+    }
     match exif.u16(0xA001)? {
         1 => Some(PreviewColorSpace::Srgb),
         0xFFFF if exif.interop.as_deref()?.bytes(0x0001)?.starts_with(b"R03") => Some(PreviewColorSpace::AdobeRgb),
+        _ => None,
+    }
+}
+
+/// A CR3 keeps its EXIF and maker note in `CMT2`/`CMT3` TIFF blocks and its JPEGs carry no EXIF; a body shot in
+/// Adobe RGB writes ColorSpace Uncalibrated (0xFFFF) with no Interoperability IFD (issue #2654), so the Canon
+/// maker note says which, else an EXIF ColorSpace of sRGB is taken.
+fn cr3_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
+    let cr3 = lightcraft_meta::cr3::parse_cr3(bytes)?;
+    let first = |i: usize| cr3.cmt[i].and_then(|b| Tiff::parse(b).ok()).and_then(|t| t.ifds.into_iter().next());
+    if let Some(space) = first(2).and_then(|mn| canon_color_space(&mn)) {
+        return Some(space);
+    }
+    (first(1)?.u16(0xA001)? == 1).then_some(PreviewColorSpace::Srgb)
+}
+
+/// The Canon maker-note ColorSpace (0x00b4: 1 = sRGB, 2 = Adobe RGB, per ExifTool's published Canon tag names).
+/// A Canon body shot in Adobe RGB writes EXIF ColorSpace Uncalibrated (0xFFFF) with InteropIndex "R98" in a CR2
+/// and no Interoperability IFD in a CR3, so the EXIF alone does not say Adobe RGB (issue #2654).
+fn canon_color_space(note: &Ifd) -> Option<PreviewColorSpace> {
+    match note.u16(0x00b4)? {
+        1 => Some(PreviewColorSpace::Srgb),
+        2 => Some(PreviewColorSpace::AdobeRgb),
         _ => None,
     }
 }
@@ -666,6 +697,75 @@ mod tests {
         // a track pointing past the end falls back to PRVW
         file.truncate(at as usize + 100);
         assert_eq!(embedded_preview(&file).unwrap(), small);
+    }
+
+    /// A minimal CR3 whose Canon box holds `CMT2` (EXIF ColorSpace `exif`) and `CMT3` (maker-note ColorSpace `note`).
+    fn cr3_with_color_space(exif: Option<u16>, note: Option<u16>) -> Vec<u8> {
+        let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };
+        let block = |tag: u16, v: Option<u16>| {
+            let ifd = v.map_or_else(
+                || IfdBuilder::new().with(t::ISO_SPEED, Value::Short(vec![100])),
+                |v| IfdBuilder::new().with(tag, Value::Short(vec![v])),
+            );
+            TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap()
+        };
+        let cmt1 = TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false)
+            .write(&[IfdBuilder::new().with(t::MAKE, Value::Ascii("Canon".into()))])
+            .unwrap();
+        let canon_uuid = [0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
+        let boxes = [bx(b"CMT1", &cmt1), bx(b"CMT2", &block(0xA001, exif)), bx(b"CMT3", &block(0x00b4, note))].concat();
+        let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+        file.extend(bx(b"moov", &bx(b"uuid", &[&canon_uuid[..], &boxes].concat())));
+        file
+    }
+
+    /// A CR3 (not TIFF-based) says its preview's colour space in the Canon maker note (`CMT3` 0x00b4), else an
+    /// EXIF ColorSpace of sRGB in `CMT2`: an EOS R shot in Adobe RGB writes Uncalibrated with no interop (issue #2654).
+    #[test]
+    fn cr3_preview_colour_space_comes_from_the_canon_maker_note() {
+        use PreviewColorSpace::{AdobeRgb, Srgb};
+        let space = |exif, note| embedded_preview_color_space(&cr3_with_color_space(exif, note));
+        assert_eq!(space(Some(0xFFFF), Some(2)), Some(AdobeRgb));
+        assert_eq!(space(Some(1), Some(1)), Some(Srgb));
+        assert_eq!(space(Some(1), Some(2)), Some(AdobeRgb), "the maker note wins");
+        assert_eq!(space(Some(1), None), Some(Srgb), "no maker-note value: the EXIF sRGB");
+        assert_eq!(space(Some(0xFFFF), Some(0xFFFF)), None, "neither says");
+        assert_eq!(space(Some(0xFFFF), None), None);
+        assert_eq!(space(None, None), None);
+        let f = cr3_with_color_space(Some(0xFFFF), Some(2));
+        for n in 0..f.len() {
+            let _ = embedded_preview_color_space(&f[..n]);
+        }
+    }
+
+    /// A CR2 shot in Adobe RGB writes EXIF ColorSpace Uncalibrated with InteropIndex "R98", not "R03": the Canon
+    /// maker note (0x00b4) says Adobe RGB (issue #2654). Another make's note is not read for it.
+    #[test]
+    fn cr2_preview_colour_space_comes_from_the_canon_maker_note() {
+        use PreviewColorSpace::{AdobeRgb, Srgb};
+        let cr2 = |make: &str, exif_space: u16, note: Option<u16>| {
+            let mut exif = IfdBuilder::new();
+            exif.set(0xA001, Value::Short(vec![exif_space]));
+            exif.set_child(t::INTEROP_IFD, IfdBuilder::new().with(0x0001, Value::Undefined(b"R98".to_vec())));
+            if let Some(v) = note {
+                // a plain one-entry IFD, its SHORT value inline
+                let mut mn = 1u16.to_le_bytes().to_vec();
+                mn.extend([0x00b4u16.to_le_bytes(), 3u16.to_le_bytes()].concat());
+                mn.extend(1u32.to_le_bytes());
+                mn.extend([v.to_le_bytes(), [0, 0]].concat());
+                mn.extend(0u32.to_le_bytes());
+                exif.set(t::MAKER_NOTE, Value::Undefined(mn));
+            }
+            let mut ifd0 = IfdBuilder::new().with(t::MAKE, Value::Ascii(make.into()));
+            ifd0.set_child(t::EXIF_IFD, exif);
+            TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        assert_eq!(embedded_preview_color_space(&cr2("Canon", 0xFFFF, Some(2))), Some(AdobeRgb));
+        assert_eq!(embedded_preview_color_space(&cr2("Canon", 1, Some(1))), Some(Srgb));
+        assert_eq!(embedded_preview_color_space(&cr2("Canon", 1, None)), Some(Srgb), "no maker note: the EXIF");
+        assert_eq!(embedded_preview_color_space(&cr2("Canon", 0xFFFF, None)), None, "R98 is not Adobe RGB's R03");
+        assert_eq!(embedded_preview_color_space(&cr2("Canon", 0xFFFF, Some(0xFFFF))), None);
+        assert_eq!(embedded_preview_color_space(&cr2("Leica", 0xFFFF, Some(2))), None, "only a Canon note");
     }
 
     /// A structurally complete DCT JPEG (no real image data): `nc` components, `n` entropy bytes.
