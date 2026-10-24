@@ -8,6 +8,7 @@ use serde_json::json;
 use super::edit::apply_slider_out;
 use super::right::header;
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
@@ -182,7 +183,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     egui::ProgressBar::new(pct as f32).desired_width(ui.available_width() - 70.0).text(format!("SAM 3: {} %", (pct * 100.0).floor())),
                 );
                 register(ui.ctx(), "maskSamProgress", r.rect);
-                if text_button(ui, "maskSamDetails", crate::i18n::tr("Details"), false).clicked() {
+                if Button::new("Details").small().widget("button:maskSamDetails").show(ui).clicked() {
                     app.offer_sam_download(None);
                 }
             });
@@ -288,9 +289,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // type; Describe… opens its field here)
                 ui.horizontal(|ui| {
                     ui.add_space(30.0);
-                    let plus = text_button(ui, &format!("maskPlus:{}", m.id), "+", false).on_hover_text(crate::i18n::tr("Add to this mask"));
+                    let plus = Button::icon_only(Icon::Plus, "Add to this mask").ghost().small().widget(format!("button:maskPlus:{}", m.id)).show(ui);
                     egui::Popup::menu(&plus).show(|ui| component_menu(app, ui, "add"));
-                    let minus = text_button(ui, &format!("maskMinus:{}", m.id), "−", false).on_hover_text(crate::i18n::tr("Subtract from this mask"));
+                    let minus = Button::icon_only(Icon::Minus, "Subtract from this mask")
+                        .ghost()
+                        .small()
+                        .widget(format!("button:maskMinus:{}", m.id))
+                        .show(ui);
                     egui::Popup::menu(&minus).show(|ui| component_menu(app, ui, "subtract"));
                 });
                 describe_field(app, ui, false);
@@ -351,8 +356,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 crate::widgets::context_menu(&resp, |ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let more = ui.small_button("…").on_hover_text(crate::i18n::tr("Component options"));
-                    register(ui.ctx(), format!("button:componentMenu{i}"), more.rect);
+                    let more = crate::button::Button::icon_only(Icon::Dots, "Component options")
+                        .ghost()
+                        .small()
+                        .widget(format!("button:componentMenu{i}"))
+                        .show(ui);
                     egui::Popup::menu(&more).show(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
                 });
             });
@@ -362,11 +370,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         // wraps: the five actions are wider than a narrow panel
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
-            let add = text_button(ui, "maskAddComp", crate::i18n::tr("Add"), false);
+            let add = Button::new("Add").small().widget("button:maskAddComp").show(ui);
             egui::Popup::menu(&add).show(|ui| component_menu(app, ui, "add"));
-            let sub = text_button(ui, "maskSubComp", crate::i18n::tr("Subtract"), false);
+            let sub = Button::new("Subtract").small().widget("button:maskSubComp").show(ui);
             egui::Popup::menu(&sub).show(|ui| component_menu(app, ui, "subtract"));
-            let int = text_button(ui, "maskIntComp", crate::i18n::tr("Intersect"), false);
+            let int = Button::new("Intersect").small().widget("button:maskIntComp").show(ui);
             egui::Popup::menu(&int).show(|ui| component_menu(app, ui, "intersect"));
             if text_button(ui, "maskInvert", crate::i18n::tr("Invert"), m.invert).clicked() {
                 let _ = app.run("mask.invert", json!({}));
@@ -777,7 +785,7 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     let mut submit = false;
     // the (translated) Select button is placed first, at the right; the field takes what is left
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
+        if Button::new("Select").small().widget("button:maskDescribeGo").show(ui).clicked() {
             submit = true;
         }
         let r = ui.add(

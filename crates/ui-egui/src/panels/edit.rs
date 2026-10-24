@@ -10,6 +10,7 @@ use lightcraft_raster::Histogram;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::icons::{Icon, paint};
 use crate::render::Slot;
 use crate::state::RightPanel;
@@ -109,7 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
+            if Button::new("Auto").small().widget("button:auto").show(ui).clicked() {
                 let _ = app.run("develop.auto", json!({}));
                 app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
             }
@@ -125,8 +126,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
-                    .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                if Button::new("Reset")
+                    .small()
+                    .widget("button:reset")
+                    .tooltip(&reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                    .show(ui)
                     .clicked()
                 {
                     reset_clicked = true;
@@ -152,7 +156,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
+                    if Button::new("Turn Off").small().widget("button:autoSyncOff").show(ui).clicked() {
                         let _ = app.run("develop.autoSync", json!({"on": false}));
                     }
                 });
@@ -868,8 +872,7 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("view.softProof", json!({"paperInk": paper}));
             }
         }
-        let r = ui.button(crate::i18n::tr("Create Proof Copy"));
-        register(ui.ctx(), "button:createProofCopy", r.rect);
+        let r = crate::button::Button::new("Create Proof Copy").widget("button:createProofCopy").show(ui);
         if r.clicked() {
             let target = app.ui.proof_profile.as_ref().map_or_else(|| app.ui.proof.space.label().to_string(), |(_, n)| n.clone());
             let name = crate::i18n::tr_format!("Proof Copy ({})", target);
@@ -1226,9 +1229,11 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let r = text_button(ui, "curveReset", crate::i18n::tr("Reset"), false).on_hover_text(crate::i18n::tr(
-                    "Reset all curves: point curves (all channels) and parametric (double-click a channel to reset only that one)",
-                ));
+                let r = Button::new("Reset")
+                    .small()
+                    .widget("button:curveReset")
+                    .tooltip("Reset all curves: point curves (all channels) and parametric (double-click a channel to reset only that one)")
+                    .show(ui);
                 if r.clicked() {
                     let _ = app.run("curve.reset", json!({"channel": "all"}));
                 }
@@ -1336,10 +1341,7 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     if crate::is_bw(d) {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
-            if crate::widgets::text_button(ui, "bwAuto", crate::i18n::tr("Auto"), false)
-                .on_hover_text(crate::i18n::tr("Set the mix from the photo's colours"))
-                .clicked()
-            {
+            if Button::new("Auto").small().widget("button:bwAuto").tooltip("Set the mix from the photo's colours").show(ui).clicked() {
                 let _ = app.run("develop.autoBwMix", json!({}));
             }
         });
@@ -1423,7 +1425,7 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
                 app.ui.point_color_visualize = v;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "pointColorDelete", crate::i18n::tr("Delete"), false).clicked() {
+                if Button::new("Delete").small().widget("button:pointColorDelete").show(ui).clicked() {
                     let _ = app.run("pointColor.delete", json!({"index": sel}));
                 }
             });
@@ -1794,18 +1796,9 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
                     ("▶", Icon::ChevronRight, small),
                     ("▶▶", Icon::ChevronDoubleRight, big),
                 ] {
-                    let r = crate::widgets::arrow_button(ui, "", icon, false);
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            ui.is_enabled(),
-                            crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)),
-                        )
-                    });
-                    crate::widgets::register(ui.ctx(), format!("button:quick-{ctl}-{txt}"), r.rect);
-                    if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)))
-                        .clicked()
-                    {
+                    let name = crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label));
+                    let r = crate::button::Button::icon_only(icon, &name).ghost().small().widget(format!("button:quick-{ctl}-{txt}")).show(ui);
+                    if r.clicked() {
                         let _ = app.run("develop.quickAdjust", json!({"control": ctl, "delta": d}));
                     }
                 }
