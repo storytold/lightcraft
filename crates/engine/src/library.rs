@@ -733,6 +733,16 @@ impl Session {
         result
     }
 
+    /// Let go of the open library's lock (and with it the owner note, `catalog.lock.owner`) while
+    /// the library stays open in this session. For a host that ends the process without running
+    /// destructors (`std::process::exit`), after [`Session::close_library`] has saved: the OS would
+    /// free the lock anyway, but only the lock's `Drop` removes the note. Nothing else is
+    /// protected after this, so call it only when the process is about to end. A no-op without a
+    /// library or a lock.
+    pub fn release_library_lock(&mut self) {
+        drop(self.library.as_mut().and_then(|l| l.lock.take()));
+    }
+
     fn view_json(&self) -> Vec<u8> {
         let view = ViewFile {
             source: self.source,
@@ -897,6 +907,26 @@ mod resolve_tests {
         let e = Session::new().with_fs().open_library(&other, false).err().unwrap().to_string();
         assert!(e.contains("is a file"), "{e}");
         assert!(!e.contains("File exists"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host that ends the process without destructors releases the lock by hand: the owner note
+    /// goes and another opener is let in, while the session keeps its library.
+    #[test]
+    fn release_library_lock_removes_the_owner_note() {
+        let dir = std::env::temp_dir().join(format!("lc-release-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        s.close_library().unwrap();
+        assert!(dir.join(lightcraft_catalog::lock::OWNER).exists(), "close_library keeps the lock");
+        assert!(matches!(LibraryLock::acquire(&dir, "other"), Err(lightcraft_catalog::lock::LockError::InUse(_))));
+        s.release_library_lock();
+        assert!(!dir.join(lightcraft_catalog::lock::OWNER).exists());
+        drop(LibraryLock::acquire(&dir, "other").unwrap());
+        s.release_library_lock();
+        assert!(s.library.is_some(), "the library stays open");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

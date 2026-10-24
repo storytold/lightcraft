@@ -50,6 +50,12 @@
   stay available in All Metadata; PSD edit copies keep their capture date. Original exports with Remove Location Info enabled
   are refused when a PSD or PSB embeds GPS, since LightCraft cannot strip metadata from a byte-for-byte original copy.
 
+### Quitting on macOS leaves no lock note
+- Quitting LightCraft on macOS no longer leaves `catalog.lock.owner` in the library folder. The note, which names the
+  program that has the library open, stayed behind after Quit and the window's close button, pointing at a process
+  that no longer existed. The library's lock is now released as soon as everything is saved, as it already was on
+  the other systems.
+
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
   library open now, or create a new library for them, named after the catalog and placed next to the open library
