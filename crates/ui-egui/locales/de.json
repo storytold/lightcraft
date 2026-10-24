@@ -154,6 +154,7 @@
   "Before/After (Y)": "Vorher/Nachher (Y)",
   "Before/After Settings": "Vorher/Nachher-Einstellungen",
   "Before/After Split": "Vorher/Nachher geteilt",
+  "Before/After": "Vorher/Nachher",
   "Before/After Split Top/Bottom": "Vorher/Nachher geteilt – oben/unten",
   "Before/After Top/Bottom": "Vorher/Nachher – oben/unten",
   "Begin Interaction": "Interaktion beginnen",
@@ -368,6 +369,7 @@
   "Cut": "Ausschneiden",
   "Cut pages": "Seiten ausschneiden",
   "Cycle Crop Overlay": "Zuschnittüberlagerung wechseln",
+  "Crop Overlay": "Zuschnittüberlagerung",
   "Cycle Crop Overlay Orientation": "Ausrichtung der Zuschnittüberlagerung wechseln",
   "Cycle Info Overlay": "Infoüberlagerung wechseln",
   "Cycle Mask Overlay Color": "Farbe der Maskenüberlagerung wechseln",
@@ -1414,6 +1416,7 @@
   "Show Luminance Map": "Luminanzkarte anzeigen",
   "Show Mask": "Maske anzeigen",
   "Show Mask Overlay": "Maskenüberlagerung anzeigen",
+  "Mask Overlay": "Maskenüberlagerung",
   "Show All Mask Overlays": "Alle Maskenüberlagerungen anzeigen",
   "Show all overlays": "Alle Überlagerungen anzeigen",
   "Show Mask Pins": "Maskenpins anzeigen",
@@ -1658,6 +1661,7 @@
   "XMP sidecars": "XMP-Begleitdateien",
   "Year": "Jahr",
   "Yellow": "Gelb",
+  "White": "Weiß",
   "Yellow Hue": "Gelb – Farbton",
   "Yellow Luminance": "Gelb – Luminanz",
   "Yellow Saturation": "Gelb – Sättigung",
@@ -3423,5 +3427,6 @@
   "favourites across restarts (issue #328).": "über Neustarts hinweg Favoriten (Issue #328).",
   "Optional remote SAM 3: keep the native editor local and run Object, Describe, and detail": "Optionales entferntes SAM 3: Der native Editor bleibt lokal, und Objekt-, Beschreibungs- und Detail-",
   "inference on a Mac through SSH. Saved masks still render and export offline.": "Inferenz laufen über SSH auf einem Mac. Gespeicherte Masken werden weiterhin offline gerendert und exportiert.",
-  "See [remote Metal inference](ai-masks.md#remote-metal-inference).": "Siehe [remote Metal inference](ai-masks.md#remote-metal-inference)."
+  "See [remote Metal inference](ai-masks.md#remote-metal-inference).": "Siehe [remote Metal inference](ai-masks.md#remote-metal-inference).",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Ansicht → Lupenüberlagerung → Ansichtsoptionen legt fest, welche Zeilen Info 1 und Info 2 zeigen."
 }

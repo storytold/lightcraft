@@ -2104,7 +2104,7 @@ fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
 }
 
 /// A labelled row (fixed label column).
-/// View ▸ Export Slideshow…: what to write (PDF, JPEG sequence, video) and how big; where comes
+/// View ▸ Slideshow ▸ Export Slideshow…: what to write (PDF, JPEG sequence, video) and how big; where comes
 /// after (a save dialog).
 fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::slideshow_export::ExportSettings) {
     use lightcraft_engine::slideshow_export::{ExportSettings, Format};

@@ -302,7 +302,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "faces.detect",
             "Detect Faces",
-            ["Photo"],
+            ["Photo", "Metadata"],
             None,
             "{ids?, apply?: bool (default true), score?: 0.6, nmsIou?: 0.3, maxFaces?} → {photos: [{id, faces: [{rect, score, landmarks}]}]}. Finds faces with the YuNet detector (download it first: `faces.models.download {id: \"yunet-2023mar\"}`) and, unless `apply` is false, adds them as unnamed face regions (one undo step), replacing earlier detections but never regions from XMP or ones you named; the sidecar is not touched",
             has_selection,

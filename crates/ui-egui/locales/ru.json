@@ -116,6 +116,7 @@
   "Before/After (Y)": "До/после (Y)",
   "Before/After Settings": "Настройки «до/после»",
   "Before/After Split": "Разделение «до/после»",
+  "Before/After": "До/после",
   "Before/After Split Top/Bottom": "Разделение «до/после» сверху/снизу",
   "Before/After Top/Bottom": "До/после сверху/снизу",
   "Begin Interaction": "Начать взаимодействие",
@@ -293,6 +294,7 @@
   "Cut": "Вырезать",
   "Cut pages": "Вырезать страницы",
   "Cycle Crop Overlay": "Переключить сетку кадрирования",
+  "Crop Overlay": "Сетка кадрирования",
   "Cycle Crop Overlay Orientation": "Переключить ориентацию сетки кадрирования",
   "Cycle Info Overlay": "Переключить информационную накладку",
   "Cycle Mask Overlay Color": "Переключить цвет наложения маски",
@@ -1140,6 +1142,7 @@
   "Show Luminance Map": "Показать карту яркости",
   "Show Mask": "Показать маску",
   "Show Mask Overlay": "Показать наложение маски",
+  "Mask Overlay": "Наложение маски",
   "Show All Mask Overlays": "Показать все наложения масок",
   "Show all overlays": "Показать все наложения",
   "Show Mask Pins": "Показать булавки масок",
@@ -1349,6 +1352,7 @@
   "XMP sidecars": "XMP-файлы",
   "Year": "Год",
   "Yellow": "Жёлтый",
+  "White": "Белый",
   "Yellow Hue": "Тон жёлтого",
   "Yellow Luminance": "Яркость жёлтого",
   "Yellow Saturation": "Насыщенность жёлтого",
@@ -2335,5 +2339,6 @@
   "Checking the GPU…": "Проверка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
-  "Checking the GPU for faces": "Проверка ГП для лиц"
+  "Checking the GPU for faces": "Проверка ГП для лиц",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Вид → Накладка лупы → Параметры вида выбирает строки, которые показывают Info 1 и Info 2."
 }

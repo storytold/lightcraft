@@ -1,4 +1,4 @@
-//! View ▸ Export Slideshow…: the dialog's choices go to `app.slideshowExport`, which asks where
+//! View ▸ Slideshow ▸ Export Slideshow…: the dialog's choices go to `app.slideshowExport`, which asks where
 //! to write (a PDF or video file, or the folder of a JPEG sequence) and starts the engine's
 //! `slideshow.export` in the background. The export's row in the activity stack shows its
 //! progress and ✕ (the engine owns the row); [`poll`] tells the user how it ended.

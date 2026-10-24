@@ -275,6 +275,7 @@
   "Before/After (Y)": "Před/Po (Y)",
   "Before/After Settings": "Nastavení Před/Po",
   "Before/After Split": "Rozdělené Před/Po",
+  "Before/After": "Před/Po",
   "Before/After Split Top/Bottom": "Rozdělené Před/Po nahoře/dole",
   "Before/After Top/Bottom": "Před/Po nahoře/dole",
   "Begin Interaction": "Zahájit interakci",
@@ -507,6 +508,7 @@
   "Cut": "Vyjmout",
   "Cut pages": "Vyjmout stránky",
   "Cycle Crop Overlay": "Přepnout překrytí ořezu",
+  "Crop Overlay": "Překrytí ořezu",
   "Cycle Crop Overlay Orientation": "Přepnout orientaci překrytí ořezu",
   "Cycle Info Overlay": "Přepnout překrytí informací",
   "Cycle Mask Overlay Color": "Přepnout barvu překrytí masky",
@@ -1760,6 +1762,7 @@
   "Show Luminance Map": "Zobrazit mapu jasu",
   "Show Mask": "Zobrazit masku",
   "Show Mask Overlay": "Zobrazit překrytí masky",
+  "Mask Overlay": "Překrytí masky",
   "Show All Mask Overlays": "Zobrazit všechna překrytí masek",
   "Show all overlays": "Zobrazit všechna překrytí",
   "Show Mask Pins": "Zobrazit body masek",
@@ -2060,6 +2063,7 @@
   "XMP sidecars": "Přidružené soubory XMP",
   "Year": "Rok",
   "Yellow": "Žlutá",
+  "White": "Bílá",
   "Yellow Hue": "Odstín žluté",
   "Yellow Luminance": "Jas žluté",
   "Yellow Saturation": "Sytost žluté",
@@ -2394,5 +2398,6 @@
   "End Slideshow": "Ukončit prezentaci",
   "Save Current Settings as New Effect Preset…": "Uložit aktuální nastavení jako nové přednastavení efektu…",
   "Manage Effect Presets…": "Spravovat přednastavení efektů…",
-  "Export Effect Presets…": "Exportovat přednastavení efektů…"
+  "Export Effect Presets…": "Exportovat přednastavení efektů…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Zobrazení → Překrytí lupy → Možnosti zobrazení určuje, které řádky zobrazují Info 1 a Info 2."
 }

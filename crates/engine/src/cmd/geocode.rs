@@ -141,7 +141,8 @@ fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "none of these photos has a GPS position"));
     }
     let dir = dataset_dir(p).ok_or_else(|| bad(C, "no settings folder: give `dataset`"))?;
-    let names = s.place_names.load(&dir).map_err(|e| bad(C, format!("{e}: download the place names first (Photo ▸ Download Place Names)")))?;
+    let names =
+        s.place_names.load(&dir).map_err(|e| bad(C, format!("{e}: download the place names first (Photo ▸ Metadata ▸ Download Place Names)")))?;
     // a large selection shows in the activity stack and can be stopped
     let task = (todo.len() > 1).then(|| s.activity.start("geocode", "Looking up places", Cancel::Yes));
     let mut ops = Vec::new();
@@ -292,7 +293,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "metadata.reverseGeocode",
             "Fill Location from GPS",
-            ["Photo"],
+            ["Photo", "Metadata"],
             None,
             "{ids?, overwrite?: bool (also replace place fields that already have text; default false: only empty ones are filled), dryRun?, dataset?: folder, maxDistance?: metres (past this distance from the town found, City is left empty and the town is given as nearestCity)} → {looked, found, changed, photos: [{id, place: {sublocation, city, state, country, iso, distance}, nearestCity?}], attribution} — fills City / State / Country (and Sublocation when known) from GPS with the offline GeoNames place names (download them first); one undo step. The place names list towns of 15 000 people or more (GeoNames cities15000): a photo taken in a smaller town gets the nearest larger one, up to 50 km away (`distance` says how far); `maxDistance` keeps such a town out of City",
             has_selection,
@@ -304,7 +305,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v.push(cmd!(
         "metadata.downloadPlaceNames",
         "Download Place Names (GeoNames)",
-        ["Photo"],
+        ["Photo", "Metadata"],
         None,
         "{dataset?: folder} → {started, path, attribution} — downloads the GeoNames cities list (CC-BY 4.0, ~3 MB, from download.geonames.org) in the background for Fill Location from GPS; no photo data is sent",
         always,

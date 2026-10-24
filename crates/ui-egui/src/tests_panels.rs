@@ -291,18 +291,18 @@ fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_jso
     r["result"].clone()
 }
 
-/// The View ▸ Sidebar Sections items: (section id or command, checked).
+/// The Window ▸ Sidebar Sections items: (section id or command, checked).
 fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(&h.app);
-    let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
-    let children = view
+    let window = &bar.iter().find(|(t, _)| t == "Window").expect("Window menu").1;
+    let children = window
         .iter()
         .find_map(|n| match n {
             MenuNode::Submenu { label, children } if label == "Sidebar Sections" => Some(children.clone()),
             _ => None,
         })
-        .expect("View ▸ Sidebar Sections");
+        .expect("Window ▸ Sidebar Sections");
     children
         .iter()
         .filter_map(|n| match n {
@@ -312,11 +312,11 @@ fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
         .collect()
 }
 
-/// Given the sidebar, when a section is unchecked in View ▸ Sidebar Sections, then it leaves the
+/// Given the sidebar, when a section is unchecked in Window ▸ Sidebar Sections, then it leaves the
 /// sidebar (header and rows) and the menu shows it unchecked; checking it again brings it back
 /// as it was. The choice is part of the saved UI state.
 #[test]
-fn a_section_is_hidden_and_shown_from_the_view_menu() {
+fn a_section_is_hidden_and_shown_from_the_window_menu() {
     let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let checked = |h: &Headless, id: &str| sidebar_menu_items(h).into_iter().find(|(s, _)| s == id).unwrap_or_else(|| panic!("no {id} item")).1;
     assert_eq!(checked(&h, "byDate"), Some(true));

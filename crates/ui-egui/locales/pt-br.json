@@ -141,6 +141,7 @@
   "Before/After (Y)": "Antes/Depois (Y)",
   "Before/After Settings": "Configurações de Antes/Depois",
   "Before/After Split": "Divisão Antes/Depois",
+  "Before/After": "Antes/Depois",
   "Before/After Split Top/Bottom": "Divisão Antes/Depois topo/base",
   "Before/After Top/Bottom": "Antes/Depois topo/base",
   "Begin Interaction": "Iniciar interação",
@@ -348,6 +349,7 @@
   "Cut": "Recortar",
   "Cut pages": "Recortar páginas",
   "Cycle Crop Overlay": "Alternar sobreposição de recorte",
+  "Crop Overlay": "Sobreposição de recorte",
   "Cycle Crop Overlay Orientation": "Alternar orientação da sobreposição de recorte",
   "Cycle Info Overlay": "Alternar sobreposição de informações",
   "Cycle Mask Overlay Color": "Alternar cor da sobreposição da máscara",
@@ -1372,6 +1374,7 @@
   "Show Luminance Map": "Mostrar mapa de luminância",
   "Show Mask": "Mostrar máscara",
   "Show Mask Overlay": "Mostrar sobreposição da máscara",
+  "Mask Overlay": "Sobreposição da máscara",
   "Show All Mask Overlays": "Mostrar todas as sobreposições de máscara",
   "Show all overlays": "Mostrar todas as sobreposições",
   "Show Mask Pins": "Mostrar pinos da máscara",
@@ -1606,6 +1609,7 @@
   "XMP sidecars": "Sidecars XMP",
   "Year": "Ano",
   "Yellow": "Amarelo",
+  "White": "Branco",
   "Yellow Hue": "Matiz do amarelo",
   "Yellow Luminance": "Luminância do amarelo",
   "Yellow Saturation": "Saturação do amarelo",
@@ -2188,5 +2192,6 @@
   "Color Overlay on B&W": "Sobreposição de cor em P&B",
   "Image on Black": "Imagem sobre preto",
   "Image on White": "Imagem sobre branco",
-  "White on Black": "Branco sobre preto"
+  "White on Black": "Branco sobre preto",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Exibir → Sobreposição da lupa → Opções de exibição escolhe as linhas que Info 1 e Info 2 mostram."
 }

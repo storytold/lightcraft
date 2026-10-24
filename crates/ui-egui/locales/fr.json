@@ -136,6 +136,7 @@
   "Before/After (Y)": "Avant/Après (Y)",
   "Before/After Settings": "Réglages Avant/Après",
   "Before/After Split": "Avant/Après divisé",
+  "Before/After": "Avant/Après",
   "Before/After Split Top/Bottom": "Avant/Après divisé haut/bas",
   "Before/After Top/Bottom": "Avant/Après haut/bas",
   "Begin Interaction": "Commencer l'interaction",
@@ -340,6 +341,7 @@
   "Cut": "Couper",
   "Cut pages": "Couper les pages",
   "Cycle Crop Overlay": "Parcourir les incrustations de recadrage",
+  "Crop Overlay": "Incrustation de recadrage",
   "Cycle Crop Overlay Orientation": "Parcourir les orientations de l'incrustation de recadrage",
   "Cycle Info Overlay": "Parcourir les incrustations d'informations",
   "Cycle Mask Overlay Color": "Parcourir les couleurs de l'incrustation du masque",
@@ -1349,6 +1351,7 @@
   "Show Luminance Map": "Afficher la carte de luminance",
   "Show Mask": "Afficher le masque",
   "Show Mask Overlay": "Afficher l'incrustation du masque",
+  "Mask Overlay": "Incrustation du masque",
   "Show All Mask Overlays": "Afficher toutes les superpositions de masque",
   "Show all overlays": "Afficher toutes les superpositions",
   "Show Mask Pins": "Afficher les épingles de masque",
@@ -1583,6 +1586,7 @@
   "XMP sidecars": "Fichiers annexes XMP",
   "Year": "Année",
   "Yellow": "Jaune",
+  "White": "Blanc",
   "Yellow Hue": "Teinte jaune",
   "Yellow Luminance": "Luminance jaune",
   "Yellow Saturation": "Saturation jaune",
@@ -2340,5 +2344,6 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Affichage → Incrustation de la loupe → Options d'affichage choisit les lignes que montrent Info 1 et Info 2."
 }

@@ -181,6 +181,7 @@
   "Balance": "Cân bằng",
   "Basic": "Cơ bản",
   "Before": "Trước",
+  "Before/After": "Trước/Sau",
   "Before/After (Y)": "Trước/Sau (Y)",
   "Before/After Settings": "Cài đặt Trước/Sau",
   "Before/After Split": "Chia Trước/Sau",
@@ -411,6 +412,7 @@
   "Crop & Rotate": "Cắt và xoay",
   "Crop & Rotate (C)": "Cắt và xoay (C)",
   "Crop Aspect": "Tỷ lệ cắt",
+  "Crop Overlay": "Lớp phủ cắt",
   "Crop, Rotate, Geometry": "Cắt, xoay, hình học",
   "Cropped": "Đã cắt",
   "Cross Process": "Cross Process",
@@ -1015,6 +1017,7 @@
   "Manual": "Thủ công",
   "Marquee zoom": "Thu phóng vùng chọn",
   "Mask Adjustment": "Điều chỉnh mặt nạ",
+  "Mask Overlay": "Lớp phủ mặt nạ",
   "Masking": "Mặt nạ",
   "Masking (M)": "Mặt nạ (M)",
   "Masks": "Mặt nạ",
@@ -1976,6 +1979,7 @@
   "Wednesday": "Thứ Tư",
   "What's New": "Có gì mới",
   "When rated or hovered": "Khi đã xếp hạng hoặc rê chuột",
+  "White": "Trắng",
   "White Balance": "Cân bằng trắng",
   "White Balance Selector": "Bộ chọn cân bằng trắng",
   "White Balance Selector (W)": "Bộ chọn cân bằng trắng (W)",
@@ -2220,5 +2224,6 @@
   "≥  at least": "≥  tối thiểu",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-kéo để chỉnh thẳng, ⇧G Chỉnh thẳng có hướng dẫn, lưới khi biến đổi.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Xem → Lớp phủ kính lúp → Tùy chọn xem chọn các dòng mà Info 1 và Info 2 hiển thị."
 }

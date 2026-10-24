@@ -199,7 +199,7 @@ impl InfoOverlay {
     }
 }
 
-/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// One line of the loupe's info overlay, chosen in View ▸ Loupe Overlay ▸ View Options… (Lightroom Classic's Loupe
 /// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -455,12 +455,12 @@ pub struct AppSettings {
     /// The Keywording box: whole keyword paths, or grouped by the keyword they are inside.
     #[serde(deserialize_with = "lenient")]
     pub keyword_chips: KeywordChips,
-    /// View ▸ Show Focus Point: draw the box the camera focused on (`view.focusPoint`).
+    /// View ▸ Loupe Overlay ▸ Show Focus Point: draw the box the camera focused on (`view.focusPoint`).
     pub focus_point: bool,
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
-    /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
+    /// View ▸ Loupe Overlay ▸ View Options…: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]
     pub loupe_info: LoupeInfo,
 }
@@ -1047,7 +1047,7 @@ pub enum Dialog {
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
-    /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
+    /// View ▸ Slideshow ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
         settings: lightcraft_engine::slideshow_export::ExportSettings,
     },
@@ -1323,7 +1323,7 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
-    /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
+    /// View ▸ Loupe Overlay ▸ View Options… (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
     /// as they are made.
     ViewOptions,
 }

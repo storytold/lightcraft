@@ -140,6 +140,7 @@
   "Before/After (Y)": "修改前/修改后 (Y)",
   "Before/After Settings": "修改前/修改后设置",
   "Before/After Split": "修改前/修改后分屏",
+  "Before/After": "修改前/修改后",
   "Before/After Split Top/Bottom": "修改前/修改后上下分屏",
   "Before/After Top/Bottom": "修改前/修改后上下排列",
   "Begin Interaction": "开始交互",
@@ -346,6 +347,7 @@
   "Cut": "剪切",
   "Cut pages": "剪切页面",
   "Cycle Crop Overlay": "切换裁切叠加",
+  "Crop Overlay": "裁切叠加",
   "Cycle Crop Overlay Orientation": "切换裁切叠加方向",
   "Cycle Info Overlay": "切换信息叠加",
   "Cycle Mask Overlay Color": "切换蒙版叠加颜色",
@@ -1357,6 +1359,7 @@
   "Show Luminance Map": "显示明亮度图",
   "Show Mask": "显示蒙版",
   "Show Mask Overlay": "显示蒙版叠加",
+  "Mask Overlay": "蒙版叠加",
   "Show All Mask Overlays": "显示所有蒙版叠加",
   "Show all overlays": "显示所有叠加",
   "Show Mask Pins": "显示蒙版图钉",
@@ -1587,6 +1590,7 @@
   "XMP sidecars": "XMP 附属文件",
   "Year": "年",
   "Yellow": "黄色",
+  "White": "白色",
   "Yellow Hue": "黄色色相",
   "Yellow Luminance": "黄色明度",
   "Yellow Saturation": "黄色饱和度",
@@ -2186,5 +2190,6 @@
   "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根据你已命名的人脸，推测照片中的人物。所有数据仅保存在本机。",
   "This build cannot run recognition models: they can be added and chosen, not used.": "此版本无法运行识别模型：可以添加和选择，但无法使用。",
   "Detect Faces (Photo menu) needs it: a small one-time download.": "“检测人脸”（照片菜单）依赖它：一次性小文件下载。",
-  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）"
+  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "视图 → 放大镜叠加 → 视图选项 用于选择“信息 1”和“信息 2”显示的行。"
 }

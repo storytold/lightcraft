@@ -251,6 +251,7 @@
   "Before/After (Y)": "მანამდე/შემდეგ (Y)",
   "Before/After Settings": "მანამდე/შემდეგ პარამეტრები",
   "Before/After Split": "მანამდე/შემდეგ, გაყოფილი",
+  "Before/After": "მანამდე/შემდეგ",
   "Before/After Split Top/Bottom": "მანამდე/შემდეგ, გაყოფილი ზემოთ/ქვემოთ",
   "Before/After Top/Bottom": "მანამდე/შემდეგ ზემოთ/ქვემოთ",
   "Begin Interaction": "ურთიერთქმედების დაწყება",
@@ -516,6 +517,7 @@
   "Cut pages": "გვერდების ამოჭრა",
   "Cut, Copy, Paste and Select All. Esc in them gives back the text from before you started typing (in the Info panel it": "ხელმისაწვდომია ამოჭრა, კოპირება, ჩასმა და ყველაფრის მონიშვნა. Esc მათში აკრეფის დაწყებამდე არსებულ ტექსტს აბრუნებს (ინფორმაციის პანელში",
   "Cycle Crop Overlay": "ჩამოჭრის ზედდების მონაცვლეობა",
+  "Crop Overlay": "ჩამოჭრის ზედდება",
   "Cycle Crop Overlay Orientation": "ჩამოჭრის ზედდების ორიენტაციის მონაცვლეობა",
   "Cycle Info Overlay": "ინფორმაციის ზედდების მონაცვლეობა",
   "Cycle Mask Overlay Color": "ნიღბის ზედდების ფერის მონაცვლეობა",
@@ -1909,6 +1911,7 @@
   "Show Luminance Map": "სიკაშკაშის რუკის ჩვენება",
   "Show Mask": "ნიღბის ჩვენება",
   "Show Mask Overlay": "ნიღბის ზედდების ჩვენება",
+  "Mask Overlay": "ნიღბის ზედდება",
   "Show Mask Pins": "ნიღბის მარკერების ჩვენება",
   "Show Original": "ორიგინალის ჩვენება",
   "Show Person": "ადამიანის ჩვენება",
@@ -2274,6 +2277,7 @@
   "XMP sidecars": "XMP თანმხლები ფაილები",
   "Year": "წელი",
   "Yellow": "ყვითელი",
+  "White": "თეთრი",
   "Yellow Hue": "ყვითლის ფერის ტონი",
   "Yellow Luminance": "ყვითლის სიკაშკაშე",
   "Yellow Saturation": "ყვითლის გაჯერება",
@@ -2719,5 +2723,6 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "ხედი → ლუპის ზედდება → ხედის პარამეტრები ირჩევს სტრიქონებს, რომლებსაც Info 1 და Info 2 აჩვენებს."
 }

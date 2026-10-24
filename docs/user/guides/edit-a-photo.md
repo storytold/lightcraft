@@ -14,7 +14,7 @@ Double-click a photo in the grid, then press `E` to open the **Edit** panel. Dra
 3. Click **Auto** for a first pass, or skip this step and start with the sliders.
 4. Open the **Light** section and set **Exposure**, **Contrast**, **Highlights**, **Shadows**, **Whites** and **Blacks**.
 5. Open the **Color** section to change **Vibrance** and **Saturation**. Open **Effects** for **Texture**, **Clarity** and **Dehaze**. The panel also has **Detail** and **Optics** sections.
-6. Check your work against the original. Hold `\` to peek at the original. Press `Y` (**View** > **Compare Before and After**) to see before and after side by side.
+6. Check your work against the original. Hold `\` to peek at the original. Press `Y` (**View** > **Before/After** > **Compare Before and After**) to see before and after side by side.
 7. To go back a step, choose **Edit** > **Undo**. To drop all edits on the photo, click **Reset** at the top of the **Edit** panel.
 
 ## Black and white

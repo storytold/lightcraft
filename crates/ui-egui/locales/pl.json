@@ -133,6 +133,7 @@
   "Before/After (Y)": "Przed/Po (Y)",
   "Before/After Settings": "Ustawienia porównania przed/po",
   "Before/After Split": "Podział przed/po",
+  "Before/After": "Przed/Po",
   "Before/After Split Top/Bottom": "Podział przed/po góra/dół",
   "Before/After Top/Bottom": "Przed/Po góra/dół",
   "Begin Interaction": "Rozpocznij interakcję",
@@ -330,6 +331,7 @@
   "Cut": "Wytnij",
   "Cut pages": "Wytnij strony",
   "Cycle Crop Overlay": "Przełącz nakładkę kadrowania",
+  "Crop Overlay": "Nakładka kadrowania",
   "Cycle Crop Overlay Orientation": "Przełącz orientację nakładki kadrowania",
   "Cycle Info Overlay": "Przełącz nakładkę informacji",
   "Cycle Mask Overlay Color": "Przełącz kolor nakładki maski",
@@ -1325,6 +1327,7 @@
   "Show Luminance Map": "Pokaż mapę luminancji",
   "Show Mask": "Pokaż maskę",
   "Show Mask Overlay": "Pokaż nakładkę maski",
+  "Mask Overlay": "Nakładka maski",
   "Show Mask Pins": "Pokaż znaczniki masek",
   "Show Original": "Pokaż oryginał",
   "Show Photo Counts": "Pokaż liczbę zdjęć",
@@ -1552,6 +1555,7 @@
   "XMP sidecars": "Pliki pomocnicze XMP",
   "Year": "Rok",
   "Yellow": "Żółty",
+  "White": "Biały",
   "Yellow Hue": "Odcień żółci",
   "Yellow Luminance": "Luminancja żółci",
   "Yellow Saturation": "Nasycenie żółci",
@@ -2269,5 +2273,6 @@
   "SDR Shadows": "Cienie SDR",
   "SDR Whites": "Biele SDR",
   "SDR Clarity": "Przejrzystość SDR",
-  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU"
+  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Widok → Nakładka lupy → Opcje widoku wybiera wiersze, które pokazują Info 1 i Info 2."
 }

@@ -188,6 +188,7 @@
   "Basic": "Perus",
   "Before": "Ennen",
   "Before the last template": "Ennen viimeistä mallipohjaa",
+  "Before/After": "Ennen/jälkeen",
   "Before/After (Y)": "Ennen/jälkeen (Y)",
   "Before/After Settings": "Ennen/jälkeen-asetukset",
   "Before/After Split": "Ennen/jälkeen jaettuna",
@@ -442,6 +443,7 @@
   "Crop & Rotate": "Rajaa ja kierrä",
   "Crop & Rotate (C)": "Rajaa ja kierrä (C)",
   "Crop Aspect": "Rajauksen kuvasuhde",
+  "Crop Overlay": "Rajauksen peittokuva",
   "Crop, Rotate, Geometry": "Rajaus, kierto, geometria",
   "Cropped": "Rajattu",
   "Cross Process": "Ristiinkäsittely",
@@ -1107,6 +1109,7 @@
   "Marquee zoom": "Aluezoom",
   "Mask": "Maski",
   "Mask Adjustment": "Maskin säätö",
+  "Mask Overlay": "Maskin peittokuva",
   "Masking": "Maskaus",
   "Masking (M)": "Maskaus (M)",
   "Masks": "Maskit",
@@ -2165,6 +2168,7 @@
   "What's New": "Mitä uutta",
   "When pins show on the photo (Shift+H cycles)": "Milloin nastat näkyvät kuvassa (Shift+H vaihtaa)",
   "When rated or hovered": "Luokiteltaessa tai osoitettaessa",
+  "White": "Valkoinen",
   "White Balance": "Valkotasapaino",
   "White Balance Selector": "Valkotasapainon valitsin",
   "White Balance Selector (W)": "Valkotasapainon valitsin (W)",
@@ -2311,5 +2315,6 @@
   "− harder border · + softer border": "− terävämpi reuna · + pehmeämpi reuna",
   "≤  at most": "≤  enintään",
   "≥  at least": "≥  vähintään",
-  "★ Favorites": "★ Suosikit"
+  "★ Favorites": "★ Suosikit",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Näytä → Luupin peittokuva → Näyttöasetukset valitsee rivit, jotka Info 1 ja Info 2 näyttävät."
 }

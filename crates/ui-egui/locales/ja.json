@@ -137,6 +137,7 @@
   "Before/After (Y)": "編集前／編集後（Y）",
   "Before/After Settings": "編集前／編集後の設定",
   "Before/After Split": "編集前／編集後の分割表示",
+  "Before/After": "編集前／編集後",
   "Before/After Split Top/Bottom": "編集前／編集後の上下分割表示",
   "Before/After Top/Bottom": "編集前／編集後の上下表示",
   "Begin Interaction": "操作を開始",
@@ -329,6 +330,7 @@
   "Custom template…": "カスタムテンプレート…",
   "Custom…": "カスタム…",
   "Cycle Crop Overlay": "切り抜きの重ね表示を切り替え",
+  "Crop Overlay": "切り抜きの重ね表示",
   "Cycle Crop Overlay Orientation": "切り抜きの重ね表示の向きを切り替え",
   "Cycle Info Overlay": "情報オーバーレイを切り替え",
   "Cycle Mask Overlay Color": "マスクの重ね表示の色を切り替え",
@@ -1295,6 +1297,7 @@
   "Show Luminance Map": "輝度マップを表示",
   "Show Mask": "マスクを表示",
   "Show Mask Overlay": "マスクの重ね表示",
+  "Mask Overlay": "マスクの重ね表示",
   "Show All Mask Overlays": "すべてのマスクオーバーレイを表示",
   "Show all overlays": "すべてのオーバーレイを表示",
   "Show Mask Pins": "マスクのピンを表示",
@@ -1511,6 +1514,7 @@
   "XMP sidecars": "XMPサイドカーファイル",
   "Year": "年",
   "Yellow": "イエロー",
+  "White": "ホワイト",
   "Yellow Hue": "イエローの色相",
   "Yellow Luminance": "イエローの輝度",
   "Yellow Saturation": "イエローの彩度",
@@ -2342,5 +2346,6 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "表示 → ルーペのオーバーレイ → 表示オプション で、情報1と情報2に表示する行を選びます。"
 }

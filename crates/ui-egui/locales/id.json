@@ -192,6 +192,7 @@
   "Basic": "Dasar",
   "Before": "Sebelum",
   "Before the last template": "Sebelum templat terakhir diterapkan",
+  "Before/After": "Sebelum/Sesudah",
   "Before/After (Y)": "Sebelum/Sesudah (Y)",
   "Before/After Settings": "Pengaturan Sebelum/Sesudah",
   "Before/After Split": "Sebelum/Sesudah: terbagi",
@@ -441,6 +442,7 @@
   "Crop & Rotate": "Pangkas & putar",
   "Crop & Rotate (C)": "Pangkas & putar (C)",
   "Crop Aspect": "Aspek pangkas",
+  "Crop Overlay": "Overlay pangkas",
   "Crop, Rotate, Geometry": "Pangkas, putar, geometri",
   "Cropped": "Dipangkas",
   "Cross Process": "Cross Process",
@@ -1105,6 +1107,7 @@
   "Marquee zoom": "Zoom area pilihan",
   "Mask Adjustment": "Penyesuaian masker",
   "Mask Effect Presets": "Preset efek masker",
+  "Mask Overlay": "Overlay masker",
   "Masking": "Masker",
   "Masking (M)": "Masker (M)",
   "Masks": "Masker",
@@ -2157,6 +2160,7 @@
   "Wednesday": "Rabu",
   "What's New": "Yang baru",
   "When rated or hovered": "Saat diberi rating atau saat kursor di atasnya",
+  "White": "Putih",
   "White Balance": "Keseimbangan putih",
   "White Balance Selector": "Pemilih keseimbangan putih",
   "White Balance Selector (W)": "Pemilih keseimbangan putih (W)",
@@ -2325,5 +2329,6 @@
   "≤  at most": "≤  maksimal",
   "≥  at least": "≥  minimal",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Tampilan → Overlay loupe → Opsi Tampilan memilih baris yang ditampilkan Info 1 dan Info 2."
 }

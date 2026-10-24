@@ -866,7 +866,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 }
             });
         }
-        // where the camera focused, and how (View ▸ Show Focus Point draws it): only when known; the
+        // where the camera focused, and how (View ▸ Loupe Overlay ▸ Show Focus Point draws it): only when known; the
         // whole card's width, so "AF-C · Expanded Flexible Spot · Face tracking" fits
         if let Some(text) = focus_text(m.focus.as_ref()) {
             ui.add_space(3.0);

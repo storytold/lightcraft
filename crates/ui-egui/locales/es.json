@@ -137,6 +137,7 @@
   "Before/After (Y)": "Antes/Después (Y)",
   "Before/After Settings": "Ajustes de Antes/Después",
   "Before/After Split": "Antes/Después dividido",
+  "Before/After": "Antes/Después",
   "Before/After Split Top/Bottom": "Antes/Después dividido arriba/abajo",
   "Before/After Top/Bottom": "Antes/Después arriba/abajo",
   "Begin Interaction": "Iniciar interacción",
@@ -355,6 +356,7 @@
   "Cut": "Cortar",
   "Cut pages": "Cortar páginas",
   "Cycle Crop Overlay": "Alternar superposición de recorte",
+  "Crop Overlay": "Superposición de recorte",
   "Cycle Crop Overlay Orientation": "Alternar orientación de la superposición de recorte",
   "Cycle Info Overlay": "Alternar superposición de información",
   "Cycle Mask Overlay Color": "Alternar color de superposición de máscara",
@@ -1419,6 +1421,7 @@
   "Show Luminance Map": "Mostrar mapa de luminancia",
   "Show Mask": "Mostrar máscara",
   "Show Mask Overlay": "Mostrar superposición de máscara",
+  "Mask Overlay": "Superposición de máscara",
   "Show All Mask Overlays": "Mostrar todas las superposiciones de máscara",
   "Show all overlays": "Mostrar todas las superposiciones",
   "Show Mask Pins": "Mostrar chinchetas de máscara",
@@ -1761,6 +1764,7 @@
   "XMP sidecars": "Archivos XMP complementarios",
   "Year": "Año",
   "Yellow": "Amarillo",
+  "White": "Blanco",
   "Yellow Hue": "Tono amarillo",
   "Yellow Luminance": "Luminancia amarilla",
   "Yellow Saturation": "Saturación amarilla",
@@ -2342,5 +2346,6 @@
   "Checking the GPU…": "Comprobando la GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modelo de caras usa la GPU solo cuando una comprobación muestra que da los mismos resultados más rápido.",
-  "Checking the GPU for faces": "Comprobando la GPU para las caras"
+  "Checking the GPU for faces": "Comprobando la GPU para las caras",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Vista → Superposición de la lupa → Opciones de vista elige las líneas que muestran Info 1 e Info 2."
 }

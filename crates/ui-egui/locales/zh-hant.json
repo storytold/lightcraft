@@ -140,6 +140,7 @@
   "Before/After (Y)": "編輯前／後（Y）",
   "Before/After Settings": "編輯前／後設定",
   "Before/After Split": "編輯前／後分割檢視",
+  "Before/After": "編輯前／後",
   "Before/After Split Top/Bottom": "編輯前／後上下分割檢視",
   "Before/After Top/Bottom": "編輯前／後上下檢視",
   "Begin Interaction": "開始互動",
@@ -346,6 +347,7 @@
   "Cut": "剪下",
   "Cut pages": "剪下頁面",
   "Cycle Crop Overlay": "切換裁切疊加",
+  "Crop Overlay": "裁切疊加",
   "Cycle Crop Overlay Orientation": "切換裁切疊加方向",
   "Cycle Info Overlay": "切換資訊疊加",
   "Cycle Mask Overlay Color": "切換遮色片疊加色彩",
@@ -1357,6 +1359,7 @@
   "Show Luminance Map": "顯示明度圖",
   "Show Mask": "顯示遮色片",
   "Show Mask Overlay": "顯示遮色片疊加",
+  "Mask Overlay": "遮色片疊加",
   "Show All Mask Overlays": "顯示所有蒙版疊加",
   "Show all overlays": "顯示所有疊加",
   "Show Mask Pins": "顯示遮色片控制點",
@@ -1587,6 +1590,7 @@
   "XMP sidecars": "XMP 附屬檔案",
   "Year": "年",
   "Yellow": "黃色",
+  "White": "白色",
   "Yellow Hue": "黃色色相",
   "Yellow Luminance": "黃色明度",
   "Yellow Saturation": "黃色飽和度",
@@ -2143,5 +2147,6 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "檢視 → 放大鏡疊加 → 檢視選項 可選擇「資訊 1」和「資訊 2」顯示的行。"
 }

@@ -2414,5 +2414,10 @@
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-dra för att räta upp, ⇧G guidad upprätning, ett rutnät under transformering.",
   "★ Favorites": "★ Favoriter",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "White": "Vit",
+  "Before/After": "Före/efter",
+  "Crop Overlay": "Beskärningsöverlägg",
+  "Mask Overlay": "Masköverlägg",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Visa → Lupp-överlägg → Visningsalternativ väljer vilka rader Info 1 och Info 2 visar."
 }
