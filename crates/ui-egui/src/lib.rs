@@ -1214,7 +1214,7 @@ impl LightcraftApp {
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
+        if let Some(walk) = lightcraft_engine::cmd::library::AutoImportWalk::of(&self.session) {
             const LABEL: &str = "Auto Import";
             let now = ctx.input(|i| i.time);
             if now - self.ui.auto_import_at >= 3.0
@@ -1224,23 +1224,34 @@ impl LightcraftApp {
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
-                let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
-                let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
-                    let listing = match listing {
-                        Ok(l) => l,
-                        Err(e) => return log::debug!("auto import: {e}"),
+                let work = move || walk.list();
+                let done =
+                    |app: &mut LightcraftApp, ctx: &egui::Context, listing: Result<lightcraft_engine::cmd::library::AutoImportListing, String>| {
+                        let listing = match listing {
+                            Ok(l) => l,
+                            Err(e) => return log::debug!("auto import: {e}"),
+                        };
+                        // what the listing left out (an unreadable subfolder, a bound reached): said once
+                        if listing.warnings != app.ui.auto_import_warned {
+                            for w in &listing.warnings {
+                                log::warn!("{w}");
+                            }
+                            if let Some(w) = listing.warnings.first() {
+                                app.toast(ctx, w.clone());
+                            }
+                            app.ui.auto_import_warned = listing.warnings.clone();
+                        }
+                        let p = serde_json::json!({"listing": listing.files, "listingWarnings": listing.warnings, "start": false});
+                        let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
+                        let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
+                        let paths: Vec<String> =
+                            params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                        if let Some(o) = params.as_object_mut() {
+                            o.remove("paths");
+                        }
+                        let undo0 = app.session.undo.len();
+                        app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
                     };
-                    let p = serde_json::json!({"listing": listing, "start": false});
-                    let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
-                    let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
-                    let paths: Vec<String> =
-                        params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                    if let Some(o) = params.as_object_mut() {
-                        o.remove("paths");
-                    }
-                    let undo0 = app.session.undo.len();
-                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
-                };
                 // listed every few seconds: quiet, no row in the activity stack
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");

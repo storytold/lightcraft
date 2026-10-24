@@ -870,6 +870,7 @@
   "Photos": "Фото",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "Фото, которые видели в «Локальном», но ни разу не добавляли и не меняли, исключаются из каталога, если папку не открывали так долго (проверяется при открытии библиотеки). Файлы остаются на диске; при просмотре папки они появятся снова.",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "Фото, поступающие в эту папку (тетеринг, сканер, приложение синхронизации), добавляются, как только будут готовы.",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "Фотографии из папок внутри отслеживаемой папки тоже добавляются (скрытые папки и папка самой библиотеки пропускаются).",
   "Pick": "Выбрать",
   "Pick a colour on the photo with the eyedropper.": "Выберите цвет на фото пипеткой.",
   "Pick the sharpest photo of each burst": "Выбирать самое чёткое фото в каждой серии",

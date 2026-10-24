@@ -1173,6 +1173,7 @@
   "Photos": "Фото",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "Фото, переглянуті в локальних, але ніколи не додані й не змінені, вилучаються з каталогу, якщо їхню теку не оглядали протягом цього часу (перевіряється під час відкриття бібліотеки). Файли залишаються на диску; огляд теки знову їх показує.",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "Фото, що надходять до цієї теки (камерне підключення, сканер, застосунок синхронізації), додаються одразу після завершення запису.",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "Фотографії з тек усередині відстежуваної теки теж додаються (приховані теки та тека самої бібліотеки пропускаються).",
   "Pick": "Відібрати",
   "Pick a colour on the photo with the eyedropper.": "Виберіть колір на фото піпеткою.",
   "Pick the sharpest photo of each burst": "Відібрати найчіткіше фото кожної серії",

@@ -518,6 +518,14 @@
   merges used to open at about 7000 K / +115 where the photos show 4000–5300 K / +8. HDRs merged before this keep
   their old white balance; merge them again.
 
+### Auto Import looks in subfolders
+- Settings ▸ Import ▸ Auto Import has an **Include subfolders** box (issue #1109): photos that arrive anywhere
+  inside the watched folder, e.g. a tethering or sync app's dated folders, are added too. Off by default, so the
+  watched folder's top level only, as before. Hidden folders, links to folders and the library's own folder (where
+  copied photos go) are never looked in; the scan goes 16 folder levels deep and stops after 200,000 files and
+  folders, and says so. A subfolder LightCraft can't read is skipped with a warning. Agents: `subfolders` on
+  `library.autoImport`.
+
 ## 2026-10-13
 
 ### Edits keep up in a large library

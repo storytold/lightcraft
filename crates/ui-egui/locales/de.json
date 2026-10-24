@@ -1080,6 +1080,7 @@
   "Photos per bracket (0 = auto)": "Fotos pro Belichtungsreihe (0 = automatisch)",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "Fotos, die unter „Lokal“ angezeigt, aber nie hinzugefügt oder geändert wurden, verlassen den Katalog, wenn ihr Ordner so lange nicht durchsucht wurde (Prüfung beim Öffnen der Bibliothek). Dateien bleiben auf dem Datenträger; beim Durchsuchen erscheinen sie wieder.",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "Fotos, die in diesem Ordner ankommen (Tethering, Scanner, Synchronisierungs-App), werden hinzugefügt, sobald sie vollständig sind.",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "Fotos in Ordnern innerhalb des überwachten Ordners werden ebenfalls hinzugefügt (ausgeblendete Ordner und der Ordner der Bibliothek selbst werden übersprungen).",
   "Photos); importing (also by drag and drop), Find Missing Photos, Build / Discard Smart Previews, the Rename preview,": "Auch Import einschließlich Drag-and-drop, Suche fehlender Fotos, Erstellen und Verwerfen von Smart-Vorschauen, Umbenennungsvorschau,",
   "Pick": "Auswahl",
   "Pick Flag": "Auswahlmarkierung",
