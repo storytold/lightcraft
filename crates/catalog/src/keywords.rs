@@ -19,9 +19,31 @@ use crate::{Catalog, CatalogError, Meta, Op, Result};
 /// Separator of hierarchical keyword levels.
 pub const SEP: char = '|';
 
-/// Normalize a keyword: trim every level, drop empty levels.
+/// Normalize a keyword: trim every level, drop empty levels, keep the top [`MAX_LEVELS`]. A
+/// keyword is input (a file's metadata, a typed name, a snapshot), so its nesting is bounded, and
+/// with it every walk of the keyword tree.
 pub fn clean(k: &str) -> String {
-    k.split(SEP).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("|")
+    k.split(SEP).map(str::trim).filter(|s| !s.is_empty()).take(MAX_LEVELS).collect::<Vec<_>>().join("|")
+}
+
+/// `k` nests deeper than [`MAX_LEVELS`]: [`clean`] cuts it.
+pub(crate) fn too_deep(k: &str) -> bool {
+    k.split(SEP).filter(|s| !s.trim().is_empty()).nth(MAX_LEVELS).is_some()
+}
+
+/// A photo's keywords as the catalog keeps them: one nested deeper than [`MAX_LEVELS`] is cut to
+/// its top levels ([`clean`]), then the first of case-insensitively equal ones is kept; one that
+/// isn't stays as written. Says whether any was cut.
+pub(crate) fn bound_levels(keywords: &mut Vec<String>) -> bool {
+    let mut cut = false;
+    for k in keywords.iter_mut().filter(|k| too_deep(k)) {
+        *k = clean(k);
+        cut = true;
+    }
+    if cut {
+        dedupe(keywords);
+    }
+    cut
 }
 
 /// The same name, whatever the case of any of its letters (not only ASCII ones).
@@ -365,7 +387,8 @@ impl Catalog {
             let left: Vec<ListedKeyword> = moving.iter().filter_map(|key| list.remove(key)).collect();
             for l in left {
                 let Some(f) = closest(&l.path, from) else { continue };
-                let path = reparent(&l.path, f, to);
+                // cut as the list keeps it: one landing past `MAX_LEVELS` merges into the keyword it is cut to
+                let path = clean(&reparent(&l.path, f, to));
                 match list.get_mut(&path.to_lowercase()) {
                     Some(there) => {
                         there.info.new_keywords_inside |= l.info.new_keywords_inside;
@@ -1396,8 +1419,9 @@ mod tests {
 
     /// What the list can't hold is left out and named, so the file always reads back: a name the
     /// format would read as something else (in brackets or braces), one with a line break, a
-    /// synonym with one, a keyword nested deeper than a list goes; and the keywords inside one left
-    /// out go with it.
+    /// synonym with one; and the keywords inside one left out go with it. A keyword nested deeper
+    /// than a list goes keeps only the levels a list holds once it is on a photo, so it is written
+    /// in full.
     #[test]
     fn an_exported_keyword_list_always_reads_back() {
         let deep = (0..=MAX_LEVELS).map(|i| format!("level {i}")).collect::<Vec<_>>().join("|");
@@ -1415,7 +1439,77 @@ mod tests {
         assert!(unwritable.contains(&"{todo}".to_string()), "{unwritable:?}");
         assert!(unwritable.contains(&"Line\nbreak".to_string()), "{unwritable:?}");
         assert!(unwritable.contains(&"Weddings {two\nlines}".to_string()), "{unwritable:?}");
-        assert!(unwritable.iter().any(|u| u.ends_with(&format!("level {MAX_LEVELS}"))), "{unwritable:?}");
+    }
+
+    /// `k0|k1|…` with `n` levels.
+    fn levels(n: usize) -> String {
+        (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>().join("|")
+    }
+
+    /// A photo's keyword nested thousands of levels deep (some 30 KB of metadata) keeps its top
+    /// [`MAX_LEVELS`] levels: the keyword tree built from it recursed once per level, and so did
+    /// every walk of it (the sidebar, the list file, dropping it), so it overflowed the stack, an
+    /// abort on every launch (issue #2558).
+    #[test]
+    fn a_keyword_thousands_of_levels_deep_is_cut_to_64() {
+        let (c, ids) = lib(&[&[levels(5000).as_str()]]);
+        assert_eq!(kws(&c, ids[0]), [levels(MAX_LEVELS)]);
+        // on a small stack: 64 levels fit
+        let walked = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let tree = c.keyword_tree();
+                let (mut depth, mut node) = (0, tree.first());
+                while let Some(n) = node {
+                    depth += 1;
+                    node = n.children.first();
+                }
+                (tree.len(), depth, c.keyword_list_text().written.len())
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(walked, (1, MAX_LEVELS, MAX_LEVELS));
+    }
+
+    /// Metadata set on a photo (read again from its file, edited, replayed from the op log) is cut
+    /// the same way; a keyword it then repeats is kept once, the others stay as written, and undo
+    /// gives back what the photo had.
+    #[test]
+    fn set_meta_cuts_a_deep_keyword_and_undoes() {
+        let (mut c, ids) = lib(&[&["beach"]]);
+        let keywords = vec![levels(MAX_LEVELS), levels(5000), " Travel | Lisbon".to_string()];
+        let meta = Meta { keywords, ..c.photo(ids[0]).unwrap().meta.clone() };
+        let undo = c.apply(Op::SetMeta { id: ids[0], meta: Box::new(meta) }).unwrap();
+        assert_eq!(kws(&c, ids[0]), [levels(MAX_LEVELS), " Travel | Lisbon".to_string()]);
+        c.apply(undo).unwrap();
+        assert_eq!(kws(&c, ids[0]), ["beach"]);
+    }
+
+    /// A listed keyword renamed below a keyword already [`MAX_LEVELS`] deep is cut to that keyword
+    /// and merges into it: its attributes stay, the synonyms gather.
+    #[test]
+    fn a_listing_moved_past_64_levels_merges_into_the_keyword_it_is_cut_to() {
+        let (top, child) = (levels(MAX_LEVELS), format!("{}|z", levels(MAX_LEVELS)));
+        let (mut c, ids) = lib(&[&["y|z"]]);
+        let person = KeywordInfo { person: true, ..KeywordInfo::default() };
+        c.apply(Op::SetKeyword { path: top.clone(), info: Some(person) }).unwrap();
+        c.apply(Op::SetKeyword { path: "y|z".into(), info: Some(with_synonyms(&["zed"])) }).unwrap();
+        let op = c.rename_keyword_ops("y", &top).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(kws(&c, ids[0]), std::slice::from_ref(&top), "not {child}");
+        assert_eq!(listed(&c), [(top, KeywordInfo { person: true, ..with_synonyms(&["zed"]) })]);
+    }
+
+    /// A keyword read from a file, typed or listed keeps [`MAX_LEVELS`] levels at most.
+    #[test]
+    fn clean_keeps_64_levels() {
+        assert_eq!(clean(&levels(5000)), levels(MAX_LEVELS));
+        assert_eq!(clean(&levels(MAX_LEVELS)), levels(MAX_LEVELS));
+        assert_eq!(from_file(&[], &[levels(5000)]), [levels(MAX_LEVELS)]);
+        let mut c = Catalog::new();
+        c.apply(Op::SetKeyword { path: levels(5000), info: Some(KeywordInfo::default()) }).unwrap();
+        assert_eq!(listed(&c).into_iter().map(|(p, _)| p).collect::<Vec<_>>(), [levels(MAX_LEVELS)]);
     }
 
     /// The list leaves out only what it must, and names only what's lost: a name starting with a

@@ -88,6 +88,9 @@
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
   is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's
   temporary files, issue #1502).
+- A photo with a keyword nested thousands of levels deep (in its XMP, IPTC or sidecar metadata) no longer crashes
+  LightCraft, then and on every launch after it: a keyword keeps its top 64 levels, as keyword list files already
+  did. A library that already holds such a keyword has it cut when it opens, and what was cut is written to the log.
 
 ### Keys reach text fields and the shortcut editor on macOS
 - While a text field has focus, the native menu now lets go of the keys the field needs (`G`, the digits `0`–`9`,

@@ -150,3 +150,26 @@ fn an_album_filed_under_another_id_gets_its_own() {
     assert_eq!((a.id, a.parent), (inner, Some(folder)));
     assert_eq!(c.album_children(Some(folder)).iter().map(|a| a.id).collect::<Vec<_>>(), vec![inner]);
 }
+
+/// A keyword nested thousands of levels deep on a photo or in the keyword list (a catalog written
+/// before keywords were bounded, or edited by hand) is cut to its top [`keywords::MAX_LEVELS`]
+/// levels on load: the keyword tree built from it overflowed the stack, an abort every time the
+/// library opened (issue #2558).
+#[test]
+fn a_snapshot_with_a_keyword_thousands_of_levels_deep_loads_cut() {
+    let levels = |n: usize| (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>().join("|");
+    let (deep, top) = (levels(5000), levels(keywords::MAX_LEVELS));
+    let (c, ids) = sound();
+    let (c, report) = load_edited(&c, |v| {
+        v["photos"][ids[0].0.to_string()]["meta"]["keywords"] = serde_json::json!([deep, "beach"]);
+        v["keyword_list"] = serde_json::json!({ (deep.to_lowercase()): { "path": deep, "info": {} } });
+    });
+    assert!(report.repaired.iter().any(|r| r.starts_with("1 photo(s): a keyword deeper than")), "{:?}", report.repaired);
+    assert!(report.repaired.iter().any(|r| r.starts_with("keyword list: 1 keyword(s) deeper than")), "{:?}", report.repaired);
+    assert_eq!(c.photo(ids[0]).unwrap().meta.keywords, [top.clone(), "beach".to_string()]);
+    assert_eq!(c.listed_keywords().map(|k| k.path.as_str()).collect::<Vec<_>>(), [top.as_str()]);
+    assert!(c.keyword_info(&top).is_some(), "filed under the path it has now");
+    // on a small stack: 64 levels fit
+    let roots = std::thread::Builder::new().stack_size(256 * 1024).spawn(move || c.keyword_tree().len()).unwrap().join().unwrap();
+    assert_eq!(roots, 2);
+}
