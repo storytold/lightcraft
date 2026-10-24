@@ -691,8 +691,8 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
-/// which, and the three lines each of Info 1 and Info 2 shows (`view.viewOptions`). Changes apply
-/// as they are made.
+/// which, the three lines each of Info 1 and Info 2 shows, and whether the loupe shows its loading
+/// and rendering message (`view.viewOptions`). Changes apply as they are made.
 pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
     heading(ui, t, crate::i18n::tr("Loupe View"));
@@ -728,6 +728,8 @@ pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
             *lines = defaults;
         }
     }
+    heading(ui, t, crate::i18n::tr("General"));
+    check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
 }
 
 // ----------------------------------------------------------------------------------- Slideshow

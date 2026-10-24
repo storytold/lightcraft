@@ -438,6 +438,9 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
+    /// "Rendering…" while the photo it shows is not the finished render.
+    pub loupe_messages: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -483,6 +486,7 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            loupe_messages: true,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
@@ -1630,5 +1634,19 @@ mod loupe_info_tests {
             serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
         assert_eq!(newer.loupe_info, LoupeInfo::default());
         assert!(!newer.film_names, "the rest of the settings are still read");
+    }
+
+    /// Show message when loading or rendering photos is on until it is turned off, and is saved
+    /// with the app's settings.
+    #[test]
+    fn the_loading_message_choice_is_saved_with_the_settings() {
+        assert!(AppSettings::default().loupe_messages);
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert!(old.loupe_messages, "a settings file from before the choice existed keeps the message");
+        let settings = AppSettings { loupe_messages: false, ..AppSettings::default() };
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["loupeMessages"], false);
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(!read.loupe_messages);
     }
 }

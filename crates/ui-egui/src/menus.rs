@@ -742,9 +742,20 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"infoOverlay": app.ui.info_overlay}))
         }
         "view.viewOptions" => {
-            // `info1` / `info2` set the lines for an agent; without them the window opens
+            // `info1`, `info2` and `loupeMessages` set the options for an agent; without any of them the window opens
             let mut info = app.ui.settings.loupe_info;
             let mut set = false;
+            // `loupeMessages` sets Show message when loading or rendering photos
+            let messages = match p.get("loupeMessages") {
+                None => app.ui.settings.loupe_messages,
+                Some(v) => match v.as_bool() {
+                    Some(on) => {
+                        set = true;
+                        on
+                    }
+                    None => return Some(Err("`loupeMessages`: true|false".into())),
+                },
+            };
             for (key, lines) in [("info1", &mut info.info1), ("info2", &mut info.info2)] {
                 let Some(v) = p.get(key) else { continue };
                 match serde_json::from_value(v.clone()) {
@@ -757,10 +768,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             if set {
                 app.ui.settings.loupe_info = info;
+                app.ui.settings.loupe_messages = messages;
             } else {
                 app.ui.dialog = Some(Dialog::ViewOptions);
             }
-            Ok(json!({"loupeInfo": app.ui.settings.loupe_info}))
+            Ok(json!({"loupeInfo": app.ui.settings.loupe_info, "loupeMessages": app.ui.settings.loupe_messages}))
         }
         "view.chooseLayoutImage" => {
             let path = match p.get("path").and_then(Value::as_str) {

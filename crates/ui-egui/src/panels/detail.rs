@@ -796,9 +796,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     );
                     p.text(canvas.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, e, t.font(12.0), t.text_dim);
                 }
-                None => {
+                None if app.ui.settings.loupe_messages => {
                     p.text(canvas.center(), Align2::CENTER_CENTER, crate::i18n::tr("Rendering…"), t.font(13.0), t.text_dim);
                 }
+                None => {}
             }
         }
     }
@@ -950,9 +951,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let over = if over.is_positive() { over } else { canvas };
         match failed {
             Some(e) => failed_pill(ui, app, &photo, canvas, over, nav, "loupe:renderFailed", e),
-            None => {
+            // View Options' Show message when loading or rendering photos
+            None if app.ui.settings.loupe_messages => {
                 loupe_pill(ui, canvas, over, nav, "loupe:rendering", crate::i18n::tr("Rendering…"), false);
             }
+            None => {}
         }
     }
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
