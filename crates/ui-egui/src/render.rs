@@ -185,6 +185,9 @@ pub const VARIANT_TEXTURES: usize = 96;
 pub const MAX_VARIANT_TEXTURES: usize = 800;
 /// Priority of variant thumbnail jobs: below on-screen grid thumbnails and the loupe.
 const VARIANT_PRIORITY: u32 = 6;
+/// Photo textures: shrinking blends (thumbnails, Fit), magnifying past 100 % shows each pixel as a block, so zooming in
+/// shows what the file holds instead of a bilinear blur (#2643).
+const PHOTO_TEXTURE: egui::TextureOptions = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR };
 
 pub struct Renderer {
     #[cfg(test)]
@@ -915,7 +918,7 @@ impl Renderer {
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {
-                    t.tex.set(color, egui::TextureOptions::LINEAR);
+                    t.tex.set(color, PHOTO_TEXTURE);
                     t.pixels = pixels;
                     t.key = r.key;
                     t.photo = r.photo;
@@ -925,7 +928,7 @@ impl Renderer {
                     t.quick = r.quick;
                 }
                 None => {
-                    let tex = ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
+                    let tex = ctx.load_texture(name, color, PHOTO_TEXTURE);
                     self.textures.insert(
                         slot,
                         Tex {
