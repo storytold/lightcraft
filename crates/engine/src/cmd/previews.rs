@@ -482,7 +482,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let mut jobs: Vec<SmartJob> = Vec::new();
     for id in ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
-        if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
+        if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) || ph.kind == lightcraft_catalog::MediaKind::Video {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);

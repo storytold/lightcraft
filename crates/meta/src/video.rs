@@ -455,6 +455,7 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
         captured = meta.capture_time.map(|c| c.to_iso());
     }
 
+    let has_video_track = primary_track.is_some();
     let (width, height, orientation) = match primary_track {
         Some(t) => (t.width, t.height, t.orientation),
         None => (0, 0, None),
@@ -464,8 +465,8 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
     meta.height = (height > 0).then_some(height);
     meta.orientation = orientation;
 
-    // A valid video probe must have at least a duration or a video track
-    if duration.is_some() || width > 0 || height > 0 {
+    // A valid video probe needs a video track; a duration alone is not a video.
+    if has_video_track && (duration.is_some() || width > 0 || height > 0) {
         Some(VideoMeta { duration, width, height, orientation, captured, metadata: meta })
     } else {
         None
@@ -632,6 +633,28 @@ mod tests {
         let ones = synthetic_mp4(1000, u32::MAX, 640, 360, 0);
         let meta_ones = probe_video(&ones).expect("valid video");
         assert_eq!(meta_ones.duration, None);
+    }
+
+    #[test]
+    fn movie_with_duration_but_no_video_track_is_rejected() {
+        // An audio-only or empty container has mvhd duration but no video trak
+        let mut out = Vec::new();
+        let mut ftyp = Vec::new();
+        ftyp.extend_from_slice(b"mp42\0\0\0\0isommp42");
+        write_box(&mut out, b"ftyp", &ftyp);
+        let mut mvhd = Vec::new();
+        mvhd.push(0);
+        mvhd.extend_from_slice(&[0, 0, 0]);
+        mvhd.extend_from_slice(&0u32.to_be_bytes()); // creation
+        mvhd.extend_from_slice(&0u32.to_be_bytes()); // mod
+        mvhd.extend_from_slice(&1000u32.to_be_bytes()); // timescale
+        mvhd.extend_from_slice(&5000u32.to_be_bytes()); // duration 5s
+        mvhd.extend_from_slice(&[0; 80]); // rest of mvhd
+        let mut moov = Vec::new();
+        write_box(&mut moov, b"mvhd", &mvhd);
+        write_box(&mut out, b"moov", &moov);
+
+        assert_eq!(probe_video(&out), None, "a movie with duration but no video track is rejected");
     }
 
     #[test]

@@ -3010,8 +3010,17 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     assert!(s.render_job(video, 1600, 1600, false, true).is_none(), "no loupe render of a video");
     assert!(s.loupe_job(video, 1600, 1600, true).is_none());
     assert!(s.quick_view_job(video, 1600, true).is_none());
+    assert!(s.variant_job(video, &lightcraft_develop::DevelopSettings::default(), 256).is_none());
     assert_eq!(s.source_now(video, crate::media::SourceLevel::Thumb).unwrap_err(), "a video has no frame to sample");
     assert!(s.thumb_job(still, 512).is_some(), "a still still renders");
+
+    // Smart previews skip catalogued videos
+    let lib = temp_dir("video-smart-previews");
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("library.smartPreviews", &json!({"ids": [video.0]})).unwrap();
+    assert_eq!(r["built"], 0, "smart previews skip video");
+    assert_eq!(r["failed"].as_array().map(|a| a.len()), Some(0));
+    let _ = std::fs::remove_dir_all(&lib);
 }
 
 #[test]
