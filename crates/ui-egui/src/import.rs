@@ -956,9 +956,9 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         // a view the new photos aren't in (an album, Picks, a Local folder) would leave the active
         // photo off screen: show All Photos, as Lightroom shows the import's own collection (#1446)
         if !app.session.visible().contains(&lightcraft_catalog::PhotoId(f)) {
-            let _ = app.run("library.source", json!({"kind": "all"}));
+            app.act("library.source", json!({"kind": "all"}));
         }
-        let _ = app.run("library.select", json!({"ids": [f]}));
+        app.act("library.select", json!({"ids": [f]}));
     }
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     // nothing new, only files the library already has: show where they are (Recently Deleted is
@@ -1027,7 +1027,10 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     if ids.is_empty() || app.run("library.source", json!({"kind": kind})).is_err() {
         return false;
     }
-    let _ = app.run("library.select", json!({"ids": ids}));
+    // refused: `act` said why, and a toast of ours would write over it
+    if app.act("library.select", json!({"ids": ids})).is_none() {
+        return true;
+    }
     app.ui.left_panel = true;
     let n = ids.len();
     let plural = if n == 1 { "" } else { "s" };
