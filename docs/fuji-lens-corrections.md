@@ -28,8 +28,9 @@ Every table is an array of signed rationals with `n` knots:
 ```
 
 - `scale × n` is the half diagonal of the recorded image (the RAF crop) in pixels: 3749 for 6240×4160, 4643 for
-  7728×5152, 2942 for 4896×3264, 7280 for 11648×8736, on 61 of the 65 bodies. Files that store another number (X-S20,
-  X-T30 III and X-M5 write the 40 MP value, 4643; an X-T5 in an in-camera crop) are left uncorrected.
+  7728×5152, 2942 for 4896×3264, 7280 for 11648×8736, on 61 of the 65 bodies. Files that store another number (X-T30 III and X-M5 write the 40 MP value, 4643; an X-T5 in an in-camera crop)
+  are left uncorrected. X-S20 writes the 40 MP reference value 4643 despite its 26 MP sensor, but indexes its 9 knots
+  over the 26 MP active frame; LightCraft accepts this scale for X-S20.
 - Knots are **radii in half diagonals**: the farthest corner is at 1, and a table is read at `ρ = r`, the distance
   from the centre in half diagonals. Older bodies use 11 knots `0, 0.1 … 1`, newer ones 9 knots evenly spaced in `r²`
   (`√(k/8)`), GFX 50 bodies 8 (`√(k/8)`, last 1). In the nine-knot tables the eighth knot is the corner and the ninth,

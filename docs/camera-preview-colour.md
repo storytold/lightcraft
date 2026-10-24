@@ -192,8 +192,8 @@ For 52 camera models LightCraft has colour matrices fitted to the camera's measu
 [rawtoaces-data](https://github.com/AcademySoftwareFoundation/rawtoaces-data) v1.1.0, Apache-2.0): 22 Canon, 11 Nikon,
 11 Sony, 3 Fujifilm and 5 others, plus the other names rawtoaces-data lists for them (EOS Rebel T3i and Kiss X5 for
 the EOS 600D; bodies it lists as sharing a sensor, such as the GFX100S with the GFX 100), and the bodies `SAME_SENSOR`
-in `spectral.rs` adds by hand because the table is generated: Fujifilm's 26.1 MP X-Trans CMOS 4 bodies (X-T30, X-T30 II,
-X-Pro3, X100V, X-S10, X-E4) take the X-T3's matrices. Without them an X-T30 raw whose camera JPEG was shot in Acros
+in `spectral.rs` adds by hand because the table is generated: Fujifilm's 26.1 MP X-Trans CMOS 4 bodies take the X-T3's
+(X-T30, X-T30 II, X-Pro3, X100V, X-E4, X-M5) or X-T4's (X-S10, X-S20) matrices. Without them an X-T30 raw whose camera JPEG was shot in Acros
 (black and white) got its tone curve on the muted neutral fallback, with a grey sky where the scene had a deep blue
 one. Per model the generator fits,
 under CIE Standard Illuminant A and under D65, a white-preserving 3×3 from white-balanced camera RGB to XYZ by the
