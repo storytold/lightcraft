@@ -26,6 +26,12 @@ pub const DEFAULT_LIBRARY_DIR: &str = "library";
 /// Largest backup (offsets are 32-bit without zip64).
 pub const MAX_BYTES: u64 = 0xFFFF_FFFF - (64 << 20);
 
+/// Why a photo of `len` bytes is refused from the host bridge (`lightcraft:open`), or `None`
+/// when it fits: one larger than [`MAX_BYTES`] could never go into a library backup.
+pub fn open_size_error(len: u64) -> Option<String> {
+    (len > MAX_BYTES).then(|| format!("the file is too large to open ({} MB; the limit is {} MB)", len >> 20, MAX_BYTES >> 20))
+}
+
 const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
 const END_SIG: u32 = 0x0605_4b50;
@@ -340,6 +346,12 @@ mod tests {
         assert_eq!(original_entry("abc", ".."), "originals/abc/original");
         assert!(valid_library_dir("library") && valid_library_dir("library-restored-17"));
         assert!(!valid_library_dir("library-../x") && !valid_library_dir("originals") && !valid_library_dir("library-"));
+    }
+
+    #[test]
+    fn open_size_is_capped_at_max_bytes() {
+        assert!(open_size_error(MAX_BYTES).is_none());
+        assert!(open_size_error(MAX_BYTES + 1).is_some_and(|e| e.contains("too large")));
     }
 
     #[test]

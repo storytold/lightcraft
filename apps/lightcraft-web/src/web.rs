@@ -1,13 +1,14 @@
 //! Browser host: opens the library in browser storage, starts the render workers and eframe on
 //! `<canvas id="lightcraft_canvas">`, wires the file picker and drag-and-drop, and turns exports
-//! into downloads.
+//! into downloads (in host mode, `?host=parent`, messages to the parent page: [`crate::host`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use lightcraft_engine::Session;
-use lightcraft_engine::catalog::Source;
+use lightcraft_engine::catalog::{PhotoId, Source};
+use lightcraft_engine::develop::DevelopSettings;
 use lightcraft_engine::library::LibraryStores;
 use lightcraft_ui_egui::{LightcraftApp, Services, UiState};
 use serde_json::json;
@@ -18,6 +19,7 @@ use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
+use crate::host;
 use crate::safety::{self, notice};
 use crate::store::{Originals, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
@@ -71,6 +73,8 @@ struct Options {
     store: String,
     workers: Option<usize>,
     reset: bool,
+    /// `?host=parent`: framed by a same-origin page that opens and saves the photo ([`host`]).
+    host: bool,
 }
 
 impl Options {
@@ -91,6 +95,7 @@ impl Options {
             store: get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()),
             workers: get("workers").and_then(|v| v.parse().ok()),
             reset: get("reset").is_some(),
+            host: get("host").as_deref() == Some("parent"),
         }
     }
 }
@@ -141,6 +146,9 @@ fn open_picker(originals: Originals, backend: Option<Backend>, ctx: egui::Contex
 
 /// Offer `bytes` as a download named after `path`.
 fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
+    if let Some(r) = host::save(download_name(path), bytes) {
+        return r;
+    }
     let e = |e: JsValue| format!("download failed: {e:?}");
     let arr = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let opts = web_sys::BlobPropertyBag::new();
@@ -404,6 +412,8 @@ struct WebApp {
     first_frame_logged: bool,
     last_save: f64,
     ui_written: Vec<u8>,
+    /// Host mode: the photo the parent opened and its edit settings when opened or last exported.
+    hosted: Option<(PhotoId, Arc<DevelopSettings>)>,
 }
 
 impl WebApp {
@@ -424,7 +434,7 @@ impl WebApp {
         let read_failed = load_error.is_some();
         let opened = match load_error {
             Some(e) => Err(format!("{e}. Nothing was changed in storage")),
-            None => session.open_library_in(stores, true).cloned().map_err(|e| e.to_string()),
+            None => session.open_library_in(stores, !host::is_hosted()).cloned().map_err(|e| e.to_string()),
         };
         match opened {
             Ok(r) => log::info!(
@@ -467,6 +477,10 @@ impl WebApp {
         }
         app.ui = app.ui.sanitized();
         app.library_problem = problem;
+        if host::is_hosted() {
+            // Export with Previous works from the start; the folder only names the file handed over
+            app.session.last_export.get_or_insert_with(|| json!({"dir": "/exports"}));
+        }
         let n = opts.workers.unwrap_or_else(|| {
             let cores = window().map_or(1, |w| w.navigator().hardware_concurrency() as usize);
             cores.saturating_sub(1).clamp(1, 4)
@@ -503,6 +517,7 @@ impl WebApp {
             first_frame_logged: false,
             last_save: 0.0,
             ui_written,
+            hosted: None,
         }
     }
 
@@ -518,14 +533,37 @@ impl WebApp {
                 }
             });
         }
+        for (name, bytes) in host::take_opened() {
+            wasm_bindgen_futures::spawn_local(store_file(self.originals.clone(), None, name, bytes, ctx.clone()));
+        }
         let paths = self.originals.take_pending();
         if !paths.is_empty() {
             let n = paths.len();
             match self.app.run("library.import", json!({"paths": paths})) {
+                Ok(r) if host::is_hosted() => self.show_hosted(&r),
                 Ok(_) => self.app.toast(ctx, format!("Added {n} photo{}", if n == 1 { "" } else { "s" })),
                 Err(e) => log::warn!("import: {e}"),
             }
         }
+    }
+
+    /// Host mode: select the photo just imported (or found already imported) and edit it.
+    fn show_hosted(&mut self, imported: &serde_json::Value) {
+        let id = ["imported", "restored"].iter().filter_map(|k| imported[*k].as_array()?.last()?.as_u64()).next().map(PhotoId);
+        let Some((id, develop)) = id.and_then(|id| Some((id, self.app.session.catalog.photo(id)?.develop.clone()))) else { return };
+        self.app.session.selection = lightcraft_engine::Selection { ids: vec![id], active: Some(id) };
+        self.app.ui.view = lightcraft_ui_egui::state::ViewMode::Detail;
+        self.hosted = Some((id, develop));
+    }
+
+    /// Host mode: report whether the photo's edits differ from those it was opened or last exported with.
+    fn report_dirty(&mut self) {
+        let Some((id, baseline)) = &mut self.hosted else { return };
+        let Some(now) = self.app.session.catalog.photo(*id).map(|p| p.develop.clone()) else { return };
+        if host::take_saved() {
+            *baseline = now.clone();
+        }
+        host::dirty(*baseline != now);
     }
 
     /// Load originals the main thread asked for (and the active photo's, ahead of time).
@@ -664,6 +702,7 @@ impl eframe::App for WebApp {
             w.set_budget(self.app.session.cache_bytes());
         }
         self.app.logic(ctx);
+        self.report_dirty();
         self.save();
         if let Some(b) = self.bench.as_mut()
             && let Some(report) = b.step(&mut self.app)
@@ -731,7 +770,11 @@ pub fn start(chinese_font: Vec<u8>) {
     if chinese_font.is_empty() {
         log::warn!("lightcraft: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");
     }
-    let opts = Options::from_url();
+    let mut opts = Options::from_url();
+    if opts.host && host::connect() {
+        // one photo at a time, kept in memory: no library in browser storage, no demo photos
+        opts.store = "memory".into();
+    }
     wasm_bindgen_futures::spawn_local(async move {
         // one tab per library: two would each keep their own copy and overwrite each other's saves
         if opts.store != "memory" && safety::acquire_tab_lock().await == Some(false) {
@@ -754,12 +797,14 @@ pub fn start(chinese_font: Vec<u8>) {
         let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font))))).await;
         match r {
             Ok(()) => {
+                host::ready();
                 if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {
                     el.remove();
                 }
             }
             Err(e) => {
                 log::error!("LightCraft failed to start: {e:?}");
+                host::failed(&format!("LightCraft failed to start: {e:?}"));
                 set_status(&format!("LightCraft failed to start: {e:?}"));
             }
         }
