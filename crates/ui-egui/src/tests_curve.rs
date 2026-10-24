@@ -223,6 +223,32 @@ fn curve_points_from_an_agent_are_stored_in_order() {
     assert!(c[1].0 < c[2].0, "dragged up to its neighbour, not past it: {c:?}");
 }
 
+#[test]
+fn clicking_to_add_a_point_puts_it_on_the_curve() {
+    let mut h = curve_open("master");
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [1.0, 1.0]]}));
+    h.step();
+    // a click a few points below the straight line adds a point on it: the curve doesn't move
+    let r = h.request("ui.clickWidget", json!({"id": "curve", "fx": 0.3, "fy": 0.72}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let c = pts(&develop(&h).curve.master);
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert!((c[1].0 - 0.3).abs() < 0.01, "x follows the click: {c:?}");
+    assert!((c[1].1 - c[1].0).abs() < 1e-9, "the new point sits on the line: {c:?}");
+
+    // on a bent curve the new point takes the curve's value at the clicked x
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": S_CURVE}));
+    h.step();
+    let before = lightcraft_color::spline::MonotoneCurve::new(&S_CURVE.map(|[x, y]| (x, y)));
+    let r = h.request("ui.clickWidget", json!({"id": "curve", "fx": 0.5, "fy": 0.4}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let c = pts(&develop(&h).curve.master);
+    assert_eq!(c.len(), 5, "{c:?}");
+    assert!((c[2].1 - before.eval(c[2].0)).abs() < 1e-9, "the new point sits on the curve: {c:?}");
+}
+
 /// The settings the parametric graph is drawn from: two neighbouring regions pushed opposite ways,
 /// where the raw sum of their bumps folds back on itself before the renderer's running maximum
 /// straightens it out.
