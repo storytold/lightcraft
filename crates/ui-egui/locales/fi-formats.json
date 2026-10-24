@@ -35,6 +35,7 @@
   "Added {n} keyword{}": "Lisättyjä avainsanoja: {n}{:.0}",
   "Added {n} photo{} to My Photos": "Omiin kuviin lisättyjä kuvia: {n}{:.0}",
   "Added {n} photo{} to “{}”": "Lisättyjä kuvia kohteeseen ”{1}”: {n}{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "Lisätty {n} esimerkkikuvaa, albumit kansiossa ”{folder}” ja avainsanat kokeiltavaksi",
   "Added {what} to {name}": "{what} lisätty kohteeseen {name}",
   "Added “{keyword}” to {n} photo{}": "Avainsana ”{keyword}” lisätty kuviin: {n}{:.0}",
   "Adding photos… {} of {}": "Lisätään kuvia… {} / {}",

@@ -31,6 +31,7 @@
   "Added {n} keyword{}": "დაემატა საკვანძო სიტყვა: {n}{:.0}",
   "Added {n} photo{} to My Photos": "ჩემს ფოტოებს დაემატა ფოტო: {n}{:.0}",
   "Added {n} photo{} to “{}”": "„{1}“-ს დაემატა ფოტო: {n}{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "დაემატა {n} სანიმუშო ფოტო, ალბომებით „{folder}“-ში და საკვანძო სიტყვებით საცდელად",
   "Added {what} to {name}": "{what}: დაემატა {name}-ს",
   "Added “{keyword}” to {n} photo{}": "„{keyword}“ დაემატა ფოტოს: {n}{:.0}",
   "Adding photos… {} of {}": "ფოტოების დამატება… {} / {}",
