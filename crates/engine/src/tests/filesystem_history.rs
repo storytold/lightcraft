@@ -547,6 +547,65 @@ fn merged_rename_failure_keeps_rolled_back_photo_identity() {
     assert_eq!(files.iter().find(|(file, _)| *file == path).map(|(_, bytes)| bytes.as_str()), Some("Photo 2"));
 }
 
+/// A step of history that renames a file and then fails part-way in the catalog, with the file then refusing to go
+/// back, still hands what is left of its rollback to the other stack, and the journal says what the catalog now holds.
+/// (Where the file stayed is not followed: that is as it is for a step that fails whole.)
+#[test]
+fn a_partly_applied_step_whose_files_cannot_be_moved_back_keeps_what_is_left_of_it() {
+    use crate::rename::tests::FakeFs;
+    use lightcraft_catalog::{CatalogError, Stack};
+
+    for redo in [false, true] {
+        let store = lightcraft_catalog::MemStore::new();
+        let mut s = memory_library(&store);
+        let fs = FakeFs::new(false, &[("/p/a.jpg", "A"), ("/p/b.jpg", "B")]);
+        let ops = ["/p/a.jpg", "/p/b.jpg"]
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                let name = std::path::Path::new(path).file_name().unwrap().to_string_lossy();
+                let path = path.replace('/', std::path::MAIN_SEPARATOR_STR);
+                Op::AddPhoto { photo: Box::new(Photo::new(PhotoId(i as u64 + 1), Source::File { path }, &name, "JPEG", 16, 16, "")) }
+            })
+            .collect();
+        s.commit("Photos", Op::Batch { ops }).unwrap();
+        let stack = s.catalog.alloc_stack_id();
+        s.commit("Stack", Op::AddStack { stack: Stack { id: stack, photos: vec![PhotoId(1), PhotoId(2)], collapsed: false } }).unwrap();
+        s.persist().unwrap();
+        s.undo.clear();
+        // the file is renamed, the photo and its stack go, and an op fails: the stack cannot be put back before its photo
+        let renamed = "/p/renamed.jpg".replace('/', std::path::MAIN_SEPARATOR_STR);
+        let step = Op::Batch {
+            ops: vec![
+                Op::SetFile { id: PhotoId(1), file_name: "renamed.jpg".into(), source: Source::File { path: renamed } },
+                Op::RemovePhoto { id: PhotoId(2) },
+                Op::RemoveStack { id: stack },
+                Op::SetRating { id: PhotoId(9_999), rating: 1 },
+            ],
+        };
+        let entry = crate::UndoEntry { label: "Broken".into(), op: step, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() };
+        if redo {
+            s.redo.push(entry);
+        } else {
+            s.undo.push(entry);
+        }
+        // the file goes forward and then refuses to come back
+        *fs.fail.borrow_mut() = vec!["renamed.jpg".into()];
+        let error = file_history_step(&mut s, &fs, redo).unwrap_err();
+        assert!(matches!(&error, crate::EngineError::Catalog(CatalogError::PartlyApplied { .. })), "{error:?}");
+        assert!(error.to_string().contains("could not all be moved back"), "{error}");
+        let (this, other) = if redo { (&s.redo, &s.undo) } else { (&s.undo, &s.redo) };
+        assert_eq!((this.len(), other.len()), (0, 1), "what is left of the step goes to the other stack");
+        let torn = s.catalog.to_snapshot();
+        let replayed = {
+            let mut again = memory_library(&store);
+            again.persist().unwrap();
+            again.catalog.to_snapshot()
+        };
+        assert_eq!(replayed, torn, "the journal and the memory agree");
+    }
+}
+
 /// A photo whose old file name is empty cannot be put back by `SetFile` (it refuses an empty name), so a rename that
 /// fails part-way leaves that inverse in what is left of the rollback. The files are back where they were by then, so
 /// the step that finishes the rollback points the photo at them and moves nothing.
