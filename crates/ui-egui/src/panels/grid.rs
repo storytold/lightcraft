@@ -935,12 +935,8 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         let _ = app.run("library.select", json!({"ids": [id.0]}));
         let _ = app.run("view.detail", json!({}));
     }
-    // drag the selection (this photo joins it, or replaces it when it wasn't selected)
     if resp.drag_started() {
-        if !app.session.selection.contains(id) {
-            let _ = app.run("library.select", json!({"ids": [id.0]}));
-        }
-        app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
+        begin_photo_drag(app, id);
     }
     crate::widgets::context_menu(&resp, |ui| context_menu(app, ui, id));
 }
@@ -1056,6 +1052,15 @@ fn folder_breadcrumbs(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
         }
         r.on_hover_text(path);
     }
+}
+
+/// A drag of photo `id` began (grid cell or filmstrip cell): the photos it carries are the selection,
+/// which this photo joins, or replaces when it wasn't part of it.
+pub(crate) fn begin_photo_drag(app: &mut LightcraftApp, id: PhotoId) {
+    if !app.session.selection.contains(id) {
+        let _ = app.run("library.select", json!({"ids": [id.0]}));
+    }
+    app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
 }
 
 /// While photos are dragged: a badge at the pointer; the drag ends when the button is up
