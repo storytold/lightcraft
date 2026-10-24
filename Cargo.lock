@@ -3206,6 +3206,7 @@ dependencies = [
 name = "lightcraft-denoise-core"
 version = "0.13.0"
 dependencies = [
+ "dhat",
  "lightcraft-raster",
  "miniz_oxide 0.8.9",
  "proptest",

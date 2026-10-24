@@ -656,18 +656,38 @@ fn fix_pixels(buf: &mut [f32], w: usize, h: usize, cpp: usize, cfa: Option<&Cfa>
     }
 }
 
+/// Most full-image passes of one `OpcodeList3`: every warp record is a full-image allocation and resample
+/// pass and every bad-pixel record a full flatten-and-rebuild, and a hostile record may repeat either
+/// thousands of times. Real DNGs carry at most a couple; passes past the cap are skipped.
+const MAX_LIST3_PASSES: usize = 8;
+
 /// Apply `OpcodeList3` (on the demosaiced RGB image, values normalised to [0, 1]).
 pub fn apply_list3(list: &[Opcode], img: &mut Rgb32f) {
     if list.is_empty() {
         return;
     }
     let (w, h) = (img.width, img.height);
+    let mut passes = 0usize;
     for op in applied_ops(list) {
         match op {
-            Opcode::WarpRectilinear { planes, center } => *img = warp_rectilinear(img, planes, *center),
-            Opcode::WarpRectilinear2 { planes, center, reciprocal, .. } => *img = warp_rectilinear2(img, planes, *center, *reciprocal),
+            Opcode::WarpRectilinear { planes, center } => {
+                if passes < MAX_LIST3_PASSES {
+                    passes += 1;
+                    *img = warp_rectilinear(img, planes, *center);
+                }
+            }
+            Opcode::WarpRectilinear2 { planes, center, reciprocal, .. } => {
+                if passes < MAX_LIST3_PASSES {
+                    passes += 1;
+                    *img = warp_rectilinear2(img, planes, *center, *reciprocal);
+                }
+            }
             Opcode::WarpFisheye { .. } | Opcode::TrimBounds { .. } | Opcode::Unknown { .. } => {}
             other => {
+                if passes >= MAX_LIST3_PASSES {
+                    continue;
+                }
+                passes += 1;
                 let mut flat: Vec<f32> = img.data.iter().flat_map(|p| *p).collect();
                 apply_list(std::slice::from_ref(other), &mut flat, w, h, 3, None, 1.0);
                 for (d, c) in img.data.iter_mut().zip(flat.as_chunks::<3>().0) {
@@ -763,6 +783,27 @@ pub(crate) mod tests {
     }
     pub(crate) fn area(a: [u32; 8]) -> Vec<u8> {
         a.iter().flat_map(|v| v.to_be_bytes()).collect()
+    }
+
+    /// Warp and bad-pixel records each cost a full-image pass, and a hostile `OpcodeList3` repeats them
+    /// thousands of times ([`MAX_LIST3_PASSES`] bounds the multiplier); identity warps below the cap must
+    /// still apply, exactly, so the same image comes out.
+    #[test]
+    fn list3_pass_cap_skips_repeated_records() {
+        let mut img = Rgb32f::new(8, 6);
+        for (i, px) in img.data.iter_mut().enumerate() {
+            *px = [i as f32 / 2.0, (i % 8) as f32, (i / 8) as f32];
+        }
+        let orig: Vec<[f32; 3]> = img.data.clone();
+        let list: Vec<Opcode> =
+            (0..MAX_LIST3_PASSES * 5).map(|_| Opcode::WarpRectilinear { planes: vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] }).collect();
+        apply_list3(&list, &mut img);
+        assert_eq!(img.data, orig, "identity warps change nothing, and the cap skips the repeated rest");
+
+        // a real warp below the cap is still applied
+        let one = [Opcode::WarpRectilinear { planes: vec![[2.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] }];
+        apply_list3(&one, &mut img);
+        assert_ne!(img.data, orig, "a genuine warp record is not skipped");
     }
 
     #[test]

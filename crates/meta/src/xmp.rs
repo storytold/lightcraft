@@ -154,6 +154,11 @@ const MAX_NODES: usize = 200_000;
 // Expanding a long namespace URI on many short names must not amplify a small packet without bound.
 pub(crate) const MAX_OPAQUE_NAME_BYTES: usize = 8 * 1024 * 1024;
 
+/// Most text a converter's flattened property keys may add up to. Keys repeat their whole ancestor
+/// path (`parent/field`), so a document with a long nested name and a wide child fan-out otherwise
+/// retains its prefix once per property: node limits alone cannot bound that duplication.
+const MAX_KEY_BYTES: usize = 1 << 20;
+
 /// Names canonicalised by namespace URI (see [`NAMESPACES`]); conflicting foreign prefixes are opaque.
 pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
     canonical(qname, scopes, opaque_budget)
@@ -332,18 +337,29 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) {
+        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
             props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props);
+        collect_property(c, prefix, props, budget);
     }
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>) {
+/// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
+/// property is then left out, like other elements a limit has cut).
+fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+    let n = key.len();
+    if *budget < n {
+        return false;
+    }
+    *budget -= n;
+    true
+}
+
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -357,29 +373,36 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
+        if take_key_bytes(&key, budget) {
+            props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
+        }
         return;
     }
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props);
+            collect_property(c, &struct_prefix, props, budget);
         }
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props);
+        collect_description(d, &struct_prefix, props, budget);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
-            props.entry(format!("{struct_prefix}{k}")).or_default().push(v.clone());
+            let full = format!("{struct_prefix}{k}");
+            if take_key_bytes(&full, budget) {
+                props.entry(full).or_default().push(v.clone());
+            }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    props.entry(key).or_default().push(v);
+    if take_key_bytes(&key, budget) {
+        props.entry(key).or_default().push(v);
+    }
 }
 
 fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
@@ -498,7 +521,8 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
     for d in descs {
-        collect_description(d, "", &mut props);
+        let mut key_budget = MAX_KEY_BYTES;
+        collect_description(d, "", &mut props, &mut key_budget);
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
         }
@@ -1170,5 +1194,30 @@ mod tests {
         assert_eq!(entity("#xFFFE"), None);
         assert_eq!(entity("#x41"), Some('A'));
         assert_eq!(entity("#9"), Some('\t'));
+    }
+
+    /// Flattened keys repeat their whole ancestor path, so a long nested name with a wide child
+    /// fan-out would otherwise retain its prefix once per leaf: the cumulative key budget stops it
+    /// (a 65 KB document with 3000 leaves must not retain ~2.4 MB of key text).
+    #[test]
+    fn flattened_keys_stay_within_the_cumulative_budget() {
+        let level = "n".repeat(200);
+        let mut doc = String::from(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:lc=\"https://lightcraft.example/lc/\"><rdf:RDF><rdf:Description><lc:root rdf:parseType=\"Resource\">",
+        );
+        for _ in 0..4 {
+            doc.push_str(&format!("<lc:{level} rdf:parseType=\"Resource\">"));
+        }
+        doc.push_str(&"<lc:leaf lc:att=\"v\"/>".repeat(3000));
+        doc.push_str("</lc:root>");
+        for _ in 0..4 {
+            doc.push_str(&format!("</lc:{level}>"));
+        }
+        doc.push_str("</rdf:Description></rdf:RDF></x:xmpmeta>");
+        let d = parse_xmp(&doc).unwrap();
+        let total: usize = d.properties.keys().map(String::len).sum();
+        assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
+        assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
+        assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
     }
 }

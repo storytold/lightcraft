@@ -53,6 +53,11 @@ impl Default for PanoOptions {
 /// The largest panorama, in megapixels (Lightroom's limit too); a bigger one is scaled down.
 pub const MAX_MEGAPIXELS: f64 = 512.0;
 
+/// Most frames one stitch accepts: pair matching compares every pair of frames (n(n−1)/2 runs), so an
+/// unbounded frame count is quadratic CPU as well as quadratic memory while the frames load. A panorama
+/// with more than [`MAX_FRAMES`] shots is refused with an error, not attempted.
+pub const MAX_FRAMES: usize = 256;
+
 /// The longest edge of a panorama, in pixels (Lightroom's limit too); a longer one is scaled down.
 pub const MAX_EDGE: f64 = 65_000.0;
 
@@ -223,6 +228,9 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
     let n = frames.len();
     if n < 2 {
         return Err(MergeError::TooFew(n, 2));
+    }
+    if n > MAX_FRAMES {
+        return Err(MergeError::TooMany(n, MAX_FRAMES));
     }
     check(progress, 0.01, "Finding features")?;
     let (cams, rms_before, rms) = register(&frames, progress)?;
