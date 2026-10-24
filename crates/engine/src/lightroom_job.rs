@@ -31,11 +31,20 @@ fn cancelled() -> crate::EngineError {
 }
 
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
-    let archive_path = archive_dir.map(|dir| crate::lightroom_archive::store_best_effort(dir, data).map_err(error)).transpose()?.flatten();
-    if archive_dir.is_some() && archive_path.is_none() {
-        data.warnings.push("Lightroom source archive exceeded 32 MiB; archive skipped".into());
-    }
-    Ok(archive_path)
+    use crate::lightroom_archive::{Kept, MAX_ARCHIVE_BYTES};
+    let Some(dir) = archive_dir else { return Ok(None) };
+    let limit = MAX_ARCHIVE_BYTES >> 20;
+    Ok(match crate::lightroom_archive::store_best_effort(dir, data).map_err(error)? {
+        Kept::All(path) => Some(path),
+        Kept::WithoutSettings(path) => {
+            data.warnings.push(format!("Lightroom source archive exceeded {limit} MiB; archived without history-step and snapshot settings"));
+            Some(path)
+        }
+        Kept::Nothing => {
+            data.warnings.push(format!("Lightroom source archive exceeded {limit} MiB; archive skipped"));
+            None
+        }
+    })
 }
 
 /// Memory identity of the library which owns a prepared completion.
@@ -509,59 +518,67 @@ mod tests {
         assert_eq!(session.undo.len(), 3);
     }
 
+    /// 5,000 photos with 8 KiB each of history settings (`in_history`) or develop settings: about 40 MiB of JSON. An
+    /// archive too big with its history settings is kept without them; one too big even then is skipped. Either
+    /// way the import goes on and says so.
     #[test]
-    fn oversized_history_archive_keeps_prepared_import_successful_with_warning() {
-        let archive_dir = std::env::temp_dir().join(format!("lightcraft-lr-prepared-scale-{}", std::process::id()));
-        let mut data = empty_data();
-        data.photos = (0..5_000)
-            .map(|source_id| {
-                let image = std::collections::BTreeMap::from([
-                    ("id_local".into(), serde_json::json!(source_id)),
-                    ("fileFormat".into(), serde_json::json!("JPG")),
-                    ("fileWidth".into(), serde_json::json!(1)),
-                    ("fileHeight".into(), serde_json::json!(1)),
-                ]);
-                lightroom_catalog::CatalogPhoto {
-                    source_id,
-                    uuid: format!("scale-{source_id}"),
-                    path: format!("/missing/scale-{source_id}.jpg"),
-                    image,
-                    settings: String::new(),
-                    xmp: String::new(),
-                    keywords: Vec::new(),
-                    history: vec![std::collections::BTreeMap::from([(
-                        "text".into(),
-                        serde_json::json!(format!("history-{source_id}-{}", "x".repeat(8 * 1024))),
-                    )])],
-                    snapshots: Vec::new(),
-                    original: lightroom_catalog::Original::Local,
-                }
-            })
-            .collect();
-        let archive_path = stage_archive(Some(&archive_dir), &mut data).unwrap();
-        assert!(archive_path.is_none());
-        let mut session = crate::Session::new();
-        let token = LightroomLibraryToken::capture(&session);
-        let prepared = PreparedLightroom {
-            data,
-            normal: Prepared::default(),
-            index: ImportIndex::default(),
-            archive_path,
-            token,
-            missing_sources: HashSet::new(),
-            update_existing: false,
-            now: "2026-01-01T00:00:00".into(),
-            cancelled: false,
-        };
-        let completion = commit_prepared(&mut session, prepared).unwrap();
-        assert_eq!(completion.report["photos"], 5_000);
-        assert!(
-            completion.report["warnings"]
-                .as_array()
-                .is_some_and(|warnings| warnings.iter().any(|warning| warning == "Lightroom source archive exceeded 32 MiB; archive skipped"))
-        );
-        assert_eq!(session.catalog.len(), 5_000);
-        std::fs::remove_dir_all(archive_dir).unwrap();
+    fn oversized_archive_keeps_prepared_import_successful_with_warning() {
+        for (in_history, warning, archived) in [
+            (true, "Lightroom source archive exceeded 32 MiB; archived without history-step and snapshot settings", true),
+            (false, "Lightroom source archive exceeded 32 MiB; archive skipped", false),
+        ] {
+            let archive_dir = std::env::temp_dir().join(format!("lightcraft-lr-prepared-scale-{in_history}-{}", std::process::id()));
+            let mut data = empty_data();
+            data.photos = (0..5_000)
+                .map(|source_id| {
+                    let image = std::collections::BTreeMap::from([
+                        ("id_local".into(), serde_json::json!(source_id)),
+                        ("fileFormat".into(), serde_json::json!("JPG")),
+                        ("fileWidth".into(), serde_json::json!(1)),
+                        ("fileHeight".into(), serde_json::json!(1)),
+                    ]);
+                    let bulk = format!("history-{source_id}-{}", "x".repeat(8 * 1024));
+                    lightroom_catalog::CatalogPhoto {
+                        source_id,
+                        uuid: format!("scale-{source_id}"),
+                        path: format!("/missing/scale-{source_id}.jpg"),
+                        image,
+                        settings: if in_history { String::new() } else { bulk.clone() },
+                        xmp: String::new(),
+                        keywords: Vec::new(),
+                        history: vec![std::collections::BTreeMap::from([(
+                            "text".into(),
+                            serde_json::json!(if in_history { bulk } else { String::new() }),
+                        )])],
+                        snapshots: Vec::new(),
+                        original: lightroom_catalog::Original::Local,
+                    }
+                })
+                .collect();
+            let archive_path = stage_archive(Some(&archive_dir), &mut data).unwrap();
+            assert_eq!(archive_path.is_some(), archived, "{warning}");
+            let mut session = crate::Session::new();
+            let token = LightroomLibraryToken::capture(&session);
+            let prepared = PreparedLightroom {
+                data,
+                normal: Prepared::default(),
+                index: ImportIndex::default(),
+                archive_path,
+                token,
+                missing_sources: HashSet::new(),
+                update_existing: false,
+                now: "2026-01-01T00:00:00".into(),
+                cancelled: false,
+            };
+            let completion = commit_prepared(&mut session, prepared).unwrap();
+            assert_eq!(completion.report["photos"], 5_000);
+            assert!(
+                completion.report["warnings"].as_array().is_some_and(|warnings| warnings.iter().any(|w| w == warning)),
+                "the report should say: {warning}"
+            );
+            assert_eq!(session.catalog.len(), 5_000);
+            std::fs::remove_dir_all(archive_dir).unwrap();
+        }
     }
 
     #[test]

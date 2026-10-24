@@ -2,10 +2,10 @@
 //!
 //! Archives use a deterministic JSON representation wrapped in zlib.  The JSON
 //! writer streams through a bounded compressor, so an import cannot first build
-//! an unbounded archive buffer.  Blob columns are omitted by the catalog reader;
-//! decoded XMP,
-//! settings, history, snapshots, identities, paths, collections & membership
-//! remain available for recovery.
+//! an unbounded archive buffer.  The catalog reader decodes Lightroom's compressed
+//! XMP and history-step and snapshot settings and omits other blob columns, so
+//! decoded XMP, settings, history, snapshots, identities, paths, collections &
+//! membership remain available for recovery.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -29,6 +29,41 @@ pub const MAX_TOTAL_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 /// Maximum number of managed archives retained.
 pub const MAX_MANAGED_ARCHIVES: usize = 8;
 
+/// Why [`store`] stored no archive.
+#[derive(Debug)]
+pub enum StoreError {
+    /// The archive would pass [`MAX_ARCHIVE_BYTES`], as JSON or on disk.
+    TooBig,
+    /// Anything else, such as a folder or file that can't be written.
+    Failed(String),
+}
+
+impl From<String> for StoreError {
+    fn from(why: String) -> Self {
+        Self::Failed(why)
+    }
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooBig => write!(f, "{TooBig}"),
+            Self::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+/// What [`store_best_effort`] kept.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// The whole archive.
+    All(PathBuf),
+    /// The archive without history-step and snapshot settings (`text`): with them it passed [`MAX_ARCHIVE_BYTES`].
+    WithoutSettings(PathBuf),
+    /// No archive: it passed [`MAX_ARCHIVE_BYTES`] even without them.
+    Nothing,
+}
+
 const FORMAT_VERSION: u8 = 1;
 const HEADER: &[u8] = b"LC-LRARCH\0\x01Z";
 const NAME_PREFIX: &str = "lightroom-import-";
@@ -44,13 +79,18 @@ const IO_BUFFER: usize = 16 * 1024;
 /// most [`MAX_MANAGED_ARCHIVES`] and [`MAX_TOTAL_ARCHIVE_BYTES`].  Legacy
 /// `lightroom-import-*.json` files are deliberately ignored and preserved for
 /// an explicit caller warning.
-pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> {
+pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, StoreError> {
+    store_with(directory, data, true)
+}
+
+/// [`store`], with the `text` of history steps and snapshots only when `settings`.
+fn store_with(directory: &Path, data: &CatalogImport, settings: bool) -> Result<PathBuf, StoreError> {
     prepare_directory(directory)?;
     let mut managed = managed_files(directory)?;
     managed.sort_by_key(|entry| entry.index);
 
     let temporary = temporary_path(directory)?;
-    write_archive(&temporary, data).inspect_err(|_| {
+    write_archive(&temporary, data, settings).inspect_err(|_| {
         let _ = remove_managed_file(&temporary);
     })?;
 
@@ -60,7 +100,7 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
             Ok(same) => same,
             Err(error) => {
                 let _ = remove_managed_file(&temporary);
-                return Err(error.to_string());
+                return Err(error.to_string().into());
             }
         };
         if same {
@@ -75,20 +115,20 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
     let index = managed.last().map_or(0, |entry| entry.index.saturating_add(1));
     if managed.last().is_some_and(|entry| entry.index == u64::MAX) {
         let _ = remove_managed_file(&temporary);
-        return Err("managed Lightroom archive index is exhausted".into());
+        return Err(StoreError::Failed("managed Lightroom archive index is exhausted".into()));
     }
     let destination = match next_destination(directory, index) {
         Ok(path) => path,
         Err(error) => {
             let _ = remove_managed_file(&temporary);
-            return Err(error);
+            return Err(error.into());
         }
     };
     let size = match fs::metadata(&temporary) {
         Ok(meta) => meta.len(),
         Err(error) => {
             let _ = remove_managed_file(&temporary);
-            return Err(error.to_string());
+            return Err(error.to_string().into());
         }
     };
     let new_entry = Managed { index, path: destination.clone(), size };
@@ -99,40 +139,46 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
         Ok(retirees) => retirees,
         Err(error) => {
             let _ = remove_managed_file(&temporary);
-            return Err(error);
+            return Err(error.into());
         }
     };
     let quarantined = match quarantine(&retirees) {
         Ok(quarantined) => quarantined,
         Err(error) => {
             let _ = remove_managed_file(&temporary);
-            return Err(error);
+            return Err(error.into());
         }
     };
 
     if let Err(error) = publish_new(&temporary, &destination) {
         rollback_quarantine(&quarantined);
         let _ = remove_managed_file(&temporary);
-        return Err(error.to_string());
+        return Err(error.to_string().into());
     }
     if let Err(error) = remove_managed_file(&temporary) {
-        return Err(format!("archive published but temporary cleanup failed: {error}"));
+        return Err(StoreError::Failed(format!("archive published but temporary cleanup failed: {error}")));
     }
     for (old, held) in quarantined {
         if let Err(error) = remove_managed_file(&held) {
-            return Err(format!("archive published but could not retire {}: {error}", old.display()));
+            return Err(StoreError::Failed(format!("archive published but could not retire {}: {error}", old.display())));
         }
     }
     Ok(destination)
 }
 
-/// Store source data when possible. An archive that reaches its bounded size is
-/// omitted with a warning so catalog import can still complete.
-pub fn store_best_effort(directory: &Path, data: &CatalogImport) -> Result<Option<PathBuf>, String> {
+/// Store source data when possible, so catalog import can still complete. An archive past
+/// [`MAX_ARCHIVE_BYTES`] is stored again without the history-step and snapshot settings, which
+/// can be most of a catalog's data; one still too big is not stored at all.
+pub fn store_best_effort(directory: &Path, data: &CatalogImport) -> Result<Kept, String> {
     match store(directory, data) {
-        Ok(path) => Ok(Some(path)),
-        Err(error) if error.contains("Lightroom archive exceeds 32 MiB") => Ok(None),
-        Err(error) => Err(error),
+        Ok(path) => return Ok(Kept::All(path)),
+        Err(StoreError::TooBig) => {}
+        Err(StoreError::Failed(why)) => return Err(why),
+    }
+    match store_with(directory, data, false) {
+        Ok(path) => Ok(Kept::WithoutSettings(path)),
+        Err(StoreError::TooBig) => Ok(Kept::Nothing),
+        Err(StoreError::Failed(why)) => Err(why),
     }
 }
 
@@ -213,21 +259,25 @@ fn next_destination(directory: &Path, mut index: u64) -> Result<PathBuf, String>
     Err("no safe managed archive name available".into())
 }
 
-fn write_archive(path: &Path, data: &CatalogImport) -> Result<(), String> {
+fn write_archive(path: &Path, data: &CatalogImport, settings: bool) -> Result<(), StoreError> {
     lightcraft_catalog::safe_file::write_atomic_with(path, &mut |raw| {
         let mut bounded = BoundedWriter { inner: raw, total: 0 };
         bounded.write_all(HEADER)?;
         let mut compressor = ZlibWriter::new(&mut bounded);
-        serde_json::to_writer(&mut compressor, &ArchiveRef(data)).map_err(json_io)?;
+        serde_json::to_writer(&mut compressor, &ArchiveRef(data, settings)).map_err(json_io)?;
         compressor.finish()?;
         Ok(())
     })
     .map(|_| ())
-    .map_err(|error| format!("could not write Lightroom archive: {error}"))
+    .map_err(|error| match error.get_ref().is_some_and(|inner| inner.is::<TooBig>()) {
+        true => StoreError::TooBig,
+        false => StoreError::Failed(format!("could not write Lightroom archive: {error}")),
+    })
 }
 
+/// A write error from the archive writers keeps its own `io::Error`, so [`TooBig`] can still be told apart.
 fn json_io(error: serde_json::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+    io::Error::from(error)
 }
 
 struct BoundedWriter<'a> {
@@ -251,8 +301,20 @@ impl Write for BoundedWriter<'_> {
     }
 }
 
+/// The archive writers' error when the archive would pass [`MAX_ARCHIVE_BYTES`].
+#[derive(Debug)]
+struct TooBig;
+
+impl std::fmt::Display for TooBig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Lightroom archive exceeds {} MiB", MAX_ARCHIVE_BYTES >> 20)
+    }
+}
+
+impl std::error::Error for TooBig {}
+
 fn limit_error() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "Lightroom archive exceeds 32 MiB")
+    io::Error::new(io::ErrorKind::InvalidData, TooBig)
 }
 
 struct ZlibWriter<'a, 'b> {
@@ -435,67 +497,70 @@ fn remove_managed_file(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
-struct ArchiveRef<'a>(&'a CatalogImport);
+/// The archive of a catalog import, with the `text` of history steps and snapshots only when `.1`.
+struct ArchiveRef<'a>(&'a CatalogImport, bool);
 
 impl Serialize for ArchiveRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut out = serializer.serialize_struct("CatalogImportArchive", 7)?;
         out.serialize_field("version", &FORMAT_VERSION)?;
         out.serialize_field("source", &self.0.source)?;
-        out.serialize_field("photos", &PhotoSeq(&self.0.photos))?;
-        out.serialize_field("collections", &RowSeq(&self.0.collections))?;
-        out.serialize_field("members", &RowSeq(&self.0.members))?;
-        out.serialize_field("collection_content", &RowSeq(&self.0.collection_content))?;
+        out.serialize_field("photos", &PhotoSeq(&self.0.photos, self.1))?;
+        out.serialize_field("collections", &RowSeq(&self.0.collections, None))?;
+        out.serialize_field("members", &RowSeq(&self.0.members, None))?;
+        out.serialize_field("collection_content", &RowSeq(&self.0.collection_content, None))?;
         out.serialize_field("warnings", &self.0.warnings)?;
         out.end()
     }
 }
 
-struct PhotoSeq<'a>(&'a [CatalogPhoto]);
+struct PhotoSeq<'a>(&'a [CatalogPhoto], bool);
 impl Serialize for PhotoSeq<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut out = serializer.serialize_seq(Some(self.0.len()))?;
         for photo in self.0 {
-            out.serialize_element(&PhotoRef(photo))?;
+            out.serialize_element(&PhotoRef(photo, self.1))?;
         }
         out.end()
     }
 }
 
-struct PhotoRef<'a>(&'a CatalogPhoto);
+struct PhotoRef<'a>(&'a CatalogPhoto, bool);
 impl Serialize for PhotoRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let p = self.0;
+        let skip = (!self.1).then_some("text");
         let mut out = serializer.serialize_struct("CatalogPhotoArchive", 8)?;
         out.serialize_field("source_id", &p.source_id)?;
         out.serialize_field("uuid", &p.uuid)?;
         out.serialize_field("path", &p.path)?;
-        out.serialize_field("image", &RowRef(&p.image))?;
+        out.serialize_field("image", &RowRef(&p.image, None))?;
         out.serialize_field("settings", &p.settings)?;
         out.serialize_field("xmp", &p.xmp)?;
         out.serialize_field("keywords", &p.keywords)?;
-        out.serialize_field("history", &RowSeq(&p.history))?;
-        out.serialize_field("snapshots", &RowSeq(&p.snapshots))?;
+        out.serialize_field("history", &RowSeq(&p.history, skip))?;
+        out.serialize_field("snapshots", &RowSeq(&p.snapshots, skip))?;
         out.end()
     }
 }
 
-struct RowSeq<'a>(&'a [BTreeMap<String, Value>]);
+/// Rows, each without the column `.1` names.
+struct RowSeq<'a>(&'a [BTreeMap<String, Value>], Option<&'a str>);
 impl Serialize for RowSeq<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut out = serializer.serialize_seq(Some(self.0.len()))?;
         for row in self.0 {
-            out.serialize_element(&RowRef(row))?;
+            out.serialize_element(&RowRef(row, self.1))?;
         }
         out.end()
     }
 }
 
-struct RowRef<'a>(&'a BTreeMap<String, Value>);
+struct RowRef<'a>(&'a BTreeMap<String, Value>, Option<&'a str>);
 impl Serialize for RowRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut out = serializer.serialize_map(None)?;
-        for (key, value) in self.0 {
+        for (key, value) in self.0.iter().filter(|(key, _)| Some(key.as_str()) != self.1) {
             out.serialize_entry(key, value)?;
         }
         out.end()
@@ -604,31 +669,74 @@ mod tests {
     fn rejects_oversize_before_creating_archive() {
         let path = tempdir();
         let input = data("x".repeat((MAX_ARCHIVE_BYTES as usize) + 1));
-        assert!(store(&path, &input).is_err());
+        assert!(matches!(store(&path, &input), Err(StoreError::TooBig)), "an oversize archive is told apart by its error");
         assert_eq!(managed_count(&path), 0);
         fs::remove_dir_all(path).unwrap();
     }
 
-    #[test]
-    fn large_catalog_history_is_best_effort_and_does_not_abort_import() {
-        let path = tempdir();
+    /// 5,000 photos with 8 KiB of history settings each: about 40 MiB of JSON.
+    fn large_catalog(history: bool) -> CatalogImport {
         let mut input = data("catalog.lrcat".into());
         input.photos = (0..5_000)
-            .map(|index| CatalogPhoto {
-                source_id: index,
-                uuid: format!("photo-{index}"),
-                path: format!("/photos/{index}.raw"),
-                image: BTreeMap::new(),
-                settings: String::new(),
-                xmp: String::new(),
-                keywords: Vec::new(),
-                history: vec![BTreeMap::from([("text".into(), serde_json::json!(format!("history-{index}-{}", "x".repeat(8 * 1024))))])],
-                snapshots: Vec::new(),
-                original: crate::lightroom_catalog::Original::Local,
+            .map(|index| {
+                let bulk = format!("history-{index}-{}", "x".repeat(8 * 1024));
+                CatalogPhoto {
+                    source_id: index,
+                    uuid: format!("photo-{index}"),
+                    path: format!("/photos/{index}.raw"),
+                    image: BTreeMap::new(),
+                    settings: if history { String::new() } else { bulk.clone() },
+                    xmp: String::new(),
+                    keywords: Vec::new(),
+                    history: vec![BTreeMap::from([
+                        ("name".into(), serde_json::json!("Exposure")),
+                        ("text".into(), serde_json::json!(if history { bulk.as_str() } else { "s = {}" })),
+                    ])],
+                    snapshots: vec![BTreeMap::from([("name".into(), serde_json::json!("Before")), ("text".into(), serde_json::json!("s = {}"))])],
+                    original: crate::lightroom_catalog::Original::Local,
+                }
             })
             .collect();
-        assert_eq!(store_best_effort(&path, &input).unwrap(), None);
+        input
+    }
+
+    #[test]
+    fn an_archive_too_big_with_its_history_settings_is_kept_without_them() {
+        let path = tempdir();
+        let kept = store_best_effort(&path, &large_catalog(true)).unwrap();
+        let Kept::WithoutSettings(archive) = kept else { panic!("the archive should be kept without settings, not {kept:?}") };
+        let decoded = crate::lightroom_fixture::read_archive(&archive);
+        let photos = decoded["photos"].as_array().unwrap();
+        assert_eq!(photos.len(), 5_000, "every photo is still archived");
+        assert_eq!(photos[7]["uuid"], serde_json::json!("photo-7"));
+        assert_eq!(photos[7]["history"], serde_json::json!([{"name": "Exposure"}]), "history steps keep everything but their settings");
+        assert_eq!(photos[7]["snapshots"], serde_json::json!([{"name": "Before"}]), "and so do snapshots");
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 1, "the first, too big try leaves nothing behind");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn large_catalog_is_best_effort_and_does_not_abort_import() {
+        let path = tempdir();
+        assert_eq!(store_best_effort(&path, &large_catalog(false)).unwrap(), Kept::Nothing, "too big even without history settings");
         assert_eq!(managed_count(&path), 0);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Only the size limit leads to a smaller archive or none: any other failure is reported as such.
+    #[test]
+    fn a_write_failure_is_not_taken_for_an_oversize_archive() {
+        let path = tempdir();
+        let file = path.join("not-a-folder");
+        fs::write(&file, b"x").unwrap();
+        assert!(matches!(store(&file, &rich_data()), Err(StoreError::Failed(_))), "a folder that can't be made");
+        let folder = path.join("Interop");
+        {
+            let _full = lightcraft_catalog::safe_file::fail_writes_after(0);
+            assert!(matches!(store(&folder, &rich_data()), Err(StoreError::Failed(_))), "a full disk while writing");
+            assert!(store_best_effort(&folder, &rich_data()).is_err(), "a failure is an error, not a skipped archive");
+        }
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 0, "a failed write leaves nothing behind");
         fs::remove_dir_all(path).unwrap();
     }
 
@@ -638,6 +746,7 @@ mod tests {
         let archive = store(&path, &rich_data()).unwrap();
         let bytes = fs::read(archive).unwrap();
         assert!(bytes.starts_with(HEADER));
+        assert_eq!(crate::lightroom_fixture::ARCHIVE_HEADER, HEADER, "the fixture reads archives with this module's header");
         let json = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&bytes[HEADER.len()..], MAX_ARCHIVE_BYTES as usize).unwrap();
         let decoded: Value = serde_json::from_slice(&json).unwrap();
         assert_eq!(decoded["version"], serde_json::json!(FORMAT_VERSION));

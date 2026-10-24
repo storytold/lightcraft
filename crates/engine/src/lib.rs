@@ -1358,6 +1358,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 }
 
 #[cfg(test)]
+mod lightroom_fixture;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_album_order;
@@ -1411,6 +1413,8 @@ mod tests_libops;
 mod tests_library;
 #[cfg(test)]
 mod tests_lightroom_folder;
+#[cfg(test)]
+mod tests_lightroom_history;
 #[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]

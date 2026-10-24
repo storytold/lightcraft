@@ -77,8 +77,11 @@ Before changing records, the importer attempts to save source image records, dec
 verbatim develop settings, history, snapshots and collection content to compressed
 `Interop/lightroom-import-N.lca` recovery archives in the LightCraft library. Archiving is
 best-effort: a size limit or write failure produces a warning and does not prevent photo import.
-Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
-capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
+Unchanged source data reuses its existing archive. History-step and snapshot settings that Lightroom
+Classic 13 and later store compressed are decoded into it; one that can't be decoded, or past 32 MiB of
+them in one table, is archived without its settings, with a warning. Other opaque SQL BLOBs are skipped. Each archive is
+capped at 32 MiB (uncompressed and on disk); one past that with its history-step and snapshot settings is
+saved without them, with a warning, and skipped only when still too big. At most eight archives and 128 MiB total are
 retained. Oldest managed archives are retired; legacy `.json` archives remain untouched.
 `Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
 never overwritten.
