@@ -21,6 +21,15 @@
 
 ## 2026-10-23
 
+### Videos in the grid are no longer sent to the image decoders
+- A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
+  grid thumbnail (issue #2682). They can't read one, so each video failed with "unrecognised image format", showed a
+  "!" and was tried again whenever the library changed, filling the log. Its cell now keeps the plain placeholder until
+  LightCraft can show video frames. The background face search skips videos too, instead of failing on each one at
+  every launch. A video is recognised by its type, by the format `VIDEO` that Lightroom catalogs
+  give videos, or by its extension (`.mp4`, `.mov`, `.m4v`, `.avi`, `.mts`, `.m2ts`, `.3gp`, `.mkv`, `.webm`, `.wmv`,
+  `.mpg`, `.mpeg`).
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

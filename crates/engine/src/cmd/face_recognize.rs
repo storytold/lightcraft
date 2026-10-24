@@ -345,10 +345,12 @@ mod imp {
         current_with(s, cmd, true)
     }
 
-    /// Whether the background scan should look for faces in this photo: it is in the library, has no face regions at all
-    /// (nothing from XMP, nothing drawn or named, no earlier detection) and has not been searched yet.
+    /// Whether the background scan should look for faces in this photo: it is in the library, is not a video (the image
+    /// decoders can't read one, [`Photo::is_video`]), has no face regions at all (nothing from XMP, nothing drawn or
+    /// named, no earlier detection) and has not been searched yet.
     fn needs_search(s: &Session, photo: &Photo) -> bool {
         photo.in_library()
+            && !photo.is_video()
             && !photo.meta.regions.iter().any(|r| r.kind == RegionKind::Face)
             && !s.faces.scanned.contains(photo.id.0)
             && !s.faces.scan_failed.contains(&photo.id.0)
@@ -968,6 +970,22 @@ mod imp {
             assert!(!s.faces.scanned.contains(a.0), "not remembered as searched: the file may come back");
             assert!(!needs_search(&s, s.catalog.photo(a).unwrap()), "but not retried on every pass");
             assert!(!pending(&s, &[], true).contains(&a));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        /// A video went to the image decoders to be searched for faces and failed, once each launch: it is skipped, as the
+        /// grid's thumbnails skip it (issue #2682 is about those).
+        #[test]
+        fn a_video_is_not_searched_for_faces() {
+            let (mut s, d) = loaded("video");
+            let (a, _) = two_photos(&s);
+            let id = s.catalog.alloc_photo_id();
+            let path = d.join("clip.mp4").to_string_lossy().into_owned();
+            let clip = Photo::new(id, lightcraft_catalog::Source::File { path }, "clip.mp4", "VIDEO", 1920, 1080, "2026-10-24T00:00:00");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(clip) }).unwrap();
+            assert!(needs_search(&s, s.catalog.photo(a).unwrap()), "a photo is searched");
+            assert!(!needs_search(&s, s.catalog.photo(id).unwrap()));
+            assert!(!pending(&s, &[], true).contains(&id));
             let _ = std::fs::remove_dir_all(&d);
         }
 

@@ -1257,7 +1257,11 @@ impl crate::Session {
 
     /// A grid/filmstrip thumbnail job: the long edge is rounded up to one of [`THUMB_SIZES`]
     /// (≥ `long_edge`) and the result comes from / goes to the thumbnail cache (memory + disk).
+    /// `None` for a video: the image decoders can't read one, so none is asked to (issue #2682).
     pub fn thumb_job(&mut self, id: PhotoId, long_edge: usize) -> Option<RenderJob> {
+        if self.catalog.photo(id).is_some_and(|p| p.is_video()) {
+            return None;
+        }
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
         // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
