@@ -1,6 +1,6 @@
 use super::fs::{MoveFs, RealFs, folded_path, is_respelling, move_one, sidecars};
 use super::sidecar::{RetainedPacket, SidecarMove, advance_packets, note_companions, packet_aliases};
-use super::{HashMap, HashSet, Op, Path, PathBuf, SidecarNaming, Source};
+use super::{HashMap, HashSet, Op, Path, PathBuf, PhotoId, SidecarNaming, Source};
 
 /// Why [`move_file`] failed, and what it left behind.
 #[derive(Clone, Debug, PartialEq)]
@@ -149,14 +149,39 @@ pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::resu
     Ok(())
 }
 
-/// `op` with every `SetFile` a `Relink`: the same change to the catalog, but undo and redo move no file for it. For what is
-/// left of a rollback when the files it would move are already back where it puts the photos.
-pub(crate) fn without_file_moves(op: Op) -> Op {
-    match op {
-        Op::Batch { ops } => Op::Batch { ops: ops.into_iter().map(without_file_moves).collect() },
-        Op::SetFile { id, file_name, source } => Op::Relink { id, file_name, source, format: None },
-        op => op,
+/// `rest`, what is left of a rollback that failed part-way, once the files were moved back (`moved_back`, the result of
+/// `move_all` on the moves back): the `SetFile`s of a photo whose file did go back become `Relink`s, the same change to the
+/// catalog that moves no file; those of a photo whose file stayed where it went keep moving it. A photo is judged by the
+/// path its last `SetFile` points to, as `Session::file_moves` plans its move.
+pub(crate) fn rest_after_move_back(rest: Op, moved_back: &std::result::Result<(), BatchMoveError>) -> Op {
+    fn targets<'a>(op: &'a Op, out: &mut HashMap<PhotoId, &'a str>) {
+        match op {
+            Op::Batch { ops } => ops.iter().for_each(|op| targets(op, out)),
+            Op::SetFile { id, source: Source::File { path }, .. } => {
+                out.insert(*id, path);
+            }
+            _ => {}
+        }
     }
+    fn rewrite(op: Op, back: &HashSet<PhotoId>) -> Op {
+        match op {
+            Op::Batch { ops } => Op::Batch { ops: ops.into_iter().map(|op| rewrite(op, back)).collect() },
+            Op::SetFile { id, file_name, source } if back.contains(&id) => Op::Relink { id, file_name, source, format: None },
+            op => op,
+        }
+    }
+    let mut to = HashMap::new();
+    targets(&rest, &mut to);
+    // (on a failed move back, `stuck` holds the moves back that stayed done: those files are at their old path)
+    let back: HashSet<PhotoId> = to
+        .into_iter()
+        .filter(|(_, path)| match moved_back {
+            Ok(()) => true,
+            Err(e) => e.stuck.iter().any(|m| Path::new(&m.1) == Path::new(path)),
+        })
+        .map(|(id, _)| id)
+        .collect();
+    rewrite(rest, &back)
 }
 
 /// Final `SetFile` per photo (nested batches included), filtered by destination only afterward.

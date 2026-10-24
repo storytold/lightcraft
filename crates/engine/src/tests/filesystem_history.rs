@@ -682,3 +682,85 @@ fn what_is_left_of_a_failed_rename_moves_no_file_that_is_already_back() {
     assert_eq!(fs.listing(), before);
     assert_eq!(file_source(&s, 1), "/p/a.jpg");
 }
+
+/// The files go, the catalog fails on a later op and cannot put three photos back (each has an empty old file name, which
+/// `SetFile` refuses), then the files are moved back and one of the moves fails while undoing the move before it fails
+/// too: the first file stays back, the others stay where they went. What is left of the rollback must follow each file.
+fn three_photos_whose_old_names_are_empty(redo: bool, through_rename: bool) {
+    use crate::rename::tests::FakeFs;
+    let sep = |p: &str| p.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let store = lightcraft_catalog::MemStore::new();
+    let mut s = memory_library(&store);
+    let fs = FakeFs::new(false, &[("/p/a.jpg", "A"), ("/p/c.jpg", "C"), ("/p/e.jpg", "E")]);
+    let ops = [("/p/a.jpg", 1), ("/p/c.jpg", 2), ("/p/e.jpg", 3)]
+        .iter()
+        .map(|(path, id)| Op::AddPhoto { photo: Box::new(Photo::new(PhotoId(*id), Source::File { path: sep(path) }, "", "JPEG", 16, 16, "")) })
+        .chain(std::iter::once(Op::AddPhoto {
+            photo: Box::new(Photo::new(PhotoId(4), Source::File { path: sep("/p/g.jpg") }, "g.jpg", "JPEG", 16, 16, "")),
+        }))
+        .collect();
+    s.commit("Photos", Op::Batch { ops }).unwrap();
+    s.undo.clear();
+    // calls 0 to 2 move the files; then the first move back works, the second fails and undoing the first fails too
+    *fs.fail_renames.borrow_mut() = vec![4, 5];
+    let error = if through_rename {
+        // the fourth photo's new name is empty, which the catalog refuses
+        let plan = |id: u64, from: &str, to: &str, from_path: &str, to_path: &str| crate::rename::RenamePlan {
+            id,
+            from: from.into(),
+            to: to.into(),
+            from_path: Some(sep(from_path)),
+            to_path: Some(sep(to_path)),
+        };
+        let plans = [
+            plan(1, "", "b.jpg", "/p/a.jpg", "/p/b.jpg"),
+            plan(2, "", "d.jpg", "/p/c.jpg", "/p/d.jpg"),
+            plan(3, "", "f.jpg", "/p/e.jpg", "/p/f.jpg"),
+            plan(4, "g.jpg", "", "/p/g.jpg", "/p/g.jpg"),
+        ];
+        s.apply_rename_with(&fs, &plans).unwrap_err()
+    } else {
+        let to = |name: &str| Source::File { path: sep(&format!("/p/{name}")) };
+        let step = Op::Batch {
+            ops: vec![
+                Op::SetFile { id: PhotoId(1), file_name: "b.jpg".into(), source: to("b.jpg") },
+                Op::SetFile { id: PhotoId(2), file_name: "d.jpg".into(), source: to("d.jpg") },
+                Op::SetFile { id: PhotoId(3), file_name: "f.jpg".into(), source: to("f.jpg") },
+                Op::SetRating { id: PhotoId(9_999), rating: 1 },
+            ],
+        };
+        let entry = crate::UndoEntry { label: "Broken".into(), op: step, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() };
+        if redo {
+            s.redo.push(entry);
+        } else {
+            s.undo.push(entry);
+        }
+        file_history_step(&mut s, &fs, redo).unwrap_err()
+    };
+    let moved = |list: Vec<(String, String)>| list.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+    assert_eq!(moved(fs.listing()), ["/p/b.jpg", "/p/d.jpg", "/p/e.jpg"], "two files stayed where they went, one is back: {error}");
+    assert!(error.to_string().contains("could not all be moved back"), "{error}");
+    // what is left of the rollback follows every file where it is: the one that went back points at it, the others still move
+    let step = if through_rename || redo { s.undo.last() } else { s.redo.last() };
+    let Some(Op::Batch { ops }) = step.map(|e| e.op.clone()) else { panic!("what is left is a batch") };
+    let kinds: Vec<(&str, u64)> = ops
+        .iter()
+        .map(|op| match op {
+            Op::Relink { id, .. } => ("relink", id.0),
+            Op::SetFile { id, .. } => ("move", id.0),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, [("relink", 3), ("move", 2), ("move", 1)], "{ops:?}");
+}
+
+#[test]
+fn what_is_left_of_a_rollback_follows_each_file_as_far_as_it_went_back() {
+    three_photos_whose_old_names_are_empty(false, false);
+    three_photos_whose_old_names_are_empty(true, false);
+}
+
+#[test]
+fn what_is_left_of_a_failed_rename_follows_each_file_as_far_as_it_went_back() {
+    three_photos_whose_old_names_are_empty(false, true);
+}

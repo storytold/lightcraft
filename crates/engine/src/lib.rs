@@ -950,7 +950,17 @@ impl Session {
                     self.pending_log.push(entry.op.clone());
                 }
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-                if let Err(mut be) = rename::move_all(fs, &back) {
+                let moved_back = rename::move_all(fs, &back);
+                // (what is left of a rollback that failed part-way must follow the files as far as they went back,
+                // not move them again)
+                let e = match e {
+                    EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => EngineError::Catalog(CatalogError::PartlyApplied {
+                        cause,
+                        remaining: Box::new(rename::rest_after_move_back(*remaining, &moved_back)),
+                    }),
+                    e => e,
+                };
+                if let Err(mut be) = moved_back {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
                     let moved = format!("the files could not all be moved back: {}", be.message);
                     return Err(match e {
@@ -963,13 +973,7 @@ impl Session {
                     });
                 }
                 undo_folder();
-                Err(match e {
-                    // (the files are back: what is left of the rollback must point the photos at them, not move them)
-                    EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => {
-                        EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining: Box::new(rename::without_file_moves(*remaining)) })
-                    }
-                    e => e,
-                })
+                Err(e)
             }
         }
     }

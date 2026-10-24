@@ -1,5 +1,5 @@
 use super::fs::{MoveFs, RealFs, folded_path};
-use super::moves::{BatchMoveError, move_all, set_file_ops_to};
+use super::moves::{BatchMoveError, move_all, rest_after_move_back, set_file_ops_to};
 use super::sidecar::{PacketVersion, retry_sidecars, retry_sidecars_for_paths};
 use super::tokens::{expand, split_ext};
 use super::{CatalogError, EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
@@ -208,14 +208,18 @@ impl Session {
             && let Err(err) = self.commit(&label(n), op)
         {
             let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-            if let Err(e) = move_all(fs, &back) {
-                return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
-            }
+            let moved_back = move_all(fs, &back);
             if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
-                && let Some(step) = self.undo.last_mut()
+                && let Some(rest) = self.undo.last().map(|step| step.op.clone())
             {
-                // (the files are back: what is left of the rollback must point the photos at them, not move them)
-                step.op = without_file_moves(std::mem::replace(&mut step.op, Op::Batch { ops: Vec::new() }));
+                // (what is left of the rollback must follow the files as far as they went back, not move them again)
+                let rest = rest_after_move_back(rest, &moved_back);
+                if let Some(step) = self.undo.last_mut() {
+                    step.op = rest;
+                }
+            }
+            if let Err(e) = moved_back {
+                return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
             }
             return Err(err);
         }
