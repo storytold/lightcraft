@@ -16,6 +16,7 @@ use candle_nn::var_builder::SimpleBackend;
 use crate::{Error, Result};
 
 struct Entry {
+    dtype: DType,
     shape: Vec<usize>,
     start: u64,
     end: u64,
@@ -49,7 +50,12 @@ impl Weights {
             }
             let dtype = match v.get("dtype").and_then(|d| d.as_str()) {
                 Some("F32") => DType::F32,
-                other => return Err(Error::Model(format!("{name}: unsupported dtype {other:?} (the SAM 3 checkpoint is F32)"))),
+                Some("F16") => DType::F16,
+                Some("BF16") => DType::BF16,
+                // integer buffers (BatchNorm's `num_batches_tracked`, index tables) are listed
+                // but never read as weights
+                Some("I64") => DType::I64,
+                other => return Err(Error::Model(format!("{name}: unsupported dtype {other:?} (expected F32, F16 or BF16)"))),
             };
             let shape: Vec<usize> = v
                 .get("shape")
@@ -67,7 +73,7 @@ impl Weights {
             if (8 + n).checked_add(end).is_none_or(|e| e > file_len) {
                 return Err(Error::Model(format!("{}: tensor {name} lies outside the file (incomplete or damaged download?)", path.display())));
             }
-            entries.insert(name, Entry { shape, start, end });
+            entries.insert(name, Entry { dtype, shape, start, end });
         }
         Ok(Arc::new(Self { file: Mutex::new(file), entries, data_start: 8 + n }))
     }
@@ -81,7 +87,7 @@ impl Weights {
         self.entries.get(name).map(|e| e.shape.as_slice())
     }
 
-    /// Tensor `name` as stored, on the CPU.
+    /// Tensor `name` on the CPU, as `f32` (F16 and BF16 are converted).
     pub fn read(&self, name: &str) -> Result<Tensor> {
         let e = self.entries.get(name).ok_or_else(|| Error::Model(format!("missing tensor `{name}`")))?;
         // checked against the file's length in `open`
@@ -92,8 +98,14 @@ impl Weights {
             f.seek(SeekFrom::Start(self.data_start + e.start)).map_err(|err| Error::Model(format!("{name}: {err}")))?;
             f.read_exact(&mut bytes).map_err(|err| Error::Model(format!("{name}: {err}")))?;
         }
-        let v: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
-        Ok(Tensor::from_vec(v, e.shape.as_slice(), &Device::Cpu)?)
+        match e.dtype {
+            DType::F32 => {
+                let v: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+                Ok(Tensor::from_vec(v, e.shape.as_slice(), &Device::Cpu)?)
+            }
+            DType::F16 | DType::BF16 => Ok(Tensor::from_raw_buffer(&bytes, e.dtype, e.shape.as_slice(), &Device::Cpu)?.to_dtype(DType::F32)?),
+            other => Err(Error::Model(format!("{name}: a {other:?} tensor, not weights"))),
+        }
     }
 }
 

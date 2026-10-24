@@ -279,6 +279,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
+        Dialog::AiModel { .. } => "Download an AI Model?",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
         Dialog::ViewOptions => "View Options",
@@ -1135,6 +1136,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 // scrolls: its tab bar stays put and its pages scroll by themselves)
                 Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
+                Dialog::AiModel { model, error, .. } => ai_model_body(app, ui, model, error.as_deref()),
                 Dialog::KeywordTag {
                     editing,
                     name,
@@ -1388,10 +1390,20 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let (sam_installed, sam_running, sam_failed) = (sam.installed(), sam.download_status().running, sam.download_status().error.is_some());
                 // no download location in this build: nothing to offer but the manual install
                 let sam_nowhere = sam_by_hand(sam);
+                let ai = match &dlg {
+                    Dialog::AiModel { model, .. } => {
+                        let seg = &app.session.segmenter;
+                        let d = seg.model_download_status(model);
+                        Some((seg.model_installed(model), d.running, d.error.is_some()))
+                    }
+                    _ => None,
+                };
                 let cancel = match &dlg {
                     Dialog::SamModel { .. } if sam_running || sam_installed || sam_nowhere => "Close",
                     Dialog::SamModel { .. } => "Not Now",
                     Dialog::LightroomResult { .. } => "Close",
+                    Dialog::AiModel { .. } if ai.is_some_and(|(installed, running, _)| installed || running) => "Close",
+                    Dialog::AiModel { .. } => "Not Now",
                     _ => "Cancel",
                 };
                 let add_label;
@@ -1429,6 +1441,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
                     Dialog::SamModel { .. } => "Download",
                     Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
+                    Dialog::AiModel { then: Some(_), .. } if ai.is_some_and(|(installed, _, _)| installed) => "Continue",
+                    Dialog::AiModel { .. } if ai.is_some_and(|(installed, running, _)| installed || running) => "",
+                    Dialog::AiModel { error, .. } if error.is_some() || ai.is_some_and(|(_, _, failed)| failed) => "Try Again",
+                    Dialog::AiModel { .. } => "Download",
                     _ if informational => "Close",
                     _ => "OK",
                 };
@@ -1540,8 +1556,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.toast(ctx, e)
             }
             // the SAM 3 dialog stays open to show the download (or why it can't start)
-            Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
-                if let Dialog::SamModel { error, .. } = &mut dlg {
+            Err(e) if matches!(dlg, Dialog::SamModel { .. } | Dialog::AiModel { .. }) => {
+                if let Dialog::SamModel { error, .. } | Dialog::AiModel { error, .. } = &mut dlg {
                     *error = Some(e);
                 }
             }
@@ -1574,7 +1590,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.toast(ctx, e);
             }
             Ok(_) if keeps_open(app, &dlg) => {
-                if let Dialog::SamModel { error, .. } = &mut dlg {
+                if let Dialog::SamModel { error, .. } | Dialog::AiModel { error, .. } = &mut dlg {
                     *error = None;
                 }
             }
@@ -1763,7 +1779,11 @@ pub fn fmt_gap(v: f64) -> String {
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
 /// downloads).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
-    matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+    match dlg {
+        Dialog::SamModel { .. } => !app.session.segmenter.installed(),
+        Dialog::AiModel { model, .. } => !app.session.segmenter.model_installed(model),
+        _ => false,
+    }
 }
 
 /// No SAM 3 model, no download running and nowhere to download it from: installing it by hand is
@@ -1801,6 +1821,66 @@ pub(crate) fn show_model_folder(app: &mut LightcraftApp) -> Result<serde_json::V
     }
     open(path, "")?;
     Ok(json!({"path": path}))
+}
+
+/// The dialog for an openly licensed AI model: what it does, its size and licence, and the download's progress.
+fn ai_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, model: &str, error: Option<&str>) {
+    let t = Tokens::get(ui.ctx());
+    let seg = &app.session.segmenter;
+    let Some(m) = seg.model_status().into_iter().find(|m| m.id == model) else {
+        ui.label(crate::i18n::tr("AI masks are not available in this build."));
+        return;
+    };
+    ui.label(egui::RichText::new(format!("{} — {}", m.title, crate::i18n::tr(&m.purpose))).font(t.semibold(13.0)).color(t.text_label));
+    if m.installed {
+        ui.label(crate::i18n::tr("The model is installed: these AI masks are ready."));
+        return;
+    }
+    ui.label(crate::i18n::tr(
+        "This AI model isn't part of LightCraft, and everything else works without it: until it is installed, this mask is made by a simpler, approximate method.",
+    ));
+    let mb = |b: u64| b as f64 / 1e6;
+    let dir = m.dir.clone().unwrap_or_default();
+    ui.label(crate::i18n::tr_format!("A one-time download of about {mb} MB, saved in {dir}", mb = format!("{:.0}", mb(m.size_bytes)), dir = dir));
+    ui.label(
+        egui::RichText::new(crate::i18n::tr_format!(
+            "Licence: {licence}, an open-source licence that allows any use, including commercial work.",
+            licence = m.license
+        ))
+        .color(t.text_label),
+    );
+    if m.licence_pending {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "Test build: whether this model's training data allows LightCraft to offer it is pending a maintainer decision.",
+            ))
+            .color(t.text_dim),
+        );
+    }
+    let r = ui.link(crate::i18n::tr("Read the licence")).on_hover_text(&m.license_url);
+    crate::widgets::register(ui.ctx(), "link:aiModelLicense", r.rect);
+    if r.clicked() {
+        let _ = crate::links::open(app, &m.license_url);
+    }
+    let d = m.download;
+    if d.running {
+        ui.add_space(4.0);
+        let frac = if d.total > 0 { d.done as f64 / d.total as f64 } else { 0.0 };
+        let text = format!("{:.0} / {:.0} MB", mb(d.done), mb(d.total));
+        let r = ui.add(egui::ProgressBar::new(frac as f32).text(text));
+        crate::widgets::register(ui.ctx(), "progress:aiModelDownload", r.rect);
+        let r = ui.button(crate::i18n::tr("Cancel Download"));
+        crate::widgets::register(ui.ctx(), "button:aiModelCancel", r.rect);
+        if r.clicked() {
+            app.session.segmenter.cancel_model_download(model);
+        }
+        ui.label(egui::RichText::new(crate::i18n::tr("You can close this: the download continues, and resumes if interrupted.")).color(t.text_dim));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    if let Some(e) = error.map(str::to_string).or(d.error) {
+        ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("The download didn't work:"))).color(egui::Color32::from_rgb(230, 90, 80)));
+    }
 }
 
 /// The SAM 3 dialog: what the model is, its size and licence, and the download's progress.
@@ -1912,6 +1992,19 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
             }
             Ok(serde_json::Value::Null)
+        }
+        Dialog::AiModel { model, then, .. } => {
+            if app.session.segmenter.model_installed(model) {
+                if let Some((kind, op)) = then {
+                    crate::panels::masking::begin_ai(app, kind, op)?;
+                }
+                return Ok(serde_json::Value::Null);
+            }
+            let r = app.run("ai.models.download", json!({"id": model, "acknowledged": true}));
+            if r.is_ok() && !app.ui.ai_downloading.contains(model) {
+                app.ui.ai_downloading.push(model.clone());
+            }
+            r
         }
         Dialog::SamModel { then, .. } => {
             if app.session.segmenter.installed() {

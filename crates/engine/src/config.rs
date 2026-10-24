@@ -131,12 +131,19 @@ fn sam3_dir(var: Option<std::ffi::OsString>, config: Option<PathBuf>) -> Option<
     var.filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config.map(|d| d.join("models").join("sam3")))
 }
 
+/// Where the openly licensed AI mask models are kept (each in its own subfolder): `$LIGHTCRAFT_AI_MODELS_DIR` if
+/// set, else `<config>/models`.
+pub fn default_ai_models_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_AI_MODELS_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("models")))
+}
+
 impl Session {
     /// Look for the SAM 3 model in the shared default folder ([`default_sam3_dir`]), and for the user's
     /// download mirrors in `<config>/models/sam3-mirrors.txt`.
     pub fn with_default_sam3_model(mut self) -> Self {
         self.segmenter.dir = default_sam3_dir();
         self.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
+        self.segmenter.models_root = default_ai_models_dir();
         self
     }
 

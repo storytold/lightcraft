@@ -16,29 +16,67 @@
 //! This crate is therefore licensed under the Apache License 2.0 only (not the MIT option of
 //! the rest of LightCraft). No UI dependencies (L3).
 //!
+//! Two smaller models complement it: [`scene`] (EoMT-S, COCO panoptic segmentation: sky,
+//! people, vegetation, … and person instances, in one pass) and [`depth`] (Depth Anything V2
+//! Small, relative depth), both DINOv2-style ViTs sharing their layers; [`grid`] holds the
+//! image and grid resampling they need.
+//! [`Sam2`] runs SAM 2.1 (Hiera, `facebook/sam2.1-hiera-tiny`, Apache-2.0 weights) for point
+//! prompts: a smaller, faster alternative to SAM 3's click path, through the same mask decoder.
+//!
 //! [`fetch`] downloads the model, only when the user asks for it (from configurable mirrors,
 //! verified before use). Nothing in LightCraft requires the model: without it, AI masks report
 //! that it isn't installed and everything else works.
 //!
 //! Modified work (Apache License 2.0, §4(b)): ported by the LightCraft contributors in 2026 from
-//! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`src/transformers/models/sam3` and `sam3_tracker`), Copyright The HuggingFace
+//! the Python/PyTorch SAM 3 and SAM 2 code of Hugging Face Transformers (`src/transformers/models/sam3`, `sam3_tracker` and `sam2`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod accel;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod birefnet;
+#[cfg(not(target_arch = "wasm32"))]
 mod clip;
+#[cfg(not(target_arch = "wasm32"))]
+mod cpu;
+#[cfg(not(target_arch = "wasm32"))]
+mod deform;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod depth;
 #[cfg(not(target_arch = "wasm32"))]
 mod detector;
 #[cfg(not(target_arch = "wasm32"))]
+mod dino;
+#[cfg(not(target_arch = "wasm32"))]
+mod feat;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fetch;
+pub mod grid;
+#[cfg(not(target_arch = "wasm32"))]
+mod hiera;
 pub mod mask;
+pub mod matte;
+pub mod mediapipe;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod models;
 #[cfg(not(target_arch = "wasm32"))]
 mod neck;
 #[cfg(not(target_arch = "wasm32"))]
 mod nn;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod people;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam2;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod scene;
+#[cfg(not(target_arch = "wasm32"))]
+mod swin;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tflite;
 pub mod tokenizer;
 #[cfg(not(target_arch = "wasm32"))]
 mod tracker;
@@ -57,7 +95,11 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use tracker::Click;
+pub use birefnet::{BIREFNET_SIDE, BiRefNet, is_birefnet_dir};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sam2::{SAM2_INPUT, SAM2_MASK_SIDE, Sam2, Sam2Encoded, is_sam2_dir};
+#[cfg(not(target_arch = "wasm32"))]
+pub use tracker::{Click, Decoded};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -65,6 +107,17 @@ pub enum Error {
     Model(String),
     #[error("SAM 3 model files not found in {0} (expected model.safetensors, vocab.json, merges.txt)")]
     Missing(PathBuf),
+    #[error("BiRefNet model: {0}")]
+    BiRefNet(String),
+    #[error("BiRefNet model files not found in {0} (expected model.safetensors)")]
+    BiRefNetMissing(PathBuf),
+    /// A self-explanatory message (the scene and depth models, image helpers).
+    #[error("{0}")]
+    Message(String),
+    #[error("SAM 2 model: {0}")]
+    Sam2(String),
+    #[error("SAM 2 model files not found in {0} (expected model.safetensors and config.json)")]
+    Sam2Missing(PathBuf),
     #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     Candle(#[from] candle_core::Error),

@@ -19,6 +19,7 @@ log = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 lightcraft-fetch = { workspace = true }
+rayon = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { workspace = true, features = ["metal"] }
@@ -27,3 +28,4 @@ candle-nn = { workspace = true, features = ["metal"] }
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+image = { workspace = true }
