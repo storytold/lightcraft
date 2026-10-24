@@ -62,5 +62,7 @@ lightcraft-testkit = { workspace = true }
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
 lightcraft-heif = { workspace = true, features = ["testdata"] }
+# Synthetic VC-5 streams (the GoPro GPR import test).
+lightcraft-raw = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 lightcraft-tiff = { workspace = true }
