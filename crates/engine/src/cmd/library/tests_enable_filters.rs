@@ -2,7 +2,7 @@
 use lightcraft_catalog::{Filter, Flag, Op, Photo, PhotoId, Source};
 use serde_json::json;
 
-use crate::{LibrarySource, Result, Session};
+use crate::{LibrarySource, Result, Selection, Session};
 
 fn session() -> Result<Session> {
     let mut s = Session::new();
@@ -151,4 +151,39 @@ fn a_keyword_renamed_while_off_is_followed_by_the_filter_put_aside() {
     assert_eq!(r["enabled"], json!(true));
     assert_eq!(s.filter.keyword.as_deref(), Some("dog"), "the put-aside filter follows the rename");
     assert_eq!(s.visible().len(), 1);
+}
+
+/// Two albums: the first holds photo 1, the second photo 3.
+fn session_with_two_albums() -> (Session, u64, u64) {
+    let mut s = session().unwrap();
+    let mut make = |name: &str, ids: &[u64]| {
+        s.selection = Selection { ids: ids.iter().map(|i| PhotoId(*i)).collect(), active: None };
+        s.execute("album.create", &json!({"name": name, "addSelected": true})).unwrap()["id"].as_u64().unwrap()
+    };
+    let (x, a) = (make("X", &[1]), make("A", &[3]));
+    (s, x, a)
+}
+
+#[test]
+fn an_album_filter_does_not_come_back_over_the_album_now_shown() {
+    let (mut s, x, a) = session_with_two_albums();
+    s.execute("library.filter", &json!({"album": x, "rating": 4})).unwrap();
+    assert_eq!(s.visible().len(), 1, "the album filter hides photo 2, or off and on would look alike");
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": a})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(s.filter.rating, 4, "the rest of the filter is back");
+    assert_eq!(s.filter.album, None, "one album at a time: the one shown wins, as for a folder");
+    // the old album must not narrow the next source, with no chip to show it
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    assert_eq!(s.visible().len(), 2, "photos 1 and 2 have four stars or more");
+}
+
+#[test]
+fn an_album_filter_comes_back_when_no_album_is_shown() {
+    let (mut s, x, _) = session_with_two_albums();
+    s.execute("library.filter", &json!({"album": x})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(s.filter.album.map(|a| a.0), Some(x));
 }
