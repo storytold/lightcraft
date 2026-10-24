@@ -1326,10 +1326,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.tool = "brush".into();
                 }
                 "linear" | "radial" => {
+                    // {op?: add | subtract | intersect}: nothing is made yet; the next drag on the photo
+                    // draws a new mask (or, with `op`, a component of the selected one), as in Lightroom
+                    // (#2311). `mask.add` / `mask.addComponent` place one without a drag.
+                    let op = p.get("op").and_then(Value::as_str);
+                    if let Some(op) = op.filter(|op| !matches!(*op, "add" | "subtract" | "intersect")) {
+                        return Some(Err(format!("{s}: unknown op `{op}` (add|subtract|intersect)")));
+                    }
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
-                    app.ui.tool = tool.into();
-                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                    app.ui.tool = op.map_or_else(|| tool.to_string(), |op| format!("{tool}:{op}"));
+                    app.toast(&ctx, crate::i18n::tr("Drag on the photo to draw the gradient · Esc cancels"));
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;

@@ -142,8 +142,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         "brush" => {
                             let _ = app.run("tool.brush", json!({"new": true}));
                         }
+                        // picked with the pointer, a drag on the photo draws it (#2311); by keyboard
+                        // or a screen reader, it is placed at once and its handles move with the arrows
+                        "linear" | "radial" if resp.clicked_by(egui::PointerButton::Primary) => {
+                            let _ = app.run(&format!("tool.{kind}"), json!({}));
+                        }
                         "linear" | "radial" => {
-                            app.ui.tool = kind.to_string();
+                            app.ui.tool.clear();
                             let _ = app.run("mask.add", json!({"kind": kind}));
                         }
                         k => {
@@ -866,6 +871,9 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         if b.clicked() {
             if kind == "brush" {
                 let _ = app.run("tool.brush", json!({"op": op}));
+            } else if matches!(kind, "linear" | "radial") && b.clicked_by(egui::PointerButton::Primary) {
+                // drawn by dragging on the photo, as from Create New Mask
+                let _ = app.run(&format!("tool.{kind}"), json!({"op": op}));
             } else {
                 let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
             }

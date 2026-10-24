@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** patch (gradients drawn by dragging, #2311; a gradient tool picked by keyboard: a New gradient point places it) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -113,7 +113,9 @@ and Space, and the app's other shortcuts still work.
 - Remove: each spot's target and source; a "New spot" point that starts at the centre, moves
   with the arrows, and turns into a spot of the brush's size when you press Return.
 - Masking: the four edges and the rotation handle of a radial gradient, the start and end of a
-  linear one, and each mask pin (moving one selects its mask).
+  linear one, and each mask pin (moving one selects its mask). A pointer draws a new gradient by
+  dragging on the photo (#2311); by keyboard the Linear and Radial tiles place one at once, and
+  with the tool picked (L / R) a "New linear / radial gradient" point places it with Return.
 
 Focus order: the audit now also counts any widget that takes the focus or a click, whatever its
 role. That found about 50 hand-drawn icons, tiles and rows with no name: top-bar icons, flags and
@@ -148,6 +150,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | patch | Accessibility: gradients are drawn by dragging (#2311); by keyboard the Linear / Radial tiles still place one at once, and a New gradient point (Return) places one once L / R picked the tool |
 | 2026-10-15 | patch | Context menus: a right-click elsewhere on the same widget while its menu is open moves the menu to the pointer; before it flashed at the new spot and closed (issue #1877); every site uses `widgets::context_menu`; 70% unchanged |
 | 2026-10-23 | patch | KEYC-RATING: ⌘L / Ctrl+L (Library ▸ Enable Filters) switches the filter off and on, restoring it as it was |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); ⌘L is the filter-bar key left |

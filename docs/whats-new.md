@@ -245,6 +245,19 @@
   Auto Advance jumped back to the first photo of the view. With Auto Advance on, or with Shift+0–5, you land on the
   photo after it: no photo is skipped.
 
+### Gradients go where you drag
+- Picking Linear or Radial under Create New Mask, or pressing L or R, no longer drops a gradient at the top or the
+  centre of the photo (issue #2311). The pointer becomes a crosshair and you drag on the photo, as in Lightroom: a
+  linear gradient runs from where you press (full effect) to where you let go, which also sets its angle; a radial
+  one is centred where you press and reaches the pointer. Hold ⇧ to keep a linear gradient horizontal or vertical,
+  or to make a radial one a circle, and ⌥ (Alt) to draw a linear gradient out from where you press in both
+  directions, or a radial one from a corner. Linear and Radial Gradient in a mask's + and − menus work the same
+  way. Esc puts the tool down without making anything, and Edit ▸ Undo removes a drawn gradient in one step. While
+  the tool is picked, a click that doesn't drag only shows how to draw the gradient, and the handles of the masks
+  already on the photo wait until you have drawn it or pressed Esc. By keyboard, the Linear and Radial tiles still
+  place a gradient at once, and once L or R picked the tool, a "New gradient" point on the photo places one with
+  Return.
+
 ## 2026-10-18
 
 ### Thumbnails of Lightroom HDR and panorama merges in a second
