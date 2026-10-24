@@ -72,7 +72,7 @@ pub struct Filter {
     pub rule_set: Option<crate::RuleSet>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SortKey {
     #[default]
@@ -485,11 +485,12 @@ impl Catalog {
         let prepared = filter.prepare();
         // `within` only decides for the few kept photos: worked out per photo, not hashed
         let within_prepared = within.prepare_one();
-        let mut v: Vec<&Photo> = self
-            .photos()
-            .map(|p| p.as_ref())
-            .filter(|p| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared)))
-            .collect();
+        let wanted = |p: &Photo| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared));
+        // the whole library is kept in order ([`crate::order`]): what matches is picked out of it, not sorted
+        if let Some(ids) = self.pick_in_order(sort, wanted) {
+            return ids;
+        }
+        let mut v: Vec<&Photo> = self.photos().map(|p| p.as_ref()).filter(|p| wanted(p)).collect();
         v.sort_by(|a, b| sort.order(a, b));
         v.into_iter().map(|p| p.id).collect()
     }
