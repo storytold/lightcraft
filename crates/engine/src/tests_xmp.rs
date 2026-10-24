@@ -288,6 +288,80 @@ fn a_crs_change_after_a_read_is_taken_with_auto_write_on() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar with keywords as Lightroom Classic and darktable write them: names in `dc:subject`,
+/// paths in `lr:hierarchicalSubject`.
+const KEYWORDED: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmp:Rating="0" crs:Exposure2012="+0.40">
+   <dc:subject><rdf:Bag><rdf:li>Places</rdf:li><rdf:li>Italy</rdf:li><rdf:li>Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Italy|Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#;
+
+/// Saving a sidecar keeps keywords where other applications look for them: names in `dc:subject`
+/// and paths in `lr:hierarchicalSubject`, each property once. LightCraft 0.13 wrote the paths into
+/// `dc:subject` (`Places|Italy|Rome`), so after any change, even a rating, a search for "Rome" in
+/// another DAM no longer found the photo. A sidecar written that way is put right on the next save,
+/// and keywords added here keep their hierarchy when the sidecar is read back.
+#[test]
+fn saving_a_sidecar_writes_keyword_names_flat_and_paths_hierarchical() {
+    let src = temp_dir("keywords-flat");
+    write_png(&src.join("rome.png"), 8);
+    let sidecar = src.join("rome.xmp");
+    std::fs::write(&sidecar, KEYWORDED).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset"]);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+
+    let lists = |text: &str| {
+        let x = lightcraft_meta::parse_xmp(text).unwrap();
+        (x.metadata.keywords, x.metadata.hierarchical_keywords)
+    };
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    let (flat, hierarchical) = lists(&text);
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset"], "names, not paths, in dc:subject:\n{text}");
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset"], "{text}");
+    assert_eq!(text.matches("<dc:subject>").count(), 1, "{text}");
+    assert_eq!(text.matches("lr:hierarchicalSubject>").count(), 2, "one lr:hierarchicalSubject, opened and closed:\n{text}");
+    assert!(text.contains("<xmp:Rating>3</xmp:Rating>") && text.contains(r#"crs:Exposure2012="+0.40""#), "{text}");
+
+    // a keyword added here keeps its hierarchy through the file
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["Places|Italy|Rome", "sunset", "people|Ada"]})).unwrap();
+    let (flat, hierarchical) = lists(&std::fs::read_to_string(&sidecar).unwrap());
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset", "people", "Ada"]);
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset", "people|Ada"]);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": []})).unwrap();
+    let text = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(!text.contains("dc:subject") && !text.contains("lr:hierarchicalSubject"), "clearing keywords clears both lists:\n{text}");
+    s.execute("edit.undo", &json!({})).unwrap(); // undo rewrites the sidecar with the three keywords
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset", "people|Ada"], "read back as written");
+
+    // a sidecar from LightCraft 0.13 (paths in dc:subject) reads as paths and is written properly
+    let old = KEYWORDED
+        .replace("<rdf:li>Places</rdf:li><rdf:li>Italy</rdf:li><rdf:li>Rome</rdf:li>", "<rdf:li>Places|Italy|Rome</rdf:li>")
+        .replace("<lr:hierarchicalSubject><rdf:Bag><rdf:li>Places|Italy|Rome</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>", "");
+    std::fs::write(&sidecar, old).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Places|Italy|Rome", "sunset"]);
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    let (flat, hierarchical) = lists(&std::fs::read_to_string(&sidecar).unwrap());
+    assert_eq!(flat, ["Places", "Italy", "Rome", "sunset"]);
+    assert_eq!(hierarchical, ["Places|Italy|Rome", "sunset"]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Lightroom's default profiles (`Adobe Standard`, `Adobe Color`) are named by nearly every sidecar
 /// and our own starting look stands in for them: importing one gives no camera-profile warning.
 #[test]

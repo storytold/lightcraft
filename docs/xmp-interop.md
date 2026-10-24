@@ -22,7 +22,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Title / caption / copyright / creator | `dc:title` / `dc:description` / `dc:rights` / `dc:creator` |
 | Copyright status | `xmpRights:Marked` (`True` copyrighted, `False` public domain, absent = unknown) |
 | Rights usage terms / copyright info URL | `xmpRights:UsageTerms` / `xmpRights:WebStatement` |
-| Keywords | `dc:subject` |
+| Keywords | `dc:subject` (names: `Places`, `Italy`, `Rome`) and, when any keyword has levels, `lr:hierarchicalSubject` (paths: `Places\|Italy\|Rome`, with the flat keywords too) |
 | Capture time, GPS | `exif:DateTimeOriginal`, `photoshop:DateCreated`, `exif:GPSLatitude`/`GPSLongitude` |
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
@@ -70,14 +70,14 @@ A sidecar may already hold another application's data — e.g. its `crs:` develo
 the only copy of those edits outside that application's catalog. Saving never drops it:
 
 - LightCraft **owns** the properties in the table above: `xmp:Rating`, `xmp:Label`, `dc:title`, `dc:description`,
-  `dc:rights`, `dc:creator`, `dc:subject`, `Iptc4xmpCore:Location`, `Iptc4xmpCore:AltTextAccessibility`,
+  `dc:rights`, `dc:creator`, `dc:subject`, `lr:hierarchicalSubject`, `Iptc4xmpCore:Location`, `Iptc4xmpCore:AltTextAccessibility`,
   `Iptc4xmpCore:ExtDescrAccessibility`, `photoshop:City`/`State`/`Country`, `xmpRights:Marked`/`UsageTerms`/
   `WebStatement` and everything in `lc:`. They are replaced on every save, and removed when LightCraft has no value
   (clearing a title in LightCraft clears it in the file). All of them are read back on import, so the library starts
   from what the sidecar said.
 - The **capture time** (`exif:DateTimeOriginal`, `photoshop:DateCreated`) and **GPS** (`exif:GPSLatitude`,
   `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay.
-- **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, `lr:hierarchicalSubject`, unknown
+- **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, the rest of `lr:`, unknown
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.
@@ -88,8 +88,13 @@ the only copy of those edits outside that application's catalog. Saving never dr
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.
 
-Limits: LightCraft writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
-it was and may still list keywords removed in LightCraft. LightCraft doesn't write `crs:`: the other application's
+Keywords are written the way Lightroom Classic and darktable write them, so other applications can search them: names
+in `dc:subject`, paths in `lr:hierarchicalSubject` (`keywords::to_file`; read back by `keywords::from_file`, which gives
+the same keywords). No export option applies to a sidecar, so no keyword is left out and no synonym added. Sidecars
+from LightCraft 0.13 and older have paths in `dc:subject`; they still read as paths, and the next save writes them this
+way.
+
+Limits: LightCraft doesn't write `crs:`: the other application's
 develop settings stay as that application left them, next to LightCraft's own (`lc:settings`, which LightCraft reads
 first).
 

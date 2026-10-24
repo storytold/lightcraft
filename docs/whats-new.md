@@ -2,6 +2,14 @@
 
 ## 2026-10-24
 
+### Sidecar keywords stay searchable in other applications
+- Saving an XMP sidecar wrote each keyword's path into `dc:subject`, so after any change, even a star rating, a
+  photo keyworded `Places|Italy|Rome` listed `Places|Italy|Rome` there instead of `Places`, `Italy` and `Rome`,
+  and a search for "Rome" in Lightroom, darktable, digiKam or another DAM no longer found it. Sidecars now get the
+  names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
+  reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
+  saved.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
