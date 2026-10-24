@@ -354,6 +354,17 @@ pub fn preview_stamp(preview_only: &Option<String>) -> String {
 }
 
 impl Photo {
+    /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
+    /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
+    pub fn trim_history(&mut self) -> usize {
+        let n = self.history.len().saturating_sub(crate::HISTORY_LIMIT);
+        if n > 0 {
+            self.history.drain(..n);
+            self.history_cursor = self.history_cursor.map(|c| c.saturating_sub(n));
+        }
+        n
+    }
+
     /// The History step the settings are at (the cursor, clamped to the list; `None` = no history).
     pub fn history_index(&self) -> Option<usize> {
         let last = self.history.len().checked_sub(1)?;

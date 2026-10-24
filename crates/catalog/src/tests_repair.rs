@@ -127,6 +127,33 @@ fn id_counters_are_moved_past_the_ids_in_use() {
     assert!(c.apply(Op::AddPhoto { photo: Box::new(p) }).is_err(), "the id is taken: refused, not overwritten");
 }
 
+/// History was bounded only where an edit adds a step, so a snapshot holding more steps kept
+/// every one in memory on each load (#2579). The newest are kept and the cursor stays on its step.
+#[test]
+fn history_beyond_the_limit_is_trimmed_on_load() {
+    let (mut c, ids) = sound();
+    let extra = HISTORY_LIMIT * 5;
+    let step = HistoryStep { label: "s0".into(), settings: std::sync::Arc::new(lightcraft_develop::DevelopSettings::default()) };
+    c.apply(Op::PushHistory { id: ids[0], step }).unwrap();
+    c.apply(Op::SetHistoryCursor { id: ids[0], cursor: Some(extra - 3) }).unwrap();
+    let (loaded, report) = load_edited(&c, |v| {
+        let history = &mut v["photos"][ids[0].0.to_string()]["history"];
+        let one = history[0].clone();
+        *history = (0..extra)
+            .map(|i| {
+                let mut s = one.clone();
+                s["label"] = format!("s{i}").into();
+                s
+            })
+            .collect();
+    });
+    let p = loaded.photo(ids[0]).unwrap();
+    assert_eq!(p.history.len(), HISTORY_LIMIT);
+    assert_eq!(p.history[0].label, format!("s{}", extra - HISTORY_LIMIT));
+    assert_eq!(p.history_index().map(|i| p.history[i].label.clone()), Some(format!("s{}", extra - 3)));
+    assert_eq!(report.repaired.len(), 1, "{:?}", report.repaired);
+}
+
 /// A sound catalog loads unchanged.
 #[test]
 fn a_sound_snapshot_needs_no_repair() {
