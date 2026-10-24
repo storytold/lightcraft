@@ -127,6 +127,13 @@ still has lens corrections removed, so the pipeline applies them once through En
 Corrections. Developing this proxy requires a full-resolution demosaic; files without such
 opcodes keep their binned proxy.
 
+An accepted DNG tone fit may then add colour terms on top of the file's own matrix, white balance
+and profile tables: a hue/saturation table, luminance-band chroma matrices, a hue-chroma gain and
+rotation, and bounded offsets. Each term is kept only if it lowers the median displayed CIE76 error
+on the other spatial half and on a finer proxy (up to 768 px) by at least 3%, and the combined look
+is applied through the render's own colour model to confirm it clips no more than the plain render.
+These checks measure agreement with the camera preview, not calibrated colour.
+
 ## Camera profiles (pooled per model)
 
 One photo can show too little of a colour for its own fit to learn it: in a second shot of the lime shirt only a few dozen proxy pixels show it, next to a hillside of foliage at the same hue that the camera renders differently, and the shirt stayed yellow (hue 68° against the JPEG's 82°; a 192-pixel proxy only reached 74°). `lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS…` therefore pools the colour pairs of many ARWs, NEFs or RAFs per camera model — each against its own embedded JPEG, at a 192-pixel proxy, at most 4000 pairs per photo, files spread evenly over the folders — and fits one matrix (from white-balanced camera RGB, so no single photo's white point is baked in) and one hue/saturation/value table. Models need at least 5 usable photos.
