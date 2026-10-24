@@ -1,5 +1,11 @@
 # What's new in LightCraft
 
+## 2026-10-24
+
+### Virtual-copy numbering stops cleanly at its limit
+- Creating a numbered virtual copy now reports when the `Copy N` sequence is exhausted, before any copies in a
+  batch are created. An explicit name remains available even when the numeric sequence is full.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
