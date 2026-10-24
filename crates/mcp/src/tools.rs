@@ -2,6 +2,7 @@
 //! per command in the engine's command registry (`cmd_<id with . → _>`), all forwarded to a
 //! [`Backend`] as control-channel methods.
 
+use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value, json};
@@ -437,9 +438,48 @@ fn activate(b: &mut dyn Backend, args: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn temp_path(tag: &str) -> std::path::PathBuf {
-    static N: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!("lightcraft-mcp-{}-{}-{tag}.png", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
+/// Where the backend writes a render or screenshot for us to read back: `<tag>.png` in a new
+/// `lightcraft-mcp-<pid>-<random>` folder in the temp dir, private to this user on Unix (0700).
+/// Straight in a shared /tmp, other users could read the PNG, and a name they took first made the
+/// render fail (#2573). Dropping this removes the folder and whatever is in it.
+struct TempPng {
+    dir: std::path::PathBuf,
+    file: std::path::PathBuf,
+}
+
+impl TempPng {
+    fn new(tag: &str) -> Result<Self, String> {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let temp = std::env::temp_dir();
+        for _ in 0..100 {
+            let mut h = RandomState::new().build_hasher();
+            h.write_u64(N.fetch_add(1, Ordering::Relaxed));
+            let dir = temp.join(format!("lightcraft-mcp-{}-{:016x}", std::process::id(), h.finish()));
+            #[cfg(unix)]
+            let builder = {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut b = std::fs::DirBuilder::new();
+                b.mode(0o700);
+                b
+            };
+            #[cfg(not(unix))]
+            let builder = std::fs::DirBuilder::new();
+            // Never recursive: a name someone else made first fails and is not used.
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self { file: dir.join(format!("{tag}.png")), dir }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("cannot make a private temporary folder in {}: {e}", temp.display())),
+            }
+        }
+        Err(format!("cannot make a private temporary folder in {}: every name tried is taken", temp.display()))
+    }
+}
+
+impl Drop for TempPng {
+    fn drop(&mut self) {
+        // Also removes the temp file a backend that died mid-write leaves next to the PNG.
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// Read a PNG the backend wrote, optionally downscale / re-encode as JPEG, and wrap it as image
@@ -512,26 +552,32 @@ fn render_photo(b: &mut dyn Backend, args: &Value) -> ToolResult {
         },
     };
     let Some(id) = id else { return ToolResult::error("no active photo: import or select one, or pass `id`") };
-    let file = temp_path("render");
-    let path = file.to_string_lossy().to_string();
+    let tmp = match TempPng::new("render") {
+        Ok(t) => t,
+        Err(e) => return ToolResult::error(e),
+    };
+    let path = tmp.file.to_string_lossy().to_string();
     let meta = match b.call("ui.render", json!({"id": id, "size": size, "path": path})) {
         Ok(m) => m,
         Err(e) => return ToolResult::error(e),
     };
     let mut meta = meta;
     meta["id"] = json!(id);
-    image_result(&file, None, args.get("format").and_then(Value::as_str).unwrap_or("png"), args.get("path").and_then(Value::as_str), meta)
+    image_result(&tmp.file, None, args.get("format").and_then(Value::as_str).unwrap_or("png"), args.get("path").and_then(Value::as_str), meta)
 }
 
 fn screenshot(b: &mut dyn Backend, args: &Value) -> ToolResult {
     if let Err(e) = check_save_path(b, args) {
         return ToolResult::error(e);
     }
-    let file = temp_path("screenshot");
-    let path = file.to_string_lossy().to_string();
+    let tmp = match TempPng::new("screenshot") {
+        Ok(t) => t,
+        Err(e) => return ToolResult::error(e),
+    };
+    let path = tmp.file.to_string_lossy().to_string();
     match b.call("ui.screenshot", json!({"path": path})) {
         Ok(meta) => image_result(
-            &file,
+            &tmp.file,
             Some(args.get("maxSize").and_then(Value::as_u64).unwrap_or(1600).clamp(64, 8192) as u32),
             args.get("format").and_then(Value::as_str).unwrap_or("png"),
             args.get("path").and_then(Value::as_str),
