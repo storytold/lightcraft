@@ -110,6 +110,8 @@ mod tests_focus_point;
 #[cfg(test)]
 mod tests_folder_drop;
 #[cfg(test)]
+mod tests_folder_move_message;
+#[cfg(test)]
 mod tests_grading;
 #[cfg(test)]
 mod tests_grid;
