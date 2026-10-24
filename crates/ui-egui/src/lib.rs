@@ -28,6 +28,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod multi_select;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
