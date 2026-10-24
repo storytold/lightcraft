@@ -264,7 +264,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-REM-CONTENTAWARE | Content-aware remove | P1 | 🟡 | `cmd:spot.add` (`mode: remove` / `fill`), `crates/pipeline/src/spots.rs`, `crates/inpaint/src/lib.rs` | Remove heals with an automatic source; Fill synthesises the area from its surroundings (PatchMatch completion over a membrane-blended start, `crates/inpaint`, ported from PhotoCraft; bounded by the spot size limit); no generative fill (M8.4) |
+| LR-REM-CONTENTAWARE | Content-aware remove | P1 | 🟡 | `cmd:spot.add` (`mode: remove` / `fill`), `crates/pipeline/src/spots.rs`, `crates/inpaint/src/lib.rs` | Remove heals with an automatic source; Fill synthesises the area from its surroundings (PatchMatch completion started from the hole's edge inwards, `crates/inpaint`, ported from PhotoCraft; reads patches as far around the spot again as it is wide, replaces everything under the brush and feathers outside it, keeps the surroundings' grain (#2359); bounded by the spot size limit); no generative fill (M8.4) |
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`), `crates/pipeline/src/spots.rs` | Zero-feather edges use a hard step; zero-opacity spots preserve all pixels, including exact-radius pixels and image corners |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`), `crates/pipeline/src/spots.rs` | Hard-edge source copying and unchanged radius pixels regression-tested at two output sizes |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |
