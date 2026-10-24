@@ -207,7 +207,7 @@ mod tests {
     fn folder_discovery_matches_engine_extensions() {
         let dir = std::env::temp_dir().join(format!("lc-mcp-discovery-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let nested = dir.join("trip/day2");
+        let nested = dir.join("trip").join("day2"); // not "trip/day2": discovery yields the platform's separator
         std::fs::create_dir_all(&nested).unwrap();
         let mut expected = Vec::new();
         for ext in lightcraft_engine::import::EXTENSIONS {
