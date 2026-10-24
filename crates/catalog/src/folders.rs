@@ -5,8 +5,10 @@
 //! ones above them, never a folder that holds nothing of the library, with how many photos each
 //! holds — its subfolders included, like a year in By Date counts its months.
 //!
-//! Every folder is a row of its own, the ones above the imported photos included
-//! (`/Users` → `me` → `Pictures`), so a row is exactly the folder it names. A folder spelled two
+//! Every folder is a node of its own, the ones above the imported photos included
+//! (`/Users` → `me` → `Pictures`), so a node is exactly the folder it names. (The sidebar leaves
+//! out the rows of folders that only lead from a disk to the library's first folder there; that
+//! is its choice of what to draw, not this tree's.) A folder spelled two
 //! ways (`/` or `\`, repeated or trailing separators, `.`) is one folder (see
 //! [`crate::query::folder_key`]).
 //!
