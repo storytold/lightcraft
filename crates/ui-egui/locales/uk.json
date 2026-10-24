@@ -2351,5 +2351,13 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "AI masks": "ШІ-маски",
+  "Device": "Пристрій",
+  "Last photo": "Останнє фото",
+  "Remote worker": "Віддалений обробник",
+  "Run on": "Виконувати на",
+  "Automatic (GPU when available)": "Автоматично (ГП, якщо є)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Маски «Об’єкт» і «Описати» аналізують кожне фото один раз — на відеокарті, якщо не вибрано ЦП і не вимкнено «Використовувати ГП для рендерингу». На процесорі це значно довше.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "«Автоматично» запускає модель на відеокарті Mac. Якщо ШІ-маски там не працюють, виберіть ЦП; на процесорі вони значно довші."
 }

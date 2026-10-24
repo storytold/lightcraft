@@ -2355,5 +2355,13 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "AI masks": "Máscaras de IA",
+  "Device": "Dispositivo",
+  "Last photo": "Última foto",
+  "Remote worker": "Proceso remoto",
+  "Run on": "Ejecutar en",
+  "Automatic (GPU when available)": "Automático (GPU si la hay)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Las máscaras Objeto y Describir analizan cada foto una sola vez, en la tarjeta gráfica salvo que se elija CPU o «Usar la GPU para renderizar» esté desactivado. En el procesador tarda mucho más.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automático ejecuta el modelo en la tarjeta gráfica del Mac. Elige CPU si las máscaras de IA fallan allí; en el procesador tardan mucho más."
 }

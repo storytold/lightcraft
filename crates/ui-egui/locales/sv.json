@@ -2426,5 +2426,13 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "AI masks": "AI-masker",
+  "Device": "Enhet",
+  "Last photo": "Senaste foto",
+  "Remote worker": "Fjärrarbetare",
+  "Run on": "Kör på",
+  "Automatic (GPU when available)": "Automatisk (GPU när den finns)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Objekt- och Beskriv-masker analyserar varje foto en gång, på grafikkortet om inte CPU är vald eller ”Använd GPU:n för rendering” är av. På processorn tar det mycket längre tid.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatisk kör modellen på Macens grafikkort. Välj CPU om AI-masker misslyckas där; på processorn tar de mycket längre tid."
 }
