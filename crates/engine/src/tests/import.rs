@@ -2907,6 +2907,10 @@ fn video_files_import_with_duration_and_kind() {
     assert_eq!(photo.captured.as_deref(), Some("2026-05-04T10:00:00"));
 
     let _ = std::fs::remove_dir_all(&src);
+
+    // An unreadable video with ftyp box only fails to probe rather than cataloguing as 0x0 video
+    let truncated_ftyp = b"\0\0\0\x18ftypmp42\0\0\0\0mp42isom";
+    assert!(crate::files::probe_bytes("bad.mp4", truncated_ftyp).is_err());
 }
 
 #[test]
@@ -3006,6 +3010,7 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     assert!(s.render_job(video, 1600, 1600, false, true).is_none(), "no loupe render of a video");
     assert!(s.loupe_job(video, 1600, 1600, true).is_none());
     assert!(s.quick_view_job(video, 1600, true).is_none());
+    assert_eq!(s.source_now(video, crate::media::SourceLevel::Thumb).unwrap_err(), "a video has no frame to sample");
     assert!(s.thumb_job(still, 512).is_some(), "a still still renders");
 }
 

@@ -34,6 +34,13 @@ impl crate::Session {
         apply_crop: bool,
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
+        // A catalogued video has no frame decoder yet (playback, trim and frame capture come in a
+        // later update): there is nothing to render, and asking would read a multi-gigabyte file
+        // to fail. The UI draws its own video placeholder and card instead (the grid's badges and
+        // the loupe's video card).
+        if self.catalog.photo(id)?.kind == MediaKind::Video {
+            return None;
+        }
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
@@ -480,7 +487,11 @@ impl crate::Session {
 
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
     pub fn source_now(&mut self, id: PhotoId, level: SourceLevel) -> Result<Arc<Rgb32f>, String> {
-        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        let p = self.catalog.photo(id).ok_or("no such photo")?;
+        if p.kind == MediaKind::Video {
+            return Err("a video has no frame to sample".into());
+        }
+        let p = p.clone();
         let r = self.media.source_ref(&p, level).load_source()?;
         let image = r.image.clone();
         if let Some(info) = &r.info {

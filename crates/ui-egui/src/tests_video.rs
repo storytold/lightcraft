@@ -151,3 +151,20 @@ fn a_still_has_no_video_card_or_duration_row() {
     assert!(!has(&h, "canvas:videoCard"));
     assert!(!has(&h, "info:duration"));
 }
+
+/// A very small loupe pane (e.g. docked or small window) never crashes video_card with f32::clamp bounds.
+#[test]
+fn video_card_never_panics_on_small_pane() {
+    let mut session = lightcraft_engine::Session::new();
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/test.mp4".into() }, "test.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    p.duration = Some(10.0);
+    session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let app = LightcraftApp::new(session, Services::default());
+    // Small window: height 100px (canvas height < 120px)
+    let mut h = Headless::new(app, [300.0, 100.0], 1.0);
+    select(&mut h, PhotoId(1));
+    h.app.ui.view = ViewMode::Detail;
+    h.settle(SETTLE);
+    assert!(has(&h, "canvas:videoCard"), "the card is drawn even in small pane without panicking");
+}

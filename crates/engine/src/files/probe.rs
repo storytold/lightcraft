@@ -176,7 +176,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     let fmt = lightcraft_codecs::sniff(bytes);
     if fmt.as_ref().is_some_and(|f| f.is_video()) || (fmt.is_none() && lightcraft_meta::probe_video(bytes).is_some()) {
-        let v = lightcraft_meta::probe_video(bytes).unwrap_or_default();
+        let v = lightcraft_meta::probe_video(bytes).ok_or("unreadable video: no movie header or video track")?;
         let (mut w, mut h) = (v.width, v.height);
         if let Some(o) = v.orientation
             && o.swaps_axes()
@@ -184,7 +184,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             std::mem::swap(&mut w, &mut h);
         }
         let (v_meta, v_captured) = meta_of(&v.metadata);
-        let captured = v.captured.or(v_captured).or(captured);
+        let captured = v_captured.or(v.captured).or(captured);
         let mut meta = meta;
         if !v_meta.camera.is_empty() {
             meta.camera = v_meta.camera;

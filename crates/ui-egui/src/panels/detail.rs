@@ -140,7 +140,7 @@ fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_c
     let name_h = name.size().y;
     let duration_h = duration.as_ref().map_or(0.0, |g| 6.0 + g.size().y);
     let content = icon + 14.0 + name_h + duration_h + 14.0 + message.size().y;
-    let h = (content + 40.0).clamp(120.0, (canvas.height() - 8.0).max(80.0));
+    let h = (content + 40.0).max(120.0).min((canvas.height() - 8.0).max(1.0));
     let card = Rect::from_center_size(canvas.center(), vec2(w, h));
     p.rect_filled(card, 10.0, t.cell);
     p.rect_stroke(card, 10.0, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);

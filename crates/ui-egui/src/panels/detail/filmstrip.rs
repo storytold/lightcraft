@@ -121,12 +121,14 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             let thumb = app.renderer.thumb(*id);
+            let is_video = app.session.catalog.photo(*id).is_some_and(|p| p.kind == lightcraft_catalog::MediaKind::Video);
             if thumb.is_none() {
-                p.rect_filled(img_area, 0.0, t.skeleton);
-                if failed {
+                p.rect_filled(img_area, 0.0, if is_video { Color32::from_gray(30) } else { t.skeleton });
+                if failed && !is_video {
                     p.text(img_area.center(), Align2::CENTER_CENTER, "!", t.semibold(14.0), t.text);
                 }
             }
+            let has_thumb = thumb.is_some();
             if let Some(tex) = thumb {
                 let [tw, th] = tex.size;
                 let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
@@ -159,6 +161,29 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
                     if badge.clicked() {
                         crate::panels::grid::toggle_stack(app, ui.ctx(), *id);
+                    }
+                }
+            }
+            // A catalogued video has no frame yet: its icon and running time read it at a glance
+            // in the strip too (the grid and the loupe show the same badges and card).
+            if let Some(ph) = app.session.catalog.photo(*id).filter(|p| p.kind == lightcraft_catalog::MediaKind::Video) {
+                if !has_thumb {
+                    crate::icons::paint(p, Rect::from_center_size(img_area.center(), vec2(24.0, 24.0)), crate::icons::Icon::Video, t.text_dim);
+                }
+                if let Some(d) = ph.duration {
+                    let text = crate::widgets::format_duration(d);
+                    if !text.is_empty() {
+                        let g = p.layout_no_wrap(text, t.semibold(9.0), Color32::WHITE);
+                        let w = g.size().x + 20.0;
+                        let br = Rect::from_min_size(pos2(img_area.right() - w - 2.0, img_area.bottom() - 16.0), vec2(w, 14.0));
+                        p.rect_filled(br, 3.0, Color32::from_black_alpha(175));
+                        crate::icons::paint(
+                            p,
+                            Rect::from_center_size(pos2(br.left() + 8.0, br.center().y), vec2(9.0, 9.0)),
+                            crate::icons::Icon::Video,
+                            Color32::WHITE,
+                        );
+                        p.galley(pos2(br.left() + 14.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
                     }
                 }
             }
