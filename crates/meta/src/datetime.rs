@@ -31,7 +31,7 @@ impl DateTime {
         // chrono rejects impossible days (leap years and all); the time is checked
         // by hand so a leap second (`second == 60`) stays acceptable.
         let day_ok = self.year > 0 && chrono::NaiveDate::from_ymd_opt(i32::from(self.year), u32::from(self.month), u32::from(self.day)).is_some();
-        let ok = day_ok && self.hour < 24 && self.minute < 60 && self.second < 61 && self.offset_minutes.is_none_or(|o| o.abs() <= 18 * 60);
+        let ok = day_ok && self.hour < 24 && self.minute < 60 && self.second < 61 && self.offset_minutes.is_none_or(|o| o.unsigned_abs() <= 18 * 60);
         ok.then_some(self)
     }
 
@@ -135,7 +135,8 @@ impl DateTime {
         }
         if let Some(o) = self.offset_minutes {
             let sign = if o < 0 { '-' } else { '+' };
-            s += &format!("{sign}{:02}:{:02}", o.abs() / 60, o.abs() % 60);
+            let o = o.unsigned_abs();
+            s += &format!("{sign}{:02}:{:02}", o / 60, o % 60);
         }
         s
     }
@@ -187,6 +188,14 @@ mod tests {
         assert_eq!(DateTime::parse_offset("+0930"), Some(570));
         assert_eq!(DateTime::parse_offset("   :  "), None);
         assert_eq!(DateTime::parse_offset("+99:00"), None);
+    }
+
+    #[test]
+    fn extreme_offsets_do_not_overflow() {
+        // `DateTime` deserializes with public fields, so an offset can arrive without passing `valid()`
+        let d = DateTime { offset_minutes: Some(i16::MIN), ..DateTime::parse_iso("2024-06-01T13:45:59").unwrap() };
+        assert_eq!(d.to_iso(), "2024-06-01T13:45:59-546:08");
+        assert_eq!(d.valid(), None);
     }
 
     #[test]
