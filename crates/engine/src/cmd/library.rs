@@ -726,7 +726,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "library.devices", "Cameras and Cards", [], None, "{} → [{name, path (its DCIM folder), root}] — mounted volumes with a DCIM folder", always, |_, _| {
             Ok(serde_json::to_value(crate::devices::devices_now()).unwrap_or_default())
         }),
-        cmd!(query "photo.copyMetadata", "Copy Metadata", ["Photo"], None, "{} — title, caption, copyright (notice, status, usage terms, info URL), creator, location and keywords of the active photo", has_active, |s, _| {
+        cmd!(query "photo.copyMetadata", "Copy Metadata", ["Photo"], Some("Cmd+Alt+Shift+C"), "{} — title, caption, copyright (notice, status, usage terms, info URL), creator, location and keywords of the active photo", has_active, |s, _| {
             let id = s.active().ok_or_else(|| bad("photo.copyMetadata", "no active photo"))?;
             let m = &s.catalog.photo(id).ok_or_else(|| bad("photo.copyMetadata", "no photo"))?.meta;
             let v = json!({"title": m.title, "caption": m.caption, "altText": m.alt_text, "extendedDescription": m.extended_description,
@@ -740,7 +740,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "photo.pasteMetadata",
             "Paste Metadata",
             ["Photo"],
-            None,
+            Some("Cmd+Alt+Shift+V"),
             "{ids?, fields?: [title|caption|copyright|copyrightStatus|usageTerms|copyrightUrl|creator|location|keywords] (default: all copied)}",
             has_selection,
             |s, p| {

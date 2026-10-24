@@ -18,6 +18,8 @@ Select photos in Photo Grid or Square Grid, then use:
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
 | `\` (backslash) | Show / hide the Filter Bar |
 | ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |
+| ⌘⌥⇧C / Ctrl+Alt+Shift+C | Copy Metadata: copy the active photo's metadata |
+| ⌘⌥⇧V / Ctrl+Alt+Shift+V | Paste Metadata: paste the copied metadata on the selected photos |
 
 Enter opens the active photo without changing the selection. Text fields, dialogs and open popups keep the key; a custom Enter binding takes precedence. Enter has no additional action in Detail.
 
