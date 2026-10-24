@@ -23,6 +23,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod library_work;
 pub mod lightroom_destination;
 pub mod lightroom_import;
 pub mod links;
@@ -137,6 +138,8 @@ mod tests_labels;
 mod tests_launch_library;
 #[cfg(test)]
 mod tests_layout_image;
+#[cfg(test)]
+mod tests_library_counts;
 #[cfg(test)]
 mod tests_library_problem;
 #[cfg(test)]
@@ -1156,6 +1159,9 @@ impl LightcraftApp {
             // worker fills: a sleeping NAS or a dropped share never stalls a frame
             let repaint = ctx.clone();
             self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
+            // …and the library's counts, when they were made on a worker
+            let repaint = ctx.clone();
+            self.caches.library.set_wake(std::sync::Arc::new(move || repaint.request_repaint()));
             self.styled = true;
             self.font_language = self.ui.language;
         } else if self.font_language != self.ui.language {
@@ -1791,7 +1797,11 @@ mod drop_tests {
 /// Results recomputed only when the catalog (or their inputs) change.
 #[derive(Default)]
 pub struct Caches {
-    keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    /// The library's tally (folders, dates, keywords, counts): followed edit by edit,
+    /// counted whole off the UI thread ([`library_work::LibraryWork`]).
+    pub library: library_work::LibraryWork,
+    /// The trees built from it: (the tally's stamp, catalog revision, tree).
+    keyword_tree: Option<(u64, u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
     /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
     /// revision, selection and view.
     keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
@@ -1804,13 +1814,12 @@ pub struct Caches {
     keyword_groups: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Group>>)>,
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
-    folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
+    folder_tree: Option<(u64, u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
     people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
     completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
-    counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
     /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally
@@ -1864,14 +1873,6 @@ pub struct Caches {
     pub grid_stats: panels::grid::GridStats,
 }
 
-/// The left panel's counts.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LibraryCounts {
-    pub total: usize,
-    pub picks: usize,
-    pub deleted: usize,
-}
-
 /// The values the filter bar's pickers offer.
 #[derive(Clone, Debug, Default)]
 pub struct FilterValues {
@@ -1905,27 +1906,52 @@ fn still_right(cat: &lightcraft_catalog::Catalog, revision: u64, reads: lightcra
 const READS_FILE: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::FILE);
 const READS_META: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::META);
 const READS_PEOPLE: lightcraft_catalog::Aspects = READS_META.with(lightcraft_catalog::Aspects::ANALYSIS);
-const READS_CAPTURED: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::CAPTURED);
-const READS_FLAG: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::FLAG);
+
+/// A tree built from the library's tally, kept while the counts it was built from are the
+/// tally's (`stamp`) and nothing but photos changed since `revision` (a folder's label or the
+/// keyword list, which the trees also show, changes no photo). A kept tree moves its revision on.
+fn kept_tree<T>(slot: &mut Option<(u64, u64, std::sync::Arc<T>)>, cat: &lightcraft_catalog::Catalog, stamp: u64) -> Option<std::sync::Arc<T>> {
+    let (s, r, tree) = slot.take()?;
+    (s == stamp && (r == cat.revision || cat.aspects_since(r).is_some())).then(|| {
+        *slot = Some((s, cat.revision, tree.clone()));
+        tree
+    })
+}
 
 impl Caches {
-    /// The folders the library's photos were imported from.
-    pub fn folder_tree(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::FolderNode>> {
-        let kept = self.folder_tree.take().filter(|(r, _)| still_right(cat, *r, READS_FILE)).map(|(_, t)| t);
-        let t = kept.unwrap_or_else(|| std::sync::Arc::new(cat.folder_tree()));
-        self.folder_tree = Some((cat.revision, t.clone()));
-        t
+    /// The folders the library's photos were imported from (none before the library's first
+    /// count: see [`library_work::LibraryWork::current`]).
+    pub fn folder_tree(&mut self, cat: &lightcraft_catalog::Catalog, library: u64) -> std::sync::Arc<Vec<lightcraft_catalog::FolderNode>> {
+        let Some(t) = self.library.current(cat, library) else { return std::sync::Arc::default() };
+        let stamp = t.folders_stamp();
+        kept_tree(&mut self.folder_tree, cat, stamp).unwrap_or_else(|| {
+            let tree = std::sync::Arc::new(t.folder_tree(cat));
+            self.folder_tree = Some((stamp, cat.revision, tree.clone()));
+            tree
+        })
     }
-    /// The folder tree as last built, when it still holds (a read-only check cannot rebuild it).
-    pub(crate) fn folder_tree_if_fresh(&self, cat: &lightcraft_catalog::Catalog) -> Option<std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>> {
-        self.folder_tree.as_ref().filter(|(r, _)| still_right(cat, *r, READS_FILE)).map(|(_, t)| t.clone())
+    /// The folder tree as last built, when it still holds (a read-only check cannot rebuild it). Not
+    /// while the library's tally lags the catalog ([`library_work::LibraryWork::is_current`]): the
+    /// tree then shows the folders as they were before the change being counted.
+    pub(crate) fn folder_tree_if_fresh(
+        &self,
+        cat: &lightcraft_catalog::Catalog,
+        library: u64,
+    ) -> Option<std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>> {
+        if !self.library.is_current(cat, library) {
+            return None;
+        }
+        self.folder_tree.as_ref().filter(|(_, r, _)| still_right(cat, *r, READS_FILE)).map(|(_, _, t)| t.clone())
     }
     /// The library's keyword tree.
-    pub fn keyword_tree(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>> {
-        let kept = self.keyword_tree.take().filter(|(r, _)| still_right(cat, *r, READS_META)).map(|(_, t)| t);
-        let t = kept.unwrap_or_else(|| std::sync::Arc::new(cat.keyword_tree()));
-        self.keyword_tree = Some((cat.revision, t.clone()));
-        t
+    pub fn keyword_tree(&mut self, cat: &lightcraft_catalog::Catalog, library: u64) -> std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>> {
+        let Some(t) = self.library.current(cat, library) else { return std::sync::Arc::default() };
+        let stamp = t.keywords_stamp();
+        kept_tree(&mut self.keyword_tree, cat, stamp).unwrap_or_else(|| {
+            let tree = std::sync::Arc::new(t.keyword_tree(cat));
+            self.keyword_tree = Some((stamp, cat.revision, tree.clone()));
+            tree
+        })
     }
     /// The Keywording box's read-only names for the selection: what exported files carry
     /// (`export`), or the keywords with those containing them.
@@ -2028,27 +2054,9 @@ impl Caches {
             }
         }
     }
-    /// All Photos / Picks / Recently Deleted counts.
-    pub fn counts(&mut self, cat: &lightcraft_catalog::Catalog) -> LibraryCounts {
-        if let Some((r, c)) = self.counts
-            && still_right(cat, r, READS_FLAG)
-        {
-            self.counts = Some((cat.revision, c));
-            return c;
-        }
-        let mut c = LibraryCounts::default();
-        for p in cat.photos() {
-            if p.in_library() {
-                c.total += 1;
-                if p.flag == lightcraft_catalog::Flag::Pick {
-                    c.picks += 1;
-                }
-            } else if p.deleted && !p.local {
-                c.deleted += 1;
-            }
-        }
-        self.counts = Some((cat.revision, c));
-        c
+    /// All Photos / Picks / Recently Deleted counts (none before the library's first count).
+    pub fn counts(&mut self, cat: &lightcraft_catalog::Catalog, library: u64) -> lightcraft_catalog::library_tally::LibraryCounts {
+        self.library.current(cat, library).map(|t| t.counts()).unwrap_or_default()
     }
     /// Everyone named on a face in the library (for completing a name as it is typed).
     pub fn person_names(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<String>> {
@@ -2058,11 +2066,17 @@ impl Caches {
         v
     }
     /// The By Date tree.
-    pub fn date_groups(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::DateGroup>> {
-        let kept = self.date_groups.take().filter(|(r, _)| still_right(cat, *r, READS_CAPTURED)).map(|(_, g)| g);
-        let g = kept.unwrap_or_else(|| std::sync::Arc::new(cat.date_groups()));
-        self.date_groups = Some((cat.revision, g.clone()));
-        g
+    pub fn date_groups(&mut self, cat: &lightcraft_catalog::Catalog, library: u64) -> std::sync::Arc<Vec<lightcraft_catalog::DateGroup>> {
+        let Some(t) = self.library.current(cat, library) else { return std::sync::Arc::default() };
+        let stamp = t.dates_stamp();
+        match &self.date_groups {
+            Some((s, g)) if *s == stamp => g.clone(),
+            _ => {
+                let g = std::sync::Arc::new(t.date_groups());
+                self.date_groups = Some((stamp, g.clone()));
+                g
+            }
+        }
     }
     /// Cameras, lenses and keywords in the library (filter bar pickers).
     pub fn filter_values(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<FilterValues> {

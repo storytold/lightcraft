@@ -157,6 +157,12 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Importing into a large library keeps the window responsive
+- While an import or Synchronize Folder adds photos to a large library, the sidebar's counts (Folders, By Date,
+  Keywords, All Photos, Picks, Recently Deleted) take in each batch as it lands instead of counting every photo of
+  the library again, which made the window slow and at times unresponsive for as long as the import ran. A change
+  too large to follow, such as opening a library, is counted in the background while the sidebar keeps its counts.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

@@ -1744,7 +1744,8 @@ fn show_in_folders_is_disabled_for_a_folder_below_the_trees_depth() {
     let deep = format!("/pics{}/a.jpg", "/d".repeat(lightcraft_catalog::folders::MAX_DEPTH + 4));
     let mut h = folders_app(&[deep.as_str()]);
     activate(&mut h, &deep);
-    assert!(!h.app.caches.folder_tree(&h.app.session.catalog).is_empty());
+    let library = h.app.session.library_generation();
+    assert!(!h.app.caches.folder_tree(&h.app.session.catalog, library).is_empty());
     assert!(!crate::menus::ui_enabled(&h.app, "app.showInFolders"));
     assert!(h.app.run("app.showInFolders", json!({})).is_err());
 }

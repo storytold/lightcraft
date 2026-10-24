@@ -666,7 +666,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 title.on_hover_text(l.dir.display().to_string());
             }
         }
-        let counts = app.caches.counts(&app.session.catalog);
+        let library = app.session.library_generation();
+        let counts = app.caches.counts(&app.session.catalog, library);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
         egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             drag_auto_scroll(app, ui);
@@ -747,18 +748,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         section(app, ui, s, local.places.places.len(), |app, ui| local_rows(app, ui, local))
                     }
                     SidebarSection::ByDate => {
-                        let rows = app.caches.date_groups(&app.session.catalog).len();
+                        let rows = app.caches.date_groups(&app.session.catalog, library).len();
                         section(app, ui, s, rows, date_rows)
                     }
                     SidebarSection::Folders => {
-                        let tree = app.caches.folder_tree(&app.session.catalog);
+                        let tree = app.caches.folder_tree(&app.session.catalog, library);
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
                             folder_rows(app, ui, &tree, 0.0);
                         })
                     }
                     SidebarSection::Keywords => {
-                        let tree = app.caches.keyword_tree(&app.session.catalog);
+                        let tree = app.caches.keyword_tree(&app.session.catalog, library);
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
                     }
                 };
@@ -802,7 +803,7 @@ fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Option<u64>) 
 
 /// By Date: year → month → day; a click filters by that prefix, the triangle opens a level.
 fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let groups = app.caches.date_groups(&app.session.catalog);
+    let groups = app.caches.date_groups(&app.session.catalog, app.session.library_generation());
     for g in groups.iter() {
         if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
             for (m, n) in &g.months {
@@ -1162,7 +1163,7 @@ fn folder_tree(
     }
     crate::widgets::context_menu(&resp, |ui| {
         // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
-        let library = app.caches.folder_tree(&app.session.catalog);
+        let library = app.caches.folder_tree(&app.session.catalog, app.session.library_generation());
         let held = library_node_for(&library, path);
         if (transient || indent > 0.0)
             && ui
