@@ -1236,6 +1236,8 @@ pub enum Dialog {
         pick_best: bool,
         burst_gap: f32,
         similarity: f32,
+        #[serde(default)]
+        reanalyze: bool,
     },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {

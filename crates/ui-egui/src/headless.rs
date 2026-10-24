@@ -361,6 +361,7 @@ impl Headless {
             || self.app.sync_run.is_some()
             || self.app.import.is_some()
             || self.app.export.is_some()
+            || self.app.culling.as_ref().is_some_and(crate::culling::CullTask::is_working)
             || self.app.session.denoise_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()

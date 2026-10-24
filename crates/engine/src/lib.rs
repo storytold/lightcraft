@@ -362,6 +362,11 @@ pub struct Session {
     pub label_sets: Vec<cmd::manage::LabelSet>,
     /// Look-alike signatures by content key (Find Similar).
     pub signatures: std::collections::HashMap<String, [f32; 64]>,
+    /// One current assisted-culling measurement per photo (groups are recomputed per selection).
+    pub(crate) cull_measurements: std::collections::HashMap<PhotoId, (cmd::cull::MeasurementKey, cmd::cull::Scores)>,
+    /// Source generations only for photos requested by culling; removed with the photo or library.
+    pub(crate) cull_source_generations: std::collections::HashMap<PhotoId, u64>,
+    cull_generation: u64,
     /// Imported `.cube` LUT profiles.
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
     /// The target album B adds to (`None` = the Quick Collection).
@@ -514,6 +519,9 @@ impl Session {
             mask_tool_effects: Default::default(),
             label_sets: Vec::new(),
             signatures: Default::default(),
+            cull_measurements: Default::default(),
+            cull_source_generations: Default::default(),
+            cull_generation: 0,
             lut_profiles: Vec::new(),
             target_album: None,
             auto_import_seen: Default::default(),
@@ -646,27 +654,14 @@ impl Session {
     }
 
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
-        // Retain only cache IDs while the catalog consumes the operation. Cloning an import
-        // batch here also cloned every photo, although commit already keeps the journal copy.
-        let mut invalidated = Vec::new();
-        // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
-        let mut replaced = Vec::new();
-        let mut pending = vec![&op];
-        while let Some(op) = pending.pop() {
-            match op {
-                Op::SetContent { id, .. } => {
-                    invalidated.push(*id);
-                    replaced.push(*id);
-                }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
-                Op::AddPhoto { photo } => invalidated.push(photo.id),
-                Op::Batch { ops } => pending.extend(ops),
-                _ => {}
-            }
-        }
+        let (invalidated, replaced, deleted) = Self::touched(&op);
         let inv = self.catalog.apply(op)?;
         for id in invalidated {
-            self.media.forget(id);
+            self.forget_source(id);
+        }
+        // a delete or restore leaves the file, and so its decoded sources, as they were
+        for id in deleted {
+            self.forget_cull(id);
         }
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {
@@ -675,6 +670,60 @@ impl Session {
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
         Ok(inv)
+    }
+
+    /// The photos `op` touches: (file changed, file replaced, deleted or restored). Only IDs are
+    /// kept while the catalog consumes the op: cloning an import batch would clone every photo.
+    fn touched(op: &Op) -> (Vec<PhotoId>, Vec<PhotoId>, Vec<PhotoId>) {
+        let mut invalidated = Vec::new();
+        // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
+        let mut replaced = Vec::new();
+        let mut deleted = Vec::new();
+        let mut pending = vec![op];
+        while let Some(op) = pending.pop() {
+            match op {
+                Op::SetContent { id, .. } => {
+                    invalidated.push(*id);
+                    replaced.push(*id);
+                }
+                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
+                Op::SetDeleted { id, .. } => deleted.push(*id),
+                Op::AddPhoto { photo } => invalidated.push(photo.id),
+                Op::Batch { ops } => pending.extend(ops),
+                _ => {}
+            }
+        }
+        (invalidated, replaced, deleted)
+    }
+
+    pub(crate) fn cull_source_generation(&mut self, id: PhotoId) -> u64 {
+        *self.cull_source_generations.entry(id).or_insert_with(|| {
+            self.cull_generation = self.cull_generation.wrapping_add(1);
+            self.cull_generation
+        })
+    }
+
+    fn forget_source(&mut self, id: PhotoId) {
+        self.media.forget(id);
+        self.forget_cull(id);
+    }
+
+    /// Photo `id`'s culling measurements and in-flight results no longer apply.
+    fn forget_cull(&mut self, id: PhotoId) {
+        self.cull_measurements.remove(&id);
+        if self.catalog.photo(id).is_none() {
+            self.cull_source_generations.remove(&id);
+        } else if let Some(generation) = self.cull_source_generations.get_mut(&id) {
+            // Undo restores catalog provenance, not file bytes. Never reuse an earlier generation.
+            self.cull_generation = self.cull_generation.wrapping_add(1);
+            *generation = self.cull_generation;
+        }
+    }
+
+    pub(crate) fn clear_cull_sources(&mut self) {
+        self.cull_measurements.clear();
+        self.cull_source_generations.clear();
+        self.cull_generation = 0;
     }
 
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
@@ -703,7 +752,13 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
+        let (invalidated, _, deleted) = Self::touched(&op);
         self.catalog.apply(op)?;
+        // Bookkeeping keeps decoded sources and faces (a recheck's SetContent often only
+        // restamps the file), but culling measures the photo again.
+        for id in invalidated.into_iter().chain(deleted) {
+            self.forget_cull(id);
+        }
         self.pending_log.push(fwd);
         Ok(())
     }

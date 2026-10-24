@@ -611,6 +611,7 @@ impl Session {
             crate::cmd::previews::refresh_stale_smart_previews(self);
         }
         self.library_identity = std::sync::Arc::new(());
+        self.clear_cull_sources();
         Ok(())
     }
 
@@ -729,6 +730,7 @@ impl Session {
         };
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
+            self.clear_cull_sources();
         }
         result
     }

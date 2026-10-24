@@ -1,7 +1,8 @@
 # Long-running tasks and the activity stack
 
-Everything that takes a while runs off the UI thread and shows up in **one** place: the activity stack in the
-top-left corner under the top bar (issue #345). Each task has a row with its name, a progress bar (a sweep while
+Native long-running work runs off the UI thread; browser hosts without threads advance bounded batches between
+frames. Both show up in **one** place: the activity stack in the top-left corner under the top bar (issue #345).
+Each task has a row with its name, a progress bar (a sweep while
 the amount of work isn't known), the count and what it's working on, and ✕ if it can stop. Quitting asks first while
 a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
 `ui.inspect` reports it as `activity`.
@@ -58,10 +59,27 @@ guard.detail(&file_name);
 | Slideshow export | `crates/engine/src/cmd/slideshow.rs`, `crates/engine/src/slideshow_export.rs` | an engine command that owns its worker and row; progress from the worker through a `TaskHandle`; results read back by command |
 | Model downloads | `crates/engine/src/face_download.rs` | report progress through a `TaskHandle` in shared state |
 | Lightroom catalog import | `crates/ui-egui/src/lightroom_import.rs` | stop being cancellable for a phase that must finish |
+| Assisted Culling | `crates/ui-egui/src/culling.rs` | detached source analysis; Cancel discards results; owner-thread completion is one undo step |
 | Face scan, AI Denoise | `crates/engine/src/cmd/face_recognize.rs`, `crates/engine/src/denoise.rs` | a continuous job with no ✕, kept in session state |
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
+
+Assisted Culling decodes use the background memory gate. Completed results wait for an active develop
+interaction to end before their catalog batch applies, so XMP AutoWrite also saves flag changes to other photos.
+Cancel remains available during that wait. Measurements are retained once per photo, not once per historical
+content hash: relink, rename/move, reload (including the background preview recheck), deletion and restoration
+invalidate that photo's source generation, including undo/redo. Forgetting untouched Local records also drops
+their measurements. An old worker result cannot apply after a source change even when undo restores its former
+hash and path. Opening or closing a library clears this cache; ratings and develop edits alone do not.
+The activity row stays live through owner-thread completion and is removed on success, cancellation,
+decode failure or worker disconnection. Decode failures are reported per photo and can be retried;
+a library switch discards an old worker's result instead of applying it to the new catalog.
+In the browser, Assisted Culling registers the row before decoding and advances at most one photo per
+frame, following the import runner's cooperative pattern. Controls and cancellation can run between
+photos; cancellation discards all collected measurements and flags, even after the last source read.
+A source decode itself is synchronous and cannot be interrupted mid-photo. Completion still applies
+as one owner-thread undo step; native builds keep the worker thread.
 
 ## Testing
 

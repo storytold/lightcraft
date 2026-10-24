@@ -9,7 +9,7 @@ mod before;
 pub(crate) mod browse;
 mod color;
 pub(crate) mod convert;
-mod cull;
+pub mod cull;
 pub mod curves;
 pub(crate) mod denoise;
 mod develop;

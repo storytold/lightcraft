@@ -441,6 +441,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
     }
+    if id == "photo.analyze" && p.get("background").and_then(Value::as_bool).unwrap_or(false) {
+        return Some(crate::culling::start(app, p));
+    }
+    if id == "photo.analyze" && app.culling.is_some() {
+        return Some(Err("Assisted Culling is already running".into()));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame
@@ -1546,7 +1552,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity, reanalyze: false });
             Ok(Value::Null)
         }
         "app.whatsNew" => {

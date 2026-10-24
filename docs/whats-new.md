@@ -208,6 +208,11 @@
   use. The names are English in every interface language, so folders don't change when the language does. Rename
   Photos and export file names take them too.
 
+### Browser Assisted Culling yields between photos
+- Browser analysis now advances one photo per frame instead of blocking the page for the full selection.
+  Progress and Cancel remain available between source reads. Cancellation applies no partial scores or flags,
+  and a completed run remains one undo step. Native analysis continues on its worker thread.
+
 ## 2026-10-20
 
 ### Smart albums check File Path rules faster
