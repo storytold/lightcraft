@@ -134,11 +134,28 @@ fn ext_upper(name: &str) -> String {
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
-    let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
+    probe_bytes_with(name, bytes, true)
+}
+
+/// What [`lightcraft_raw::probe_info`] says about a raw file (`None`: not a raw).
+type RawProbe = Option<lightcraft_raw::Result<lightcraft_raw::RawInfo>>;
+
+fn raw_probe(bytes: &[u8]) -> RawProbe {
+    lightcraft_raw::probe(bytes).is_some().then(|| lightcraft_raw::probe_info(bytes))
+}
+
+/// [`probe_bytes`], with the content hash only when `hash` (a buffer read in part has none).
+fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<ProbeInfo, String> {
+    describe(name, bytes, raw_probe(bytes), hash)
+}
+
+/// [`probe_bytes_with`] given what the raw reader said about `bytes` ([`raw_probe`]).
+fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<ProbeInfo, String> {
+    let content_hash = hash.then(|| lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
-    if lightcraft_raw::probe(bytes).is_some() {
-        let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
+    if let Some(raw) = raw {
+        let raw = match raw.map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
@@ -953,8 +970,6 @@ const PLAN_PREFIX: u64 = 64 * 1024;
 /// gives what the whole file gives), so a window that still fails to decode ends in the same
 /// whole-file fallback in [`fs_preview_loader`], never in a wrong picture.
 fn planned_preview(file: &mut std::fs::File, path: &str, total: u64, max_edge: usize) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
-    use std::io::{Read, Seek, SeekFrom};
-
     if total > MAX_PREVIEW_PLAN_BYTES {
         return Ok(None);
     }
@@ -965,60 +980,44 @@ fn planned_preview(file: &mut std::fs::File, path: &str, total: u64, max_edge: u
     head.copy_from_slice(&header);
     let mut loaded = lightcraft_raw::sparse::Ranges::new();
     loaded.insert(0, header.len() as u64);
-    for _ in 0..MAX_PREVIEW_PLAN_ROUNDS {
-        match lightcraft_raw::sparse::preview_plan(&buf, &loaded) {
-            lightcraft_raw::sparse::HeaderPlan::Need(ranges) => {
-                let wanted = loaded.total().saturating_add(ranges.total());
-                if wanted.saturating_mul(10) > total.saturating_mul(MAX_PREVIEW_PLAN_SHARE) {
-                    return Ok(None);
-                }
-                for &(start, end) in ranges.spans() {
-                    let (Ok(a), Ok(b)) = (usize::try_from(start), usize::try_from(end)) else { return Ok(None) };
-                    let Some(dst) = buf.get_mut(a..b) else { return Ok(None) };
-                    file.seek(SeekFrom::Start(start)).map_err(|e| format!("{path}: {e}"))?;
-                    file.read_exact(dst).map_err(|e| format!("{path}: {e}"))?;
-                    loaded.insert(start, end);
-                }
-            }
-            lightcraft_raw::sparse::HeaderPlan::Ready => {
-                // the plan loads every preview's strips, so the JPEG picked for `max_edge` is the whole file's pick
-                let edge = u32::try_from(max_edge).unwrap_or(u32::MAX);
-                let Some(window) = lightcraft_raw::embedded_preview_covering(&buf, edge) else { return Ok(None) };
-                // The quick path hands the JPEG to the decoder alone, so what the *container* says
-                // about the preview has to be something the bytes it is handed can show. Two container
-                // facts change the pixels and are not in the JPEG: the preview's colour space (which
-                // the whole-file path applies through `decode_raw_preview`) and, when the JPEG carries
-                // no orientation of its own, the file's EXIF orientation. The colour space is read
-                // here and handed on ([`PreviewRead::adobe_rgb`]: a Sony α1 writes Adobe RGB previews,
-                // which used to send each of them to the whole-file path, issue #1440); a container
-                // that says sRGB agrees with the JPEG-only decode (its own declaration, else sRGB).
-                // Where the orientation is present and the header cannot answer for it, the
-                // whole-file path keeps the preview.
-                let adobe_rgb = lightcraft_raw::embedded_preview_color_space(&buf) == Some(lightcraft_raw::PreviewColorSpace::AdobeRgb);
-                // `extract` copies a TIFF's bytes to hand on its Exif block, so ask the cheap side
-                // first: a JPEG that carries its own orientation needs nothing from the container.
-                if lightcraft_meta::extract(&window).orientation.is_none()
-                    && lightcraft_meta::extract(&header).orientation.is_none()
-                    && lightcraft_meta::extract(&buf).orientation.is_some()
-                {
-                    return Ok(None);
-                }
-                let read = PreviewRead { read: loaded.total(), total, header_path: true, planned: true, adobe_rgb };
-                // A plan-driven preview is the one that used to cost the whole file, so it is worth
-                // saying what it cost now too.
-                if lightcraft_pipeline::profiling() {
-                    eprintln!("[profile] preview {path}: read {} of {} bytes (plan, window {})", read.read, total, window.len());
-                }
-                // The planner's buffer is the file's length, so give its pages back the way a decode
-                // does (see `fs_pair_loader`).
-                drop(buf);
-                crate::memory::release();
-                return Ok(Some((header, window, read)));
-            }
-            lightcraft_raw::sparse::HeaderPlan::Whole(_) => return Ok(None),
-        }
+    let planned = read_planned(file, &mut buf, &mut loaded, MAX_PREVIEW_PLAN_ROUNDS, MAX_PREVIEW_PLAN_SHARE, lightcraft_raw::sparse::preview_plan)
+        .map_err(|e| format!("{path}: {e}"))?;
+    if planned != Planned::Ready {
+        return Ok(None);
     }
-    Ok(None)
+    // the plan loads every preview's strips, so the JPEG picked for `max_edge` is the whole file's pick
+    let edge = u32::try_from(max_edge).unwrap_or(u32::MAX);
+    let Some(window) = lightcraft_raw::embedded_preview_covering(&buf, edge) else { return Ok(None) };
+    // The quick path hands the JPEG to the decoder alone, so what the *container* says
+    // about the preview has to be something the bytes it is handed can show. Two container
+    // facts change the pixels and are not in the JPEG: the preview's colour space (which
+    // the whole-file path applies through `decode_raw_preview`) and, when the JPEG carries
+    // no orientation of its own, the file's EXIF orientation. The colour space is read
+    // here and handed on ([`PreviewRead::adobe_rgb`]: a Sony α1 writes Adobe RGB previews,
+    // which used to send each of them to the whole-file path, issue #1440); a container
+    // that says sRGB agrees with the JPEG-only decode (its own declaration, else sRGB).
+    // Where the orientation is present and the header cannot answer for it, the
+    // whole-file path keeps the preview.
+    let adobe_rgb = lightcraft_raw::embedded_preview_color_space(&buf) == Some(lightcraft_raw::PreviewColorSpace::AdobeRgb);
+    // `extract` copies a TIFF's bytes to hand on its Exif block, so ask the cheap side
+    // first: a JPEG that carries its own orientation needs nothing from the container.
+    if lightcraft_meta::extract(&window).orientation.is_none()
+        && lightcraft_meta::extract(&header).orientation.is_none()
+        && lightcraft_meta::extract(&buf).orientation.is_some()
+    {
+        return Ok(None);
+    }
+    let read = PreviewRead { read: loaded.total(), total, header_path: true, planned: true, adobe_rgb };
+    // A plan-driven preview is the one that used to cost the whole file, so it is worth
+    // saying what it cost now too.
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] preview {path}: read {} of {} bytes (plan, window {})", read.read, total, window.len());
+    }
+    // The planner's buffer is the file's length, so give its pages back the way a decode
+    // does (see `fs_pair_loader`).
+    drop(buf);
+    crate::memory::release();
+    Ok(Some((header, window, read)))
 }
 
 /// The file's first [`lightcraft_raw::PREVIEW_PREFIX`] bytes (or the whole file when it is shorter),
@@ -1093,15 +1092,126 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
-    let probe: FileProbe = Arc::new(|path: &str| {
-        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
-        let _permit = crate::memory::work_gate().acquire(len);
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let mut info = probe_bytes(path, &bytes)?;
-        info.file_modified = file_modified(path);
-        Ok(info)
-    });
-    (loader, probe)
+    (loader, Arc::new(probe_file))
+}
+
+/// Probe a whole file (its bytes are read once, and hashed).
+fn probe_file(path: &str) -> Result<ProbeInfo, String> {
+    let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+    let _permit = crate::memory::work_gate().acquire(len);
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut info = probe_bytes(path, &bytes)?;
+    info.file_modified = file_modified(path);
+    Ok(info)
+}
+
+/// Files smaller than this are probed whole: one read of them costs about what a partial read does.
+const PARTIAL_MIN: u64 = 4 << 20;
+/// Nor are files beyond this read in part (a buffer of the file's length is set aside).
+const PARTIAL_MAX: u64 = 4 << 30;
+/// The first read of a partial probe: most raw headers fit in it.
+const PARTIAL_PREFIX: u64 = 512 << 10;
+/// Rounds of further reads before giving up on a partial probe.
+const PARTIAL_ROUNDS: usize = 16;
+/// Reading more than this many tenths of a file in part is slower than one read of all of it.
+const PARTIAL_SHARE: u64 = 6;
+
+/// The probe of an import that adds files where they are (a Lightroom catalog's originals): a raw
+/// is described from its headers ([`lightcraft_raw::sparse`]), so its pixel data, nearly all of its
+/// bytes, is never read, and it gets no content hash; a raw shown from its embedded preview (a
+/// coding not decoded yet) is read with that preview. Anything else — other formats, raws whose
+/// description needs their samples (NEF, ORF, PEF), a partial read that fails or would read most of
+/// the file — is probed whole, with its hash.
+pub fn fs_header_probe() -> FileProbe {
+    Arc::new(|path: &str| {
+        let info = match probe_partial(path) {
+            Ok(Some(mut info)) => {
+                info.file_modified = file_modified(path);
+                Ok(info)
+            }
+            Ok(None) | Err(_) => probe_file(path),
+        };
+        // the file's buffer (and any whole-file copy) is gone: give its pages back, as a load does
+        crate::memory::release();
+        info
+    })
+}
+
+/// [`fs_header_probe`]'s partial read: `None` when the file has to be probed whole.
+fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
+    use lightcraft_raw::sparse::{Ranges, header_plan, preview_plan};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if !(PARTIAL_MIN..=PARTIAL_MAX).contains(&len) {
+        return Ok(None);
+    }
+    let Ok(size) = usize::try_from(len) else { return Ok(None) };
+    // (counted at its full size: some readers copy the whole buffer)
+    let _permit = crate::memory::work_gate().acquire(size);
+    // zero-filled pages are only allocated once written or read, so the bytes never read cost nothing
+    let mut buf = vec![0u8; size];
+    let mut loaded = Ranges::new();
+    load_range(&mut file, &mut buf, &mut loaded, 0, PARTIAL_PREFIX.min(len))?;
+    if read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, header_plan)? != Planned::Ready {
+        return Ok(None);
+    }
+    // what the raw reader says; reading the preview below doesn't change it
+    let raw = raw_probe(&buf);
+    // a raw shown from its embedded preview (a coding not decoded yet): read the preview first
+    if matches!(raw, Some(Err(_))) && read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, preview_plan)? != Planned::Ready {
+        return Ok(None);
+    }
+    Ok(describe(path, &buf, raw, false).ok().filter(|i| i.kind == MediaKind::Raw))
+}
+
+/// What reading a file in part came to ([`read_planned`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Planned {
+    /// Everything the plan's readers look at is loaded.
+    Ready,
+    /// Read the whole file instead.
+    Whole,
+}
+
+/// Load into `buf` (the file's full length, its `loaded` ranges read) what `plan` names, round by
+/// round, until it is [`HeaderPlan::Ready`](lightcraft_raw::sparse::HeaderPlan::Ready). `Whole`
+/// when the plan says so, when more than `share` tenths of the file would be read, or after `rounds`.
+fn read_planned(
+    file: &mut std::fs::File,
+    buf: &mut [u8],
+    loaded: &mut lightcraft_raw::sparse::Ranges,
+    rounds: usize,
+    share: u64,
+    plan: fn(&[u8], &lightcraft_raw::sparse::Ranges) -> lightcraft_raw::sparse::HeaderPlan,
+) -> std::io::Result<Planned> {
+    use lightcraft_raw::sparse::HeaderPlan;
+    let total = buf.len() as u64;
+    for _ in 0..rounds {
+        match plan(buf, loaded) {
+            HeaderPlan::Need(more) => {
+                if loaded.total().saturating_add(more.total()).saturating_mul(10) > total.saturating_mul(share) {
+                    return Ok(Planned::Whole);
+                }
+                for &(start, end) in more.spans() {
+                    load_range(file, buf, loaded, start, end)?;
+                }
+            }
+            HeaderPlan::Ready => return Ok(Planned::Ready),
+            HeaderPlan::Whole(_) => return Ok(Planned::Whole),
+        }
+    }
+    Ok(Planned::Whole)
+}
+
+/// Read the file's bytes `[start, end)` into the same place of `buf`.
+fn load_range(file: &mut std::fs::File, buf: &mut [u8], loaded: &mut lightcraft_raw::sparse::Ranges, start: u64, end: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let range = usize::try_from(start).ok().zip(usize::try_from(end).ok()).and_then(|(a, b)| buf.get_mut(a..b));
+    let Some(range) = range else { return Err(std::io::ErrorKind::InvalidInput.into()) };
+    file.seek(SeekFrom::Start(start))?;
+    file.read_exact(range)?;
+    loaded.insert(start, end);
+    Ok(())
 }
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
@@ -1138,6 +1248,7 @@ impl crate::Session {
         self.media.file_loader = Some(l);
         self.media.reduced_loader = Some(fs_reduced_loader());
         self.media.file_probe = Some(p);
+        self.media.header_probe = Some(fs_header_probe());
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
         #[cfg(target_os = "macos")]
@@ -1654,6 +1765,50 @@ pub(crate) mod tests {
         assert_eq!((img.width, img.height), (32, 24));
         let worst = img.data.iter().map(|p| p[1] / ((p[0] + p[2]) / 2.0).max(1e-6)).fold(0.0f32, f32::max);
         assert!(worst < 1.12, "green speckles: green {worst:.2}× the other channels");
+    }
+
+    /// An import that adds files where they are describes a raw from its headers: the same as
+    /// reading all of it, but without a content hash; a file too small to gain is read whole.
+    #[test]
+    fn header_probe_describes_a_raw_as_reading_all_of_it_does() {
+        let dir = crate::tests_xmp::temp_dir("header-probe");
+        let (w, h) = (2000usize, 1500usize);
+        let mut x = 0x9e37_79b9u32;
+        let data: Vec<u16> = (0..w * h)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                256 + (x % 15000) as u16
+            })
+            .collect();
+        let meta = lightcraft_meta::Metadata {
+            make: Some("Example".into()),
+            model: Some("Camera".into()),
+            keywords: vec!["Travel".into()],
+            ..Default::default()
+        };
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#;
+        let bytes = crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, Some(xmp), meta);
+        assert!(bytes.len() as u64 > PARTIAL_MIN, "{} bytes", bytes.len());
+        let big = dir.join("big.dng");
+        std::fs::write(&big, &bytes).unwrap();
+        let big = big.to_string_lossy();
+        assert!(probe_partial(&big).unwrap().is_some(), "described from its headers");
+        let partial = fs_header_probe()(&big).unwrap();
+        let whole = probe_file(&big).unwrap();
+        assert!(whole.content_hash.is_some() && partial.content_hash.is_none());
+        assert!(partial.file_modified.is_some(), "the file's date, as a whole read gives it");
+        assert_eq!(format!("{partial:?}"), format!("{:?}", ProbeInfo { content_hash: None, ..whole }));
+        assert_eq!(partial.meta.camera, "Example Camera");
+        assert!(partial.xmp.is_some_and(|x| x.contains("Rating")));
+        let small = dir.join("small.dng");
+        std::fs::write(&small, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let small = small.to_string_lossy();
+        assert!(probe_partial(&small).unwrap().is_none());
+        assert!(fs_header_probe()(&small).unwrap().content_hash.is_some(), "read whole, hashed");
+        assert!(fs_header_probe()(&dir.join("gone.dng").to_string_lossy()).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
