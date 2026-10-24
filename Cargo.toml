@@ -25,6 +25,7 @@ lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }
 lightcraft-develop = { path = "crates/develop" }
+lightcraft-film = { path = "crates/film" }
 lightcraft-lensdb = { path = "crates/lensdb" }
 lightcraft-inpaint = { path = "crates/inpaint" }
 lightcraft-scenes = { path = "crates/scenes" }
@@ -56,6 +57,7 @@ proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
+libm = "0.2" # pure-Rust maths for lightcraft-film (target-independent results)
 libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
