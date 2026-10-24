@@ -7,7 +7,7 @@
 //! - **new** files: supported files the library doesn't have, by path or by content (the import
 //!   scan's duplicate rules, [`crate::import::scan_with`]);
 //! - **missing** photos: library photos in the folder whose file is gone (the Missing Photos rule,
-//!   [`crate::cmd::missing::checked_path`]);
+//!   [`lightcraft_catalog::Photo::library_file`]);
 //! - **metadata** updates: photos whose XMP sidecar file was saved after the photo came into the
 //!   library or was last edited here, and says something the library doesn't (rating, flag,
 //!   label, metadata, capture time or develop settings). Reading one makes the sidecar win, as
@@ -267,7 +267,7 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     );
     let mut changes = FolderChanges { path: folder, seen, ..Default::default() };
     for ((p, _), check) in photos.iter().zip(checks) {
-        let Some(file) = crate::cmd::missing::checked_path(p) else { continue };
+        let Some(file) = p.library_file() else { continue };
         let found = FolderPhoto { id: p.id.0, path: file.to_string() };
         match check {
             Check::Missing => changes.missing.push(found),
@@ -510,7 +510,7 @@ impl Listing {
 }
 
 fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing) -> Check {
-    let Some(file) = crate::cmd::missing::checked_path(p) else { return Check::Nothing };
+    let Some(file) = p.library_file() else { return Check::Nothing };
     let file = Path::new(file);
     if !listing.or_ask(listing.exists(file), || file.exists()) {
         Check::Missing

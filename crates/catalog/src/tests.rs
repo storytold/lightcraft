@@ -901,6 +901,52 @@ fn search_text_finds_people_and_quoted_values() {
     assert_eq!(q("   \t jane \u{3000} "), vec![jane, both], "any whitespace separates tokens");
 }
 
+/// The photos a tally that reads only some things of a photo has to look at again: those whose file, presence or flag
+/// changed, not those that were only rated, and not what an album, a stack or a folder label changed (no photo's own).
+#[test]
+fn photos_changed_since_names_the_photos_whose_read_aspects_changed() {
+    let mut c = Catalog::default();
+    let add = |c: &mut Catalog, name: &str| {
+        let id = c.alloc_photo_id();
+        c.apply(Op::AddPhoto {
+            photo: Box::new(Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00")),
+        })
+        .unwrap();
+        id
+    };
+    let (a, b) = (add(&mut c, "a.jpg"), add(&mut c, "b.jpg"));
+    let files = Aspects::PRESENCE.with(Aspects::FILE);
+    let start = c.revision;
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![]));
+    // a rating changes neither; a flag is read by the flag reader only
+    c.apply(Op::SetRating { id: a, rating: 3 }).unwrap();
+    c.apply(Op::SetFlag { id: b, flag: Flag::Pick }).unwrap();
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![]));
+    assert_eq!(c.photos_changed_since(start, Aspects::FLAG), Some(vec![b]));
+    assert_eq!(c.touched_since(start), Some(vec![a, b]), "touched_since says every photo that was touched");
+    // a photo that comes in, moves or goes
+    let new = add(&mut c, "c.jpg");
+    c.apply(Op::Relink { id: a, file_name: "m.jpg".into(), source: Source::File { path: "/p/m.jpg".into() }, format: None }).unwrap();
+    c.apply(Op::RemovePhoto { id: b }).unwrap();
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![a, b, new]), "each once, in id order");
+    // an op that changes no photo of its own is remembered, and is not in the answer (touched_since gives up on it)
+    let before = c.revision;
+    let album = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album { photos: vec![a], ..Album::new(album, "Trip") } }).unwrap();
+    assert_eq!(c.photos_changed_since(before, files), Some(vec![]));
+    assert_eq!(c.touched_since(before), None);
+    assert_eq!(c.photos_changed_since(start, files), Some(vec![a, b, new]), "what came before it is still known");
+    // not known: a revision that is not this catalog's past, and one set from outside (a library just loaded)
+    assert_eq!(c.photos_changed_since(c.revision + 5, files), None);
+    let old = c.revision;
+    c.revision = 7 << 32;
+    assert_eq!(c.photos_changed_since(old, files), None);
+    let loaded = c.revision;
+    c.apply(Op::SetRating { id: a, rating: 1 }).unwrap();
+    assert_eq!(c.photos_changed_since(loaded, files), Some(vec![]));
+    assert_eq!(c.photos_changed_since(old, files), None);
+}
+
 /// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be
 /// said photo by photo.
 #[test]
