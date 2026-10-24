@@ -494,6 +494,34 @@ fn clipped_highlights_stay_neutral_on_both() {
     }
 }
 
+/// Black pixels have no hue. The GPU's `atan2(0, 0)` is undefined (NaN on some GPUs), which made
+/// every exactly black pixel NaN once a colour tool ran, and a lightening vignette then showed it:
+/// the CPU lifted the black corners, the GPU left them black.
+#[test]
+fn black_pixels_match_under_colour_tools_and_a_light_vignette() {
+    if !gpu() {
+        return;
+    }
+    let base = scene(0, 320, 240);
+    // black bars across the frame, reaching into the corners the vignette lightens
+    let src = Arc::new(Rgb32f::from_fn(320, 240, |x, y| if y % 40 < 8 || x % 64 < 6 { [0.0; 3] } else { base.get(x, y) }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(320, 240);
+    for (name, f) in [
+        ("black, light vignette + saturation", (|s: &mut DevelopSettings| s.color.saturation = 40.0) as fn(&mut DevelopSettings)),
+        ("black, light vignette + vibrance", |s| s.color.vibrance = 30.0),
+        ("black, light vignette + mixer", |s| s.mixer.yellow.hue = 30.0),
+    ] {
+        let mut s = DevelopSettings::default();
+        s.vignette.amount = 25.0;
+        s.vignette.style = VignetteStyle::HighlightPriority;
+        f(&mut s);
+        check(name, &src, &info, &s, &req);
+        let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
+        assert!(gpu.get(0, 0)[1] > 0, "{name}: the black corner is not lightened on the GPU");
+    }
+}
+
 #[test]
 fn rendered_sources_and_other_scenes() {
     if !gpu() {
