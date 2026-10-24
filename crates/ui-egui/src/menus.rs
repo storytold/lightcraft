@@ -160,6 +160,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.keywords", "Keywords", Some("K"), "Window"),
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
     ("panel.activity", "History", None, "Window"),
+    ("panel.bursts", "Bursts", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
     ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),
@@ -1250,6 +1251,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             panel(app, &ctx, RightPanel::Activity, "History");
             Ok(Value::Null)
         }
+        "panel.bursts" => {
+            panel(app, &ctx, RightPanel::Bursts, "Bursts");
+            Ok(Value::Null)
+        }
         "panel.presets" => {
             app.ui.presets = !app.ui.presets || !crate::docking::exposed(app, crate::docking::Panel::Presets);
             if app.ui.presets && app.ui.view != ViewMode::Detail {
@@ -1546,7 +1551,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
+            app.ui.dialog = Some(Dialog::Cull {
+                reject_below: 0.0,
+                pick_best: true,
+                stack_groups: app.ui.cull_stack,
+                burst_gap,
+                similarity,
+                reset_bursts: false,
+            });
             Ok(Value::Null)
         }
         "app.whatsNew" => {
