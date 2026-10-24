@@ -297,5 +297,10 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}: resolusi penuhnya ({full}) memerlukan memori melebihi kapasitas komputer ini",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}, resolusi maksimum untuk panorama (resolusi penuhnya {full})",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}"
+  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  "· {n} copies of library photos": "· {n} salinan foto pustaka",
+  "· {n} repeated in this import": "· {n} berulang dalam impor ini",
+  "Same content as {path} in the library": "Konten sama dengan {path} di pustaka",
+  "Same file as {path} earlier in this import": "File sama dengan {path} sebelumnya dalam impor ini",
+  " · {n} imported although another photo has the same content": " · {n} diimpor meskipun foto lain memiliki konten yang sama"
 }

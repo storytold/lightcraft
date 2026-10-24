@@ -297,5 +297,10 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more"
+  "…and {more} more": "…and {more} more",
+  "· {n} copies of library photos": "· {n} bản sao của ảnh trong thư viện",
+  "· {n} repeated in this import": "· {n} lặp lại trong lần nhập này",
+  "Same content as {path} in the library": "Cùng nội dung với {path} trong thư viện",
+  "Same file as {path} earlier in this import": "Cùng tệp với {path} trước đó trong lần nhập này",
+  " · {n} imported although another photo has the same content": " · {n} đã nhập dù ảnh khác có cùng nội dung"
 }

@@ -297,5 +297,10 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "”{to}” on jo henkilö. Yhdistäminen tekee kahdesta yhden henkilön; Kumoa erottaa ne uudelleen.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… ja {more} lisää",
-  "…and {more} more": "…ja {more} lisää"
+  "…and {more} more": "…ja {more} lisää",
+  "· {n} copies of library photos": "· {n} kopiota kirjaston valokuvista",
+  "· {n} repeated in this import": "· {n} toistuu tässä tuonnissa",
+  "Same content as {path} in the library": "Sama sisältö kuin tiedostossa {path} kirjastossa",
+  "Same file as {path} earlier in this import": "Sama tiedosto kuin {path} aiemmin tässä tuonnissa",
+  " · {n} imported although another photo has the same content": " · {n} tuotu, vaikka toisella valokuvalla on sama sisältö"
 }
