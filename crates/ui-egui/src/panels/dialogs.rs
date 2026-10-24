@@ -1589,6 +1589,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(BACKDROP_SHOWN), frame));
     }
+    // a review closed without importing (Cancel, Esc) leaves no listing behind (OK took it already)
+    if close && matches!(dlg, Dialog::Import { .. }) {
+        app.review_listed = None;
+    }
     app.ui.dialog = if close { None } else { Some(dlg) };
 }
 

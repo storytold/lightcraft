@@ -146,7 +146,7 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
             .collect();
     // (`dir.jpg` is gone, though a sidecar of its name is there)
     let mut l = Listing::default();
-    let walked = crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+    let walked = crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete, _| {
         l.note(d, names, complete);
         true
     });
@@ -169,7 +169,7 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
         l.asked.load(std::sync::atomic::Ordering::Relaxed)
     };
     let mut with = Listing::default();
-    crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+    crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete, _| {
         with.note(d, names, complete);
         true
     });
@@ -186,7 +186,7 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     // a folder of plain names only: the disk is asked nothing at all
     let sub = dir.join("sub");
     let mut only_plain = Listing::default();
-    crate::walk::files_in_noting(&sub, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+    crate::walk::files_in_noting(&sub, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete, _| {
         only_plain.note(d, names, complete);
         true
     });

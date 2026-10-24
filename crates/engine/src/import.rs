@@ -428,7 +428,21 @@ pub(crate) fn expand_noting(
     paths: &[String],
     skip: Option<&Path>,
     limits: crate::walk::Limits,
+    note: Option<crate::walk::NoteFolder>,
+) -> (Vec<String>, bool) {
+    expand_knowing(paths, skip, limits, note, false, &|_| false)
+}
+
+/// [`expand_noting`], taking the paths `known_file` says are files as files without asking the
+/// disk (a review hands over thousands of them, and telling a file from a folder is a round trip
+/// each on a network share).
+fn expand_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
     mut note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
 ) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
@@ -437,8 +451,9 @@ pub(crate) fn expand_noting(
         if skip.is_some_and(|s| p == s) {
             continue;
         }
-        if p.is_dir() {
+        if !known_file(p) && p.is_dir() {
             let w = match note.as_mut() {
+                Some(note) if timed => crate::walk::files_in_noting_timed(p, skip, limits, is_supported, &mut **note),
                 Some(note) => crate::walk::files_in_noting(p, skip, limits, is_supported, &mut **note),
                 None => crate::walk::files_in(p, skip, limits, is_supported),
             };
@@ -612,6 +627,8 @@ pub struct ScanInput {
     /// ([`library_hashes`]), on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed, for the import that follows.
+    listed: ListedFolders,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
@@ -677,6 +694,8 @@ pub struct ScanProgress {
 pub struct ScanOutput {
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed (kept with the probes, for the import that follows).
+    pub listed: ListedFolders,
 }
 
 impl ScanInput {
@@ -685,7 +704,13 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            probe: s.media.file_probe.clone(),
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+            listed: ListedFolders::default(),
+        };
         (input, paths.to_vec())
     }
 
@@ -712,8 +737,21 @@ pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
-pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let files = expand(paths, input.skip.as_deref());
+pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
+    let listed = &mut input.listed;
+    let (files, _) = expand_knowing(
+        paths,
+        input.skip.as_deref(),
+        crate::walk::Limits::default(),
+        // (always `true`: nothing here stops the walk. `progress.cancel` is read only once it is over, in
+        // `scan_files`, which stops the probing and returns what it has)
+        Some(&mut |dir, names, complete, modified| {
+            listed.note(dir, names, complete, modified);
+            true
+        }),
+        true,
+        &|_| false,
+    );
     scan_files(input, files, progress)
 }
 
@@ -784,7 +822,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    ScanOutput { candidates: out, probes: kept, listed: input.listed }
 }
 
 /// Import files/folders. See the module docs.
@@ -830,6 +868,8 @@ pub struct ImportJob {
     /// Probes from a preceding scan (not read again).
     cache: HashMap<String, ProbeInfo>,
     naming: crate::sidecar::SidecarNaming,
+    /// The `.xmp` names in the folders [`ImportJob::expand`] listed.
+    listed: ListedFolders,
     now: String,
     seq: usize,
     /// Files found so far (folders expanded) and handled so far, for progress.
@@ -976,6 +1016,7 @@ impl ImportJob {
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
+            listed: ListedFolders::default(),
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
@@ -993,10 +1034,35 @@ impl ImportJob {
         self.prepare_files(files, cancel)
     }
 
+    /// Hand the job the folders the review that started it listed ([`ScanOutput::listed`]).
+    #[must_use]
+    pub fn with_listed(mut self, listed: ListedFolders) -> Self {
+        self.listed = listed;
+        self
+    }
+
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
-    pub fn expand(&self, paths: &[String]) -> Vec<String> {
-        let files = expand(paths, self.lib_dir.as_deref());
+    pub fn expand(&mut self, paths: &[String]) -> Vec<String> {
+        // (a file the review listed is a file: no round trip to a share to ask)
+        let mut listed = std::mem::take(&mut self.listed);
+        let mut walked = ListedFolders::default();
+        // (the folders' times are looked at now, not as an earlier batch found them)
+        listed.new_batch();
+        let (files, _) = expand_knowing(
+            paths,
+            self.lib_dir.as_deref(),
+            crate::walk::Limits::default(),
+            Some(&mut |dir, names, complete, modified| {
+                walked.note(dir, names, complete, modified);
+                true
+            }),
+            true,
+            &|p| listed.is_known_file(p),
+        );
+        listed.absorb(walked);
+        listed.forget_files();
+        self.listed = listed;
         self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
         files
     }
@@ -1032,6 +1098,7 @@ impl ImportJob {
         use std::sync::atomic::Ordering::Relaxed;
         // the library as it was, kept for the ownership of the shared stem sidecars below
         let library = self.look_up_library();
+        self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
@@ -1116,7 +1183,9 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar_for_import(&stems, self.naming, &path)
+            let packet = self
+                .listed
+                .find_for_import(&stems, self.naming, &path)
                 .and_then(|f| std::fs::read_to_string(f).ok())
                 .or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
@@ -1634,6 +1703,13 @@ impl Session {
         self
     }
 }
+
+mod listed_folders;
+pub use listed_folders::ListedFolders;
+
+#[cfg(test)]
+#[path = "import/tests_listed_folders.rs"]
+mod tests_listed_folders;
 
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
