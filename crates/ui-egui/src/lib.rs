@@ -81,6 +81,8 @@ mod tests_dialog_fit;
 #[cfg(test)]
 mod tests_dialog_primary;
 #[cfg(test)]
+mod tests_dialog_settings_text;
+#[cfg(test)]
 mod tests_dialog_tab;
 #[cfg(test)]
 mod tests_dialogs;

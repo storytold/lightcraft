@@ -2,6 +2,12 @@
 
 ## 2026-10-23
 
+### Text boxes in Settings
+- Esc in a text box of Settings (Copyright, Creator, the Auto Import album, the two External Editing boxes) gives
+  the text back and stays in Settings; in the first three it used to save what was typed, and in all of them it
+  closed the window. Those three now have the Cut / Copy / Paste menu too, and what is typed in Copyright or
+  Creator is saved when another tab is clicked, where it used to be dropped.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
