@@ -17,6 +17,7 @@ pub mod date_picker;
 pub mod docking;
 pub mod export_task;
 mod focus_scan;
+mod fuji_recipe;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -458,6 +459,8 @@ pub struct LightcraftApp {
     pub export: Option<export_task::ExportTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
+    /// Fujifilm film recipes read off the UI thread for photos imported before they were stored.
+    pub(crate) recipes: fuji_recipe::Recipes,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).
@@ -552,6 +555,7 @@ impl LightcraftApp {
             shown_library: None,
             export: None,
             tasks: Default::default(),
+            recipes: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
             hover_preview: None,

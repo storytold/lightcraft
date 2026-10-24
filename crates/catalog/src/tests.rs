@@ -489,6 +489,26 @@ fn focus_point_is_not_serialized_when_unknown_and_round_trips() {
     assert_eq!(back, with);
 }
 
+/// A film recipe is camera data, like the focus point: older catalogs have neither field, a photo
+/// with no recipe does not grow a null in the JSON, and a recipe that was stored comes back whole.
+#[test]
+fn fuji_recipe_is_not_serialized_when_unknown_and_round_trips() {
+    let old: Meta = serde_json::from_value(serde_json::json!({"camera": "X"})).unwrap();
+    assert!(!old.fuji_recipe_known && old.fuji_recipe.is_none());
+    let m = Meta { camera: "FUJIFILM X-T5".into(), ..Default::default() };
+    let v = serde_json::to_value(&m).unwrap();
+    assert!(v.get("fuji_recipe").is_none() && v.get("fuji_recipe_known").is_none(), "{v}");
+    let mut with = m.clone();
+    with.fuji_recipe_known = true;
+    with.fuji_recipe = Some(lightcraft_meta::FujiRecipe {
+        rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Classic Chrome".into() }],
+    });
+    let json = serde_json::to_string(&with).unwrap();
+    assert!(json.contains("fuji_recipe_known") && json.contains("Classic Chrome"), "{json}");
+    let back: Meta = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, with);
+}
+
 // ---- random sort: Given a seed, the order is a stable, reproducible shuffle of the matching photos
 
 fn many(c: &mut Catalog, n: usize) -> Vec<PhotoId> {
