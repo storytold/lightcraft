@@ -1110,7 +1110,7 @@ impl ExportOptions {
             naming: s("naming").map_or(d.naming, str::to_string),
             start_number: u("startNumber").map_or(d.start_number, |v| v.min(999_999) as u32),
             destination_mode: s("destinationMode").and_then(DestinationMode::parse).unwrap_or(d.destination_mode),
-            subfolder: s("subfolder").map_or(d.subfolder, |v| v.trim().replace(['\\', ':', '\0'], "_")),
+            subfolder: s("subfolder").map_or(d.subfolder, clean_subfolder),
             conflict: s("conflict").and_then(Conflict::parse).unwrap_or(d.conflict),
             tiff_compression: match s("tiffCompression").map(str::to_ascii_lowercase).as_deref() {
                 Some("none") => TiffCompression::None,
@@ -2252,6 +2252,14 @@ fn join_path(a: &str, b: &str) -> String {
     if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) }
 }
 
+/// A subfolder that stays inside the destination folder (issue #2571): `\`, `:` and NUL become `_`
+/// (so no drive, root or Windows separator), and empty, `.` and `..` parts are dropped; `a/b` still
+/// nests. Applied where the folder is used, so presets and the Export dialog's field are covered too.
+pub(crate) fn clean_subfolder(s: &str) -> String {
+    let s = s.trim().replace(['\\', ':', '\0'], "_");
+    s.split('/').map(str::trim).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
+}
+
 impl<'a> Placer<'a> {
     fn new(
         o: &'a ExportOptions,
@@ -2281,7 +2289,8 @@ impl<'a> Placer<'a> {
                 d.to_string()
             }
         };
-        Ok(if self.o.subfolder.is_empty() { base } else { join_path(&base, &self.o.subfolder) })
+        let sub = clean_subfolder(&self.o.subfolder);
+        Ok(if sub.is_empty() { base } else { join_path(&base, &sub) })
     }
 
     /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it

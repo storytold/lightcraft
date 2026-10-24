@@ -2,6 +2,12 @@
 
 ## 2026-10-23
 
+### Export subfolders stay inside the export folder
+- An export subfolder (typed in the Export dialog, saved in a preset or passed to `export`) can no longer lead
+  outside the chosen folder (issue #2571). `..` and `.` parts and a leading `/` are dropped, and `\` and `:` become
+  `_`, so a shared preset with `../..` in its subfolder writes inside your folder instead of elsewhere on disk.
+  Nested subfolders such as `Client/Jobs` still work.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
