@@ -48,7 +48,8 @@ fn album_json(a: &Album, all: &[Album], counts: &HashMap<AlbumId, usize>, cat: &
         "id": a.id.0,
         "name": a.name,
         "folder": a.folder,
-        "count": counts.get(&a.id).copied().unwrap_or(0),
+        // (the whole count leaves folders out: the sidebar shows them none; an agent is told their photos' number)
+        "count": counts.get(&a.id).copied().unwrap_or_else(|| if a.folder { cat.album_count(a.id) } else { 0 }),
         "cover": a.cover.map(|c| c.0),
         "children": children,
     });
@@ -154,7 +155,8 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();
-            // every album counted in one pass, so a smart album tested by others is worked out once
+            // every album but the folders counted in one pass, so a smart album tested by others is worked out once
+            // (a folder's photos are counted on their own, as the whole count leaves folders out)
             let counts = lightcraft_catalog::tally::AlbumTally::of(&s.catalog);
             Ok(Value::Array(all.iter().filter(|a| a.parent.is_none()).map(|a| album_json(a, &all, counts.counts(), &s.catalog, 0)).collect()))
         }),

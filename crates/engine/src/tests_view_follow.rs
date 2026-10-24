@@ -233,6 +233,33 @@ fn relative_clock_direct_and_nested_smart_album_sources_expire() {
     }
 }
 
+/// A folder of albums is a source too: a smart album inside it (at any depth) whose rules are relative to now
+/// ("in the last day") makes the folder's view and count change when the minute passes, as it does for the smart album itself.
+#[test]
+fn relative_clock_folder_of_albums_source_expires() {
+    for deeper in [false, true] {
+        let (mut s, now, ids) = relative_clock_session(&["2026-10-23T12:00:30"]);
+        let id_of = |r: Value| r["id"].as_u64().unwrap();
+        let folder = id_of(s.execute("album.create", &json!({"name": "Outer", "folder": true})).unwrap());
+        let parent =
+            if deeper { id_of(s.execute("album.create", &json!({"name": "Inner", "folder": true, "parent": folder})).unwrap()) } else { folder };
+        s.execute(
+            "album.createSmart",
+            &json!({"name": "Recent", "parent": parent, "rules": {"ruleSet": {"rules": [{"field": "captureDate", "op": "inLast", "value": 1}]}}}),
+        )
+        .unwrap();
+        s.execute("library.source", &json!({"kind": "album", "id": folder})).unwrap();
+        assert_eq!(s.visible_cloned(), ids, "deeper={deeper}");
+        assert_eq!(s.source_total(), Some(1), "deeper={deeper}");
+        let revision = s.catalog.revision;
+
+        *now.lock().unwrap() = "2026-10-24T12:01:00".to_string();
+        assert!(s.visible_cloned().is_empty(), "deeper={deeper}");
+        assert_eq!(s.source_total(), Some(0), "deeper={deeper}");
+        assert_eq!(s.catalog.revision, revision, "deeper={deeper}");
+    }
+}
+
 #[test]
 fn relative_clock_source_total_expires_before_or_after_visible_refresh() {
     for refresh_visible in [false, true] {
