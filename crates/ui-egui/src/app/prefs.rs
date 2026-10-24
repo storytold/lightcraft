@@ -11,6 +11,11 @@ impl LightcraftApp {
         self.ui.settings.reduce_motion.unwrap_or(self.system_reduce_motion.unwrap_or(false))
     }
 
+    /// Whether there is a system Reduce Motion to follow: a reader that has answered.
+    pub(crate) fn system_reduce_motion_available(&self) -> bool {
+        self.services.system_reduce_motion.is_some() && self.system_reduce_motion.is_some()
+    }
+
     /// Read the system's Reduce Motion (`services.system_reduce_motion`) at most once a second.
     fn follow_system_reduce_motion(&mut self) {
         let now = self.tick_now();

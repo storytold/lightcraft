@@ -79,7 +79,7 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
     let mut reduce = app.reduce_motion();
-    let has_system = app.services.system_reduce_motion.is_some();
+    let has_system = app.system_reduce_motion_available();
     ui.horizontal(|ui| {
         let r = ui.checkbox(&mut reduce, crate::i18n::tr("Reduce motion"));
         register(ui, "check:settings.reduceMotion".to_string(), r.rect);
