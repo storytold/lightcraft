@@ -93,6 +93,8 @@ fn save_delete_library_reimport_restores_edits() {
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.8})).unwrap();
     s.execute("develop.set", &json!({"control": "effects.clarity", "value": 25})).unwrap();
     s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let mask = s.develop_of(id).unwrap().masks[0].id;
+    s.execute("develop.curve", &json!({"channel": "blue", "points": [[0.0, 0.1], [0.5, 0.6], [1.0, 1.0]], "mask": mask})).unwrap();
     let edited = s.catalog.photo(id).unwrap().clone();
     let r = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
     assert_eq!(r["written"][0], src.join("dune.xmp").to_string_lossy().as_ref(), "{r}");
@@ -110,6 +112,7 @@ fn save_delete_library_reimport_restores_edits() {
     let p = s.catalog.photos().find(|p| p.file_name == "dune.png").unwrap().clone();
     assert_eq!(p.develop, edited.develop, "develop settings restored exactly");
     assert_eq!(p.develop.masks.len(), 1);
+    assert_eq!(p.develop.masks[0].curve.blue.len(), 3, "the mask's local Curve");
     assert_eq!((p.rating, p.flag, p.label), (4, Flag::Pick, Some(ColorLabel::Blue)));
     assert_eq!(p.meta.title, "Dune");
     assert_eq!(p.meta.caption, "Evening light");
