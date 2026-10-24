@@ -2340,5 +2340,10 @@
   "Checking the GPU…": "Перевірка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
-  "Checking the GPU for faces": "Перевірка ГП для облич"
+  "Checking the GPU for faces": "Перевірка ГП для облич",
+  "Reduce Motion": "Зменшити рух",
+  "Reduce motion": "Зменшити рух",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються. Доки ви не зміните це тут, діє системне налаштування «Зменшити рух».",
+  "Use the system setting": "Використовувати налаштування системи",
+  "Turns off zoom and spinner animations. Fades stay.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються."
 }

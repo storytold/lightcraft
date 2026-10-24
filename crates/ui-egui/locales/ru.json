@@ -2335,5 +2335,10 @@
   "Checking the GPU…": "Проверка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
-  "Checking the GPU for faces": "Проверка ГП для лиц"
+  "Checking the GPU for faces": "Проверка ГП для лиц",
+  "Reduce Motion": "Уменьшить движение",
+  "Reduce motion": "Уменьшить движение",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются. Пока вы не измените это здесь, действует системная настройка «Уменьшение движения».",
+  "Use the system setting": "Использовать настройку системы",
+  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются."
 }

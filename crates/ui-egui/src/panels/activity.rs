@@ -146,6 +146,18 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
     clicked
 }
 
+/// The sweeping segment of an indeterminate bar, as offsets from the bar's left edge. Reduced motion
+/// leaves a still segment (a quarter of the bar, at its left end) that says "working" without moving.
+pub(crate) fn indeterminate_span(width: f32, time: f64, reduced: bool) -> (f32, f32) {
+    if reduced {
+        return (0.0, width * 0.25);
+    }
+    let phase = (time * 0.7).fract() as f32;
+    let w = width * 0.3;
+    let x = (width + w) * phase - w;
+    (x.max(0.0), (x + w).min(width))
+}
+
 /// The progress bar; while the amount of work isn't known, a segment sweeps across.
 fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 5.0), Sense::hover());
@@ -155,10 +167,8 @@ fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) {
         let frac = (task.done as f64 / task.total as f64).clamp(0.0, 1.0) as f32;
         Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height()))
     } else {
-        let phase = (ui.input(|i| i.time) * 0.7).fract() as f32;
-        let w = rect.width() * 0.3;
-        let x = rect.left() + (rect.width() + w) * phase - w;
-        Rect::from_min_max(pos2(x.max(rect.left()), rect.top()), pos2((x + w).min(rect.right()), rect.bottom()))
+        let (x0, x1) = indeterminate_span(rect.width(), ui.input(|i| i.time), crate::motion::reduced(ui.ctx()));
+        Rect::from_min_max(pos2(rect.left() + x0, rect.top()), pos2(rect.left() + x1, rect.bottom()))
     };
     if fill.width() > 0.0 {
         p.rect_filled(fill, 2.5, if task.cancelling { t.text_dim } else { t.accent });

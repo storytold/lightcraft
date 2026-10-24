@@ -28,6 +28,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod motion;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
@@ -153,6 +154,8 @@ mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]
+mod tests_reduce_motion;
+#[cfg(test)]
 mod tests_rename_person;
 #[cfg(test)]
 mod tests_rules_editor;
@@ -225,6 +228,8 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// The ICC profile of the screen showing the window, as the system colour-manages it (`None`:
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
+/// Whether the system asks for reduced motion (`None`: not known).
+pub type SystemReduceMotionFn = Box<dyn FnMut() -> Option<bool>>;
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
@@ -259,6 +264,10 @@ pub struct Services {
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
     /// Display (macOS, whose windows aren't colour-managed: issue #787).
     pub screen_profile: Option<ScreenProfileFn>,
+    /// The system's Reduce Motion setting (macOS), followed while Settings ▸ Interface ▸ Reduce motion
+    /// has not been changed by the user; read at most once a second, on frames the app draws (an idle
+    /// window notices on its next input), as people switch it while the app runs.
+    pub system_reduce_motion: Option<SystemReduceMotionFn>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,
     /// Open dialog for a keyword list file (`.txt`, Photo Supreme's `.utf8`; File ▸ Import Keywords…).
@@ -482,6 +491,9 @@ pub struct LightcraftApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// The last answer of `services.system_reduce_motion` and when it was read.
+    pub(crate) system_reduce_motion: Option<bool>,
+    pub(crate) system_reduce_motion_read: Option<f64>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
@@ -563,6 +575,8 @@ impl LightcraftApp {
             display_error: None,
             screen_profile: None,
             screen_profile_read: None,
+            system_reduce_motion: None,
+            system_reduce_motion_read: None,
             library_problem: None,
             activity_expanded: false,
             model_setup: Default::default(),
@@ -1009,9 +1023,32 @@ impl LightcraftApp {
         self.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
     }
 
+    /// Whether motion is reduced: the user's choice, else the system's Reduce Motion (off when unknown).
+    pub fn reduce_motion(&self) -> bool {
+        self.ui.settings.reduce_motion.unwrap_or(self.system_reduce_motion.unwrap_or(false))
+    }
+
+    /// Whether there is a system Reduce Motion to follow: a reader that has answered.
+    pub(crate) fn system_reduce_motion_available(&self) -> bool {
+        self.services.system_reduce_motion.is_some() && self.system_reduce_motion.is_some()
+    }
+
+    /// Read the system's Reduce Motion (`services.system_reduce_motion`) at most once a second.
+    fn follow_system_reduce_motion(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if self.system_reduce_motion_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+            return;
+        }
+        let Some(read) = self.services.system_reduce_motion.as_mut() else { return };
+        self.system_reduce_motion_read = Some(now);
+        self.system_reduce_motion = read();
+    }
+
     /// Restyle `ctx` when the theme the settings select (Appearance Mode, the dark and light
     /// themes, the system's appearance in Auto) is not the one it shows. A no-op otherwise.
     pub fn sync_theme(&mut self, ctx: &egui::Context) {
+        self.follow_system_reduce_motion(ctx);
+        motion::sync(ctx, self.reduce_motion());
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
         if theme::current(ctx) != Some(wanted) {
             theme::apply_kind(ctx, wanted);

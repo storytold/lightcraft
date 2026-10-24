@@ -2342,5 +2342,10 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Reduce Motion": "動きを減らす",
+  "Reduce motion": "動きを減らす",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。",
+  "Use the system setting": "システム設定に従う",
+  "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。"
 }

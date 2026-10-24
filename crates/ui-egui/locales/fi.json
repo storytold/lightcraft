@@ -2311,5 +2311,10 @@
   "− harder border · + softer border": "− terävämpi reuna · + pehmeämpi reuna",
   "≤  at most": "≤  enintään",
   "≥  at least": "≥  vähintään",
-  "★ Favorites": "★ Suosikit"
+  "★ Favorites": "★ Suosikit",
+  "Reduce Motion": "Vähennä liikettä",
+  "Reduce motion": "Vähennä liikettä",
+  "Turns off zoom and spinner animations. Fades stay.": "Poistaa zoomaus- ja pyörivät animaatiot käytöstä. Häivytykset säilyvät.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Poistaa zoomaus- ja pyörivät animaatiot käytöstä. Häivytykset säilyvät. Seuraa järjestelmän Vähennä liikettä -asetusta, kunnes muutat sitä täällä.",
+  "Use the system setting": "Käytä järjestelmän asetusta"
 }

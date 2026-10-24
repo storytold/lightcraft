@@ -2220,5 +2220,10 @@
   "≥  at least": "≥  tối thiểu",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-kéo để chỉnh thẳng, ⇧G Chỉnh thẳng có hướng dẫn, lưới khi biến đổi.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Reduce Motion": "Giảm chuyển động",
+  "Reduce motion": "Giảm chuyển động",
+  "Turns off zoom and spinner animations. Fades stay.": "Tắt hiệu ứng phóng to và biểu tượng xoay. Hiệu ứng mờ dần vẫn được giữ nguyên.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Tắt hiệu ứng phóng to và biểu tượng xoay. Hiệu ứng mờ dần vẫn được giữ nguyên. Theo cài đặt Giảm chuyển động của hệ thống cho đến khi bạn thay đổi tại đây.",
+  "Use the system setting": "Dùng cài đặt của hệ thống"
 }

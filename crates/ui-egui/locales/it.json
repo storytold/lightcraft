@@ -2345,5 +2345,10 @@
   "Loupe Info 2": "Info lente 2",
   "Use Defaults": "Usa predefiniti",
   "Camera & Lens": "Fotocamera e obiettivo",
-  "View → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2."
+  "View → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2.",
+  "Reduce Motion": "Riduci movimento",
+  "Reduce motion": "Riduci movimento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Disattiva le animazioni dello zoom e degli indicatori di attività. Le dissolvenze restano. Segue l’impostazione Riduci movimento del sistema finché non la cambi qui.",
+  "Use the system setting": "Usa l’impostazione del sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Disattiva le animazioni dello zoom e degli indicatori di attività. Le dissolvenze restano."
 }

@@ -2719,5 +2719,10 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Reduce Motion": "მოძრაობის შემცირება",
+  "Reduce motion": "მოძრაობის შემცირება",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება. სანამ აქ არ შეცვლით, სისტემის „მოძრაობის შემცირების“ პარამეტრს მისდევს.",
+  "Use the system setting": "სისტემის პარამეტრის გამოყენება",
+  "Turns off zoom and spinner animations. Fades stay.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება."
 }

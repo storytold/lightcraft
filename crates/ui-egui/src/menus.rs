@@ -86,6 +86,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.focusPoint", "Show Focus Point", Some("Alt+F"), "View"),
     ("view.zoomToFocus", "Zoom to Focus Point", None, "View"),
+    ("view.reduceMotion", "Reduce Motion", None, ""),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
     ("compare.swap", "Swap Compare Photos", None, "View"),
@@ -569,6 +570,21 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // {on?}; no params toggles. Toggle Zoom (Z) centres on the focus point when there is one.
             app.ui.settings.zoom_to_focus = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.zoom_to_focus);
             Ok(json!({"on": app.ui.settings.zoom_to_focus}))
+        }
+        "view.reduceMotion" => {
+            // {on?} sets it; {follow: true} goes back to the system's Reduce Motion; no params toggles
+            // what is in effect. Zoom and spinner animations stop; fades stay.
+            let (follow, on) = match (bool_param(id, p, "follow"), bool_param(id, p, "on")) {
+                (Ok(follow), Ok(on)) => (follow, on),
+                (Err(e), _) | (_, Err(e)) => return Some(Err(e)),
+            };
+            // (where the host has no system setting to read, following would turn off a choice made
+            // for nothing, and report a system that is not there)
+            if follow == Some(true) && !app.system_reduce_motion_available() {
+                return Some(Err("view.reduceMotion: this system has no Reduce Motion setting to follow".into()));
+            }
+            app.ui.settings.reduce_motion = if follow == Some(true) { None } else { Some(on.unwrap_or(!app.reduce_motion())) };
+            Ok(json!({"on": app.reduce_motion(), "followsSystem": app.ui.settings.reduce_motion.is_none()}))
         }
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);

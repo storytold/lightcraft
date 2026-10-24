@@ -34,6 +34,8 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(target_os = "macos")]
+mod reduce_motion;
+#[cfg(target_os = "macos")]
 mod screen_profile;
 mod window_gpu;
 
@@ -630,6 +632,11 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         // macOS doesn't colour-manage the window: previews follow the screen's profile (#787)
         #[cfg(target_os = "macos")]
         screen_profile: Some(Box::new(screen_profile::icc)),
+        // Follow System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until the user chooses
+        #[cfg(target_os = "macos")]
+        system_reduce_motion: Some(Box::new(reduce_motion::system)),
+        #[cfg(not(target_os = "macos"))]
+        system_reduce_motion: None,
         // Linux: the profile the desktop assigns in colord, read off the UI thread
         #[cfg(target_os = "linux")]
         screen_profile: Some(colord::service()),

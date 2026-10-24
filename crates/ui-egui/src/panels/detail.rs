@@ -329,7 +329,7 @@ pub(crate) fn draw_focus_point(p: &egui::Painter, img: Rect, photo: &lightcraft_
 
 /// Ease the loupe rect toward `target` while a click-zoom animation runs; otherwise follow it exactly.
 fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
-    let t = if *anim { 0.22 } else { 0.0 };
+    let t = if *anim { crate::motion::zoom_tween_seconds(ctx) } else { 0.0 };
     let id = egui::Id::new("loupe_anim");
     let v = |k: &str, x: f32| ctx.animate_value_with_time(id.with(k), x, t);
     let (c, s) = (target.center(), target.size());

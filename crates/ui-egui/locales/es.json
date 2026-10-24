@@ -2342,5 +2342,10 @@
   "Checking the GPU…": "Comprobando la GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modelo de caras usa la GPU solo cuando una comprobación muestra que da los mismos resultados más rápido.",
-  "Checking the GPU for faces": "Comprobando la GPU para las caras"
+  "Checking the GPU for faces": "Comprobando la GPU para las caras",
+  "Reduce Motion": "Reducir movimiento",
+  "Reduce motion": "Reducir movimiento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen. Sigue el ajuste Reducir movimiento del sistema hasta que lo cambies aquí.",
+  "Use the system setting": "Usar el ajuste del sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen."
 }

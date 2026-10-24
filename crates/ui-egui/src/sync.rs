@@ -169,7 +169,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     ui.add_space(6.0);
     let Some(c) = counts.as_ref() else {
         ui.horizontal(|ui| {
-            ui.spinner();
+            crate::motion::spinner(ui);
             match progress(app) {
                 Some(ScanStage::Listing(folders, files)) => ui.label(listing_text(folders, files)),
                 Some(ScanStage::Checking(done, total)) if total > 0 => ui.label(format!("{} {done} / {total}", crate::i18n::tr("Scanning…"))),
