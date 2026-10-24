@@ -32,10 +32,21 @@ fn base(path: &str) -> Option<&str> {
     path.rsplit(['/', '\\']).find(|n| !n.is_empty())
 }
 
-/// The paths of the other rows of the Folders tree that are folders named `name`.
+/// The name a Folders row shows: a disk's own (`photos on tokyo`, where its path ends in a mount token such as
+/// `smb-share:server=tokyo,share=photos`), any other folder's last name.
+fn shown(n: &FolderNode) -> &str {
+    if n.volume { &n.name } else { base(&n.path).unwrap_or(&n.name) }
+}
+
+/// The row of the Folders tree at `path`.
+fn node_at<'a>(nodes: &'a [FolderNode], path: &str) -> Option<&'a FolderNode> {
+    nodes.iter().find_map(|n| if n.path == path { Some(n) } else { node_at(&n.children, path) })
+}
+
+/// The paths of the other rows of the Folders tree that are folders shown as `name`.
 fn same_named<'a>(nodes: &'a [FolderNode], path: &str, name: &str, out: &mut Vec<&'a str>) {
     for n in nodes {
-        if n.selectable && n.path != path && base(&n.path) == Some(name) {
+        if n.selectable && n.path != path && shown(n) == name {
             out.push(&n.path);
         }
         same_named(&n.children, path, name, out);
@@ -48,11 +59,12 @@ fn parent(path: &str) -> Option<&str> {
     trimmed.rfind(['/', '\\']).filter(|at| *at > 0).map(|at| &trimmed[..at])
 }
 
-/// How the folder at `path` is called as a destination: its `name`, and, when another row of the
+/// How the folder at `path` is called as a destination: the name its row shows, and, when another row of the
 /// Folders tree has that name, the folder it is in (`Home (/Users/me/Pictures)`). A long parent is
 /// cut to its last names, unless that would make it read like another folder's of the same name
 /// (one the cut path is the end of, or that is cut to the same names): then it is given whole.
-pub fn folder(tree: &[FolderNode], path: &str, name: &str) -> String {
+pub fn folder(tree: &[FolderNode], path: &str) -> String {
+    let name = node_at(tree, path).map_or_else(|| base(path).unwrap_or(path), shown);
     let mut others = Vec::new();
     same_named(tree, path, name, &mut others);
     if others.is_empty() {
@@ -117,14 +129,14 @@ mod tests {
     #[test]
     fn a_folder_name_nobody_shares_stays_plain() {
         let tree = vec![node("/a", vec![node("/a/Home", vec![]), node("/a/Trip", vec![])])];
-        assert_eq!(folder(&tree, "/a/Home", "Home"), "Home");
+        assert_eq!(folder(&tree, "/a/Home"), "Home");
     }
 
     #[test]
     fn two_folders_with_one_name_are_told_apart_by_where_they_are() {
         let tree = vec![node("/a", vec![node("/a/Home", vec![])]), node("/b/pics", vec![node("/b/pics/Home", vec![])])];
-        assert_eq!(folder(&tree, "/a/Home", "Home"), "Home (/a)");
-        assert_eq!(folder(&tree, "/b/pics/Home", "Home"), "Home (/b/pics)");
+        assert_eq!(folder(&tree, "/a/Home"), "Home (/a)");
+        assert_eq!(folder(&tree, "/b/pics/Home"), "Home (/b/pics)");
     }
 
     #[test]
@@ -132,7 +144,7 @@ mod tests {
         let mut other = node("/b/Home", vec![]);
         other.selectable = false;
         let tree = vec![node("/a/Home", vec![]), other];
-        assert_eq!(folder(&tree, "/a/Home", "Home"), "Home");
+        assert_eq!(folder(&tree, "/a/Home"), "Home");
     }
 
     #[test]
@@ -142,15 +154,31 @@ mod tests {
         a.volume = true;
         b.volume = true;
         let tree = vec![a, b];
-        assert_eq!(folder(&tree, "/Volumes/photos", "photos"), "photos (/Volumes)");
-        assert_eq!(folder(&tree, "/mnt/photos", "photos"), "photos (/mnt)");
+        assert_eq!(folder(&tree, "/Volumes/photos"), "photos (/Volumes)");
+        assert_eq!(folder(&tree, "/mnt/photos"), "photos (/mnt)");
+    }
+
+    #[test]
+    fn a_disk_is_named_as_its_row_shows_it_not_by_its_mount_token() {
+        let mut gvfs = node("/run/user/1000/gvfs/smb-share:server=tokyo,share=photos", vec![]);
+        gvfs.volume = true;
+        gvfs.name = "photos on tokyo".into();
+        let tree = vec![gvfs, node("/a/Home", vec![])];
+        assert_eq!(folder(&tree, "/run/user/1000/gvfs/smb-share:server=tokyo,share=photos"), "photos on tokyo");
+        // two rows showing that name still say where each is
+        let mut other = node("/mnt/photos on tokyo", vec![]);
+        other.volume = true;
+        let mut again = tree[0].clone();
+        again.children.clear();
+        let tree = vec![again, other];
+        assert_eq!(folder(&tree, "/mnt/photos on tokyo"), "photos on tokyo (/mnt)");
     }
 
     #[test]
     fn a_long_parent_keeps_its_last_names() {
         let deep = "/Volumes/tokyo/vault/photos/Asian/Japanese/Archive/2019";
         let tree = vec![node("/x/Home", vec![]), node(&format!("{deep}/Home"), vec![])];
-        let label = folder(&tree, &format!("{deep}/Home"), "Home");
+        let label = folder(&tree, &format!("{deep}/Home"));
         assert_eq!(label, "Home (…/photos/Asian/Japanese/Archive/2019)");
         assert!(shorten("/a/b").len() < 10);
         // one name longer than the room is kept whole rather than dropped
@@ -165,8 +193,8 @@ mod tests {
         let tree = vec![node(&format!("{a}/Home"), vec![]), node(&format!("{b}/Home"), vec![])];
         // cut to its last names the two would read the same
         assert_eq!(shorten(a), shorten(b));
-        assert_eq!(folder(&tree, &format!("{a}/Home"), "Home"), format!("Home ({a})"));
-        assert_eq!(folder(&tree, &format!("{b}/Home"), "Home"), format!("Home ({b})"));
+        assert_eq!(folder(&tree, &format!("{a}/Home")), format!("Home ({a})"));
+        assert_eq!(folder(&tree, &format!("{b}/Home")), format!("Home ({b})"));
     }
 
     #[test]
@@ -174,16 +202,16 @@ mod tests {
         let mirror = "/Volumes/Backup/Users/me/Pictures/Lightroom/2019";
         let home = "/Users/me/Pictures/Lightroom/2019";
         let tree = vec![node(&format!("{mirror}/Home"), vec![]), node(&format!("{home}/Home"), vec![])];
-        assert_eq!(folder(&tree, &format!("{mirror}/Home"), "Home"), format!("Home ({mirror})"));
+        assert_eq!(folder(&tree, &format!("{mirror}/Home")), format!("Home ({mirror})"));
         // (the short one is shown whole already)
-        assert_eq!(folder(&tree, &format!("{home}/Home"), "Home"), format!("Home ({home})"));
+        assert_eq!(folder(&tree, &format!("{home}/Home")), format!("Home ({home})"));
     }
 
     #[test]
     fn a_long_windows_parent_is_cut_at_its_backslashes() {
         let deep = r"C:\Users\me\Pictures\Lightroom\Archive\2019";
         let tree = vec![node("/x/Home", vec![]), node(&format!("{deep}\\Home"), vec![])];
-        assert_eq!(folder(&tree, &format!("{deep}\\Home"), "Home"), "Home (…/me/Pictures/Lightroom/Archive/2019)");
+        assert_eq!(folder(&tree, &format!("{deep}\\Home")), "Home (…/me/Pictures/Lightroom/Archive/2019)");
     }
 
     #[test]
@@ -191,14 +219,14 @@ mod tests {
         let backup = r"D:\Backup\Users\me\Pictures\Lightroom\Archive\2019";
         let home = r"C:\Users\me\Pictures\Lightroom\Archive\2019";
         let tree = vec![node(&format!("{backup}\\Home"), vec![]), node(&format!("{home}\\Home"), vec![])];
-        assert_eq!(folder(&tree, &format!("{backup}\\Home"), "Home"), format!("Home ({backup})"));
-        assert_eq!(folder(&tree, &format!("{home}\\Home"), "Home"), format!("Home ({home})"));
+        assert_eq!(folder(&tree, &format!("{backup}\\Home")), format!("Home ({backup})"));
+        assert_eq!(folder(&tree, &format!("{home}\\Home")), format!("Home ({home})"));
     }
 
     #[test]
     fn a_folder_at_the_root_of_a_disk_has_no_parent_to_show() {
         let tree = vec![node("/Home", vec![]), node("/b/Home", vec![])];
-        assert_eq!(folder(&tree, "/Home", "Home"), "Home");
+        assert_eq!(folder(&tree, "/Home"), "Home");
     }
 
     fn album_in(cat: &mut Catalog, name: &str, parent: Option<AlbumId>, folder: bool) -> AlbumId {
