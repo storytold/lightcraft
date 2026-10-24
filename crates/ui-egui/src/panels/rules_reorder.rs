@@ -90,6 +90,8 @@ struct Drag {
     /// edited meanwhile (typing in a field that kept focus) is given up, its path would point into
     /// other rules; the edit stays.
     base: Option<RuleSet>,
+    /// The first frame of the drag has been seen (`base` is taken in the next).
+    seen: bool,
 }
 
 /// What the rows record while they are drawn, for the end of the frame to act on (kept in the
@@ -189,7 +191,7 @@ pub fn grip(ui: &mut Ui, row: &Row) {
     let (dragging_this, dragging) = with_state(&ctx, |s| (s.drag.as_ref().is_some_and(|d| d.from == row.path), s.drag.is_some()));
     if resp.drag_started_by(egui::PointerButton::Primary) {
         let label = (row.label)();
-        with_state(&ctx, |s| s.drag = Some(Drag { from: row.path.to_vec(), label, base: None }));
+        with_state(&ctx, |s| s.drag = Some(Drag { from: row.path.to_vec(), label, base: None, seen: false }));
         // the dragged row's grip takes the focus, so after the drop it follows the row (a focus left
         // on another row's grip or field would stay at its old place, on whichever row lands there)
         resp.request_focus();
@@ -210,6 +212,9 @@ pub fn grip(ui: &mut Ui, row: &Row) {
                 .map(|(_, dir)| dir)
         });
         if let Some(dir) = pressed {
+            // egui picked a neighbor to focus from this same key (the first one after the focus moved
+            // here, or a repeat in the frame after a move, before the lock above applies): cancel that
+            ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
             with_state(&ctx, |s| s.key_move = Some((row.path.to_vec(), dir)));
         }
     }
@@ -252,6 +257,12 @@ pub fn finish(ui: &mut Ui, rs: &mut RuleSet, salt: &str) {
     }
     let Some(mut drag) = drag else { return };
     match &drag.base {
+        None if !drag.seen => {
+            // the frame the drag starts, the grip takes the focus from a number field, which hands back
+            // its clamped or rounded text one frame later: the rules are taken after that
+            drag.seen = true;
+            with_state(&ctx, |s| s.drag = Some(drag.clone()));
+        }
         None => {
             drag.base = Some(rs.clone());
             with_state(&ctx, |s| s.drag = Some(drag.clone()));
