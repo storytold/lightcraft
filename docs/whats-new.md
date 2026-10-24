@@ -755,8 +755,9 @@
   Photo".
 
 ### Several albums, folders, keywords or dates shown at once (agents)
-- `library.source` takes `ids` (albums) or `paths` (folders) and shows the photos of any of them, each once;
-  `library.filter` takes `keywords`, `dates`, `libraryFolders` and `albums`. The single fields stay and count as one
+- `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
+  browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
+  `libraryFolders` and `albums`. The single fields stay and count as one
   more of them. `library.state` lists `albums` and `libraryFolders`. Nothing on screen changes yet: the sidebars'
   Cmd+click and Shift+click that use this come in a later change.
 - `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops

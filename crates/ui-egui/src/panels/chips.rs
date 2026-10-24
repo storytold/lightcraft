@@ -47,7 +47,14 @@ fn prefixed_value(prefix: &str, value: &str, filter: &lightcraft_catalog::Filter
     use crate::i18n::{date_group_label, tr};
     let date = match prefix {
         "Type" => return tr(value).to_string(),
-        "Date" => &filter.date,
+        "Date" => {
+            // every date of the chip, as the engine's label lists them
+            let dates = filter.dates_wanted();
+            if dates.is_empty() {
+                return value.to_string();
+            }
+            return dates.iter().map(|date| date_group_label(date, false)).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
+        }
         "Imported" => &filter.imported,
         _ => return value.to_string(),
     };
