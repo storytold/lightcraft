@@ -35,5 +35,5 @@ proptest = { workspace = true }
 zune-jpegxl = { workspace = true }
 # Pinned CC0 corpus identities; not a product dependency.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
-# Peak-heap regression tests (tests/sr2_heap.rs); not a product dependency.
+# Peak-heap regression tests (tests/sr2_heap.rs, tests/erf_preview_heap.rs); not a product dependency.
 dhat = { workspace = true }

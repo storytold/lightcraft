@@ -13,7 +13,7 @@ const NEUTRAL_SPREAD: u8 = 12;
 /// At least this many neutral preview pixels are needed.
 const MIN_NEUTRAL: usize = 64;
 /// Previews larger than this (pixels) are not decoded for the estimate.
-const MAX_PREVIEW_PIXELS: usize = 1 << 24;
+pub(crate) const MAX_PREVIEW_PIXELS: usize = 1 << 24;
 
 /// The raw frame the estimate looks at.
 pub(crate) struct Frame<'a> {
@@ -66,7 +66,8 @@ fn median(v: &mut [f64]) -> Option<f64> {
 
 fn from_preview(bytes: &[u8], f: &Frame) -> Option<[f32; 3]> {
     let jpeg = crate::preview::embedded_preview(bytes)?;
-    let (px, pw, ph, ch) = crate::tiffraw::lossy_jpeg(&jpeg, 3).ok()?;
+    // a preview over the cap is refused from its JPEG header, before it is decoded (issue #2560)
+    let (px, pw, ph, ch) = crate::tiffraw::lossy_jpeg(&jpeg, 3, (u16::MAX as usize, u16::MAX as usize), MAX_PREVIEW_PIXELS).ok()?;
     if ch != 3 {
         return None;
     }
