@@ -1434,7 +1434,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         .or_else(|| s.catalog.quick_collection());
                     let al = existing.and_then(|a| s.catalog.album(a));
                     return Ok(
-                        json!({"album": al.map(|a| a.id.0), "name": al.map(|a| a.name.clone()), "added": null, "count": al.map_or(0, |a| s.catalog.album_count(a.id)), "skipped": skipped}),
+                        json!({"album": al.map(|a| a.id.0), "name": al.map(|a| a.name.clone()), "added": null, "toggled": 0, "count": al.map_or(0, |a| s.catalog.album_count(a.id)), "skipped": skipped}),
                     );
                 }
                 let target = s.target_album.filter(|a| s.catalog.album(*a).is_some_and(|al| !al.is_smart() && !al.folder));

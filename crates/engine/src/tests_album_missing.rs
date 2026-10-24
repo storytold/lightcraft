@@ -49,7 +49,7 @@ fn photos_the_catalog_lacks_reach_no_album() {
 
     // toggling: nothing is made or changed for ids that are gone
     let r = s.execute("album.toggleTarget", &json!({"ids": [GONE.0]})).unwrap();
-    assert!(r["added"].is_null(), "{r}");
+    assert!(r["added"].is_null() && r["toggled"] == 0, "{r}");
     assert!(s.catalog.quick_collection().is_none(), "no Quick Collection for nothing");
     assert_eq!(s.undo.len(), undo + 1);
 
@@ -78,7 +78,7 @@ fn toggling_gone_photos_leaves_the_target_album_and_redo_alone() {
     let undo = s.undo.len();
     let r = s.execute("album.toggleTarget", &json!({"ids": [GONE.0]})).unwrap();
     assert_eq!(r["album"].as_u64(), Some(a.0), "{r}");
-    assert!(r["added"].is_null(), "{r}");
+    assert!(r["added"].is_null() && r["toggled"] == 0, "{r}");
     assert_eq!(s.catalog.album(a).unwrap().photos, vec![photo]);
     assert_eq!((s.undo.len(), s.redo.len()), (undo, 1));
 }
