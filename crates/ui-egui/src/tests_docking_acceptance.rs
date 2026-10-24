@@ -53,7 +53,7 @@ fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
         let undo = h.app.session.undo.len();
         let photos = serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap();
         h.app.run(command, json!({})).unwrap();
-        assert!(h.app.ui.docking.as_ref().unwrap().exposed(Panel::Tools), "{command}");
+        assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools), "{command}");
         assert_ne!(h.app.ui.right, RightPanel::None);
         assert_eq!(h.app.session.undo.len(), undo);
         assert_eq!(serde_json::to_value(h.app.session.catalog.photos().map(|photo| photo.as_ref()).collect::<Vec<_>>()).unwrap(), photos);
@@ -64,10 +64,10 @@ fn inactive_same_mode_commands_reveal_without_closing_or_editing() {
     dock(&mut h, json!({"operation":"move","panel":"presets","target":"library","zone":"center"}));
     dock(&mut h, json!({"operation":"activate","panel":"library"}));
     h.app.run("panel.presets", json!({})).unwrap();
-    assert!(h.app.ui.docking.as_ref().unwrap().exposed(Panel::Presets));
+    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Presets));
     dock(&mut h, json!({"operation":"activate","panel":"library"}));
     dock(&mut h, json!({"operation":"open","panel":"presets"}));
-    assert!(h.app.ui.docking.as_ref().unwrap().exposed(Panel::Presets));
+    assert!(crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Presets));
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     dock(&mut h, json!({"operation":"move","panel":"tools","target":"presets","zone":"center"}));
     dock(&mut h, json!({"operation":"activate","panel":"presets"}));
     assert_eq!(h.app.ui.right, RightPanel::Crop);
-    assert!(!h.app.ui.docking.as_ref().unwrap().exposed(Panel::Tools));
+    assert!(!crate::docking::exposed_in(h.app.ui.docking.as_ref().unwrap(), Panel::Tools));
     let library = h.app.ui.docking.as_ref().unwrap().layout.location(&Panel::Library).unwrap();
     let id = h.app.session.active().unwrap();
     let photo = serde_json::to_value(h.app.session.catalog.photo(id).unwrap().as_ref()).unwrap();
@@ -94,7 +94,7 @@ fn crop_canvas_double_click_reveals_edit_in_actual_custom_workspace() {
     }
     assert_eq!(h.app.ui.right, RightPanel::Edit, "the real Canvas double-click completes Crop");
     let workspace = h.app.ui.docking.as_ref().unwrap();
-    assert!(workspace.exposed(Panel::Tools), "tool.done reveals Tools after the Canvas callback");
+    assert!(crate::docking::exposed_in(workspace, Panel::Tools), "tool.done reveals Tools after the Canvas callback");
     assert_eq!(workspace.layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Presets));
     assert_eq!(workspace.layout.location(&Panel::Library).unwrap(), library);
     assert_eq!(h.app.session.active(), Some(id));

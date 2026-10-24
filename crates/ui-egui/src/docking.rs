@@ -1,7 +1,10 @@
 //! Application panel identities and persistence around the shared docking renderer.
 //! Document contents remain owned by their existing view implementations.
 
-use craft_ui::docking::{Action, DockArea, DockStyle, Layout, Location, Node, PanelLimits, Permissions, Placement, Zone};
+use craft_ui::docking::{
+    Action, DockArea, DockCommand, DockError, DockOperation, DockStyle, FloatSpace, Layout, Node, PanelLimits, PanelState, Permissions, Placement,
+    UiDock, Zone,
+};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -41,13 +44,11 @@ impl Panel {
             Self::Presets => Zone::Right,
         }
     }
-    fn parse(id: &str) -> Result<Self, String> {
-        Self::ALL.iter().copied().find(|panel| panel.id() == id).ok_or_else(|| format!("Unknown panel: {id}"))
-    }
 }
 
 fn permissions(panel: &Panel) -> Permissions {
-    if *panel == Panel::Canvas { Permissions::PROTECTED } else { Permissions::default() }
+    // Panels open and split beside the photo view, but never join it as tabs.
+    if *panel == Panel::Canvas { Permissions { accepts_splits: true, ..Permissions::PROTECTED } } else { Permissions::default() }
 }
 
 fn tabs(panel: Panel) -> Node<Panel> {
@@ -58,233 +59,119 @@ fn split(axis: SplitAxis, size: SplitSize, first: Node<Panel>, second: Node<Pane
     Node::Split { axis, size, first: Box::new(first), second: Box::new(second) }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Workspace {
-    pub layout: Layout<Panel>,
-    /// Closed panels retain their most recent group, side, size or floating rectangle.
-    pub hidden: Vec<(Panel, Location<Panel>)>,
+/// The saved arrangement. Closed panels keep their last group, side, size or floating rect.
+pub type Workspace = craft_ui::docking::Workspace<Panel>;
+
+pub fn default_workspace() -> Workspace {
+    Workspace::new(Layout {
+        root: Some(split(
+            SplitAxis::Horizontal,
+            SplitSize::FixedFirst(crate::state::LEFT_WIDTH.default),
+            tabs(Panel::Library),
+            split(
+                SplitAxis::Horizontal,
+                SplitSize::FixedSecond(crate::state::RIGHT_WIDTH.default),
+                split(SplitAxis::Horizontal, SplitSize::FixedSecond(300.0), tabs(Panel::Canvas), tabs(Panel::Presets)),
+                tabs(Panel::Tools),
+            ),
+        )),
+        floating: Vec::new(),
+    })
 }
 
-impl Default for Workspace {
-    fn default() -> Self {
-        Self {
-            layout: Layout {
-                root: Some(split(
-                    SplitAxis::Horizontal,
-                    SplitSize::FixedFirst(crate::state::LEFT_WIDTH.default),
-                    tabs(Panel::Library),
-                    split(
-                        SplitAxis::Horizontal,
-                        SplitSize::FixedSecond(crate::state::RIGHT_WIDTH.default),
-                        split(SplitAxis::Horizontal, SplitSize::FixedSecond(300.0), tabs(Panel::Canvas), tabs(Panel::Presets)),
-                        tabs(Panel::Tools),
-                    ),
-                )),
-                floating: Vec::new(),
-            },
-            hidden: Vec::new(),
-        }
-    }
+fn error(error: DockError) -> String {
+    error.to_string()
 }
 
-impl Workspace {
-    pub fn validate(&self) -> Result<(), String> {
-        self.layout.validate().map_err(|error| error.to_string())?;
-        if !self.layout.contains(&Panel::Canvas) || self.hidden.len() > Panel::ALL.len() {
-            return Err("The panel layout must contain its document view and bounded hidden panels".into());
-        }
-        // Saved settings cannot turn the protected document view into a floating or closable tab.
-        if self.layout.floating.iter().any(|group| group.panels.contains(&Panel::Canvas)) {
-            return Err("The document view cannot float".into());
-        }
-        let mut nodes: Vec<_> = self.layout.root.iter().collect();
-        while let Some(node) = nodes.pop() {
-            match node {
-                Node::Split { first, second, .. } => {
-                    nodes.push(first);
-                    nodes.push(second);
-                }
-                Node::Tabs { panels, .. } if panels.contains(&Panel::Canvas) && panels.len() != 1 => {
-                    return Err("The document view cannot share a tab group".into());
-                }
-                Node::Stack { entries } if entries.iter().any(|entry| entry.panel == Panel::Canvas) => {
-                    return Err("The document view cannot be collapsed".into());
-                }
-                _ => {}
+/// The shared checks plus LightCraft's own: saved settings cannot float, hide, share or
+/// collapse the photo view, nor send a hidden panel back onto it.
+pub fn validate(workspace: &Workspace) -> Result<(), String> {
+    workspace.validate().map_err(error)?;
+    let mut nodes: Vec<_> = workspace.layout.root.iter().collect();
+    let mut alone = false;
+    while let Some(node) = nodes.pop() {
+        match node {
+            Node::Split { first, second, .. } => {
+                nodes.push(first);
+                nodes.push(second);
             }
+            Node::Tabs { panels, .. } => alone |= panels.as_slice() == [Panel::Canvas],
+            _ => {}
         }
-        let mut seen = std::collections::HashSet::new();
-        for (panel, location) in &self.hidden {
-            if *panel == Panel::Canvas || self.layout.contains(panel) || !seen.insert(*panel) {
-                return Err("A hidden panel has an invalid or duplicate identity".into());
-            }
-            if location.anchor == Some(Panel::Canvas) && matches!(location.placement, Placement::Tab { .. } | Placement::Split(Zone::Center)) {
-                return Err("A hidden panel cannot restore over the document view".into());
-            }
-            let mut probe = self.layout.clone();
-            if let Err(error) = probe.restore(*panel, location)
-                && error != craft_ui::docking::DockError::MissingTarget
-            {
-                return Err(error.to_string());
-            }
-        }
-        Ok(())
     }
+    if !alone {
+        return Err("The document view must stay docked in a group of its own".into());
+    }
+    if workspace.hidden.iter().any(|(_, location)| {
+        location.anchor == Some(Panel::Canvas) && matches!(location.placement, Placement::Tab { .. } | Placement::Split(Zone::Center))
+    }) {
+        return Err("A hidden panel cannot restore over the document view".into());
+    }
+    Ok(())
+}
 
-    pub fn apply(&mut self, action: Action<Panel>) -> Result<(), String> {
-        self.validate()?;
-        let mut next = self.clone();
-        if let Action::Close { panel } = &action {
-            let location = next.layout.location(panel).map_err(|error| error.to_string())?;
-            next.hidden.retain(|(id, _)| id != panel);
-            next.hidden.push((*panel, location));
-        } else if let Action::Open { panel, .. } | Action::OpenAt { panel, .. } = &action {
-            next.hidden.retain(|(id, _)| id != panel);
-        }
-        next.layout.apply_with_permissions(action, permissions).map_err(|error| error.to_string())?;
-        next.validate()?;
-        *self = next;
-        Ok(())
-    }
+fn apply(workspace: &mut Workspace, action: Action<Panel>) -> Result<(), String> {
+    let mut next = workspace.clone();
+    next.apply(action, permissions).map_err(error)?;
+    validate(&next)?;
+    *workspace = next;
+    Ok(())
+}
 
-    pub fn set_visible(&mut self, panel: Panel, visible: bool) -> Result<(), String> {
-        if self.layout.contains(&panel) == visible {
-            return Ok(());
-        }
-        if !visible {
-            return self.apply(Action::Close { panel });
-        }
-        self.validate()?;
-        let mut next = self.clone();
-        let mut location = next.hidden.iter().find(|(id, _)| *id == panel).map(|(_, location)| location.clone());
-        next.hidden.retain(|(id, _)| *id != panel);
-        if let Some(saved) = &mut location
-            && saved.floating.is_some()
-            && saved.anchor.as_ref().is_some_and(|anchor| !next.layout.floating.iter().any(|group| group.panels.contains(anchor)))
-        {
-            // The other members of a floating group may have been closed too.
-            saved.anchor = None;
-            saved.placement = Placement::Tab { before: None };
-        }
-        let restored = location.as_ref().is_some_and(|location| next.layout.restore(panel, location).is_ok());
-        if !restored {
-            next.layout
-                .apply_with_permissions(
-                    Action::OpenAt { panel, anchor: Panel::Canvas, placement: Placement::Split(panel.default_side()) },
-                    permissions,
-                )
-                .map_err(|error| error.to_string())?;
-        }
-        next.validate()?;
-        *self = next;
-        Ok(())
+/// Shows a panel at its recorded place, else beside the photo on its usual side. A panel that
+/// already has the asked visibility keeps its tab selection.
+fn set_visible(workspace: &mut Workspace, panel: Panel, visible: bool) -> Result<(), String> {
+    if workspace.layout.contains(&panel) == visible {
+        return Ok(());
     }
+    if !visible {
+        return apply(workspace, Action::Close { panel });
+    }
+    validate(workspace)?;
+    let mut next = workspace.clone();
+    if next.set_visible(panel, true, None, permissions).is_ok() && validate(&next).is_ok() {
+        *workspace = next;
+        return Ok(());
+    }
+    apply(workspace, Action::OpenAt { panel, anchor: Panel::Canvas, placement: Placement::Split(panel.default_side()) })
+}
 
-    /// Membership is passive state; an explicit command also exposes the panel's body.
-    pub fn reveal(&mut self, panel: Panel) -> Result<(), String> {
-        self.set_visible(panel, true)?;
-        self.apply(Action::Activate { panel })
+/// Membership is passive state; an explicit command also exposes the panel's body.
+fn reveal(workspace: &mut Workspace, panel: Panel) -> Result<(), String> {
+    set_visible(workspace, panel, true)?;
+    apply(workspace, Action::Activate { panel })?;
+    if workspace.layout.panel_state(&panel) != PanelState::Front {
+        // A minimized window or group opens again; where nothing is minimized the action is
+        // refused and the layout stays as it is.
+        let _ = apply(workspace, Action::SetMinimized { panel, minimized: false });
     }
+    Ok(())
+}
 
-    pub fn exposed(&self, panel: Panel) -> bool {
-        if self.layout.floating.iter().any(|group| group.panels.get(group.active) == Some(&panel)) {
-            return true;
-        }
-        let mut nodes = self.layout.root.as_ref().map(|node| vec![node]).unwrap_or_default();
-        while let Some(node) = nodes.pop() {
-            match node {
-                Node::Tabs { panels, active } if panels.get(*active) == Some(&panel) => return true,
-                Node::Stack { entries } if entries.iter().any(|entry| entry.panel == panel && entry.open) => return true,
-                Node::Split { first, second, .. } => {
-                    nodes.push(first);
-                    nodes.push(second);
-                }
-                _ => {}
-            }
-        }
-        false
-    }
+pub fn exposed_in(workspace: &Workspace, panel: Panel) -> bool {
+    workspace.layout.panel_state(&panel) == PanelState::Front
+}
 
-    fn command(&mut self, params: &Value) -> Result<(), String> {
-        self.validate()?;
-        if let Some(action) = params.get("action") {
-            let action: Action<Panel> = serde_json::from_value(action.clone()).map_err(|error| error.to_string())?;
-            return self.apply(action);
-        }
-        let operation = params.get("operation").and_then(Value::as_str).ok_or("operation is required")?;
-        if operation == "resizeSplit" {
-            let path: Vec<bool> =
-                serde_json::from_value(params.get("path").cloned().ok_or("path is required")?).map_err(|error| error.to_string())?;
-            let size: SplitSize =
-                serde_json::from_value(params.get("size").cloned().ok_or("size is required")?).map_err(|error| error.to_string())?;
-            return self.apply(Action::ResizeSplit { path, size });
-        }
-        let panel = Panel::parse(params.get("panel").and_then(Value::as_str).ok_or("panel is required")?)?;
-        let action = match operation {
-            "open" => return self.reveal(panel),
-            "close" => Action::Close { panel },
-            "activate" => Action::Activate { panel },
-            "setStackOpen" => Action::SetStackOpen { panel, open: params.get("open").and_then(Value::as_bool).ok_or("open must be a boolean")? },
-            "resizeStack" => {
-                let value = params.get("height").ok_or("height is required")?;
-                let height = if value.is_null() {
-                    None
-                } else {
-                    Some(
-                        value
-                            .as_f64()
-                            .filter(|height| height.is_finite() && (0.0..=1_000_000.0).contains(height))
-                            .ok_or("height must be finite and bounded")? as f32,
-                    )
-                };
-                Action::ResizeStack { panel, height }
-            }
-            "float" | "moveFloating" => {
-                let rect = params.get("rect").and_then(Value::as_array).filter(|rect| rect.len() == 4).ok_or("rect must be [x,y,width,height]")?;
-                let mut values = [0.0f32; 4];
-                for (output, value) in values.iter_mut().zip(rect) {
-                    *output = value
-                        .as_f64()
-                        .filter(|number| number.is_finite() && number.abs() <= 1_000_000.0)
-                        .ok_or("rect values must be finite and bounded")? as f32;
-                }
-                if operation == "float" { Action::Float { panel, rect: values } } else { Action::MoveFloating { panel, rect: values } }
-            }
-            "move" => {
-                let anchor = Panel::parse(params.get("target").and_then(Value::as_str).ok_or("target is required")?)?;
-                let placement = match params.get("zone").and_then(Value::as_str).unwrap_or("center") {
-                    "center" => Placement::Split(Zone::Center),
-                    "left" => Placement::Split(Zone::Left),
-                    "right" => Placement::Split(Zone::Right),
-                    "top" => Placement::Split(Zone::Top),
-                    "bottom" => Placement::Split(Zone::Bottom),
-                    _ => return Err("zone must be center, left, right, top or bottom".into()),
-                };
-                let placement = if let Some(before) = params.get("before") {
-                    if !matches!(placement, Placement::Split(Zone::Center)) {
-                        return Err("before only applies to a center move".into());
-                    }
-                    Placement::Tab {
-                        before: if before.is_null() {
-                            None
-                        } else {
-                            Some(Panel::parse(before.as_str().ok_or("before must be a panel ID or null")?)?)
-                        },
-                    }
-                } else {
-                    placement
-                };
-                Action::Move { panel, anchor, placement }
-            }
-            _ => return Err("operation must be open, close, activate, float, move, moveFloating, resizeSplit, setStackOpen or resizeStack".into()),
-        };
-        self.apply(action)
+/// `ui.dock` params, parsed by the shared command vocabulary.
+fn run(workspace: &mut Workspace, params: &Value) -> Result<(), String> {
+    validate(workspace)?;
+    let mut tagged = params.clone();
+    let fields = tagged.as_object_mut().ok_or("ui.dock params must be an object")?;
+    fields.insert("command".into(), json!("ui.dock"));
+    let command: DockCommand<Panel> = serde_json::from_value(tagged).map_err(|error| error.to_string())?;
+    if let DockCommand::UiDock(UiDock::Operation(DockOperation::Open { panel })) = command {
+        return reveal(workspace, panel);
     }
+    let mut next = workspace.clone();
+    // `ui.dock` operations carry their own rects; only `window.panel.float` reads the space.
+    command.apply(&mut next, false, &FloatSpace::new(egui::Rect::ZERO), permissions).map_err(error)?;
+    validate(&next)?;
+    *workspace = next;
+    Ok(())
 }
 
 fn from_ui(app: &crate::LightcraftApp) -> Workspace {
-    let mut workspace = Workspace::default();
+    let mut workspace = default_workspace();
     if let Some(Node::Split { size, second, .. }) = workspace.layout.root.as_mut() {
         *size = SplitSize::FixedFirst(crate::state::LEFT_WIDTH.clamp(app.ui.left_width));
         if let Node::Split { size, .. } = second.as_mut() {
@@ -295,9 +182,9 @@ fn from_ui(app: &crate::LightcraftApp) -> Workspace {
 }
 
 fn sync(workspace: &mut Workspace, app: &crate::LightcraftApp) -> Result<(), String> {
-    workspace.set_visible(Panel::Library, app.ui.left_panel)?;
-    workspace.set_visible(Panel::Tools, app.ui.right != crate::state::RightPanel::None)?;
-    workspace.set_visible(Panel::Presets, app.ui.presets)
+    set_visible(workspace, Panel::Library, app.ui.left_panel)?;
+    set_visible(workspace, Panel::Tools, app.ui.right != crate::state::RightPanel::None)?;
+    set_visible(workspace, Panel::Presets, app.ui.presets)
 }
 
 fn publish_visibility(app: &mut crate::LightcraftApp, workspace: &Workspace) {
@@ -328,7 +215,7 @@ fn publish_visibility(app: &mut crate::LightcraftApp, workspace: &Workspace) {
 }
 
 pub(crate) fn exposed(app: &crate::LightcraftApp, panel: Panel) -> bool {
-    app.ui.docking.as_ref().is_none_or(|workspace| workspace.exposed(panel))
+    app.ui.docking.as_ref().is_none_or(|workspace| exposed_in(workspace, panel))
 }
 
 pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result<(), String> {
@@ -349,7 +236,7 @@ pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result
     if let Some(panel) = panel {
         let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
         sync(&mut workspace, app)?;
-        workspace.reveal(panel)?;
+        reveal(&mut workspace, panel)?;
         cancel_replaced_gesture(app, Some(&workspace));
         app.ui.docking = Some(workspace);
     }
@@ -381,13 +268,13 @@ pub fn command(app: &mut crate::LightcraftApp, reset: bool, params: &Value) -> R
 fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, renderer_action: bool) -> Result<Value, String> {
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
     if reset {
-        workspace = Workspace::default();
+        workspace = default_workspace();
         // The usual LightCraft starting workspace shows its current tool beside the photo.
-        workspace.set_visible(Panel::Library, false)?;
-        workspace.set_visible(Panel::Presets, false)?;
+        set_visible(&mut workspace, Panel::Library, false)?;
+        set_visible(&mut workspace, Panel::Presets, false)?;
     } else {
         sync(&mut workspace, app)?;
-        workspace.command(params)?;
+        run(&mut workspace, params)?;
     }
     if !renderer_action {
         cancel_replaced_gesture(app, Some(&workspace));
@@ -400,7 +287,7 @@ fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, ren
 pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
-    if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, app)) {
+    if let Err(error) = validate(&workspace).and_then(|()| sync(&mut workspace, app)) {
         app.ui.toast = Some((format!("Panel layout could not be restored: {error}"), ui.input(|input| input.time) + 8.0, None));
         workspace = from_ui(app);
         let _ = sync(&mut workspace, app);
@@ -413,7 +300,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.min_pane = 96.0;
     style.float_label = crate::i18n::tr("Float panel").into();
     style.close_label = crate::i18n::tr("Close panel").into();
-    style.move_label = crate::i18n::tr("Move to group").into();
+    style.move_panel_to_label = crate::i18n::tr("Move to group").into();
     style.panels_label = crate::i18n::tr("Panels").into();
     style.resize_label = crate::i18n::tr("Resize panels").into();
     style.resize_window_label = crate::i18n::tr("Resize panel window").into();
@@ -427,7 +314,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.font = t.font(12.0);
     // Tool and preset panels publish hover previews before the photo consumes them.
     let mut canvas = None;
-    let output = DockArea::new(egui::Id::new("lightcraft-docking")).show_with_limits(
+    let output = DockArea::new(egui::Id::new("lightcraft-docking")).locked(workspace.locked).show_with_limits(
         ui,
         &workspace.layout,
         &style,
@@ -500,7 +387,7 @@ pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(
     let Some(workspace) = state.docking.as_mut() else {
         return Ok(());
     };
-    workspace.validate()?;
+    validate(workspace)?;
     for (key, panel, width) in [("leftWidth", Panel::Library, state.left_width), ("rightWidth", Panel::Tools, state.right_width)] {
         if params.get(key).is_none() {
             continue;
@@ -516,10 +403,10 @@ pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(
             }
             continue;
         }
-        if let Some(group) = workspace.layout.floating.iter().find(|group| group.panels.contains(&panel)) {
+        if let Some(group) = workspace.layout.floating.iter().find(|group| group.contains(&panel)) {
             let mut rect = group.rect;
             rect[2] = width;
-            workspace.apply(Action::MoveFloating { panel, rect })?;
+            apply(workspace, Action::MoveFloating { panel, rect })?;
             continue;
         }
         let mut nodes = workspace.layout.root.as_ref().map(|node| vec![(node, Vec::new())]).unwrap_or_default();
@@ -529,7 +416,7 @@ pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(
                 let contains = |node: &Node<Panel>| match node {
                     Node::Tabs { panels, .. } => panels.contains(&panel),
                     Node::Stack { entries } => entries.iter().any(|entry| entry.panel == panel),
-                    Node::Split { .. } => false,
+                    _ => false,
                 };
                 if *axis == SplitAxis::Horizontal {
                     if contains(first) {
@@ -548,7 +435,7 @@ pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(
             }
         }
         if let Some(action) = change {
-            workspace.apply(action)?;
+            apply(workspace, action)?;
         }
     }
     Ok(())
@@ -583,7 +470,7 @@ mod tests {
             split(SplitAxis::Horizontal, SplitSize::FixedSecond(300.0), tabs(Panel::Canvas), tabs(Panel::Presets)),
         );
         let root = if first { split(axis, size, tabs(Panel::Tools), rest) } else { split(axis, size, rest, tabs(Panel::Tools)) };
-        Workspace { layout: Layout { root: Some(root), floating: Vec::new() }, hidden: Vec::new() }
+        Workspace::new(Layout { root: Some(root), floating: Vec::new() })
     }
 
     #[test]
@@ -594,23 +481,20 @@ mod tests {
             .into_iter()
             .map(|panel| craft_ui::docking::StackEntry { panel, open: panel != Panel::Tools, height: Some(180.0) })
             .collect();
-        app.ui.docking = Some(Workspace {
-            layout: Layout {
-                root: Some(split(SplitAxis::Horizontal, SplitSize::FixedSecond(350.0), tabs(Panel::Canvas), Node::Stack { entries })),
-                floating: Vec::new(),
-            },
-            hidden: Vec::new(),
-        });
+        app.ui.docking = Some(Workspace::new(Layout {
+            root: Some(split(SplitAxis::Horizontal, SplitSize::FixedSecond(350.0), tabs(Panel::Canvas), Node::Stack { entries })),
+            floating: Vec::new(),
+        }));
         let undo = app.session.undo.len();
         app.run("panel.crop", json!({})).unwrap();
         assert_eq!(app.ui.right, crate::state::RightPanel::Crop);
         let workspace = app.ui.docking.as_ref().unwrap();
-        assert!(workspace.exposed(Panel::Tools));
+        assert!(exposed_in(workspace, Panel::Tools));
         assert_eq!(app.session.undo.len(), undo);
         let saved = serde_json::to_string(workspace).unwrap();
         let reloaded: Workspace = serde_json::from_str(&saved).unwrap();
-        reloaded.validate().unwrap();
-        assert!(reloaded.exposed(Panel::Tools));
+        validate(&reloaded).unwrap();
+        assert!(exposed_in(&reloaded, Panel::Tools));
     }
 
     #[test]
@@ -622,7 +506,7 @@ mod tests {
             (SplitAxis::Horizontal, SplitSize::FixedFirst(180.0), false),
         ] {
             let workspace = tools_split(axis, size, first);
-            workspace.validate().unwrap();
+            validate(&workspace).unwrap();
             let mut app = app_with_widths();
             publish_visibility(&mut app, &workspace);
             assert_eq!((app.ui.left_width, app.ui.right_width), (333.0, 410.0), "{axis:?} {size:?}, first={first}");
@@ -637,8 +521,8 @@ mod tests {
             publish_visibility(&mut app, &workspace);
             assert_eq!((app.ui.left_width, app.ui.right_width), (333.0, 310.0));
         }
-        let mut workspace = Workspace::default();
-        workspace.apply(Action::Float { panel: Panel::Tools, rect: [12.0, 34.0, 390.0, 450.0] }).unwrap();
+        let mut workspace = default_workspace();
+        apply(&mut workspace, Action::Float { panel: Panel::Tools, rect: [12.0, 34.0, 390.0, 450.0] }).unwrap();
         let mut app = app_with_widths();
         publish_visibility(&mut app, &workspace);
         assert_eq!(app.ui.right_width, 390.0);
@@ -646,12 +530,50 @@ mod tests {
 
     #[test]
     fn legacy_width_update_preserves_hidden_top_panel_height() {
-        let mut workspace = Workspace::default();
-        workspace.apply(Action::Move { panel: Panel::Tools, anchor: Panel::Canvas, placement: Placement::Split(Zone::Top) }).unwrap();
-        workspace.set_visible(Panel::Tools, false).unwrap();
+        let mut workspace = default_workspace();
+        apply(&mut workspace, Action::Move { panel: Panel::Tools, anchor: Panel::Canvas, placement: Placement::Split(Zone::Top) }).unwrap();
+        set_visible(&mut workspace, Panel::Tools, false).unwrap();
         let height = workspace.hidden.iter().find(|(panel, _)| *panel == Panel::Tools).unwrap().1.size;
         let mut state = crate::UiState { docking: Some(workspace), right_width: 410.0, ..Default::default() };
         set_widths(&mut state, &json!({"rightWidth":410.0})).unwrap();
         assert_eq!(state.docking.as_ref().unwrap().hidden.iter().find(|(panel, _)| *panel == Panel::Tools).unwrap().1.size, height);
+    }
+
+    /// Settings written before workspaces had a version: `{layout, hidden}`, a floating
+    /// window as one group, hidden locations without dock state.
+    #[test]
+    fn version_one_workspace_file_loads_and_reopens_its_hidden_panel() {
+        let v1 = json!({
+            "layout": {
+                "root": {"Split": {
+                    "axis": "Horizontal",
+                    "size": {"FixedFirst": 300.0},
+                    "first": {"Tabs": {"panels": ["library"], "active": 0}},
+                    "second": {"Tabs": {"panels": ["canvas"], "active": 0}}
+                }},
+                "floating": [{"panels": ["tools"], "active": 0, "rect": [120.0, 90.0, 320.0, 600.0]}]
+            },
+            "hidden": [["presets", {
+                "floating": null,
+                "anchor": "canvas",
+                "placement": {"Split": "Right"},
+                "size": {"FixedSecond": 280.0},
+                "stack": null,
+                "sibling": ["canvas"]
+            }]]
+        });
+        let mut workspace: Workspace = serde_json::from_value(v1).unwrap();
+        validate(&workspace).unwrap();
+        assert_eq!(workspace.version, 1);
+        let window = workspace.layout.floating.first().unwrap();
+        assert!(window.contains(&Panel::Tools));
+        assert_eq!(window.rect, [120.0, 90.0, 320.0, 600.0]);
+        assert!(exposed_in(&workspace, Panel::Library));
+        set_visible(&mut workspace, Panel::Presets, true).unwrap();
+        let location = workspace.layout.location(&Panel::Presets).unwrap();
+        assert_eq!((location.anchor, location.size), (Some(Panel::Canvas), Some(SplitSize::FixedSecond(280.0))));
+        let saved = serde_json::to_value(&workspace).unwrap();
+        assert_eq!(saved["version"], 2);
+        assert_eq!(saved["layout"]["floating"][0]["panels"], json!(["tools"]), "a one-group window keeps the v1 shape");
     }
 }

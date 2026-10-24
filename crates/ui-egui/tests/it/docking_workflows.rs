@@ -1,4 +1,5 @@
 //! Real library/tool panel moves preserve the selected tool and saved arrangement.
+use craft_ui::docking::{DockArea, Hit, Node};
 use egui::{Event, Modifiers, PointerButton, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use lightcraft_ui_egui::{LightcraftApp, Services, UiState, docking::Panel, state::RightPanel};
@@ -63,7 +64,7 @@ fn real_drag_float_close_reopen_and_state_reload_keep_photo_tool_mode() {
     h.run_steps(3);
     h.get_by_label("Float panel").click();
     h.run_steps(5);
-    let rect = h.state().ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.panels.contains(&Panel::Tools)).unwrap().rect;
+    let rect = h.state().ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect;
     h.get_by_role_and_label(egui::accesskit::Role::Tab, "Tools").click_button(PointerButton::Secondary);
     h.run_steps(3);
     h.get_by_label("Close panel").click();
@@ -71,7 +72,7 @@ fn real_drag_float_close_reopen_and_state_reload_keep_photo_tool_mode() {
     assert_eq!(h.state().ui.right, RightPanel::None);
     h.state_mut().ui.right = RightPanel::Crop;
     h.run_steps(4);
-    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.panels.contains(&Panel::Tools)).unwrap().rect, rect);
+    assert_eq!(h.state().ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.contains(&Panel::Tools)).unwrap().rect, rect);
     let saved = serde_json::to_string(&h.state().ui).unwrap();
     let expected = serde_json::to_value(&h.state().ui.docking).unwrap();
     let mut reloaded = harness(Some(serde_json::from_str(&saved).unwrap()), 1400.0, 1.0);
@@ -84,6 +85,35 @@ fn real_drag_float_close_reopen_and_state_reload_keep_photo_tool_mode() {
     reloaded.run_steps(3);
     assert!(!reloaded.state().ui.left_panel);
     assert_eq!(reloaded.state().ui.right, RightPanel::Crop);
+}
+
+#[test]
+fn dragging_a_group_by_its_bar_moves_the_whole_group() {
+    let mut h = harness(None, 1400.0, 1.0);
+    h.state_mut().ui.presets = true;
+    h.run_steps(4);
+    h.state_mut().run("ui.dock", json!({"operation":"move","panel":"presets","target":"tools","zone":"center"})).unwrap();
+    h.run_steps(6);
+    let bar = DockArea::<Panel>::hit_rects(&h.ctx, egui::Id::new("lightcraft-docking"))
+        .into_iter()
+        .find_map(|(hit, rect)| matches!(hit, Hit::DragBar(Panel::Tools | Panel::Presets)).then_some(rect))
+        .expect("the Tools and Presets group draws its drag bar");
+    let target = h.get_by_role_and_label(egui::accesskit::Role::Tab, "Library").rect().center();
+    drag(&mut h, bar.center(), target);
+    let layout = &h.state().ui.docking.as_ref().unwrap().layout;
+    let mut nodes: Vec<_> = layout.root.iter().collect();
+    let mut groups = Vec::new();
+    while let Some(node) = nodes.pop() {
+        match node {
+            Node::Split { first, second, .. } => nodes.extend([&**first, &**second]),
+            Node::Tabs { panels, .. } => groups.push(panels.clone()),
+            _ => {}
+        }
+    }
+    let mut library = groups.into_iter().find(|panels| panels.contains(&Panel::Library)).unwrap();
+    library.sort_by_key(|panel| panel.id());
+    assert_eq!(library, [Panel::Library, Panel::Presets, Panel::Tools], "both panels of the dragged group joined Library");
+    assert_eq!(h.state().ui.right, RightPanel::Edit);
 }
 
 #[test]
@@ -115,7 +145,7 @@ fn docking_renders_real_photo_panels_default_floating_and_redocked() {
                 }
                 h.run_steps(8);
                 settle_photo(&mut h);
-                h.state().ui.docking.as_ref().unwrap().validate().unwrap();
+                lightcraft_ui_egui::docking::validate(h.state().ui.docking.as_ref().unwrap()).unwrap();
                 if let Ok(directory) = std::env::var("CRAFT_UI_DOCKING_DIR") {
                     std::fs::create_dir_all(&directory).unwrap();
                     h.render().unwrap().save(format!("{directory}/light-{width}-{scale}-{state}.png")).unwrap();
