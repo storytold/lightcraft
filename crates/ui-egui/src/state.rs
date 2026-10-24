@@ -335,7 +335,7 @@ impl LightsOut {
 /// How many libraries File ▸ Open Recent Library remembers.
 pub const RECENT_LIBRARIES: usize = 8;
 
-/// Whether the interface uses the dark or the light theme (Settings ▸ Interface ▸ Appearance).
+/// Whether the interface uses the dark or the light theme (Settings ▸ Appearance).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AppearanceMode {

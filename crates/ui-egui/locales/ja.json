@@ -2053,6 +2053,8 @@
   "Face detector": "顔検出器",
   "Face recognition": "顔認識",
   "Faces": "顔",
+  "Files": "ファイル",
+  "Monitor": "モニター",
   "Faces of a Person": "人物の顔",
   "Faster exports and card imports, with the same protection for what can't be recreated (issue #134): exports,": "書き出しとカードからの読み込みが速くなり、作り直せないものは同じように保護されます（issue #134）：書き出し、",
   "Go back to listing them by name": "名前順の一覧に戻る",

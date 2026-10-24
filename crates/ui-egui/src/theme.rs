@@ -1,7 +1,7 @@
 //! Design tokens (colours, sizes, fonts). Values measured from black-box observation of the
 //! reference app's dark theme (see plan/lightroom/10-observed-ui.md); everything is our own code.
 //!
-//! Themes come in two families, picked by the Appearance Mode setting (Settings ▸ Interface):
+//! Themes come in two families, picked by the Appearance Mode setting (Settings ▸ Appearance):
 //! - dark: **Charcoal** (the default, the observed dark look) and **Midnight** (near black);
 //! - light: **Silver** (light grey chrome) and **Paper** (near white).
 

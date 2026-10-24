@@ -2032,6 +2032,8 @@
   "Test Face Model": "Testar modelo de rostos",
   "Unnamed Faces": "Rostos sem nome",
   "Faces": "Rostos",
+  "Files": "Arquivos",
+  "Monitor": "Monitor",
   "Face recognition": "Reconhecimento facial",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Esta versão não tem onde guardar modelos de rostos, então a lista de modelos não está disponível. (O aplicativo para desktop tem.)",
   "Recognise faces (experimental)": "Reconhecer rostos (experimental)",

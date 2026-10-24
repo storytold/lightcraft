@@ -81,6 +81,8 @@ mod tests_dialog_fit;
 #[cfg(test)]
 mod tests_dialog_primary;
 #[cfg(test)]
+mod tests_dialog_settings_groups;
+#[cfg(test)]
 mod tests_dialog_tab;
 #[cfg(test)]
 mod tests_dialogs;
@@ -254,10 +256,10 @@ pub struct Services {
     pub pick_preset_files: Option<PickFiles>,
     /// Open dialog for a GPS track log (`.gpx`; Photo ▸ Auto-Tag from Tracklog…).
     pub pick_tracklog: Option<PickFiles>,
-    /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Display; desktop only).
+    /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Monitor; desktop only).
     pub pick_display_profile: Option<PickFiles>,
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
-    /// Display (macOS, whose windows aren't colour-managed: issue #787).
+    /// Monitor (macOS, whose windows aren't colour-managed: issue #787).
     pub screen_profile: Option<ScreenProfileFn>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,
@@ -283,7 +285,7 @@ pub struct Services {
     /// The host's current log file (`<settings>/logs/lightcraft.log`), which Help ▸ Open Log
     /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `LIGHTCRAFT_NO_PREFS`.
     pub log_file: Option<String>,
-    /// Choose a folder (Settings → General → Open Library…; desktop only).
+    /// Choose a folder (Settings → Library → Open Library…; desktop only).
     pub pick_folder: Option<PickFolder>,
     /// Open a Lightroom Classic `.lrcat` catalog for read-only import.
     pub pick_lightroom_catalog: Option<PickFolder>,
@@ -476,7 +478,7 @@ pub struct LightcraftApp {
     memory_applied: Option<u32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
-    /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
+    /// Why the display profile setting could not be applied (shown in Settings ▸ Monitor).
     pub display_error: Option<String>,
     /// The screen profile in use while no display profile is chosen (`services.screen_profile`),
     /// and when it was last read (egui time, s).
@@ -1295,7 +1297,7 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
-        // the monitor profile (Settings ▸ Display): previews follow it from the next frame
+        // the monitor profile (Settings ▸ Monitor): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();
             match lightcraft_engine::display::Display::load_opt(&path) {

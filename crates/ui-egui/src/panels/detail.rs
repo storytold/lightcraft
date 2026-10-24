@@ -2938,7 +2938,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     });
 }
 
-/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
+/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Appearance).
 fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;

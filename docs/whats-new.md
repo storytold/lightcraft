@@ -2,6 +2,18 @@
 
 ## 2026-10-23
 
+### Settings window
+- The tabs of Settings are grouped by what you come to do. **Library** is the library itself: where it is, opening
+  or making another, where its smart previews are kept and when photos only seen in Local leave the catalog (the
+  last two were under Performance). **Files** is what is written beside the photo files and what they are opened
+  in: XMP sidecars (which was under Import, though it governs every later edit) and External Editing (which was
+  under General). General keeps the language, startup and culling; Performance keeps rendering and the thumbnail
+  cache. Display is now **Monitor** and Interface is **Appearance**, so the monitor's colour profile and how
+  LightCraft looks are not mistaken for each other. Agents: `app.settings` takes `library` and `files` as tabs;
+  every tab id from before still opens its tab (`display` and `interface` are Monitor and Appearance).
+- Each section of Settings can be found by scripts as `heading:<its English name>` in `ui.widgets`, whatever the
+  interface language.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

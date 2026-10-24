@@ -183,7 +183,7 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
 
 /// The selection's keywords as chips: the name (right-click for its menu), and × to take it off
 /// every selected photo. One only some of them have is marked with an asterisk. Whole names, or
-/// grouped by the keyword they are inside (Settings ▸ Interface).
+/// grouped by the keyword they are inside (Settings ▸ Appearance).
 pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     if chips.is_empty() {
