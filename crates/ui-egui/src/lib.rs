@@ -50,6 +50,7 @@ pub mod tasks;
 pub mod text_field;
 pub mod theme;
 pub mod titlebar;
+pub mod tree_state;
 pub mod widgets;
 pub mod window_place;
 
@@ -205,6 +206,8 @@ mod tests_temp_slider;
 mod tests_titlebar;
 #[cfg(test)]
 mod tests_tool_overlay;
+#[cfg(test)]
+mod tests_tree_state;
 #[cfg(test)]
 mod tests_unsaved;
 #[cfg(test)]
@@ -1141,6 +1144,7 @@ impl LightcraftApp {
         i18n::set_language(self.ui.language);
         let t0 = now_ms();
         panels::library_problem::logic(self, ctx);
+        panels::left::follow_shown(self, ctx);
         self.logic_inner(ctx);
         self.perf.logic_ms = now_ms() - t0;
     }
