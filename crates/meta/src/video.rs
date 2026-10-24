@@ -45,11 +45,13 @@ struct BoxRef<'a> {
     uuid: Option<[u8; 16]>,
 }
 
+/// Read an unsigned 32-bit big-endian integer at offset `at`, returning None if out of bounds.
 fn be32(b: &[u8], at: usize) -> Option<u32> {
     let s = b.get(at..at + 4)?;
     Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
+/// Read an unsigned 64-bit big-endian integer at offset `at`, returning None if out of bounds.
 fn be64(b: &[u8], at: usize) -> Option<u64> {
     let s = b.get(at..at + 8)?;
     Some(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
@@ -176,6 +178,7 @@ struct TrackInfo {
     orientation: Option<Orientation>,
 }
 
+/// Parse a `trak` box to extract video dimensions and matrix orientation from its `tkhd`.
 fn parse_trak(body: &[u8], budget: &mut usize, depth: usize) -> Option<TrackInfo> {
     if depth > MAX_DEPTH {
         return None;
@@ -584,6 +587,7 @@ mod tests {
         out
     }
 
+    /// Helper to write an ISO-BMFF box header and payload into a byte buffer.
     fn write_box(out: &mut Vec<u8>, kind: &[u8; 4], payload: &[u8]) {
         let size = (payload.len() + 8) as u32;
         out.extend_from_slice(&size.to_be_bytes());
@@ -591,6 +595,7 @@ mod tests {
         out.extend_from_slice(payload);
     }
 
+    /// Probing synthetic MP4 bytes correctly extracts duration, dimensions, orientation, and capture date.
     #[test]
     fn synthetic_mp4_probes_duration_dimensions_and_date() {
         // Mac timestamp for 2026-08-14T10:00:00 UTC:
@@ -612,6 +617,7 @@ mod tests {
         assert_eq!(meta.metadata.height, Some(1080));
     }
 
+    /// A fragmented MP4 with empty moov reads its running time from the movie extends header (mehd).
     #[test]
     fn fragmented_movie_takes_its_duration_from_mehd() {
         // empty_moov leaves mvhd's duration 0; the fragment duration lives in mvex/mehd
@@ -635,6 +641,7 @@ mod tests {
         assert_eq!(meta_ones.duration, None);
     }
 
+    /// An audio-only container with mvhd duration but no video track is rejected.
     #[test]
     fn movie_with_duration_but_no_video_track_is_rejected() {
         // An audio-only or empty container has mvhd duration but no video trak
@@ -657,6 +664,7 @@ mod tests {
         assert_eq!(probe_video(&out), None, "a movie with duration but no video track is rejected");
     }
 
+    /// 90-degree matrix rotation in the display matrix is detected and mapped to EXIF orientation.
     #[test]
     fn rotated_90_degrees_matrix_detected() {
         let mut bytes = synthetic_mp4(1000, 5000, 1920, 1080, 0);
@@ -676,6 +684,7 @@ mod tests {
         assert_eq!(meta.orientation, Some(Orientation::Rotate90));
     }
 
+    /// Truncated or corrupted video buffers never panic during box parsing.
     #[test]
     fn corrupted_and_truncated_buffers_do_not_panic() {
         assert_eq!(probe_video(b""), None);
@@ -689,6 +698,7 @@ mod tests {
         }
     }
 
+    /// Valid and malformed ISO 6709 coordinates are parsed correctly or rejected cleanly.
     #[test]
     fn iso6709_parser_handles_valid_and_malformed() {
         let g1 = parse_iso6709("+37.5090-122.2520/").unwrap();

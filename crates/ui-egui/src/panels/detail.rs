@@ -517,6 +517,7 @@ fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_c
     register(ui.ctx(), "canvas:videoCard", card);
 }
 
+/// Render the detail / loupe viewport panel, including the active photo or video card.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
@@ -2934,6 +2935,7 @@ fn film_label(name: &str) -> String {
     if name.chars().nth(14).is_some() { format!("{}…", name.chars().take(13).collect::<String>()) } else { name.to_string() }
 }
 
+/// Render the bottom filmstrip thumbnail bar.
 pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(r, 0.0, t.canvas);

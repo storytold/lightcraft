@@ -14,10 +14,12 @@ use crate::{LightcraftApp, Services};
 const T: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_secs(60);
 
+/// Check whether a widget or element with the given identifier is registered.
 fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+/// Encode a test RGBA8 image as PNG bytes.
 fn png(img: &lightcraft_raster::Rgba8) -> Vec<u8> {
     lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
 }
@@ -33,6 +35,7 @@ fn shot(h: &mut Headless, name: &str) {
     assert_eq!(r["ok"], true, "{r}");
 }
 
+/// Select a photo or video by ID in the test application and wait for the UI to settle.
 fn select(h: &mut Headless, id: PhotoId) {
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");

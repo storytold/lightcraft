@@ -1125,6 +1125,121 @@ pub fn fs_pair_loader() -> PairLoader {
     })
 }
 
+/// Read metadata boxes (ftyp, moov, meta) of an ISO-BMFF container into a bounded buffer
+/// without reading large media payloads (mdat). Capped at 64 MB.
+fn read_video_metadata_boxes(path: &str, file_len: u64) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut out = Vec::new();
+    let mut at = 0u64;
+    let mut budget = 200usize;
+    const MAX_BOX_SIZE: u64 = 64 * 1024 * 1024;
+
+    while at.saturating_add(8) <= file_len && budget > 0 {
+        budget -= 1;
+        f.seek(SeekFrom::Start(at)).map_err(|e| format!("{path}: {e}"))?;
+        let mut hdr = [0u8; 8];
+        f.read_exact(&mut hdr).map_err(|e| format!("{path}: {e}"))?;
+        let size_u32 = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as u64;
+        let kind = [hdr[4], hdr[5], hdr[6], hdr[7]];
+
+        let (total_len, hdr_len) = match size_u32 {
+            0 => (file_len.saturating_sub(at), 8u64),
+            1 => {
+                let mut large = [0u8; 8];
+                f.read_exact(&mut large).map_err(|e| format!("{path}: {e}"))?;
+                (u64::from_be_bytes(large), 16u64)
+            }
+            n => (n, 8u64),
+        };
+
+        if total_len < hdr_len {
+            break;
+        }
+
+        let end = match at.checked_add(total_len) {
+            Some(e) if e <= file_len => e,
+            _ => break,
+        };
+
+        if &kind == b"moov" || &kind == b"ftyp" || &kind == b"meta" {
+            if total_len > MAX_BOX_SIZE {
+                return Err(format!("{path}: video metadata box exceeds 64MB limit"));
+            }
+            f.seek(SeekFrom::Start(at)).map_err(|e| format!("{path}: {e}"))?;
+            let mut box_data = vec![0u8; total_len as usize];
+            f.read_exact(&mut box_data).map_err(|e| format!("{path}: {e}"))?;
+            out.extend_from_slice(&box_data);
+        }
+
+        at = end;
+    }
+
+    Ok(out)
+}
+
+/// Compute the content hash of `path` incrementally in 64 KB chunks, matching `lightcraft_preview::hash_bytes`.
+fn hash_file_stream(path: &str) -> Result<String, String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut hasher = lightcraft_preview::Hasher128::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("{path}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(buf.get(..n).unwrap_or(&[]));
+    }
+    Ok(hasher.finish().to_string())
+}
+
+/// Probe a video file using bounded box reads and incremental hashing.
+fn probe_video_file(path: &str, file_len: u64) -> Result<ProbeInfo, String> {
+    let meta_bytes = read_video_metadata_boxes(path, file_len)?;
+    if meta_bytes.is_empty() {
+        return Err("no metadata boxes found".into());
+    }
+    let v = lightcraft_meta::probe_video(&meta_bytes).ok_or("unreadable video: no movie header or video track")?;
+    let (mut w, mut h) = (v.width, v.height);
+    if let Some(o) = v.orientation
+        && o.swaps_axes()
+    {
+        std::mem::swap(&mut w, &mut h);
+    }
+    let (v_meta, v_captured) = meta_of(&v.metadata);
+    let captured = v_captured.or(v.captured);
+    let mut meta = Meta::default();
+    if !v_meta.camera.is_empty() {
+        meta.camera = v_meta.camera;
+    }
+    if v_meta.gps.is_some() {
+        meta.gps = v_meta.gps;
+    }
+    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+    let format = match ext_upper(&name).as_str() {
+        "MP4" | "MOV" | "M4V" => ext_upper(&name),
+        _ => "MP4".to_string(),
+    };
+    let content_hash = Some(hash_file_stream(path)?);
+    Ok(ProbeInfo {
+        width: w,
+        height: h,
+        format,
+        kind: MediaKind::Video,
+        file_size: file_len,
+        captured,
+        file_modified: None,
+        meta,
+        as_shot_wb: None,
+        content_hash,
+        xmp: lightcraft_meta::embedded(&meta_bytes).xmp,
+        preview_only: None,
+        duration: v.duration,
+        embedded_lens: None,
+    })
+}
+
 /// Filesystem-backed hooks (native). On the web the host installs bytes-based hooks instead.
 ///
 /// Their working memory is bounded by [`crate::memory::work_gate`]: background loads (grid
@@ -1136,9 +1251,23 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
     let probe: FileProbe = Arc::new(|path: &str| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
-        let _permit = crate::memory::work_gate().acquire(len);
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let mut info = probe_bytes(path, &bytes)?;
+        let ext = ext_upper(path);
+        let is_video = matches!(ext.as_str(), "MP4" | "MOV" | "M4V");
+        // Videos use bounded reads for metadata boxes (capped at 64MB working memory) instead of the whole file
+        let weight = if is_video { len.min(64 * 1024 * 1024) } else { len };
+        let _permit = crate::memory::work_gate().acquire(weight);
+        let mut info = if is_video {
+            match probe_video_file(path, len as u64) {
+                Ok(info) => info,
+                Err(_) => {
+                    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+                    probe_bytes(path, &bytes)?
+                }
+            }
+        } else {
+            let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            probe_bytes(path, &bytes)?
+        };
         info.file_modified = file_modified(path);
         Ok(info)
     });

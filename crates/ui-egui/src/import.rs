@@ -1393,6 +1393,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     });
 }
 
+/// Render a single candidate cell in the import review grid.
 fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
     let t = Tokens::get(ui.ctx());
     let c = d.candidates[i].clone();
