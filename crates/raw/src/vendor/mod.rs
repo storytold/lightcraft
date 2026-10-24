@@ -22,6 +22,7 @@ pub mod nefc;
 pub mod orf;
 pub mod pef;
 pub mod raf;
+mod raf_legacy;
 mod raf_lens;
 mod rafc;
 pub mod rw2;

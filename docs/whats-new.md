@@ -245,6 +245,13 @@
   Auto Advance jumped back to the first photo of the view. With Auto Advance on, or with Shift+0–5, you land on the
   photo after it: no photo is skipped.
 
+### Older Fujifilm FinePix raws open
+- Raws from FinePix cameras before the X series now develop from their sensor data instead of opening as the
+  camera's small JPEG (issue #2063): the SuperCCD bodies (S2 Pro, S3 Pro, S5 Pro, S5000, S5200 / S5600, S6000fd /
+  S6500fd, S7000, S9000 / S9500, S9100 / S9600, S100FS and others) at the size of the camera's own JPEGs,
+  and the S5500 and S200EXR. The F700, F710, S20 Pro and the DBP for GX680 still open as their preview. Photos
+  imported before this need Photo ▸ Reload from Disk.
+
 ## 2026-10-18
 
 ### Thumbnails of Lightroom HDR and panorama merges in a second

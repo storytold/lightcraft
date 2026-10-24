@@ -132,6 +132,8 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         ("raf-fujifilm-finepix-hs33exr.raf", (3328, 2464), 0x7172_f98c_0034_0dde),
         ("raf-fujifilm-finepix-hs50exr.raf", (3328, 2464), 0xad53_aa23_e481_4fcc),
         ("raf-fujifilm-finepix-s1.raf", (4624, 3470), 0xde37_e148_27f2_4305),
+        ("raf-fujifilm-finepix-s200exr.raf", (2880, 2128), 0xd0d3_f54f_e255_c144),
+        ("raf-fujifilm-finepix-s5500.raf", (2304, 1740), 0x42fa_cc4a_6691_69de),
         ("raf-fujifilm-finepix-sl1000.raf", (4624, 3470), 0xcbb1_b0f1_9dce_bdbc),
         ("raf-fujifilm-finepix-x100.raf", (4448, 2870), 0x8c7b_bdea_47c3_01bb),
         ("raf-fujifilm-finepix-x10.raf", (2944, 2144), 0xb1a0_13ee_0889_65ef),
@@ -201,4 +203,110 @@ fn nikon_and_fujifilm_bodies_decode_like_the_camera_jpeg() {
         seen += 1;
     }
     eprintln!("Nikon / Fujifilm bodies checked on {seen} files");
+}
+
+/// Mean colour of the camera's embedded JPEG on a `gw × gh` grid (row-major cells, 0–255 per channel).
+fn camera_jpeg_grid(jpeg: &[u8], gw: usize, gh: usize) -> Vec<[f64; 3]> {
+    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
+    let px = d.decode().unwrap();
+    let info = d.info().unwrap();
+    let (jw, jh) = (info.width as usize, info.height as usize);
+    let (mut sum, mut n) = (vec![[0f64; 3]; gw * gh], vec![0f64; gw * gh]);
+    for y in 0..jh {
+        for x in 0..jw {
+            let i = (y * gh / jh) * gw + x * gw / jw;
+            for c in 0..3 {
+                sum[i][c] += f64::from(px[(y * jw + x) * 3 + c]);
+            }
+            n[i] += 1.0;
+        }
+    }
+    sum.iter().zip(&n).map(|(s, n)| s.map(|v| v / n.max(1.0))).collect()
+}
+
+/// Pearson's correlation coefficient of two series of the same length.
+fn pearson(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len() as f64;
+    let (ma, mb) = (a.iter().sum::<f64>() / n, b.iter().sum::<f64>() / n);
+    let cov: f64 = a.iter().zip(b).map(|(x, y)| (x - ma) * (y - mb)).sum();
+    let va: f64 = a.iter().map(|x| (x - ma).powi(2)).sum();
+    let vb: f64 = b.iter().map(|y| (y - mb).powi(2)).sum();
+    cov / (va * vb).sqrt()
+}
+
+/// One CC0 file per SuperCCD body from raw.pixls.us: pre-X FinePix RAFs without a raw IFD, whose sites the decoder
+/// turns into linear RGB on the picture grid itself (`vendor::raf_legacy`). AHD's choices may differ in the last bits
+/// between platforms' maths libraries, so instead of a hash the active area's channel means are pinned (to 0.5 %).
+/// Against the camera's embedded JPEG, on a 24 × 16 grid: green must follow it (gamma-encoded Pearson r), better than
+/// it follows the JPEG mirrored, and the red / green balance must too (log ratios), which a red–blue swap breaks.
+#[test]
+fn superccd_bodies_decode_like_the_camera_jpeg() {
+    // (file, picture width × height, active area width × height, pinned channel means of the active area)
+    let cases: &[(&str, (usize, usize), (usize, usize), [f64; 3])] = &[
+        ("raf-fujifilm-finepix-s2pro.raf", (4384, 2944), (4256, 2848), [0.21706, 0.25280, 0.14431]),
+        ("raf-fujifilm-finepix-s3pro.raf", (4352, 2888), (4256, 2848), [0.15485, 0.27578, 0.22855]),
+        ("raf-fujifilm-finepix-s5pro.raf", (4352, 2888), (4256, 2848), [0.07372, 0.12047, 0.06083]),
+        ("raf-fujifilm-finepix-s5000.raf", (2944, 2160), (2816, 2120), [0.07239, 0.13105, 0.08194]),
+        ("raf-fujifilm-finepix-s5200.raf", (3808, 2776), (3648, 2736), [0.18310, 0.30873, 0.27133]),
+        ("raf-fujifilm-finepix-s6000fd.raf", (4224, 3088), (4048, 3036), [0.12325, 0.14518, 0.08257]),
+        ("raf-fujifilm-finepix-s6500fd.raf", (4224, 3088), (4048, 3036), [0.10745, 0.16284, 0.11599]),
+        ("raf-fujifilm-finepix-s7000.raf", (4096, 3080), (4048, 3040), [0.05749, 0.15920, 0.16447]),
+        ("raf-fujifilm-finepix-s9500.raf", (5024, 3688), (4864, 3648), [0.12601, 0.22129, 0.19175]),
+        ("raf-fujifilm-finepix-s9600.raf", (5024, 3688), (4864, 3648), [0.18161, 0.25803, 0.21482]),
+        ("raf-fujifilm-finepix-s100fs.raf", (5600, 4120), (5440, 4080), [0.08100, 0.18002, 0.13260]),
+    ];
+    let (gw, gh) = (24, 16);
+    let mut seen = 0;
+    for &(name, picture, active, means) in cases {
+        let path = corpus().join("raw").join(name);
+        let Ok(bytes) = std::fs::read(&path) else {
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+            continue;
+        };
+        let raw = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        raw.validate().unwrap();
+        assert_eq!((raw.width, raw.height, raw.cpp, raw.cfa.is_none()), (picture.0, picture.1, 3, true), "{name}: picture size");
+        assert_eq!((raw.active_area.width, raw.active_area.height), active, "{name}: active area");
+        assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: probe and decode disagree");
+        let RawData::F32(px) = &raw.data else { panic!("{name}: float RGB expected") };
+        let a = raw.active_area;
+        let (mut cells, mut cells_mirrored, mut n) = (vec![[0f64; 3]; gw * gh], vec![[0f64; 3]; gw * gh], vec![0f64; gw * gh]);
+        let mut total = [0f64; 3];
+        for y in 0..a.height {
+            for x in 0..a.width {
+                let p = &px[((a.y + y) * raw.width + a.x + x) * 3..][..3];
+                let (i, m) = ((y * gh / a.height) * gw + x * gw / a.width, (y * gh / a.height) * gw + (a.width - 1 - x) * gw / a.width);
+                for c in 0..3 {
+                    let v = f64::from(p[c]).max(0.0);
+                    cells[i][c] += v;
+                    cells_mirrored[m][c] += v;
+                    total[c] += v;
+                }
+                n[i] += 1.0;
+            }
+        }
+        let mean = |cells: &[[f64; 3]]| -> Vec<[f64; 3]> { cells.iter().zip(&n).map(|(s, n)| s.map(|v| v / n.max(1.0))).collect() };
+        let (cells, cells_mirrored) = (mean(&cells), mean(&cells_mirrored));
+        let got = total.map(|t| t / (a.width * a.height) as f64);
+        let jpeg = camera_jpeg_grid(&embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG")), gw, gh);
+        let green = |cells: &[[f64; 3]]| {
+            pearson(&cells.iter().map(|c| c[1].powf(1.0 / 2.2)).collect::<Vec<_>>(), &jpeg.iter().map(|c| c[1]).collect::<Vec<_>>())
+        };
+        let (r, r_mirrored) = (green(&cells), green(&cells_mirrored));
+        let lr = |c: &[f64; 3]| (c[0].max(1e-6) / c[1].max(1e-6)).ln();
+        let red = pearson(&cells.iter().map(lr).collect::<Vec<_>>(), &jpeg.iter().map(|c| ((c[0] + 1.0) / (c[1] + 1.0)).ln()).collect::<Vec<_>>());
+        eprintln!(
+            "{name:36} {}x{}: green r = {r:.3} (mirrored {r_mirrored:.3}), red/green r = {red:.3}, means [{:.5}, {:.5}, {:.5}]",
+            raw.width, raw.height, got[0], got[1], got[2]
+        );
+        assert!(r > 0.9 && r > r_mirrored + 0.02, "{name}: green does not follow the camera JPEG (r = {r:.3}, mirrored {r_mirrored:.3})");
+        assert!(red > 0.5, "{name}: red/green balance does not follow the camera JPEG (r = {red:.3})");
+        for c in 0..3 {
+            assert!((got[c] / means[c] - 1.0).abs() < 0.005, "{name}: channel {c} mean {:.5} differs from the pinned {:.5}", got[c], means[c]);
+        }
+        seen += 1;
+    }
+    eprintln!("SuperCCD bodies checked on {seen} files");
 }

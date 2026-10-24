@@ -75,12 +75,13 @@ pub(crate) fn header(b: &[u8]) -> Result<Header<'_>> {
     Ok(Header { jpeg, records, raw })
 }
 
-fn record<'a>(h: &Header<'a>, tag: u16) -> Option<&'a [u8]> {
+/// The first header record tagged `tag`.
+pub(super) fn record<'a>(h: &Header<'a>, tag: u16) -> Option<&'a [u8]> {
     h.records.iter().find(|r| r.0 == tag).map(|r| r.1)
 }
 
 /// A record holding two big-endian `u16`s.
-fn pair(h: &Header, tag: u16) -> Option<(usize, usize)> {
+pub(super) fn pair(h: &Header, tag: u16) -> Option<(usize, usize)> {
     let d = record(h, tag).filter(|d| d.len() >= 4)?;
     Some((u16::from_be_bytes([d[0], d[1]]) as usize, u16::from_be_bytes([d[2], d[3]]) as usize))
 }
@@ -93,7 +94,7 @@ pub(crate) fn raw_ifd(raw: &[u8]) -> Result<Ifd> {
 }
 
 /// The camera name in the file header (bytes 28..60, NUL padded): the Exif `Model` of every sample.
-fn camera_name(b: &[u8]) -> String {
+pub(super) fn camera_name(b: &[u8]) -> String {
     let name = b.get(28..60).unwrap_or_default();
     let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
     String::from_utf8_lossy(name.get(..end).unwrap_or_default()).trim().to_string()
@@ -118,9 +119,15 @@ pub(crate) fn unpack_row(src: &[u8], bits: u32, words32: bool, out: &mut [u16]) 
     }
 }
 
+/// Decode a RAF whose raw block is a TIFF with a raw IFD; the pre-X FinePix bodies, which store bare samples instead,
+/// go to [`super::raf_legacy`].
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let h = header(bytes)?;
     let raw = h.raw.ok_or_else(|| RawError::Corrupt("RAF without raw data".into()))?;
+    // pre-X FinePix bodies store bare samples, without the TIFF and its raw IFD
+    if !raw.starts_with(b"II*\0") && !raw.starts_with(b"MM\0*") {
+        return super::raf_legacy::decode(bytes, &h, raw, mode);
+    }
     let ifd = raw_ifd(raw)?;
     let get = |t: u16| ifd.u64(t).map(|v| usize::try_from(v).map_err(|_| RawError::Limit("RAF IFD value too large"))).transpose();
     let (w, hgt) = (get(0xf001)?.unwrap_or(0), get(0xf002)?.unwrap_or(0));

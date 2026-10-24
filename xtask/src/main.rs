@@ -2204,6 +2204,72 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/3039/nice/Fujifilm%20-%20FinePix%20F770EXR%20-%2012bit%2012bit%20uncompressed%20%284:3%29.RAF",
         "ffc905e325a00c57a5335681654fdf226b724269cd5d26cd976983939f88043d",
     ),
+    // pre-X FinePix RAFs without a raw IFD (crates/raw/src/vendor/raf_legacy.rs): SuperCCD and bare Bayer
+    (
+        "raf-fujifilm-finepix-s2pro.raf",
+        "https://raw.pixls.us/getfile.php/3562/nice/Fujifilm%20-%20FinePix%20S2Pro%20-%203:2.RAF",
+        "9fe1bf1361f015d9db862228e4a26b23d69e81015ed4a032eaefb8242ae9ad42",
+    ),
+    (
+        "raf-fujifilm-finepix-s3pro.raf",
+        "https://raw.pixls.us/getfile.php/1964/nice/Fujifilm%20-%20FinePix%20S3Pro%20-%203:2.RAF",
+        "038e5a13a22513f53d143e328a66e2de8071809565db696ecac84b4364fcb75b",
+    ),
+    (
+        "raf-fujifilm-finepix-s5pro.raf",
+        "https://raw.pixls.us/getfile.php/2634/nice/Fujifilm%20-%20FinePix%20S5Pro%20-%203:2.RAF",
+        "aca2b2ebcf90d248b4f822ed78bfeb73e79f1b64164a87dc2051a96726cdfa0c",
+    ),
+    (
+        "raf-fujifilm-finepix-s5000.raf",
+        "https://raw.pixls.us/getfile.php/2726/nice/Fujifilm%20-%20FinePix%20S5000%20-%204:3.RAF",
+        "dabd5e74521a6980156be9fd4b88d0c37b0fe4d0e0e6f5c12db8cffff1b76297",
+    ),
+    (
+        "raf-fujifilm-finepix-s5200.raf",
+        "https://raw.pixls.us/getfile.php/1970/nice/Fujifilm%20-%20FinePix%20S5200%20-%204:3.RAF",
+        "93eada72efdf8261d9bfde5022a28a656e4c1c6d0ddac7b0c82686fdcb8ded99",
+    ),
+    (
+        "raf-fujifilm-finepix-s5500.raf",
+        "https://raw.pixls.us/getfile.php/1769/nice/Fujifilm%20-%20FinePix%20S5500%20-%204:3.RAF",
+        "92a947758829686f0a0c662d160a7b8319099cc405a0e4bf90e1fd61c47b2b69",
+    ),
+    (
+        "raf-fujifilm-finepix-s6000fd.raf",
+        "https://raw.pixls.us/getfile.php/5549/nice/Fujifilm%20-%20FinePix%20S6000fd%20-%204:3.RAF",
+        "2c602e5a31b81683d8fb97f36c5cb3580836420e12b9ed5ae16241c68ff6201d",
+    ),
+    (
+        "raf-fujifilm-finepix-s6500fd.raf",
+        "https://raw.pixls.us/getfile.php/3122/nice/Fujifilm%20-%20FinePix%20S6500fd%20-%204:3.RAF",
+        "ee2a7afc2afc9e3a85ca9e5e237c68b612dc360fb45c6fb4495ef857abbab48e",
+    ),
+    (
+        "raf-fujifilm-finepix-s7000.raf",
+        "https://raw.pixls.us/getfile.php/3495/nice/Fujifilm%20-%20FinePix%20S7000%20-%204:3.raf",
+        "098aa2c64dc6a026f3f48f1494476a55751e08af2d37789b7f557fd11a14cf49",
+    ),
+    (
+        "raf-fujifilm-finepix-s9500.raf",
+        "https://raw.pixls.us/getfile.php/1373/nice/Fujifilm%20-%20FinePix%20S9500%20-%204:3.RAF",
+        "b7a7bb3b8a69232866c75774ca6ba9296f3d4435d1e1bac327b4cdc6bea39144",
+    ),
+    (
+        "raf-fujifilm-finepix-s9600.raf",
+        "https://raw.pixls.us/getfile.php/1642/nice/Fujifilm%20-%20FinePix%20S9600%20-%204:3.raf",
+        "d4888ec28d89ce7f9cc6d1b852d2ea03da965bf5e8ce5874d1e3fa439f92dbc0",
+    ),
+    (
+        "raf-fujifilm-finepix-s100fs.raf",
+        "https://raw.pixls.us/getfile.php/4068/nice/Fujifilm%20-%20FinePix%20S100FS%20-%204:3.RAF",
+        "efa518d70b8122dcfe65f98c7c080f15a512d841a2a86bfe226032a327e1d25e",
+    ),
+    (
+        "raf-fujifilm-finepix-s200exr.raf",
+        "https://raw.pixls.us/getfile.php/3425/nice/Fujifilm%20-%20FinePix%20S200EXR%20-%204:3.RAF",
+        "2d4549067f92b33a222d7ded9460adb5ff6ce739ed92af9890c168e37170d4ff",
+    ),
     (
         "dng-leica-m-monochrom.dng",
         "https://raw.pixls.us/getfile.php/974/nice/Leica%20-%20M%20Monochrom%20-%2016bit%20%283:2%29.DNG",
