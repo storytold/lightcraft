@@ -121,6 +121,7 @@ impl LightcraftApp {
             lightroom_last: None,
             lightroom_result: None,
             review_pending: None,
+            review_pending_listed: None,
             shown_library: None,
             export: None,
             tasks: Default::default(),

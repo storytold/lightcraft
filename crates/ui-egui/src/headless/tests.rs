@@ -3748,6 +3748,45 @@ fn a_cancelled_reviews_listing_is_not_used_by_another_import() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A review waiting behind the open one keeps its own listing. Given a review that is open, when
+/// another scan finishes (it waits for the dialog to close), then the open review still holds the
+/// folders its own scan listed, and the waiting one's are kept for when it opens.
+#[test]
+fn a_waiting_reviews_listing_does_not_replace_the_open_ones() {
+    let make = |tag: &str| {
+        let dir = std::env::temp_dir().join(format!("lc-ui-import-waiting-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[9, 9, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join("a.png"), png).unwrap();
+        set_folder_time(&dir, std::time::SystemTime::now() - Duration::from_secs(3600));
+        dir
+    };
+    let (first, second) = (make("first"), make("second"));
+    let services = crate::Services { png: None, ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services), [1300.0, 900.0], 1.0);
+    let t = Duration::from_secs(10);
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [first.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+    let listed = |h: &Headless| format!("{:?}", h.app.review_listed);
+    assert!(listed(&h).contains("-first-"), "the open review holds its own listing: {}", listed(&h));
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [second.to_string_lossy()]}}), t);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    h.step_until(SETTLE, |h| h.app.scan.is_none());
+    h.settle(SETTLE);
+    assert!(h.app.review_pending.is_some(), "the second review waits behind the open one");
+    assert!(listed(&h).contains("-first-") && !listed(&h).contains("-second-"), "the open review keeps its listing: {}", listed(&h));
+    // cancelled, the first review makes room for the waiting one, which brings its own listing
+    h.request("ui.dialog.cancel", json!({}), t);
+    h.step_until(SETTLE, |h| h.app.review_pending.is_none());
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the waiting review opens");
+    assert!(listed(&h).contains("-second-") && !listed(&h).contains("-first-"), "it holds its own listing: {}", listed(&h));
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
+}
+
 /// The import review offers what to do with files that are in Recently Deleted (issues #298,
 /// #706): they are checked, to be restored, by default; Leave them unchecks them; confirming
 /// restores the photo (with its edits) or, with Import as new, imports the file afresh.
