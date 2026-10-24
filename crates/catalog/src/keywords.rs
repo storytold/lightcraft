@@ -10,7 +10,7 @@
 //! photo has them, or given attributes ([`KeywordInfo`]: synonyms, export options, person). The
 //! tree is the keyword list together with the keywords photos carry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,12 @@ pub fn same(a: &str, b: &str) -> bool {
 pub fn is_under(k: &str, parent: &str) -> bool {
     let (k, p) = (k.to_lowercase(), parent.to_lowercase());
     k == p || k.strip_prefix(&p).is_some_and(|rest| rest.starts_with(SEP))
+}
+
+/// The upper levels of a case folded keyword path, each as a prefix of it ending before a `|`
+/// (`a|b|c` gives `a`, `a|b`), the way [`is_under`] sees them.
+fn upper_levels(folded: &str) -> impl Iterator<Item = &str> {
+    folded.match_indices(SEP).map(|(i, _)| &folded[..i])
 }
 
 /// Replace the `from` prefix of `k` (which [`is_under`] `from`) with `to`. By levels, not bytes:
@@ -446,30 +452,34 @@ impl Catalog {
     /// they go ([`CatalogError::KeywordExists`]), or two of them with one name, refuses the whole
     /// move. Returns the batch and each move as `(from, to)`.
     pub fn move_keywords_ops(&self, keywords: &[String], parent: Option<&str>) -> Result<(Op, Vec<(String, String)>)> {
+        // paths are case folded once and kept in sets: a batch of thousands stays linear
         let mut from: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for k in keywords {
             let path = self.keyword_path(k).ok_or_else(|| CatalogError::Invalid(format!("no keyword “{}”", clean(k))))?;
-            if !from.iter().any(|f| same(f, &path)) {
+            if seen.insert(path.to_lowercase()) {
                 from.push(path);
             }
         }
         if from.is_empty() {
             return Err(CatalogError::Invalid("no keyword to move".into()));
         }
-        // the upper ones only
-        let all = from.clone();
-        from.retain(|f| !all.iter().any(|o| !same(o, f) && is_under(f, o)));
+        // the upper ones only: a keyword goes when one of its upper levels is named too
+        from.retain(|f| !upper_levels(&f.to_lowercase()).any(|up| seen.contains(up)));
+        let upper: HashSet<String> = from.iter().map(|f| f.to_lowercase()).collect();
         let parent = parent.map(clean).filter(|p| !p.is_empty()).map(|p| self.keyword_path(&p).unwrap_or(p));
-        if let Some(p) = &parent
-            && from.iter().any(|f| is_under(p, f))
-        {
-            return Err(CatalogError::Invalid("can't move a keyword inside itself".into()));
+        if let Some(p) = &parent {
+            let p = p.to_lowercase();
+            if upper.contains(&p) || upper_levels(&p).any(|up| upper.contains(up)) {
+                return Err(CatalogError::Invalid("can't move a keyword inside itself".into()));
+            }
         }
         let mut moves: Vec<(String, String)> = Vec::new();
+        let mut names: HashSet<String> = HashSet::new();
         for f in &from {
             let leaf = f.rsplit(SEP).next().unwrap_or(f);
             let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}{SEP}{leaf}"));
-            if moves.iter().any(|(_, t)| same(t, &to)) {
+            if !names.insert(to.to_lowercase()) {
                 return Err(CatalogError::Invalid(format!("two of them are named “{leaf}”: move them one at a time")));
             }
             moves.push((f.clone(), to));

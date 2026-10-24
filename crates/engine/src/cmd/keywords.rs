@@ -77,10 +77,11 @@ fn keyword_list(p: &Value, command: &str) -> Result<Vec<String>> {
         return Err(bad(command, format!("`keywords` names more than {MAX_KEYWORDS} keywords")));
     }
     let mut out: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for k in list {
         let k =
             k.as_str().map(clean).filter(|k| !k.is_empty()).ok_or_else(|| bad(command, format!("`keywords` must be a list of keywords, not {k}")))?;
-        if !out.iter().any(|o| lightcraft_catalog::keywords::same(o, &k)) {
+        if seen.insert(k.to_lowercase()) {
             out.push(k);
         }
     }
