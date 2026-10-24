@@ -2,6 +2,12 @@
 
 ## 2026-10-24
 
+### Sony A7CR photos at ISO 50 open at the right brightness
+- ISO 50 on the A7CR is an extended setting: the sensor runs at ISO 100 and gets a stop more light, and the camera
+  pulls its JPEG back down. LightCraft rendered the raw as it was, so these photos opened about a stop too bright,
+  with washed-out skies. They now open a stop darker, like the camera's JPEG and other raw developers. Photos at
+  ISO 100 and above are unchanged. Other Sony bodies follow once their extended ISOs have been checked.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
