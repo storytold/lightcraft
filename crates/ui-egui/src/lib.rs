@@ -81,6 +81,8 @@ mod tests_dialog_fit;
 #[cfg(test)]
 mod tests_dialog_primary;
 #[cfg(test)]
+mod tests_dialog_tab;
+#[cfg(test)]
 mod tests_dialogs;
 #[cfg(test)]
 mod tests_edit_layout;
@@ -635,6 +637,10 @@ impl LightcraftApp {
                     .map(|d| d.crop.aspect.map_or(serde_json::json!("free"), |(w, h)| serde_json::json!([w as f64 / 100.0, h as f64 / 100.0])))
             };
         }
+        if r.is_ok() && id == "library.toggleFilters" {
+            // the search field shows the text filter: empty while the filters are off, back with them
+            self.ui.search = self.session.filter.text.clone();
+        }
         if r.is_ok() && id == "library.clearFilter" {
             // the search field shows the text filter: cleared from anywhere (the loupe's pill, the
             // menu), it must not keep a search that no longer applies (issue #1648)
@@ -810,6 +816,18 @@ impl LightcraftApp {
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         self.toast_for(ctx, text, TOAST_SECONDS);
+    }
+
+    /// Auto straighten (the crop panel's Auto, a double-click with the Straighten tool), saying so
+    /// when it finds nothing to level by instead of leaving the photo as it is without a word.
+    pub fn auto_straighten(&mut self, ctx: &egui::Context) {
+        match self.run("crop.autoStraighten", serde_json::json!({})) {
+            Ok(r) if r.get("changed").and_then(Value::as_bool) == Some(false) => {
+                self.toast(ctx, crate::i18n::tr("No horizon or vertical lines to level by"));
+            }
+            Ok(_) => {}
+            Err(e) => self.toast(ctx, e),
+        }
     }
 
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).

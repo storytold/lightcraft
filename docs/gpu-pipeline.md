@@ -229,7 +229,7 @@ passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gp
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
 with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
-Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
+Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
@@ -237,7 +237,7 @@ real failure still stops the whole process. Such a test asserts on its own rende
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
 
 ## Correctness: CPU oracle and equivalence tests
-`crates/gpu/tests/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
+`crates/gpu/tests/it/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
 bounds **mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB** per channel. Measured (Apple M4 Pro, Metal):
 **max 1 LSB, mean ≤ 0.0003 LSB** for every case — 26 settings cases (all tone/colour/effects tools,
 3 vignette styles, grain, curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
@@ -254,7 +254,7 @@ cut back after the readback. The tests skip (pass with a note) when no adapter e
 non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max 1 LSB, 10 are
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
-(`cargo test -p lightcraft-gpu --release --test equivalence -- --nocapture`).
+(`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.

@@ -214,8 +214,9 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(rs) = f.rule_set.as_ref().filter(|r| !r.rules.is_empty()) {
         add(format!("Rules: {}", rs.describe_with(cat)), json!({"ruleSet": Null}));
     }
-    if !f.only.is_empty() {
-        add(format!("Only {} photos", f.only.len()), json!({"only": []}));
+    if f.only_none || !f.only.is_empty() {
+        let n = if f.only_none { 0 } else { f.only.len() };
+        add(format!("Only {n} photos"), json!({"only": [], "onlyNone": false}));
     }
     v
 }

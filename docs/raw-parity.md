@@ -46,11 +46,11 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
   version. The year a model was added is approximated from that Camera Raw major version.
 - **What we decode**: the decoders and their refusals in `crates/raw/src` (`lib.rs` routing, `vendor/*.rs`
   coding variants, `crx.rs` CRX limits, `orf.rs` / `srw.rs` compressed refusals), the import list
-  `lightcraft_engine::import::EXTENSIONS`, and `KNOWN_UNSUPPORTED` in `crates/raw/tests/corpus.rs`. Doc
+  `lightcraft_engine::import::EXTENSIONS`, and `KNOWN_UNSUPPORTED` in `crates/raw/tests/it/corpus.rs`. Doc
   claims were not used.
 - **Verified** means a real file from that body decoded from sensor data in: the corpus test over the
   `RAW_SAMPLES` manifest (`xtask/src/main.rs`, 105 CC0 files; bodies whose sample is in
-  `KNOWN_UNSUPPORTED` excluded), `crates/raw/tests/cr3_corpus.rs` (3 bodies exact against an external decoder;
+  `KNOWN_UNSUPPORTED` excluded), `crates/raw/tests/it/cr3_corpus.rs` (3 bodies exact against an external decoder;
   the EOS R5 Mark II pinned, with a QP-map check of 33,665 private files; 22 more bodies pinned on one CC0
   file each and checked against the camera JPEG, [cr3.md](cr3.md#further-bodies-one-cc0-file-each)), the RAF reference
   check ([raf-compression.md](raf-compression.md)), and the raw.pixls.us bulk checks recorded in issue
@@ -64,7 +64,7 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
   decoded on main `25ef65c8`; [raw/coverage-sweep.tsv](raw/coverage-sweep.tsv) records the URLs,
   SHA-256, dimensions, FNV-1a sensor hashes and render/reference luminance correlations (0.6801
   to 0.9998). The hashes pin LightCraft's own output. The regression test is
-  `crates/raw/tests/coverage_sweep_corpus.rs`; downloads are in `RAW_SAMPLES`. Ten references are
+  `crates/raw/tests/it/coverage_sweep_corpus.rs`; downloads are in `RAW_SAMPLES`. Ten references are
   embedded TIFF images; the rest are JPEGs. FFF TIFF previews are not display-ready and check
   image structure only. Eleven candidate models were excluded for identity, provenance or
   missing/mismatched reference images. D6 / Z 6 / Z 7 verification covers compressed NEF only;

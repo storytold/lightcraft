@@ -197,13 +197,24 @@ impl FindPlan {
     }
 }
 
+/// How Find Missing compares file names: the part after the last `/` or `\`, in lower case. A
+/// library made on Windows keeps Windows paths, whose `\` isn't a separator to `Path` on macOS or
+/// Linux. Files on disk are named by the same rule, so a macOS or Linux file name that holds a
+/// `\` (`a\b.jpg`) still meets its photo, and a `b.jpg` beside it makes that match ambiguous
+/// rather than a guess. With no `a\b.jpg` there, such a photo may be found as `b.jpg`, if the
+/// size on record agrees.
+fn name_key(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase()
+}
+
 /// The file-system half of Find Missing Photos: which `candidates` are gone, and which file in
 /// `folder` (recursively) is each one's. Touches only the disk — never the session — so the app
 /// runs it on a worker thread (walking a big folder on a network share and hashing look-alikes
 /// takes a while) and relinks the result with `library.findMissing {found, missing, ambiguous}`.
 ///
 /// Matching, per photo:
-/// 1. a file with the same name (any letter case), the same size and the same content hash;
+/// 1. a file with the same name ([`name_key`]: any letter case), the same size and the same
+///    content hash;
 /// 2. renamed: a file of the same size with the same content hash (only same-size files are
 ///    read, so this stays cheap);
 /// 3. without a hash to confirm (or the file was edited in place): the one file with the same
@@ -228,8 +239,9 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
     let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
     let files: Vec<String> = crate::import::expand(&[folder.to_string()], None).into_iter().filter(|f| !in_use.contains(f.as_str())).collect();
     for f in &files {
-        if let Some(n) = Path::new(f).file_name() {
-            by_name.entry(n.to_string_lossy().to_lowercase()).or_default().push(f.clone());
+        let name = name_key(f);
+        if !name.is_empty() {
+            by_name.entry(name).or_default().push(f.clone());
         }
     }
     let mut by_size: Option<HashMap<u64, Vec<String>>> = None;
@@ -239,7 +251,7 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
     let mut used: HashSet<String> = HashSet::new();
     let mut plan = FindPlan::default();
     for c in &lost {
-        let name = Path::new(&c.path).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let name = name_key(&c.path);
         let size = c.size;
         let hash = c.hash.as_deref();
         let named: Vec<&String> = by_name

@@ -118,7 +118,9 @@ impl Drop for Buf {
         let mut b = Some(b);
         let _ = RETIRED.try_with(|r| r.0.borrow_mut().extend(b.take()));
         match b {
-            Some(b) => std::mem::forget(b),
+            // Leaking is deliberate during thread teardown — dropping a wgpu buffer whose device
+            // thread-locals have already gone can abort the process. The device owns it.
+            Some(b) => std::mem::forget(b), // NOSONAR
             None => {
                 RETIRED_BYTES.fetch_add(size, Ordering::Relaxed);
             }

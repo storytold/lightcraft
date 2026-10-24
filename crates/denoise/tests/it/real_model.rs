@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! LC_DENOISE_MODEL=<model_bayer.onnx> LC_DENOISE_MOSAICS=<folder> LC_DENOISE_OUT=<folder> \
-//!   cargo test --release -p lightcraft-denoise --features runtime --test real_model -- --ignored --nocapture
+//!   cargo test --release -p lightcraft-denoise --features runtime --test it real_model:: -- --ignored --nocapture
 //! ```
 //!
 //! `LC_DENOISE_MOSAICS` holds `<name>.mosaic.f32` (little-endian f32, normalised: black 0, white 1, not white
@@ -10,8 +10,6 @@
 //! `height`, `cfa`, `wb` lines). Noise is Poisson-Gaussian, made here. Optional: `LC_DENOISE_PARALLEL` (tiles at
 //! once, default 8), `LC_DENOISE_ONLY` (one name), `LC_DENOISE_ISO` (noise strength, default 1.0; 0 adds none),
 //! `LC_DENOISE_FULL` (the whole frame instead of a 2048 × 1536 crop).
-
-#![cfg(feature = "runtime")]
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

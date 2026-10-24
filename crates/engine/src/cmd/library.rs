@@ -426,6 +426,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
                 }
                 s.filter = f;
+                s.shelved_filter = None;
                 Ok(json!({"count": s.visible().len()}))
             }
         ),
@@ -469,6 +470,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.filter.library_folder = None;
                 }
+                // a filter put aside by Enable Filters must not bring the removed folder back
+                if let Some(f) = s.shelved_filter.as_mut()
+                    && f.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path))
+                {
+                    f.library_folder = None;
+                }
+                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
+                    s.shelved_filter = None;
+                }
                 // the folder being shown is gone: back to everything, as for a deleted album
                 if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.library_folder = None;
@@ -510,8 +520,30 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{}", always, |s, _| {
             s.filter = Default::default();
+            s.shelved_filter = None;
             Ok(json!({"count": s.visible().len()}))
         }),
+        // Classic: Library > Enable Filters (Cmd+L) switches the filter off and on again as it was
+        cmd!(
+            "library.toggleFilters",
+            "Enable Filters",
+            ["View"],
+            Some("Cmd+L"),
+            "{} — with a filter set, puts it aside and shows everything; with one put aside, brings it back as it was (stars, flag, text… together). Setting or clearing a filter while it is off forgets the one put aside → {enabled, count}",
+            always,
+            |s, _| {
+                if s.filter != Filter::default() {
+                    s.shelved_filter = Some(std::mem::take(&mut s.filter));
+                } else if let Some(mut f) = s.shelved_filter.take() {
+                    // one folder at a time: the folder shown now wins over the one the filter had
+                    if s.source == LibrarySource::LibraryFolder {
+                        f.library_folder = None;
+                    }
+                    s.filter = f;
+                }
+                Ok(json!({"enabled": s.shelved_filter.is_none(), "count": s.visible().len()}))
+            }
+        ),
         cmd!(
             "library.sort",
             "Sort",
@@ -1771,3 +1803,7 @@ mod relative_rating_tests;
 #[cfg(test)]
 #[path = "library/tests_flag_cycle.rs"]
 mod flag_cycle_tests;
+
+#[cfg(test)]
+#[path = "library/tests_enable_filters.rs"]
+mod enable_filters_tests;

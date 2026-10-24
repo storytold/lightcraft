@@ -5,7 +5,7 @@
 //! For every file the plan reaches `Ready` on, probing the partly loaded buffer must give exactly
 //! what probing the whole file gives — with the skipped bytes zero and again with them 0xFF, so a
 //! reader that looked at skipped data would be caught. CR3 and DNG files must be described from a
-//! small part of the file (`cargo test -p lightcraft-raw --release --test sparse_corpus -- --nocapture`
+//! small part of the file (`cargo test -p lightcraft-raw --release --test it sparse_corpus:: -- --nocapture`
 //! prints what each format reads).
 
 use lightcraft_raw::sparse::{HeaderPlan, Ranges, header_plan, preview_plan};

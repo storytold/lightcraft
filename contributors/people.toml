@@ -38,6 +38,9 @@ sync_github_name = true
 [people.Losminek]
 sync_github_name = true
 
+[people.nicolasfalesy]
+sync_github_name = true
+
 [people.FooVoo]
 real_name = "Aleksandr Batyrev"
 sync_github_name = true

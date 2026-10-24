@@ -1827,10 +1827,14 @@ impl PreparedExport {
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
-                    if remove_location && lightcraft_meta::extract(&bytes).gps.is_some() {
-                        return Err(format!(
-                            "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
-                        ));
+                    if remove_location {
+                        let metadata = lightcraft_meta::try_extract(&bytes)
+                            .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
+                        if metadata.gps.is_some() {
+                            return Err(format!(
+                                "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
+                            ));
+                        }
                     }
                     return Ok(Exported {
                         file_name,

@@ -454,3 +454,31 @@ fn a_drag_from_just_inside_a_handle_resizes_not_moves() {
     assert!(r.x0 > 0.0, "the left edge moved in: {r:?}");
     assert!((r.x1 - 1.0).abs() < 1e-6, "the right edge stays: {r:?}");
 }
+
+/// Auto on a photo without a horizon or plumb lines says so, instead of leaving the photo as it is
+/// without a word.
+#[test]
+fn auto_straighten_says_when_it_finds_nothing() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-auto-straighten-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 64, height: 48, data: vec![[90, 120, 160, 255]; 64 * 48] };
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let path = dir.join("flat.png");
+    std::fs::write(&path, bytes).unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    for (method, params) in [("ui.set", json!({"view": "detail"})), ("engine.execute", json!({"command": "panel.crop"}))] {
+        let r = h.request(method, params, T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "button:straightenAuto"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "No horizon or vertical lines to level by"), "{:?}", h.app.ui.toast);
+    assert_eq!(angle(&h), 0.0);
+    let _ = std::fs::remove_dir_all(dir);
+}

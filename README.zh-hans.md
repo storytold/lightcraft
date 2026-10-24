@@ -357,7 +357,7 @@ CI 默认使用行表调试信息，并按启动时可用内存每 1.5 GB 开一
 （每个 CPU 最多一个；读不到内存时为 4 个），所以一台 8 GB、空闲 6 GB 的机器会用 4 个任务构建，
 而一台空闲内存很少的繁忙机器会用更少。测试线程数随之调整，上限为 4。否则，每个 CPU 一个的
 完整调试信息链接器会在任何测试运行之前就耗尽内存。GPU 覆盖范围不变。显式设置
-`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS` 和 `RUST_TEST_THREADS` 会覆盖这些默认值。
+`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS`、`RUST_TEST_THREADS` 和 `NEXTEST_TEST_THREADS` 会覆盖这些默认值。
 日常开发命令保持它们各自的设置。
 
 **内存受限机器上的 release 构建：** [#1196](https://github.com/storytold/lightcraft/issues/1196)

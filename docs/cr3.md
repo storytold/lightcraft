@@ -39,7 +39,7 @@ decoded.
 ## Variant status
 
 The supported and rejected CRX coding variants. Every rejection is an explicit `RawError::Unsupported` whose
-text is part of the contract: `crates/raw/tests/cr3_variants.rs` rebuilds each variant as a synthetic CR3
+text is part of the contract: `crates/raw/tests/it/cr3_variants.rs` rebuilds each variant as a synthetic CR3
 fixture and asserts the exact string, and that header probing (`probe_info`, the import path) and full
 decoding fail with the same error, because the engine shows that reason when it falls back to the embedded
 preview. The same tests decode a control fixture at both edges of each accepted range, so a rejection can
@@ -87,7 +87,7 @@ CMP1 bit depth. A lossless sample outside the bit depth is still corrupt data.
 Other unverified coding variants return explicit unsupported errors (the table above lists them all). Header probing validates the same coding variants and
 tile/plane layout as full decoding.
 
-`crates/raw/tests/cr3_corpus.rs` checks every full-sensor sample against a
+`crates/raw/tests/it/cr3_corpus.rs` checks every full-sensor sample against a
 black-box reference, before cropping or colour processing. Public CC0 files
 are downloaded by `cargo xtask corpus --download` and kept outside version
 control. The exact inputs and reference hashes are:
@@ -194,7 +194,7 @@ All 110 CR3 files on raw.pixls.us (2026-10-12, every one CC0, 31 folders) decode
 falls back to the preview, so none of them uses a CRX variant the decoder refuses (vertical C-RAW tiles,
 partial-subband or rounded-plane coding, multi-tile 0x200, adaptive low-frequency gains) or a CR3
 sRAW / mRAW. HEIF stills are separate `.HIF` files, not CR3. One file per body is pinned in
-`canon_cr3_bodies_decode_like_the_camera_jpeg` (`crates/raw/tests/cr3_corpus.rs`; URLs and SHA-256 in
+`canon_cr3_bodies_decode_like_the_camera_jpeg` (`crates/raw/tests/it/cr3_corpus.rs`; URLs and SHA-256 in
 `RAW_SAMPLES`, `xtask/src/main.rs`): EOS-1D X Mark III, 90D, 250D, 850D, M200, M50 Mark II, M6 Mark II,
 R, R3, R5, R6, R6 Mark II, R6 Mark III, R7, R10, RP, R50, R50 V and PowerShot G5 X Mark II, G7 X Mark III,
 SX70 HS and V1, C-RAW where the body has a CC0 C-RAW sample. No external decoder was run: the sensor

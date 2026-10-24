@@ -1318,5 +1318,9 @@ mod relative_rating_tests;
 mod flag_cycle_tests;
 
 #[cfg(test)]
+#[path = "shortcuts/tests_enable_filters.rs"]
+mod enable_filters_tests;
+
+#[cfg(test)]
 #[path = "shortcuts/tests_filter_bar_key.rs"]
 mod filter_bar_key_tests;

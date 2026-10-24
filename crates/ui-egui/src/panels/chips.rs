@@ -55,7 +55,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         };
     }
     if chip.clear.get("only").is_some() {
-        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = filter.only.len()));
+        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = if filter.only_none { 0 } else { filter.only.len() }));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
         let value = if matches!(prefix, "Flag" | "Type") {

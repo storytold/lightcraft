@@ -10,7 +10,7 @@ use lightcraft_raw::{RawData, decode, probe_info};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-const RECORDS: &str = include_str!("../../../docs/raw/coverage-sweep.tsv");
+const RECORDS: &str = include_str!("../../../../docs/raw/coverage-sweep.tsv");
 
 #[test]
 fn coverage_sweep_sensor_decodes_are_pinned() {

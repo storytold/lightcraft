@@ -2,7 +2,7 @@
 //! network share, which is where reading only the header instead of the whole raw matters:
 //!
 //!   LC_PREVIEW_RAW="/run/user/1000/gvfs/smb-share:.../DSCF0001.RAF" \
-//!     cargo test --release -p lightcraft-engine --test preview_read -- --ignored --nocapture
+//!     cargo test --release -p lightcraft-engine --test it preview_read:: -- --ignored --nocapture
 //!
 //! It reports what the preview cost and fails when the read is not the small part of the file the
 //! header path promises. Skipped without `LC_PREVIEW_RAW` (there is no committed raw fixture: media

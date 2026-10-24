@@ -30,13 +30,16 @@ commands:
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
-  wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app)
+  wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app), in one call
   web [--serve [port]] [--dev]
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md]
                   fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
-                  (stops at first failure); writes target/ci/report.json (machine, GPU adapters, data,
+                  (stops at first failure). Tests run under cargo test (cargo nextest with
+                  LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
+                  them it prints the translation gaps report (never a failure). Writes
+                  target/ci/report.json (machine, GPU adapters, data,
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
                   every backend with a hardware adapter; --summary-md prints the Markdown summary
   corpus [--download]
@@ -118,9 +121,12 @@ pub fn cargo() -> Command {
             // wall-clock frame-budget tests flaky on a loaded machine.
             (jobs.to_string(), jobs.min(4).to_string())
         });
-        for (key, value) in
-            [("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"), ("CARGO_BUILD_JOBS", build.as_str()), ("RUST_TEST_THREADS", threads.as_str())]
-        {
+        for (key, value) in [
+            ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
+            ("CARGO_BUILD_JOBS", build.as_str()),
+            ("RUST_TEST_THREADS", threads.as_str()),
+            ("NEXTEST_TEST_THREADS", threads.as_str()),
+        ] {
             if std::env::var_os(key).is_none() {
                 c.env(key, value);
             }
@@ -182,6 +188,88 @@ fn total_ram_gb() -> Option<u64> {
     };
     // round to the nearest GB: "8 GB" machines report slightly less
     Some(bytes.saturating_add(1 << 29) >> 30)
+}
+
+/// The targets the test runs build: no examples (clippy `--all-targets` still checks them).
+/// Doctests run on their own, [`doctests`]: nextest can't run them.
+const TEST_TARGETS: [&str; 3] = ["--lib", "--bins", "--tests"];
+
+/// `args` followed by [`TEST_TARGETS`].
+fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().copied().chain(TEST_TARGETS).collect()
+}
+
+/// Whether the tests run under `cargo nextest`: only when `LIGHTCRAFT_NEXTEST=1` asks for it and
+/// nextest is installed. `cargo test` is the default because the demo library's generated scenes
+/// are cached per process: libtest runs a binary's tests in one process and generates each scene
+/// once, while nextest's process per test regenerates them (measured: the ui-egui tests take about
+/// 30 min under nextest, under 5 min under cargo test).
+fn nextest() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        if std::env::var_os("LIGHTCRAFT_NEXTEST").is_none_or(|v| v != "1") {
+            return false;
+        }
+        let found = cargo()
+            .args(["nextest", "--version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !found {
+            eprintln!("note: LIGHTCRAFT_NEXTEST=1 but cargo-nextest is not installed, so the tests run under cargo test (cargo install cargo-nextest --locked)");
+        }
+        found
+    })
+}
+
+/// A test run of `args` (packages, features, targets, filters): `cargo nextest run`, or `cargo
+/// test`. The command and how to print it.
+fn tests(args: &[&str]) -> (Command, String) {
+    let mut c = cargo();
+    let tool = if nextest() { "nextest run" } else { "test" };
+    c.args(tool.split(' ')).args(args);
+    (c, format!("cargo {tool} {}", args.join(" ")))
+}
+
+/// The workspace's doctests.
+fn doctests() -> (Command, String) {
+    let mut c = cargo();
+    c.args(["test", "--workspace", "--doc"]);
+    (c, "cargo test --workspace --doc".to_owned())
+}
+
+/// The test that prints the messages each language lacks (shown in English); it always passes.
+const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
+
+/// Print the translation gaps report into the log: [`TRANSLATION_GAPS_TEST`] of lightcraft-ui-egui,
+/// run from the test binary the test step built (found with `--no-run` and the step's own
+/// arguments, so nothing rebuilds). A report that can't run is a note, never a failed step.
+fn translation_gaps() {
+    eprintln!("\n=== ci: translation gaps ===");
+    let mut c = cargo();
+    c.args(["test", "--no-run", "--message-format=json"]).args(with_test_targets(&["--workspace"]));
+    let binary = c.output().map_err(|e| format!("cargo test --no-run: {e}")).and_then(|out| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|m| {
+                m["reason"] == "compiler-artifact"
+                    && m["target"]["name"] == "lightcraft_ui_egui"
+                    && m["profile"]["test"] == true
+                    && m["target"]["kind"].as_array().is_some_and(|kinds| kinds.iter().any(|kind| kind == "lib"))
+            })
+            .and_then(|m| m["executable"].as_str().map(PathBuf::from))
+            .ok_or_else(|| format!("no lightcraft-ui-egui test binary in the build (cargo exited with {})", out.status))
+    });
+    let ran = binary.and_then(|binary| {
+        let mut c = Command::new(&binary);
+        c.args(["--exact", TRANSLATION_GAPS_TEST, "--nocapture", "--quiet"]);
+        run(c, &format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display()))
+    });
+    if let Err(e) = ran {
+        eprintln!("note: the translation gaps report did not run: {e}");
+    }
 }
 
 pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
@@ -248,21 +336,15 @@ fn wasm_set() -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// One `cargo check` over the whole set; `--keep-going` reports every crate that fails.
 fn cmd_wasm() -> Result<(), String> {
     let set = wasm_set()?;
-    let mut results = Vec::new();
+    let mut c = cargo();
+    c.args(["check", "--target", "wasm32-unknown-unknown", "--keep-going"]);
     for pkg in &set {
-        let mut c = cargo();
-        c.args(["check", "--target", "wasm32-unknown-unknown", "-p", pkg]);
-        let ok = run(c, &format!("cargo check --target wasm32-unknown-unknown -p {pkg}")).is_ok();
-        results.push((pkg.clone(), ok));
+        c.args(["-p", pkg]);
     }
-    println!("\nwasm32-unknown-unknown check:");
-    for (p, ok) in &results {
-        println!("  {:<6} {p}", if *ok { "ok" } else { "FAIL" });
-    }
-    let failed = results.iter().filter(|r| !r.1).count();
-    if failed == 0 { Ok(()) } else { Err(format!("{failed} crate(s) failed the wasm check")) }
+    run(c, &format!("cargo check --target wasm32-unknown-unknown --keep-going -p {}", set.join(" -p ")))
 }
 
 fn cmd_ci(args: &[&str]) -> Result<(), String> {
@@ -275,11 +357,11 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     let report_dir = ci_report::prepare(&root)?;
     let started = std::time::Instant::now();
     let started_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    // test runs append the skips their tests record (`lightcraft_testkit::skip!`) to target/ci/skips-<step>.jsonl
-    let test = |cargo_args: &[&str], step: &str| {
-        let mut c = cargo();
-        c.args(cargo_args).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, step));
-        run(c, &format!("cargo {}", cargo_args.join(" ")))
+    // test runs append the skips their tests record (`lightcraft_testkit::skip!`) to
+    // target/ci/skips-<step>.jsonl: a file, so it works the same under nextest and cargo test
+    let test = |(mut c, what): (Command, String), step: &str| {
+        c.env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, step));
+        run(c, &what)
     };
     let gpu = std::cell::RefCell::new(serde_json::Value::Null);
     let hardware_runs = std::cell::RefCell::new(Vec::new());
@@ -309,8 +391,8 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
             "clippy",
             Box::new(|| {
                 let mut c = cargo();
-                c.args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]);
-                run(c, "cargo clippy --workspace --all-targets -- -D warnings")
+                c.args(["clippy", "--workspace", "--all-targets", "--keep-going", "--", "-D", "warnings"]);
+                run(c, "cargo clippy --workspace --all-targets --keep-going -- -D warnings")
             }),
         ),
         (
@@ -320,12 +402,21 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 let mut c = cargo();
                 c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
                 run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
-                test(&["test", "-p", "lightcraft-codecs", "-p", "lightcraft-heif", "--features", "lightcraft-codecs/heif"], "heif")?;
+                test(
+                    tests(&with_test_targets(&["-p", "lightcraft-codecs", "-p", "lightcraft-heif", "--features", "lightcraft-codecs/heif"])),
+                    "heif",
+                )?;
                 // the engine's HEIC import test, with the decoder (the workspace run checks the error)
-                test(&["test", "-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"], "heif")
+                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]), "heif")
             }),
         ),
-        ("test", Box::new(|| test(&["test", "--workspace"], "test"))),
+        (
+            "test",
+            Box::new(|| {
+                test(tests(&with_test_targets(&["--workspace"])), "test")?;
+                test(doctests(), "test")
+            }),
+        ),
     ];
     if hardware {
         steps.push((
@@ -340,12 +431,10 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 let mut failed = Vec::new();
                 for (backend, adapter) in backends {
                     let step = format!("gpu-{backend}");
-                    let mut c = cargo();
-                    c.args(["test", "-p", "lightcraft-gpu", "--features", "denoise"])
-                        .env("LIGHTCRAFT_GPU_BACKEND", &backend)
-                        .env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
+                    let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
+                    c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} cargo test -p lightcraft-gpu --features denoise")).is_ok();
+                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok();
                     hardware_runs.borrow_mut().push(serde_json::json!({
                         "backend": backend,
                         "adapter": adapter,
@@ -376,6 +465,7 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         if *name == "test" {
             // right after the workspace tests, before parity and wasm build other feature sets
             probe();
+            translation_gaps();
         }
         if let Err(e) = r {
             failure = Some((*name, e));
@@ -440,11 +530,12 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
 }
 
 /// Run the ignored `gpu_probe` test of lightcraft-gpu: the pipeline's device (`None`) or one
-/// backend's adapters. `--workspace`, like the test step, so its build is reused. Its stdout, or why
+/// backend's adapters. `--workspace`, like the test step, so its build is reused (every crate's `it`
+/// binary starts; only lightcraft-gpu's has the test). Its stdout, or why
 /// it failed (a driver that crashes while it is enumerated, issue #136, ends up here, not in xtask).
 fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
     let mut c = cargo();
-    c.args(["test", "-q", "--workspace", "--test", "gpu_probe", "--", "--ignored", "--exact", "gpu_probe", "--nocapture"]);
+    c.args(["test", "-q", "--workspace", "--test", "it", "--", "--ignored", "--exact", "gpu_probe::gpu_probe", "--nocapture"]);
     c.env("LIGHTCRAFT_GPU_PROBE", backend.unwrap_or(""));
     let out = c.output().map_err(|e| format!("gpu_probe: {e}"))?;
     if !out.status.success() {

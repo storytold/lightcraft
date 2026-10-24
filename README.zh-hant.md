@@ -375,7 +375,7 @@ CI 預設使用行表除錯資訊，並依啟動時可用記憶體每 1.5 GB 開
 （每個 CPU 最多一個；讀不到記憶體時為 4 個），所以一台 8 GB、剩餘 6 GB 可用的機器會用 4 個任務建置，
 而一台忙碌、剩餘記憶體很少的機器會用更少。測試執行緒數隨之調整，上限為 4。若不限制，每個 CPU 各跑
 一個帶完整除錯資訊的連結器，測試還沒開始記憶體就會耗盡。GPU 測試的涵蓋範圍不受影響。明確設定
-`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS` 與 `RUST_TEST_THREADS` 會覆寫這些預設值。
+`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS`、`RUST_TEST_THREADS` 與 `NEXTEST_TEST_THREADS` 會覆寫這些預設值。
 日常開發指令保留各自的設定。
 
 **記憶體受限機器上的 release 建置：** [#1196](https://github.com/storytold/lightcraft/issues/1196)

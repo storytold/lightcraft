@@ -75,8 +75,8 @@ impl FsStore {
 
 /// A new staging file at `tmp`: whatever is already there (a leftover from a crashed save, or a link) is removed first
 /// (a link itself, never what it points to), then the file is created exclusively, so a write never follows a link
-/// planted at that name into another file (issue #1502).
-fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
+/// planted at that name into another file (issue #1502). Also writes the lock's owner note.
+pub(crate) fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
     if std::fs::symlink_metadata(tmp).is_ok() {
         std::fs::remove_file(tmp)?;
     }

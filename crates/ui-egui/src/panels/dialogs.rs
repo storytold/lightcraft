@@ -2244,13 +2244,15 @@ fn person_rename_plan(cat: &lightcraft_catalog::Catalog, from: &str, to: &str) -
     PersonRenamePlan { faces, needs_merge: needs_merge && from_key != to_key, block }
 }
 
-/// A dialog's one text field: it keeps the focus (except while its own menu has it) and opens
-/// with its text selected, so typing replaces it. True when Return confirms the dialog; Esc
-/// cancels the dialog (`show`). Taking the focus back with a bare `TextEdit` every frame hid the
-/// focus Return gives up, and Return did nothing.
+/// A dialog's one text field: it takes the focus when the dialog opens, and opens with its text
+/// selected, so typing replaces it. It takes the focus back only while nothing else has it: taking
+/// it back every frame would keep Tab from ever reaching the dialog's buttons and check boxes.
+/// True when Return confirms the dialog; Esc cancels the dialog (`show`).
 fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
     let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
-    if !r.editing {
+    // (and takes it back when nothing has it: after a click on the dialog's background or a check box,
+    // or when Return gave it up on a refusal; a control Tab reached keeps it)
+    if just_opened(ui, widget) || (!r.editing && r.ending.is_none() && ui.memory(|m| m.focused().is_none())) {
         r.response.request_focus();
     }
     r.ending == Some(crate::text_field::Ending::Return)

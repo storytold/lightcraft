@@ -207,6 +207,8 @@ pub struct Session {
     pub catalog: Catalog,
     pub source: LibrarySource,
     pub filter: Filter,
+    /// The filter `library.toggleFilters` put aside (Library > Enable Filters off); not persisted.
+    pub(crate) shelved_filter: Option<Filter>,
     pub sort: Sort,
     pub selection: Selection,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
@@ -422,6 +424,7 @@ impl Session {
             catalog: Catalog::new(),
             source: LibrarySource::All,
             filter: Filter::default(),
+            shelved_filter: None,
             sort: Sort::default(),
             selection: Selection::default(),
             visible: Vec::new().into(),
@@ -1026,6 +1029,11 @@ impl Session {
     }
 
     // ---------------------------------------------------------------- library view
+
+    /// Library > Enable Filters is off: a filter is put aside (`library.toggleFilters`).
+    pub fn filters_off(&self) -> bool {
+        self.shelved_filter.is_some()
+    }
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {

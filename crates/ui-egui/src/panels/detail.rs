@@ -2245,9 +2245,15 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     }
     for m in &d.masks {
         let sel = Some(m.id) == active;
+        // Ctrl+Shift+O (`mask_overlay_all`) shows every visible mask's region; outline each one
+        // too, not just the selected mask. Handles and the rotation grip stay on the selected
+        // mask so nothing else becomes draggable. The component check keeps this in step with the
+        // painted region (`view_overlay` at detail.rs:1354 only covers masks with components).
+        let show_outline = sel || (app.ui.mask_overlay_all && m.visible && !m.components.is_empty());
+        let stroke_a: u8 = if sel { 230 } else { 170 };
         for (ci, c) in m.components.iter().enumerate() {
             match &c.shape {
-                MaskShape::Radial { center, rx, ry, angle, .. } if sel => {
+                MaskShape::Radial { center, rx, ry, angle, .. } if show_outline => {
                     let pts: Vec<Pos2> = (0..64)
                         .map(|i| {
                             let a = i as f64 / 64.0 * std::f64::consts::TAU;
@@ -2257,39 +2263,44 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                             map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1))
                         })
                         .collect();
-                    p.add(egui::Shape::closed_line(pts, Stroke::new(1.5, Color32::from_white_alpha(230))));
+                    p.add(egui::Shape::closed_line(pts, Stroke::new(1.5, Color32::from_white_alpha(stroke_a))));
 
-                    let l = frame_long_norm(map);
-                    for (i, a_deg) in [0.0_f64, 90.0_f64, 180.0_f64, 270.0_f64].into_iter().enumerate() {
-                        let a_local = a_deg.to_radians();
+                    if sel {
+                        let l = frame_long_norm(map);
+                        for (i, a_deg) in [0.0_f64, 90.0_f64, 180.0_f64, 270.0_f64].into_iter().enumerate() {
+                            let a_local = a_deg.to_radians();
+                            let (s, co) = angle.to_radians().sin_cos();
+                            let (x, y) = (rx * a_local.cos(), ry * a_local.sin());
+                            let q = map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1));
+                            p.circle_stroke(q, 5.0, Stroke::new(1.5, Color32::WHITE));
+                            register(ui.ctx(), format!("maskHandle:{}:{ci}:{}", m.id, i + 1), Rect::from_center_size(q, vec2(14.0, 14.0)));
+                            grips.push((m.id, ci, i as u8 + 1, q));
+                        }
+
                         let (s, co) = angle.to_radians().sin_cos();
-                        let (x, y) = (rx * a_local.cos(), ry * a_local.sin());
-                        let q = map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1));
-                        p.circle_stroke(q, 5.0, Stroke::new(1.5, Color32::WHITE));
-                        register(ui.ctx(), format!("maskHandle:{}:{ci}:{}", m.id, i + 1), Rect::from_center_size(q, vec2(14.0, 14.0)));
-                        grips.push((m.id, ci, i as u8 + 1, q));
+                        let rot_r = rx + 0.08;
+                        let rot_q = map.screen(Point::new(center.x + (rot_r * co) * l.0, center.y + (rot_r * s) * l.1));
+                        let h1_q = map.screen(Point::new(center.x + (rx * co) * l.0, center.y + (rx * s) * l.1));
+                        p.line_segment([h1_q, rot_q], Stroke::new(1.0, Color32::from_white_alpha(200)));
+                        p.circle_stroke(rot_q, 4.0, Stroke::new(1.5, Color32::WHITE));
+                        register(ui.ctx(), format!("maskHandle:{}:{ci}:5", m.id), Rect::from_center_size(rot_q, vec2(14.0, 14.0)));
+                        grips.push((m.id, ci, 5, rot_q));
                     }
-
-                    let (s, co) = angle.to_radians().sin_cos();
-                    let rot_r = rx + 0.08;
-                    let rot_q = map.screen(Point::new(center.x + (rot_r * co) * l.0, center.y + (rot_r * s) * l.1));
-                    let h1_q = map.screen(Point::new(center.x + (rx * co) * l.0, center.y + (rx * s) * l.1));
-                    p.line_segment([h1_q, rot_q], Stroke::new(1.0, Color32::from_white_alpha(200)));
-                    p.circle_stroke(rot_q, 4.0, Stroke::new(1.5, Color32::WHITE));
-                    register(ui.ctx(), format!("maskHandle:{}:{ci}:5", m.id), Rect::from_center_size(rot_q, vec2(14.0, 14.0)));
-                    grips.push((m.id, ci, 5, rot_q));
                 }
-                MaskShape::Linear { start, end } if sel => {
+                MaskShape::Linear { start, end } if show_outline => {
                     let (a, b) = (map.screen(*start), map.screen(*end));
                     let dir = (b - a).normalized();
                     let perp = vec2(-dir.y, dir.x) * 3000.0;
-                    for (q, alpha) in [(a, 230), (b, 110)] {
+                    let (a1, a2): (u8, u8) = if sel { (230, 110) } else { (170, 80) };
+                    for (q, alpha) in [(a, a1), (b, a2)] {
                         p.line_segment([q - perp, q + perp], Stroke::new(1.0, Color32::from_white_alpha(alpha)));
                     }
-                    for (i, q) in [a, b].iter().enumerate() {
-                        p.circle_stroke(*q, 5.0, Stroke::new(1.5, Color32::WHITE));
-                        register(ui.ctx(), format!("maskHandle:{}:{ci}:{i}", m.id), Rect::from_center_size(*q, vec2(14.0, 14.0)));
-                        grips.push((m.id, ci, i as u8 + 1, *q));
+                    if sel {
+                        for (i, q) in [a, b].iter().enumerate() {
+                            p.circle_stroke(*q, 5.0, Stroke::new(1.5, Color32::WHITE));
+                            register(ui.ctx(), format!("maskHandle:{}:{ci}:{i}", m.id), Rect::from_center_size(*q, vec2(14.0, 14.0)));
+                            grips.push((m.id, ci, i as u8 + 1, *q));
+                        }
                     }
                 }
                 _ => {}
@@ -3047,7 +3058,7 @@ mod preview_geometry_tests {
 fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if !held && resp.double_clicked() {
-        let _ = app.run("crop.autoStraighten", json!({}));
+        app.auto_straighten(ui.ctx());
         app.ui.tool.clear();
         app.gesture = None;
         return;

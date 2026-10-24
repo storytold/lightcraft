@@ -42,8 +42,9 @@ while [ $# -gt 0 ]; do
 done
 
 sha256() {
-    if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
-    else sha256sum "$1" | cut -d' ' -f1; fi
+    sha_file=$1
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$sha_file" | cut -d' ' -f1
+    else sha256sum "$sha_file" | cut -d' ' -f1; fi
 }
 
 verify() {
@@ -81,19 +82,19 @@ BASE="https://huggingface.co/$REPO/resolve/main"
 # fetch FILE DEST [resume]: HTTP errors never reach DEST (--fail writes no error page), and a
 # resume the server refuses (416) starts over instead of counting as done.
 fetch() {
-    set -- "$1" "$2" "${3:-}"
+    file=$1 dest=$2 resume=${3:-}
     if [ -n "$TOKEN" ]; then auth="Authorization: Bearer $TOKEN"; else auth="X-No-Auth: 1"; fi
-    code=$(curl --proto '=https' -fsSL ${3:+-C -} -H "$auth" -w '%{http_code}' -o "$2" "$BASE/$1") || true
+    code=$(curl --proto '=https' -fsSL ${resume:+-C -} -H "$auth" -w '%{http_code}' -o "$dest" "$BASE/$file") || true
     case "$code" in
         200|206) return 0 ;;
         416)
-            echo "the partial download of $1 doesn't match the server's; starting over" >&2
-            rm -f "$2"
-            code=$(curl --proto '=https' -fsSL -H "$auth" -w '%{http_code}' -o "$2" "$BASE/$1") || true
+            echo "the partial download of $file doesn't match the server's; starting over" >&2
+            rm -f "$dest"
+            code=$(curl --proto '=https' -fsSL -H "$auth" -w '%{http_code}' -o "$dest" "$BASE/$file") || true
             [ "$code" = 200 ] && return 0
-            echo "download of $REPO/$1 failed ($code)" >&2; return 1 ;;
-        401|403) echo "access denied to $REPO/$1 (has your request for facebook/sam3 been approved?)" >&2; return 1 ;;
-        *) echo "download of $REPO/$1 failed (${code:-no response})" >&2; return 1 ;;
+            echo "download of $REPO/$file failed ($code)" >&2; return 1 ;;
+        401|403) echo "access denied to $REPO/$file (has your request for facebook/sam3 been approved?)" >&2; return 1 ;;
+        *) echo "download of $REPO/$file failed (${code:-no response})" >&2; return 1 ;;
     esac
 }
 

@@ -1,10 +1,9 @@
 //! Opt-in same-machine denoise model-stage benchmark on one public Bayer raw.
 //! LC_DENOISE_MODEL=<onnx> LC_DENOISE_RAW=<CC0 corpus/raw> cargo test --release
-//! -p lightcraft-engine --features denoise --test denoise_cpu -- --ignored --nocapture
+//! -p lightcraft-engine --features denoise --test it denoise_cpu:: -- --ignored --nocapture
 //! LC_DENOISE_ONLY selects a file (default arw-sony-a7m3-compressed.arw).
 //! The whole model stage includes packing, scale/clip protection, blending and normalization;
 //! file decode, model loading and GPU setup are outside the timer. It uses the application's tile pool convention.
-#![cfg(feature = "denoise")]
 
 use lightcraft_denoise::{
     TileRunner,

@@ -7,9 +7,9 @@
 //! `{:+}`… keep their meaning). The English source is the fallback arm. Adding a language means
 //! adding its file (and its `language_table!` entry); this script picks the file up by name.
 //!
-//! Every catalog must carry the same messages: a `tr_format!` call whose message is in no catalog
-//! does not compile, so a message missing from one language would otherwise go unnoticed until it
-//! shows English.
+//! A message a language lacks (or translates as an empty string) shows the English source: that
+//! language has no arm for it, and a message no catalog has formats the English source through the
+//! macro's last arm. `i18n::tests::translation_gaps_report` lists the gaps per language.
 //!
 //! It also bakes the contributor credits into the binary as static Rust tables (`$OUT_DIR/credits.rs`,
 //! included by `src/credits.rs`; craftrules `standards/contributors.md`): commit stats from
@@ -61,25 +61,14 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         let Some(code) = name.strip_suffix("-formats.json").filter(|code| *code != "en") else { continue };
         println!("cargo:rerun-if-changed=locales/{name}");
         let variant = variant_for(code)?;
-        let messages: BTreeMap<String, String> =
+        let mut messages: BTreeMap<String, String> =
             serde_json::from_str(&fs::read_to_string(&path)?).map_err(|error| format!("locales/{name}: {error}"))?;
+        messages.retain(|_, translated| !translated.is_empty());
         catalogs.push((code.to_string(), variant, messages));
     }
     catalogs.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Every catalog translates the same messages.
     let all: BTreeSet<&String> = catalogs.iter().flat_map(|(_, _, messages)| messages.keys()).collect();
-    let mut problems = Vec::new();
-    for (code, _, messages) in &catalogs {
-        for key in &all {
-            if !messages.contains_key(*key) {
-                problems.push(format!("locales/{code}-formats.json is missing {key:?}"));
-            }
-        }
-    }
-    if !problems.is_empty() {
-        return Err(problems.join("\n").into());
-    }
 
     let mut source = String::from(concat!(
         "/// Translate a format string, checked by `format!` in every language.\n",
@@ -98,6 +87,9 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
     }
     source.push_str(concat!(
+        "    ($english:literal $(, $($args:tt)*)?) => {\n",
+        "        format!($english $(, $($args)*)?)\n",
+        "    };\n",
         "}\n",
         "\n",
         "// `macro_rules!` is textual: the module re-export is what lets call sites say\n",

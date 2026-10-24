@@ -296,6 +296,21 @@ fn radial_body_drag_keeps_resize_and_rotation_handles() {
 }
 
 #[test]
+fn mask_overlay_color_refuses_anything_but_six_hex_digits() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "view.maskOverlayColor", json!({"color": "#2870f0"}));
+    for bad in ["#+f+f+f", "+12345", "#-0-0-0", "##ffffff"] {
+        let r = h.request("engine.execute", json!({"command": "view.maskOverlayColor", "params": {"color": bad}}), T);
+        assert_eq!(r["ok"], false, "{bad:?} is not a colour: {r}");
+        assert_eq!(h.app.ui.mask_overlay_color, [0x28, 0x70, 0xf0], "{bad:?} leaves the overlay colour alone");
+    }
+    exec(&mut h, "view.maskOverlayColor", json!({"color": "e63228"}));
+    assert_eq!(h.app.ui.mask_overlay_color, [0xe6, 0x32, 0x28]);
+    exec(&mut h, "view.maskOverlayColor", json!({"color": [10, 20, 30]}));
+    assert_eq!(h.app.ui.mask_overlay_color, [10, 20, 30]);
+}
+
+#[test]
 fn mask_overlay_keys_and_pins() {
     use lightcraft_pipeline::{MaskView, Overlay};
     let mut h = detail("panel.masking");
@@ -346,6 +361,63 @@ fn mask_overlay_keys_and_pins() {
     pointer(&mut h, json!([{"kind": "down", "x": 0.5, "y": 0.6}, {"kind": "up", "x": 0.5, "y": 0.6}]));
     assert_eq!(h.app.session.active_mask, Some(2));
     h.settle(SETTLE);
+}
+
+/// #2210: Ctrl+Shift+O (the all-masks overlay) draws the white outline of every visible
+/// Radial/Linear mask, not just the selected one — but only the selected mask registers
+/// `maskHandle:` elements, so nothing else becomes draggable.
+#[test]
+fn all_masks_overlay_outlines_every_visible_mask_but_only_the_selected_one_is_draggable() {
+    let mut h = detail("panel.masking");
+    // Two visible radial masks; mask 2 ends up selected (mask.add selects the new one).
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.5], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.5], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    assert!(h.app.ui.mask_overlay_all);
+    assert_eq!(h.app.session.active_mask, Some(2));
+    // Pins add their own <maskPin:…> elements; keep them out of the handle count.
+    exec(&mut h, "view.maskPins", json!({"show": false}));
+    h.settle(SETTLE);
+
+    let handles_of = |h: &Headless, id: usize| h.app.widgets.iter().filter(|(w, _)| w.starts_with(&format!("maskHandle:{id}:"))).count();
+    // The selected mask keeps its 4 edge handles and its rotation grip.
+    assert_eq!(handles_of(&h, 2), 5, "the selected mask keeps its handles");
+    // The other visible mask draws its outline but registers no handle: it is not draggable.
+    assert_eq!(handles_of(&h, 1), 0, "an unselected mask must not become draggable");
+    // …while a mask with no components has nothing to outline and nothing to grab either.
+    exec(&mut h, "mask.add", json!({"kind": "luminanceRange"}));
+    exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.5, 0.8], "rx": 0.08, "ry": 0.08}));
+    assert_eq!(h.app.session.active_mask, Some(3));
+    assert_eq!(handles_of(&h, 1), 0);
+    h.settle(SETTLE);
+}
+
+/// #2210: the outlines of *unselected* masks are painted, not registered as widgets, so the way to
+/// observe them is the rendered pixels. With the all-masks overlay on, the unselected mask's
+/// ellipse edge must carry white stroke pixels the photo alone does not have.
+#[test]
+fn all_masks_overlay_paints_the_outline_of_an_unselected_mask() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.5], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.5], "rx": 0.12, "ry": 0.12}));
+    assert_eq!(h.app.session.active_mask, Some(2));
+    exec(&mut h, "view.maskPins", json!({"show": false}));
+
+    // Sample the whole canvas: the outline is white (alpha 170) over the photo, so the overlay adds
+    // near-white pixels along the unselected mask's ellipse edge.
+    let white_pixels = |h: &mut Headless, on: bool| -> usize {
+        let overlay = h.app.ui.mask_overlay_all;
+        if overlay != on {
+            exec(h, "view.maskOverlayAll", json!({}));
+        }
+        assert_eq!(h.app.ui.mask_overlay_all, on);
+        h.settle(SETTLE);
+        let px = h.view.paint(&Default::default());
+        px.pixels.iter().filter(|p| p.r() > 200 && p.g() > 200 && p.b() > 200).count()
+    };
+    let off = white_pixels(&mut h, false);
+    let on = white_pixels(&mut h, true);
+    assert!(on > off, "the unselected mask's outline must add white pixels: off {off}, on {on}");
 }
 
 /// #518: holding the brush still, however long, paints the same feathered spot as a quick press.

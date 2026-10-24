@@ -4,12 +4,11 @@
 //!
 //! ```text
 //! LC_DENOISE_MODEL=<model_bayer.onnx> LC_DENOISE_RAW=<folder with raw files> \
-//!   cargo test --release -p lightcraft-engine --features denoise --test denoise_real -- --ignored --nocapture
+//!   cargo test --release -p lightcraft-engine --features denoise --test it denoise_real:: -- --ignored --nocapture
 //! ```
 //!
 //! `LC_DENOISE_RAW` is a folder of CC0 raw files (`cargo xtask corpus --download` → `corpus/raw`); every file in it is
 //! tried. Optional: `LC_DENOISE_ONLY` (a file name to try alone), `LC_DENOISE_RUN_ON=cpu|gpu|auto` (where the model runs; `cpu` to compare with the card).
-#![cfg(feature = "denoise")]
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

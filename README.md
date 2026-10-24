@@ -410,10 +410,12 @@ cargo xtask ci                                          # fmt, clippy, HEIF, tes
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
 8 GB machine with 6 GB free builds with 4, and a busy machine with little free
-builds with fewer. Test threads follow, capped at 4. Full-debuginfo linkers, one
-per CPU, otherwise exhaust RAM before any test runs. GPU coverage is unchanged. Explicit
-`CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS` settings
-override these defaults. Ordinary development commands keep their own settings.
+builds with fewer. Test threads follow, capped at 4.
+Full-debuginfo linkers, one per CPU, otherwise exhaust RAM before any test runs. GPU coverage is
+unchanged. Explicit `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS`, `RUST_TEST_THREADS` and
+`NEXTEST_TEST_THREADS` settings override these defaults. The tests run under
+`cargo test`; `LIGHTCRAFT_NEXTEST=1` runs them under [cargo-nextest](https://nexte.st) instead (one
+process per test, slower here because each regenerates the demo scenes). Ordinary development commands keep their own settings.
 
 **Release builds on memory-constrained machines:** [#1196](https://github.com/storytold/lightcraft/issues/1196)
 reports Arch/AUR release-link OOM kills on a 16 GB machine when the desktop and CLI build concurrently

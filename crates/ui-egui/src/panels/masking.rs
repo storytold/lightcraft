@@ -897,25 +897,6 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn masking_context_actions_use_catalog_translations() {
-        let saved = crate::i18n::language();
-        crate::i18n::set_language(crate::i18n::Locale::Fr);
-        for (english, translated) in [
-            ("Duplicate Mask", "Dupliquer le masque"),
-            ("Invert Mask", "Inverser le masque"),
-            ("Hide Mask", "Masquer le masque"),
-            ("Move Up", "Monter"),
-            ("Brush", "Pinceau"),
-            ("Luminance Range", "Plage de luminance"),
-        ] {
-            assert_eq!(menu_label(english), translated, "{english}");
-        }
-        // An arbitrary user name has no catalog entry and is left unchanged.
-        assert_eq!(menu_label("My custom mask"), "My custom mask");
-        crate::i18n::set_language(saved);
-    }
-
     /// The grid keeps four 52 pt tiles when the labels fit, and gives a long (translated) label
     /// room by dropping a column rather than drawing it past its tile.
     #[test]

@@ -181,7 +181,7 @@ profile correction control when an existing edit has it disabled.
 
 ## Local inventory check
 
-`crates/raw/tests/sony_lens_inventory.rs` is opt-in and does nothing in CI. With `LIGHTCRAFT_SONY_LENS_DIR` naming a
+`crates/raw/tests/it/sony_lens_inventory.rs` is opt-in and does nothing in CI. With `LIGHTCRAFT_SONY_LENS_DIR` naming a
 directory of ARWs it decodes each from its headers and prints its record (settings, sources, copies' agreement,
 sample ranges, statuses); `LIGHTCRAFT_SONY_LENS_FULL=1` also compares header and full decode. With
 `LIGHTCRAFT_SONY_LENS_INVENTORY` naming a CSV inventory it checks every file's table counts, sizes, sample counts,
@@ -300,7 +300,7 @@ The current `cargo xtask corpus --download` manifest contains 25 Sony CC0 sample
 including samples 4822 (A7R IVA / 24–105 mm) and 3989 (A9 II / 200–600 mm), each with a pinned SHA-256 that the
 download checks. `sony_embedded_distortion_is_limited_to_validated_models` checks 23 of them (the two ILCE-7CM2
 codings have their own test), and `sony_lens_records_of_the_public_samples` verifies all 25 against their pins
-(`SONY_SAMPLES` in `crates/raw/tests/corpus.rs`, itself anchored by a pinned digest and compared with the manifest)
+(`SONY_SAMPLES` in `crates/raw/tests/it/corpus.rs`, itself anchored by a pinned digest and compared with the manifest)
 before decoding. **No CI job fetches the corpus**: these fixture tests run only where it has been downloaded, and
 otherwise skip each absent file. `LIGHTCRAFT_CORPUS_REQUIRED=1` makes `sony_lens_records_of_the_public_samples`
 fail on any absent pinned file instead.

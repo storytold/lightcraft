@@ -287,6 +287,38 @@ fn commands_subcommand_lists_registry() {
 }
 
 #[test]
+fn commands_subcommand_lists_commands_sorted_by_id() {
+    let o = Command::new(BIN).args(["commands", "--json"]).output().unwrap();
+    assert!(o.status.success());
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let cmds = v.as_array().unwrap();
+    for c in cmds {
+        for field in ["id", "label", "menu", "shortcut", "params", "enabled"] {
+            assert!(c.get(field).is_some(), "every command should keep its {field}: {c}");
+        }
+    }
+    let ids: Vec<&str> = cmds.iter().filter_map(|c| c["id"].as_str()).collect();
+    assert_eq!(ids.len(), cmds.len(), "every command should have a string id");
+    let unsorted = ids.windows(2).find(|w| w[0] >= w[1]);
+    assert!(unsorted.is_none(), "--json should list commands sorted by id, but {unsorted:?} are out of order");
+
+    let o = Command::new(BIN).arg("commands").output().unwrap();
+    assert!(o.status.success());
+    let text = String::from_utf8_lossy(&o.stdout);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2 * ids.len(), "each command should take an id line and a params line");
+    let listed: Vec<&str> = lines.iter().step_by(2).filter_map(|l| l.split_whitespace().next()).collect();
+    assert_eq!(listed, ids, "the text output should list the same commands in the same order as --json");
+    assert!(lines.iter().skip(1).step_by(2).all(|l| l.trim_start().starts_with("params:")), "each id line should be followed by its params line");
+    for (line, c) in lines.iter().step_by(2).zip(cmds) {
+        assert!(line.contains(c["label"].as_str().unwrap()), "{line:?} should show the label of {c}");
+        if let Some(sc) = c["shortcut"].as_str() {
+            assert!(line.contains(&format!("[{sc}]")), "{line:?} should show the shortcut of {c}");
+        }
+    }
+}
+
+#[test]
 fn snapshot_subcommand_renders_the_ui_headlessly() {
     let script = tmp("snap.jsonl");
     let a = tmp("snap-grid.png");

@@ -176,6 +176,11 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
     }
+    if let Some(f) = s.shelved_filter.as_mut()
+        && f.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key)
+    {
+        f.person = Some(to.clone());
+    }
     Ok(json!({"faces": faces, "photos": photos, "from": from, "to": to, "merged": other}))
 }
 

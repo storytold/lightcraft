@@ -935,7 +935,11 @@ fn snapshot(args: &[String]) -> Result<(), String> {
 
 fn commands(args: &[String]) -> Result<(), String> {
     let mut h = Headless::demo();
-    let cmds = h.call("engine.commands", json!({}))?;
+    let mut cmds = h.call("engine.commands", json!({}))?;
+    // Listed by id so each family (`photo.*`, `mask.*`, …) reads together; the registry keeps its own order.
+    if let Some(list) = cmds.as_array_mut() {
+        list.sort_by(|a, b| a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or("")));
+    }
     let mut out = std::io::stdout().lock();
     if args.iter().any(|a| a == "--json") {
         writeln!(out, "{}", serde_json::to_string_pretty(&cmds).unwrap_or_default()).map_err(|e| e.to_string())?;

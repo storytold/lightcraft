@@ -238,7 +238,7 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   the model on the CPU from the start.
 - Hostile documents: a selection keeps at most 4 detail patches (when read and when rendered),
   each at most 1024² logits; more than 64 clicks are never sent to the model.
-- Accuracy: `crates/segment/tests/reference.rs` compares every stage against the Python
+- Accuracy: `crates/segment/tests/it/reference.rs` compares every stage against the Python
   reference (`tools/sam3_reference.py`); on Metal the backbone matches to 7e-5 relative error
   and masks to ~5e-5. f16 was tried and rejected (overflow, ~7 % faster).
 - The engine feature `sam` (on in the desktop app, off for web and CLI) gates the model; without

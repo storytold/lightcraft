@@ -520,6 +520,35 @@ fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
     tree.iter().any(|n| same(&n.path, path) || (lightcraft_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
 }
 
+/// The labels the Keyword List and its dialogs pass to `tr` through variables, out of reach of a
+/// literal search: the translation gaps report (`i18n`) checks them.
+#[cfg(test)]
+pub(crate) const VARIABLE_LABELS: &[&str] = &[
+    "Include on Export",
+    "Export Containing Keywords",
+    "Export Synonyms",
+    "Person",
+    "Merge Keywords",
+    "No keywords yet",
+    "No keywords match",
+    "Add to Selected Photos",
+    "Remove from Selected Photos",
+    "Keywords",
+    "& Containing",
+    "Will Export",
+    "No keywords are exported",
+    "Add to All Selected Photos",
+    "Set name",
+    "Edit Set…",
+    "Edit Keyword Set",
+    "A keyword set needs a name",
+    "Recent Keywords",
+    "Keywords (⌥1–⌥9)",
+    "Save as a new set",
+    "Import Keywords…",
+    "Export Keywords…",
+];
+
 #[cfg(test)]
 mod tests {
     use lightcraft_catalog::{Op, Photo, Source};
@@ -588,46 +617,5 @@ mod tests {
         // any letter's case, not only ASCII; a photo with it twice counts once
         let (c, ids) = library(&[&["Ärzte", "ÄRZTE"], &[]]);
         assert_eq!(Ticks::of(&c, &ids).tick("ärzte"), Tick::Some);
-    }
-
-    /// The labels the Keyword List and its dialogs pass to `tr` through variables (out of reach of
-    /// a literal search) are translated in every language.
-    #[test]
-    fn labels_passed_through_variables_are_translated() {
-        use crate::i18n::Locale;
-        let labels = [
-            "Include on Export",
-            "Export Containing Keywords",
-            "Export Synonyms",
-            "Person",
-            "Merge Keywords",
-            "No keywords yet",
-            "No keywords match",
-            "Add to Selected Photos",
-            "Remove from Selected Photos",
-            "Keywords",
-            "& Containing",
-            "Will Export",
-            "No keywords are exported",
-            "Add to All Selected Photos",
-            "Set name",
-            "Edit Set…",
-            "Edit Keyword Set",
-            "A keyword set needs a name",
-            "Recent Keywords",
-            "Keywords (⌥1–⌥9)",
-            "Save as a new set",
-            "Import Keywords…",
-            "Export Keywords…",
-        ];
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
-        for code in ["de", "es", "fr", "pt-br", "ru", "uk", "it", "ka", "ja", "zh-hans", "zh-hant", "pl", "cs", "sv", "fi", "id", "vi"] {
-            let text = std::fs::read_to_string(dir.join(format!("{code}.json"))).unwrap();
-            let catalog: std::collections::HashMap<String, String> = serde_json::from_str(&text).unwrap();
-            for label in labels {
-                assert!(catalog.contains_key(label), "{code}: “{label}”");
-            }
-        }
-        assert_eq!(Locale::ALL.len(), 18, "a language added: list its file above");
     }
 }

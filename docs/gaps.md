@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (gap 28: ⌘L Enable Filters switches the filter off and on; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -43,7 +43,8 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 26 | **Performance at scale**: 85k-photo library opens in 1.7–4.7 s; 100k grid test pending; colour NR at half resolution; at 100k photos stack and album lookups are indexed (an "In a Stack" or "Album" smart album counts in ~14 ms, was 0.6–2.7 s) | ROADMAP log, gpu-pipeline.md | large-catalog users | 15–30 | [target-app-parity](target-app-parity.md#by-dimension) |
 | 27 | **Windows / Linux runtime coverage**: the Windows x64 installer is verified on Windows 11 (0.9.1: install and upgrade end on the completion page, a custom folder is kept, Launch works, removal is clean), but uninstalling from Settings → Apps ends with no confirmation (#892, #931); GPU path proven on Apple and on one AMD GPU on Linux (Radeon 8060S, Vulkan); NVIDIA, Intel and DX12 unverified; the Linux riscv64 tarball (new in 0.6.0, #844) is cross-compiled and never run beyond a QEMU smoke test | ROADMAP, issues, `release.yml` | non-Mac users find bugs first | 13–27 | [hardware-parity](hardware-parity.md) |
 | 29 | **HDR merge leftovers** (LR-MERGE-HDR): AI Denoise doesn't run on merged (linear) DNGs; JPEG brackets are treated as linear (no camera response curve); every frame is held as 32-bit float, ~0.86 GB per 67 MP frame (half-float frames would halve it) | tested on Sony A7R VI brackets 2026-10-14 ([merge.md](merge.md)); Lightroom's Denoise supports HDR DNGs | HDR shooters who denoise their merges, merge JPEGs, or merge 7+ frames of high-resolution raws on 16 GB machines | 10–20 (+ denoise linear-RGB contract, gap 11) | [merge](merge.md) |
-| 28 | **Small Classic shortcuts and keys**: ⌘L (Enable Filters), Tab / ⇧Tab (hide the side panels / all panels; Tab moves the keyboard focus here) and F5. Rating `[` `]`, flag cycling (`` ` ``), `\` (Filter Bar), F1 help, F6 / F7 / F8 (filmstrip, left panel, right panel) are bound | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 2–4 | [ui-parity](ui-parity.md) |
+| 28 | **Small Classic shortcuts and keys**: Tab / ⇧Tab (hide the side panels / all panels; Tab moves the keyboard focus here) and F5. Rating `[` `]`, flag cycling (`` ` ``), `\` (Filter Bar), ⌘L (Enable Filters), F1 help, F6 / F7 / F8 (filmstrip, left panel, right panel) are bound | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 2–4 | [ui-parity](ui-parity.md) |
+| 30 | **Multi-select metadata editing in the UI**: `photo.setMeta` already iterates all selected photos, so the engine applies changes to every target, but the Info panel and All Metadata dialog always show one photo's values with no "mixed" indication when selected photos differ — users cannot tell whether a field is uniform or mixed across the selection before editing | standard in Lightroom Classic's multi-select Info panel | anyone editing metadata on a batch (copyright, keywords, custom fields) | 4–8 | [ui-parity](ui-parity.md) |
 
 Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform work they need around them,
 **~340–600 h** to beta (incl. 40–80 h for the ~92 open core-path user issues) (see [target-app-parity.md](target-app-parity.md#stage)).
@@ -51,7 +52,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 ## Gaps by kind
 
 - **Feature:** 5, 8, 11, 12, 13, 15, 16, 18, 19, 29
-- **UI / UX:** 4, 23, 24, 28
+- **UI / UX:** 4, 23, 24, 28, 30
 - **File format:** 2, 6, 7, 10, 13, 20, 25 (raw ones in [raw-parity.md](raw-parity.md))
 - **Hardware:** 14, 17, 22, 27
 - **Localization:** 21
@@ -59,6 +60,10 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - **Stability and platforms:** 9, 26, 27
 
 ## Closed recently (kept for calibration)
+
+- 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
+
+- 2026-10-22: PSD/PSB imports and metadata readers now expose embedded EXIF resource 1058 and XMP resource 1060 for capture dates, GPS and All Metadata (#2519); imported PSD edit copies retain their capture date, and the `removeLocation` Original-export guard sees embedded PSD/PSB GPS. No ranked gap or headline feature count closes.
 
 - 2026-10-20: the import review album picker follows the sidebar folder hierarchy and searches album paths (#2362, LR-IMP-ADD-DIALOG), retaining None/New album and existing destination IDs. This closes a usability subgap; no ranked gap or headline feature count closes.
 
@@ -79,6 +84,9 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | patch | XMP namespace-prefix collisions no longer overwrite foreign metadata; ranked gaps and estimates unchanged |
+| 2026-10-22 | patch | Issue #2519: PSD/PSB EXIF resource 1058 and XMP resource 1060 now use the common metadata extractor, and `.psb` files are accepted by import; no ranked gap or readiness count changes |
+| 2026-10-22 | minor | Gap 30 added: multi-select metadata editing — Info panel and All Metadata dialog show one photo's values with no mixed-value indication |
 | 2026-10-21 | minor | Gap 28 shrinks: F8 shows / hides the right panel (`view.rightPanel`); rating `[` `]`, flag cycling and F1 help were already bound, so the entry lists only filter-bar keys, Tab / ⇧Tab and F5; 2–4 h (was 4–8) |
 | 2026-10-20 | minor | #2362: import destination albums use the shared hierarchy/search picker instead of a flat name list; existing import workflows retained; ranked gaps/readiness counts unchanged |
 | 2026-10-19 | minor | Gap 21: Indonesian (`id`) shipped with every catalog message but What's New; four new languages left (Hindi, Arabic, Korean, Vietnamese), 135–239 h |
@@ -86,6 +94,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-12 | minor | Gap 10: SR2/SRF folder discovery fixed; F828 imports as preview-only. Sensor decoding remains a gap; readiness scores unchanged |
+| 2026-10-23 | minor | Gap 28: ⌘L / Ctrl+L (Library ▸ Enable Filters) puts the filter aside and brings it back as it was; the entry drops ⌘L; hours unchanged |
 | 2026-10-15 | minor | Gap 28: `\` shows / hides the Filter Bar in the grids; the entry drops `[` `]` (#509), flag cycling (#1490) and F1 (Help), already on main; ⌘L is the filter-bar key left; hours unchanged |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
 | 2026-10-14 | minor | Gap 10: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277) |

@@ -739,3 +739,21 @@ fn a_cancelled_scan_does_not_check_the_cached_probes_against_the_disk() {
     let new = out.candidates.iter().find(|c| c.name == "new.png").expect("new.png is a candidate");
     assert!(new.error.is_some(), "the cached probe was used after ✕: {new:?}");
 }
+
+#[test]
+fn removing_missing_photos_takes_them_out_of_their_stacks() {
+    let dir = Scratch::new("remove-stacked");
+    let mut s = library(&dir);
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (a, b) = (id(&s, "a.png"), id(&s, "b.png"));
+    let group = s.catalog.group_ops(a, &[b], true).unwrap();
+    s.catalog.apply(group).unwrap();
+    assert!(s.catalog.stack_of(b).is_some());
+    std::fs::remove_file(dir.path("trip/day1/b.png")).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "removeMissing": true})).unwrap();
+    assert_eq!(r["removed"].as_u64(), Some(1), "{r}");
+    assert!(s.catalog.photo(b).unwrap().deleted);
+    assert!(s.catalog.stack_of(b).is_none(), "like photo.delete, a removed photo leaves its stack: {:?}", s.catalog.stack_of(b));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stack_of(b).is_some(), "one undo step puts b back in its stack");
+}

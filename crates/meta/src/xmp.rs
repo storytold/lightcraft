@@ -69,7 +69,8 @@ pub struct XmpData {
     /// The opaque `lc:settings` JSON string, if present.
     pub lc_settings: Option<String>,
     /// Every property found, keyed `prefix:name` (struct fields as `prefix:name/prefix:field`); arrays keep
-    /// item order, language alternatives put `x-default` first.
+    /// item order, language alternatives put `x-default` first. Foreign namespaces that reuse a recognized
+    /// prefix use `Q{hex-encoded namespace URI}local` instead, so they cannot impersonate known properties.
     pub properties: BTreeMap<String, Vec<String>>,
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
@@ -150,26 +151,46 @@ impl Node {
 
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 200_000;
+// Expanding a long namespace URI on many short names must not amplify a small packet without bound.
+pub(crate) const MAX_OPAQUE_NAME_BYTES: usize = 8 * 1024 * 1024;
 
-/// `prefix:local` with the prefix canonicalised by namespace URI (see [`NAMESPACES`]).
-pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>]) -> String {
-    canonical(qname, scopes)
+/// Names canonicalised by namespace URI (see [`NAMESPACES`]); conflicting foreign prefixes are opaque.
+pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
+    canonical(qname, scopes, opaque_budget)
 }
 
-fn canonical(qname: &str, scopes: &[Vec<(String, String)>]) -> String {
+fn canonical(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
     let (prefix, local) = qname.split_once(':').unwrap_or(("", qname));
     if prefix == "xml" || prefix == "xmlns" {
-        return qname.to_string();
+        return Ok(qname.to_string());
     }
     let uri = scopes.iter().rev().flat_map(|s| s.iter().rev()).find(|(p, _)| p == prefix).map(|(_, u)| u.as_str());
-    match uri {
+    Ok(match uri {
         Some(u) => match NAMESPACES.iter().find(|(_, nu)| *nu == u) {
             Some((p, _)) => format!("{p}:{local}"),
+            None if NAMESPACES.iter().any(|(p, _)| *p == prefix) => {
+                // A foreign `lc:settings` must never match our `lc:*` ownership rule (nor may a
+                // foreign `xmp:Rating` become a rating). Braces cannot occur in an XML QName;
+                // hex keeps URI slashes out of the flattened property's `/` path separators.
+                let size =
+                    u.len().checked_mul(2).and_then(|n| n.checked_add(3)).and_then(|n| n.checked_add(local.len())).ok_or(XmpError::TooComplex)?;
+                *opaque_budget = opaque_budget.checked_sub(size).ok_or(XmpError::TooComplex)?;
+                let mut key = String::with_capacity(size);
+                key.push_str("Q{");
+                for byte in u.bytes() {
+                    for nibble in [byte >> 4, byte & 15] {
+                        key.push(char::from(if nibble < 10 { b'0' + nibble } else { b'a' + (nibble - 10) }));
+                    }
+                }
+                key.push('}');
+                key.push_str(local);
+                key
+            }
             None if prefix.is_empty() => local.to_string(),
             None => qname.to_string(),
         },
         None => qname.to_string(),
-    }
+    })
 }
 
 fn entity(name: &str) -> Option<char> {
@@ -202,7 +223,7 @@ fn xml_safe(s: &str) -> String {
 }
 
 /// Unescape attribute values (predefined + numeric references; unknown references kept verbatim).
-fn unescape_attr(s: &str) -> String {
+pub(crate) fn unescape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
@@ -229,6 +250,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
     let mut stack: Vec<Node> = vec![Node { name: "#root".into(), ..Default::default() }];
     let mut scopes: Vec<Vec<(String, String)>> = vec![vec![("xml".into(), "http://www.w3.org/XML/1998/namespace".into())]];
     let mut count = 0usize;
+    let mut opaque_budget = MAX_OPAQUE_NAME_BYTES;
     loop {
         let ev = reader.read_event().map_err(|e| XmpError::Xml(e.to_string()))?;
         match ev {
@@ -251,8 +273,9 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                     }
                 }
                 scopes.push(scope);
-                let name = canonical(&String::from_utf8_lossy(e.name().as_ref()), &scopes);
-                let attrs = raw_attrs.into_iter().map(|(k, v)| (canonical(&k, &scopes), v)).collect();
+                let name = canonical(&String::from_utf8_lossy(e.name().as_ref()), &scopes, &mut opaque_budget)?;
+                let attrs =
+                    raw_attrs.into_iter().map(|(k, v)| Ok((canonical(&k, &scopes, &mut opaque_budget)?, v))).collect::<Result<_, XmpError>>()?;
                 let node = Node { name, attrs, ..Default::default() };
                 if matches!(ev, Event::Empty(_)) {
                     scopes.pop();
@@ -765,6 +788,43 @@ mod tests {
         let d = parse_xmp(&x).unwrap();
         assert_eq!(d.metadata, Metadata::default());
         assert_eq!(d.lc_settings, None);
+    }
+
+    #[test]
+    fn foreign_namespace_cannot_impersonate_known_metadata() {
+        for body in [
+            r#"xmp:Rating="2" lc:settings="foreign settings"/>"#,
+            r#"><xmp:Rating>2</xmp:Rating><lc:settings>foreign settings</lc:settings></rdf:Description>"#,
+        ] {
+            let packet = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+                xmlns:xmp="https://example.org/vendor/" xmlns:lc="https://example.org/vendor/" {body}</rdf:RDF>"#
+            );
+            let d = parse_xmp(&packet).unwrap();
+            assert_eq!(d.metadata.rating, None, "foreign rating: {packet}");
+            assert_eq!(d.lc_settings, None, "foreign settings: {packet}");
+            assert!(!d.properties.contains_key("xmp:Rating"));
+            assert!(!d.values.contains_key("lc:settings"));
+            assert!(d.properties.values().any(|v| v == &["foreign settings"]));
+            assert!(d.properties.keys().all(|key| !key.contains('/')), "opaque names must not create struct paths");
+        }
+    }
+
+    #[test]
+    fn foreign_namespace_names_are_distinct_and_scoped() {
+        let packet = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+                <xmp:Rating xmlns:xmp="https://example.org/one/">1</xmp:Rating>
+                <xmp:Rating xmlns:xmp="https://example.org/two/">2</xmp:Rating>
+                <xmp:Rating>4</xmp:Rating>
+            </rdf:Description></rdf:RDF>"#;
+        let d = parse_xmp(packet).unwrap();
+        assert_eq!(d.metadata.rating, Some(4), "a local rebinding must not escape its scope");
+        assert_eq!(d.properties.len(), 3, "different foreign URIs must not collide");
+        assert_eq!(d.values.len(), 3);
+        assert_eq!(d.properties["xmp:Rating"], vec!["4"]);
+        assert!(d.properties.values().any(|v| v == &["1"]));
+        assert!(d.properties.values().any(|v| v == &["2"]));
     }
 
     #[test]

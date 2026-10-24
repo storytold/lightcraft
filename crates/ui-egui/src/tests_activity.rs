@@ -242,6 +242,14 @@ fn dead_export_worker_leaves_no_row() {
 
 /// A folder of `n` stand-in JPEGs and an app whose file probe takes 100 ms each (a slow drive).
 fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
+    gated_import(tag, n, None)
+}
+
+/// Like `slow_import`, and while `gate` is false the probe holds every file after the first batch
+/// (`batch_size()` files, which join the catalog together), so a test can act mid-import without
+/// racing the 100 ms-per-file clock. The hold gives up after 60 s, so a failed test never leaves
+/// the import thread spinning.
+fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> (Headless, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("lc-activity-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -249,8 +257,17 @@ fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
         std::fs::write(dir.join(format!("IMG_{i:03}.jpg")), format!("not really a jpeg {i}")).unwrap();
     }
     let mut s = lightcraft_engine::Session::new();
-    s.media.file_probe = Some(std::sync::Arc::new(|p: &str| {
+    s.media.file_probe = Some(std::sync::Arc::new(move |p: &str| {
         std::thread::sleep(Duration::from_millis(100));
+        let index = p.rsplit_once("IMG_").and_then(|(_, n)| n.strip_suffix(".jpg")).and_then(|n| n.parse::<usize>().ok());
+        if let (Some(gate), Some(index)) = (&gate, index)
+            && index >= lightcraft_engine::import::batch_size()
+        {
+            let t0 = std::time::Instant::now();
+            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         Ok(lightcraft_engine::media::ProbeInfo {
             width: 60,
             height: 40,
@@ -286,14 +303,17 @@ fn import_cancelled_by_command_reports_cancelled() {
 /// selects its first photo only if nobody picked something else meanwhile (issue #1446).
 #[test]
 fn a_photo_chosen_during_an_import_stays_selected() {
-    let (mut h, dir) = slow_import("chosen", 20);
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut h, dir) = gated_import("chosen", 20, Some(gate.clone()));
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
     // the newest photo so far, never the import's first
     let chosen = h.app.session.catalog.photos().map(|p| p.id).max().expect("photos arrived");
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [chosen.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // held at the gate until now, so the import cannot have ended however slowly the frames ran
     assert!(h.app.import.is_some(), "still importing");
+    gate.store(true, std::sync::atomic::Ordering::Release);
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
     assert_eq!(h.app.session.catalog.len(), 20, "all imported");
     assert_eq!(h.app.session.selection.active, Some(chosen));

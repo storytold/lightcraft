@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, export_photo};
-use crate::tests_xmp::{synthetic_dng_with, temp_dir};
+use crate::tests_xmp::{synthetic_dng_with, synthetic_psd_with_metadata, temp_dir};
 
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
@@ -654,6 +654,92 @@ fn remove_location_refuses_a_raw_that_embeds_gps() {
     let id = s.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't remove the location"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_that_embeds_gps() {
+    let dir = temp_dir("export-noloc-psd");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let path = dir.join("Geo.psd");
+    let bytes = synthetic_psd_with_metadata(&gps);
+    assert_eq!(lightcraft_meta::extract(&bytes).gps, gps.gps, "the fixture embeds EXIF GPS");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location") && err.contains("export as JPEG"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_unreadable_xmp() {
+    let dir = temp_dir("export-noloc-psd-xmp");
+    let path = dir.join("Unreadable.psd");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let xmp = "<x:xmpmeta><broken";
+    let embedded = lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_psd(&image, &embedded).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes), lightcraft_meta::Metadata::default(), "ordinary extraction stays best-effort");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_invalid_utf8_xmp() {
+    let dir = temp_dir("export-noloc-psd-invalid-utf8");
+    let path = dir.join("Invalid.psd");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let xmp = lightcraft_meta::write_xmp(&gps, None);
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let embedded = lightcraft_codecs::EncodeMeta { xmp: Some(&xmp), ..Default::default() };
+    let mut bytes = lightcraft_codecs::encode_psd(&image, &embedded).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes).gps, gps.gps);
+    let latitude = bytes.windows(2).position(|bytes| bytes == b"45").unwrap();
+    bytes[latitude] = 0xff;
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none());
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_unreadable_resources() {
+    let dir = temp_dir("export-noloc-psd-malformed");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let path = dir.join("Geo.psd");
+    let valid_bytes = synthetic_psd_with_metadata(&gps);
+    assert_eq!(lightcraft_meta::extract(&valid_bytes).gps, gps.gps, "the fixture embeds EXIF GPS before corruption");
+    let mut bytes = valid_bytes;
+    let colour_length = usize::try_from(u32::from_be_bytes(bytes[26..30].try_into().unwrap())).unwrap();
+    let resource_length_at = 30 + colour_length;
+    let resource_length = usize::try_from(u32::from_be_bytes(bytes[resource_length_at..resource_length_at + 4].try_into().unwrap())).unwrap();
+    let resource_start = resource_length_at + 4;
+    let resource_end = resource_start + resource_length;
+    bytes.splice(resource_end..resource_end, *b"BAD!");
+    bytes[resource_length_at..resource_length_at + 4].copy_from_slice(&u32::try_from(resource_length + 4).unwrap().to_be_bytes());
+
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none(), "the malformed trailing resource reproduces the metadata gap");
+    std::fs::write(&path, bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

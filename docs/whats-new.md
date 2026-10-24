@@ -1,5 +1,51 @@
 # What's new in LightCraft
 
+## 2026-10-23
+
+### Tab leaves the name field in New Album, New Smart Album and the name prompts
+- In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
+  keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
+  Before, the field took the focus back every frame, so only Return and Esc got you out of it. Return still
+  confirms and Esc still cancels.
+
+### Foreign XMP metadata survives namespace-prefix collisions
+- Saving a sidecar keeps another application's properties even when its namespace uses prefixes such as `lc`
+  or `xmp`. Those foreign properties no longer become LightCraft settings or ratings when imported.
+
+### Find Missing Photos finds the files of a library made on Windows
+- A library made on Windows records its originals with Windows paths. Opened on macOS or Linux, its photos are
+  missing until relinked, and Find Missing Photos found them only by their content, so it missed every photo it had
+  no fingerprint for (such as photos brought in from a Lightroom catalog) or that had been edited since, even in a
+  folder holding every file under the same name. It now matches them by name as it does any other photo: the name
+  after the last `/` or `\`, in any letter case, checked against the size when the library has one. Several files
+  of that name are still reported rather than guessed, and undo puts back the paths as they were.
+
+### Auto straighten leaves straight photos alone
+- Auto straighten (Auto in the crop panel, or a double-click with the Straighten tool) no longer turns a photo by
+  more than 10°, and acts only when at least three lines agree. Before, it often turned photos that were straight:
+  the edges of wooden planks, a branch or a bird's wing were taken for the horizon, sometimes for a 25° turn.
+- When it finds no horizon or vertical lines, it says so instead of doing nothing without a word.
+
+### PSD and PSB metadata stays available
+- LightCraft now imports PSD and PSB files with EXIF and XMP image resources. Capture dates, GPS and descriptive fields
+  stay available in All Metadata; PSD edit copies keep their capture date. Original exports with Remove Location Info enabled
+  are refused when a PSD or PSB embeds GPS, since LightCraft cannot strip metadata from a byte-for-byte original copy.
+
+## 2026-10-22
+
+### Reliability
+- Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
+  is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's
+  temporary files, issue #1502).
+
+### Keys reach text fields and the shortcut editor on macOS
+- While a text field has focus, the native menu now lets go of the keys the field needs (`G`, the digits `0`–`9`,
+  `P`, `U` and the like), and while Keyboard Shortcuts is recording a key it lets go of all of them (⌘, and ⌘Q in
+  the LightCraft menu too), except the system's own items (Hide LightCraft ⌘H, Hide Others ⌥⌘H, Close Window ⌘W
+  and Minimize ⌘M) and the two keys of the Help menu (⌘/ and F1). Before, the menu item kept its key on macOS, so the
+  key could still run the menu command instead of reaching the field or the editor. The keys come back on the menu
+  items when the field loses focus or recording ends; the menu's order, checkmarks and enabled state are unchanged.
+
 ## 2026-10-21
 
 ### Sharper resampling in HDR and panorama merges

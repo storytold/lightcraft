@@ -17,6 +17,7 @@ Select photos in Photo Grid or Square Grid, then use:
 | `Cmd`/`Ctrl` + `↑` / `↓` | Raise / lower flag status (reject < unflagged < pick; stops at either end) |
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
 | `\` (backslash) | Show / hide the Filter Bar |
+| ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |
 
 Enter opens the active photo without changing the selection. Text fields, dialogs and open popups keep the key; a custom Enter binding takes precedence. Enter has no additional action in Detail.
 

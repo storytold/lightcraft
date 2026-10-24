@@ -1,7 +1,7 @@
 //! What GPU this machine offers the develop pipeline, as one JSON line: the capability probe of
 //! `cargo xtask ci`, which is std + serde_json and has no wgpu of its own. Ignored in normal runs;
 //! xtask runs it after the workspace tests, so it costs no extra build:
-//! `cargo test --workspace --test gpu_probe -- --ignored --nocapture`.
+//! `cargo test --workspace --test it -- --ignored --exact gpu_probe::gpu_probe --nocapture`.
 //!
 //! - `LIGHTCRAFT_GPU_PROBE` unset: the compute device the pipeline picks (`available()`,
 //!   `adapter_name()`, `unavailable_reason()`), the backends it may use and the backends this build
@@ -11,7 +11,6 @@
 //!   a driver that crashes while it is enumerated (issue #136) costs only its own line.
 //!
 //! Only reports: which adapters the pipeline accepts is `ctx.rs`'s policy.
-#![cfg(not(target_arch = "wasm32"))]
 
 use lightcraft_gpu::backend::{self, Backends};
 

@@ -121,7 +121,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   RGGB and GBRG, as-shot WB from `WBG`); DiMAGE 7, 7Hi, A1, A2, A200 and Dynax / Maxxum 7D verified on
   CC0 files. 551 models verified, 201 preview-only; headline numbers unchanged.
 - 2026-10-14: 97 Canon CR2, Pentax and Ricoh models verified, one CC0 raw.pixls.us file each pinned and
-  checked against the camera JPEG (`crates/raw/tests/canon_pentax_corpus.rs`). 334 models verified, ~50% of
+  checked against the camera JPEG (`crates/raw/tests/it/canon_pentax_corpus.rs`). 334 models verified, ~50% of
   photographers on a verified body; headline numbers unchanged.
 - 2026-10-12: Mamiya MEF (ZD) decodes from sensor data and is imported; verified on a CC0 file. 241 models
   verified, 35 unsupported; headline numbers unchanged.
@@ -135,7 +135,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   decode. The EOS R6 Mark III gets its as-shot white balance (`ColorData` 66). 259 models verified; RAW
   decoding 77% → 83%; mainstream ~49% → ~51%, essentials ~64% → ~65%, full ~61%.
 - 2026-10-12: 117 Nikon and Fujifilm bodies verified, one CC0 raw.pixls.us file each pinned and checked
-  against the camera JPEG (`crates/raw/tests/body_corpus.rs`); the sweep found COOLPIX 5700 / 8400 / 8800
+  against the camera JPEG (`crates/raw/tests/it/body_corpus.rs`); the sweep found COOLPIX 5700 / 8400 / 8800
   decoding wrongly. 354 models verified, ~58% of photographers on a verified body; headline numbers unchanged.
 - 2026-10-11: Canon EOS R5 Mark II C-RAW decodes from sensor data (57% of its files opened as a
   preview): the CRX QP map's first-symbol literal and limited-length escape; four CC0 R5 Mark II files

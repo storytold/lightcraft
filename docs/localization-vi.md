@@ -66,8 +66,9 @@ LIGHTCRAFT_LANGUAGE=vi lightcraft-cli snapshot --demo -o vi.png --size 1600x1000
 LIGHTCRAFT_LANGUAGE=vi lightcraft-cli snapshot --demo -o vi-narrow.png --size 1280x800
 ```
 
-Các test tiếng Việt bắt buộc phủ catalog union, nhãn lệnh/control/Settings/Smart Album,
-đổi ngôn ngữ, lưu `vi`, formats, ngày, dữ liệu người dùng, và glyph dấu.
+Các test tiếng Việt kiểm tra đổi ngôn ngữ, lưu `vi`, formats, ngày, dữ liệu người dùng và glyph
+dấu. Chuỗi còn thiếu hiện bằng tiếng Anh và được `i18n::tests::translation_gaps_report` liệt kê;
+không test nào thất bại vì thiếu bản dịch.
 
 ## Nguồn dịch (clean-room)
 

@@ -81,6 +81,9 @@ the only copy of those edits outside that application's catalog. Saving never dr
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.
+- Ownership follows the namespace URI, not the prefix spelling. A foreign namespace bound to `lc:` or `xmp:`
+  stays foreign: its properties are preserved and do not become LightCraft settings or ratings. Genuine namespace
+  aliases remain interchangeable, including namespace declarations containing XML character references.
 - A sidecar that can't be read as XMP (not well-formed, not UTF-8, no `rdf:RDF`) is first copied to
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.

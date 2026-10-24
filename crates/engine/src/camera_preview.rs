@@ -3066,10 +3066,14 @@ mod tests {
         let bundled: crate::camera_profiles::CameraProfile = serde_json::from_str(json).unwrap();
         let used = crate::camera_profiles::get(model).expect("a profile for the model");
         assert_eq!(*used, bundled, "a local {model} profile overrides the built-in one; remove it to run this test");
-        let raw = lightcraft_raw::decode(&bytes).unwrap();
+        let mut raw = lightcraft_raw::decode(&bytes).unwrap();
         assert_eq!(raw.metadata.model.as_deref(), Some(model));
+        // as the app does (`files.rs`): the camera's own lens warp pairs the sensor with its JPEG (Nikon's in-file
+        // distortion for the Z 6II and Z 8), and the lens corrections leave the opcodes before the proxy is binned
+        let lens = lens_geometry(&raw.opcodes.list3);
+        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let look = fit_preview(&raw, &bytes, &transform, None).0.expect("fit accepted");
+        let look = fit_preview(&raw, &bytes, &transform, lens.as_ref()).0.expect("fit accepted");
         let expected = bundled.matrix().mul(&transform.matrix.inverse().unwrap());
         for (row, want) in look.matrix.0.iter().zip(expected.0) {
             for (got, want) in row.iter().zip(want) {

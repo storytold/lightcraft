@@ -29,6 +29,10 @@ pub struct Filter {
     /// Only these photos (Find Similar results…); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub only: Vec<PhotoId>,
+    /// Show nothing: an explicit empty result (Find Similar with no matches), since an empty
+    /// `only` means "no constraint".
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub only_none: bool,
     /// Any of these labels (the filter bar's multi-select); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<ColorLabel>,
@@ -372,6 +376,9 @@ impl Filter {
             return false;
         }
         if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
+            return false;
+        }
+        if self.only_none {
             return false;
         }
         if !self.only.is_empty() && !prepared.only.as_ref().map_or_else(|| self.only.contains(&p.id), |only| only.contains(&p.id)) {

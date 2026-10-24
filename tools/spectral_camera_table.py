@@ -19,6 +19,25 @@ import sys
 import colour
 import numpy as np
 from scipy.optimize import minimize
+from pathlib import Path
+
+
+def _existing_dir(arg):
+    """Resolve a directory CLI argument; require it to exist."""
+    path = Path(arg).resolve()
+    if not path.is_dir():
+        sys.exit(f"not a directory: {arg}")
+    return str(path)
+
+
+def _out_path(arg):
+    """Resolve an output path CLI argument; require its parent to exist."""
+    path = Path(arg).resolve()
+    if not path.parent.is_dir():
+        sys.exit(f"output directory does not exist: {arg}")
+    if path.exists() and not path.is_file():
+        sys.exit(f"output path is not a regular file: {arg}")
+    return str(path)
 
 WL = np.arange(380, 781, 5)
 D50 = colour.xy_to_XYZ(colour.CCS_ILLUMINANTS["CIE 1931 2 Degree Standard Observer"]["D50"])
@@ -119,4 +138,4 @@ def main(root, out):
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         sys.exit("usage: spectral_camera_table.py <rawtoaces-data checkout> <output .rs>")
-    main(sys.argv[1], sys.argv[2])
+    main(_existing_dir(sys.argv[1]), _out_path(sys.argv[2]))

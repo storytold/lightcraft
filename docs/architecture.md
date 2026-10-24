@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (`cargo xtask ci` reports the machine and skipped tests; `testkit`) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -63,6 +63,16 @@ dispatch by id, and headless snapshots render the UI without a window.
 `assets` (every asset attributed, no Adobe formats) and the WASM build. Other workflows build and
 test FreeBSD and Windows ARM64, lint packaging, and build releases.
 
+The tests run under `cargo test --workspace --lib --bins --tests`, or `cargo nextest run` with the
+same targets when `LIGHTCRAFT_NEXTEST=1` is set and cargo-nextest is installed; doctests run after
+them with `cargo test --workspace --doc`. `cargo test` is the default because the demo library's
+generated scenes are cached per process, and nextest's process per test regenerates them.
+Examples are left out of the test build (clippy `--all-targets` still
+checks them). Each crate links its integration tests into one binary, `tests/it/main.rs` with one
+module per file (`cargo test -p <crate> --test it <module>::`); a test that changes state for its
+whole process (a global allocator, closing the GPU) keeps a binary of its own in `tests/`. The WASM
+build is one `cargo check --target wasm32-unknown-unknown --keep-going` over the wasm-safe crates.
+
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
@@ -77,5 +87,6 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

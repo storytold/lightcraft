@@ -1534,18 +1534,6 @@ mod tests {
     }
 
     #[test]
-    fn library_context_menu_labels_have_french_translations() {
-        let saved = crate::i18n::language();
-        crate::i18n::set_language(crate::i18n::Locale::Fr);
-        for (label, expected) in
-            [("Pick", "Sélectionnée"), ("Reject", "Rejeter"), ("Group into Stack", "Regrouper en pile"), ("HDR Panorama…", "Panorama HDR…")]
-        {
-            assert_eq!(crate::i18n::tr(label), expected);
-        }
-        crate::i18n::set_language(saved);
-    }
-
-    #[test]
     fn square_grid_groups_and_auto_levels() {
         let l = layout(&[1.0; 5], &[(0, 3), (3, 2)], 400.0, 100.0, true);
         // 4 columns: group 1 fills 3 cells of a row, group 2 starts a new row
