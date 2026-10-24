@@ -24,6 +24,7 @@ pub mod model;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
+pub mod shared;
 pub mod stacks;
 pub mod store;
 pub mod tally;
@@ -669,12 +670,13 @@ impl Catalog {
             | Op::SetFolderRecord { .. } => self.changes.broad = self.revision.saturating_add(1),
         }
         Ok(match op {
-            Op::AddPhoto { photo } => {
+            Op::AddPhoto { mut photo } => {
                 if self.photos.contains_key(&photo.id) {
                     return Err(CatalogError::Invalid(format!("photo {:?} exists", photo.id)));
                 }
                 let id = photo.id;
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
+                shared::photo(&mut photo);
                 self.photos.insert(id, Arc::new(*photo));
                 Op::RemovePhoto { id }
             }
@@ -701,7 +703,7 @@ impl Catalog {
             }
             Op::SetDevelop { id, settings, label, edited } => {
                 let p = self.photo_mut(id)?;
-                let old = std::mem::replace(&mut p.develop, settings);
+                let old = std::mem::replace(&mut p.develop, shared::settings(settings));
                 let old_edit = std::mem::replace(&mut p.edited, edited);
                 Op::SetDevelop { id, settings: old, label, edited: old_edit }
             }
@@ -717,15 +719,18 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetLocal { id, local: std::mem::replace(&mut p.local, local) }
             }
-            Op::SetVersions { id, versions } => {
+            Op::SetVersions { id, mut versions } => {
+                shared::versions(&mut versions);
                 let p = self.photo_mut(id)?;
                 Op::SetVersions { id, versions: std::mem::replace(&mut p.versions, versions) }
             }
-            Op::SetHistory { id, history } => {
+            Op::SetHistory { id, mut history } => {
+                history.iter_mut().for_each(shared::step);
                 let p = self.photo_mut(id)?;
                 Op::SetHistory { id, history: std::mem::replace(&mut p.history, history) }
             }
-            Op::PushHistory { id, step } => {
+            Op::PushHistory { id, mut step } => {
+                shared::step(&mut step);
                 let p = self.photo_mut(id)?;
                 let old = p.history.clone();
                 let old_cursor = p.history_cursor.take();
@@ -1192,6 +1197,8 @@ mod tests_lock;
 mod tests_repair;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_shared;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]
