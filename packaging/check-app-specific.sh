@@ -60,3 +60,56 @@ unsupported = {name.lower() for name in declared} & {
 assert not unsupported, f"Info.plist declares types LightCraft cannot open: {sorted(unsupported)}"
 print("LightCraft macOS bundle types ok")
 PYEOF
+
+# FreeBSD aarch64 is cross-compiled in the x86_64 release VM (craft-common-actions#39). With
+# CARGO_BUILD_TARGET set, packaging/freebsd/package.sh must take the binaries from
+# target/<triple>/release, name the archive after the target, and check the binaries with file(1)
+# instead of running them. An amd64 FreeBSD host is faked with a uname shim.
+fb="$(mktemp -d)"
+trap 'rm -rf "$fb"' EXIT
+mkdir -p "$fb/shim" "$fb/target/aarch64-unknown-freebsd/release"
+cat >"$fb/shim/uname" <<'SHEOF'
+#!/bin/sh
+case "$1" in -m) echo amd64 ;; -s) echo FreeBSD ;; *) exec /usr/bin/uname "$@" ;; esac
+SHEOF
+chmod 755 "$fb/shim/uname"
+# Just an ELF header: 64-bit, little-endian, FreeBSD ABI, aarch64, of the given ELF type
+# (1 relocatable, 2 executable), written to each path given. A shared library can't be faked
+# this way: with no dynamic section, file(1) calls an executable-mode one a PIE.
+freebsd_elf() {
+  python3 - "$@" <<'PYEOF'
+import os, struct, sys
+header = b"\x7fELF" + bytes([2, 1, 1, 9]) + bytes(8)
+header += struct.pack("<HHIQQQIHHHHHH", int(sys.argv[1]), 183, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0)
+for path in sys.argv[2:]:
+    with open(path, "wb") as out:
+        out.write(header)
+    os.chmod(path, 0o755)
+PYEOF
+}
+rel="$fb/target/aarch64-unknown-freebsd/release"
+freebsd_elf 2 "$rel/lightcraft" "$rel/lightcraft-cli"
+freebsd_package() {
+  PATH="$fb/shim:$PATH" CARGO_TARGET_DIR="$fb/target" DIST="$fb/dist" bash packaging/freebsd/package.sh --skip-build
+}
+log="$(CARGO_BUILD_TARGET=aarch64-unknown-freebsd freebsd_package 2>&1)" \
+  || { echo "$log"; echo "::error::FreeBSD package.sh failed to package an aarch64 cross build"; exit 1; }
+ls "$fb/dist"/lightcraft-*-freebsd-aarch64.tar.gz >/dev/null \
+  || { echo "$log"; echo "::error::FreeBSD package.sh did not name the cross build's archive freebsd-aarch64"; exit 1; }
+grep -q 'skipping --version' <<<"$log" \
+  || { echo "$log"; echo "::error::FreeBSD package.sh ran an aarch64 binary on an x86_64 host"; exit 1; }
+# Refused as a target (exit 2 and the message), not just failing later on missing binaries.
+status=0
+log="$(CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu freebsd_package 2>&1)" || status=$?
+if [ "$status" != 2 ] || ! grep -qF 'is not a supported FreeBSD target' <<<"$log"; then
+  echo "$log"; echo "::error::FreeBSD package.sh did not refuse a Linux target (exit $status)"; exit 1
+fi
+freebsd_elf 1 "$rel/lightcraft-cli"
+if CARGO_BUILD_TARGET=aarch64-unknown-freebsd freebsd_package >/dev/null 2>&1; then
+  echo "::error::FreeBSD package.sh packaged an ELF object file as an aarch64 executable"; exit 1
+fi
+printf '#!/bin/sh\n' >"$rel/lightcraft-cli"
+if CARGO_BUILD_TARGET=aarch64-unknown-freebsd freebsd_package >/dev/null 2>&1; then
+  echo "::error::FreeBSD package.sh packaged a cross build whose binary is not a FreeBSD aarch64 executable"; exit 1
+fi
+echo "LightCraft FreeBSD aarch64 cross packaging ok"
