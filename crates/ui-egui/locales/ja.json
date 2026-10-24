@@ -2353,5 +2353,7 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Zoom Tool": "ズームツール",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "ズームツール：クリックでズームを切り替え、右へドラッグで拡大、左へドラッグで縮小します。Shift キーを押しながらドラッグすると、このツールなしでもズームできます。Space キーを短く押すと離したときにズームを切り替え、Space キーを押したままドラッグすると切り替えずに移動します。"
 }

@@ -2280,5 +2280,7 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Zoom Tool": "Narzędzie Lupa",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Narzędzie Lupa: kliknij, aby przełączyć powiększenie; przeciągnij w prawo, aby powiększyć, w lewo, aby pomniejszyć. Przeciąganie z Shiftem powiększa także bez tego narzędzia. Krótkie naciśnięcie spacji przełącza powiększenie po zwolnieniu; przytrzymaj spację i przeciągnij, aby przesunąć bez przełączania."
 }

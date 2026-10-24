@@ -811,6 +811,24 @@
 - Compare and Reference View panes say "Rendering…" (or that the photo can't be opened) the same way, so a
   magnified preview isn't taken for the photo when checking focus at 1:1.
 
+### Magnifying-glass tool and scrub zoom
+- The magnifying-glass button beside the zoom selector selects the Zoom Tool. Hold the mouse button
+  and slide right to zoom in, left to zoom out, anchored at the point where you pressed. Shift-drag
+  uses the same gesture without selecting the tool; ordinary dragging still pans with the tool off.
+  Middle-button dragging still pans a zoomed photo in Detail, even with the magnifier selected or Shift held.
+- Tap Space with the zoom tool selected to toggle Fit / your chosen zoom ratio once on release.
+  Pointer-button interaction cancels that keyboard tap, including a drag completed between frames.
+  Hold Space and drag to pan instead, even after a scrub has started; releasing Space neither
+  toggles zoom nor restarts that cancelled scrub. Focus, tool/view changes, dialogs and popups
+  cancel pending taps; typing and custom shortcuts keep their keys. Slideshow Space still pauses.
+  Click without dragging also toggles in Detail and both Compare/Reference panes; releasing a
+  scrub does not toggle. Editing tools keep their gestures.
+- Compare and Reference stay open when selecting the tool. Compare clicks still select the
+  clicked photo; Reference clicks keep the active edit target. Wheel and pinch zoom are unchanged.
+- Magnifier clicks keep the clicked image point under the pointer, including off-centre clicks in
+  Compare and Reference at the chosen ratio, subject to pan edge limits and even with Zoom to Focus
+  Point enabled; keyboard Toggle Zoom still centres the active photo's camera focus point.
+
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
   under Optics ▸ Enable Lens Corrections, on by default for newly imported photos. On 33 photos shot with the camera's

@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** patch (selected magnifier, Shift scrub and temporary Space pan retained with current main; gap 4 stays closed) · minor (gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -91,11 +91,14 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-22 | patch | XMP namespace-prefix collisions no longer overwrite foreign metadata; ranked gaps and estimates unchanged |
 | 2026-10-22 | patch | Issue #2519: PSD/PSB EXIF resource 1058 and XMP resource 1060 now use the common metadata extractor, and `.psb` files are accepted by import; no ranked gap or readiness count changes |
 | 2026-10-22 | minor | Gap 30 added: multi-select metadata editing — Info panel and All Metadata dialog show one photo's values with no mixed-value indication |
+| 2026-10-22 | patch | Magnifier, Shift scrub and temporary Space pan retained alongside upstream F8 / Filter Bar keys, import album picker and new languages; gap 4 stays closed and ranked gaps unchanged |
 | 2026-10-21 | minor | Gap 28 shrinks: F8 shows / hides the right panel (`view.rightPanel`); rating `[` `]`, flag cycling and F1 help were already bound, so the entry lists only filter-bar keys, Tab / ⇧Tab and F5; 2–4 h (was 4–8) |
 | 2026-10-20 | minor | #2362: import destination albums use the shared hierarchy/search picker instead of a flat name list; existing import workflows retained; ranked gaps/readiness counts unchanged |
 | 2026-10-19 | minor | Gap 9 shrinks: `.github/workflows/ci.yml` runs `cargo xtask ci` on Linux x64 for every PR and push to main; macOS and Windows remain |
 | 2026-10-19 | minor | Gap 21: Indonesian (`id`) shipped with every catalog message but What's New; four new languages left (Hindi, Arabic, Korean, Vietnamese), 135–239 h |
 | 2026-10-19 | minor | Gap 27: the released 0.9.1 x64 MSI is tested on Windows 11 Pro 24H2 (a fresh install and an upgrade from 0.8.0 end on the completion page, so #790 is fixed; the upgrade keeps a custom folder; Launch starts the app; removal leaves nothing behind); uninstalling from Settings → Apps still ends with no confirmation (#892, #931); hours unchanged |
+| 2026-10-18 | patch | Selected magnifier Space taps toggle on release while held-Space drags pan without toggling; gap 4 and ranked gaps unchanged |
+| 2026-10-18 | patch | Magnifier, Shift scrub and temporary Space pan retained alongside upstream Print Page Options and camera coverage; gap 4 stays closed and ranked gaps unchanged |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 4 follow-up: the diagnostic overlays (Visualize Spots, Point Color range, HDR range) render zoom windows too; soft proofing runs on the GPU |
@@ -123,6 +126,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-12 | minor | Gap 25: Render to DNG lands as an export format; lossy DNG and AVIF import remain |
 | 2026-10-12 | minor | Gap 10 shrinks: the Hasselblad Lunar (a Sony NEX-7 ARW under its own Make) decodes and is verified, 236 models (#1275) |
 | 2026-10-12 | minor | Gap 14: HLG AVIF export (`hdrTransfer`) and a tested SDR/HDR display decision |
+| 2026-10-11 | minor | Magnifier / Shift scrub and temporary Space pan added; gap 4's rendering work and headline percentages unchanged |
 | 2026-10-12 | minor | Gap 15: printer colour management lands (printer / paper ICC profiles or Managed by Printer, intent, black point compensation, print adjustment, print sharpening, 16-bit ICC-tagged PDF with an output intent); page overlays and direct printing remain |
 | 2026-10-12 | minor | Gap 15 shrinks: File → Print… is a Print dialog with the four layout styles, cell editing, image settings, guides, page setup and templates; printer colour management, page overlays and direct printing remain |
 | 2026-10-12 | minor | Gap 15: the Print module's layout styles, cells, image settings, templates and PDF are `print.*` commands (CLI, control, MCP); the Print view, printer colour management and page overlays remain |

@@ -207,6 +207,20 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             let _ = app.run("view.filmstrip", json!({}));
         }
         child.add_space(10.0);
+        if icon_button(
+            &mut child,
+            "zoomTool",
+            Icon::Search,
+            vec2(30.0, 30.0),
+            app.ui.tool == "zoom",
+            app.session.active().is_some(),
+            "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.",
+        )
+        .clicked()
+        {
+            let command = if app.ui.tool == "zoom" { "tool.none" } else { "tool.zoom" };
+            let _ = app.run(command, json!({}));
+        }
         let zoom_label = match app.ui.zoom {
             Zoom::Fit => "Fit".to_string(),
             Zoom::Fill => "Fill".to_string(),

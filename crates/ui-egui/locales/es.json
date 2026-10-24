@@ -2355,5 +2355,7 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Zoom Tool": "Herramienta Zoom",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Herramienta Zoom: haz clic para alternar el zoom; arrastra a la derecha para acercar y a la izquierda para alejar. Arrastrar con Mayús también hace zoom sin esta herramienta. Pulsa Espacio para alternar el zoom al soltarlo; mantén Espacio y arrastra para desplazar sin alternar."
 }

@@ -2731,5 +2731,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Zoom Tool": "მასშტაბის ხელსაწყო",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "მასშტაბის ხელსაწყო: დააწკაპუნეთ მასშტაბის გადასართავად; გადაათრიეთ მარჯვნივ გასადიდებლად, მარცხნივ დასაპატარავებლად. Shift-ით გადათრევა ამ ხელსაწყოს გარეშეც ცვლის მასშტაბს. Space-ზე მოკლე დაჭერა გაშვებისას გადართავს მასშტაბს; Space-ის დაჭერით და გადათრევით ფოტოს გადაადგილებთ გადართვის გარეშე."
 }

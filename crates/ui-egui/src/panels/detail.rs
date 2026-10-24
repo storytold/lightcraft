@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::render::Slot;
-use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
+use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom, ZoomScrub};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -48,6 +48,8 @@ pub enum Gesture {
         start: (f32, f32),
         at: Pos2,
     },
+    /// Horizontal scrub zoom: hold the image point at the press position.
+    ScrubZoom(ZoomScrub),
     /// Dragging component `comp` of `mask`: its pin (`handle` 0) or a linear gradient's start (1)
     /// or end (2).
     MaskHandle {
@@ -168,7 +170,7 @@ pub(crate) fn snap_fit_rect(rect: Rect, size: [usize; 2], ppp: f32) -> Rect {
 }
 
 /// Keep the viewport inside the photo; axes smaller than the viewport stay centred.
-fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
+pub(crate) fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     let bound = |visible: f32, image: f32, centre: f32| {
         let centre = if centre.is_finite() { centre } else { 0.5 };
         if image > visible.max(0.0) {
@@ -182,9 +184,57 @@ fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
 }
 
 pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: egui::Vec2) {
+    app.ui.space_zoom_tap = None;
     let centre = area.center() - img.min - delta;
     let pan = bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)));
     let _ = app.run("view.navigate", json!({"pan": pan}));
+}
+
+fn scrub_zoom(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+    let active = matches!(&app.gesture, Some(Gesture::ScrubZoom(scrub)) if scrub.response == resp.id);
+    if active && !ui.input(|i| i.pointer.primary_down()) {
+        app.gesture = None;
+        return true;
+    }
+    let (shift, space) = ui.input(|i| (i.modifiers.shift, i.key_down(egui::Key::Space)));
+    if active && !app.ui.zoom_scrub_allowed(shift, space) {
+        app.ui.space_zoom_tap = None;
+        app.gesture = None;
+        return false;
+    }
+    if !active
+        && app.ui.zoom_scrub_allowed(shift, space)
+        && resp.drag_started_by(egui::PointerButton::Primary)
+        && let Some(anchor) = ui.input(|i| i.pointer.press_origin()).filter(|p| area.contains(*p))
+    {
+        app.gesture = Some(Gesture::ScrubZoom(ZoomScrub {
+            response: resp.id,
+            anchor,
+            point: (anchor - img.min) / img.size(),
+            percent: img.width() * ui.ctx().pixels_per_point() * 100.0 / native[0].max(1) as f32,
+            area,
+            native,
+        }));
+    }
+    let Some(Gesture::ScrubZoom(scrub)) = app.gesture.as_ref() else { return false };
+    if scrub.response != resp.id || scrub.area != area || scrub.native != native {
+        return false;
+    }
+    if let Some(pointer) = resp.interact_pointer_pos() {
+        let ppp = ui.ctx().pixels_per_point();
+        let aspect = img.width() / img.height().max(1.0);
+        let fit = fit_rect(area, aspect, Zoom::Fit, native, ppp, (0.5, 0.5));
+        let fit_pct = fit.width() * ppp * 100.0 / native[0].max(1) as f32;
+        let factor = ((pointer.x - scrub.anchor.x) / 200.0).clamp(-16.0, 16.0).exp2();
+        let pct = (scrub.percent * factor).clamp(fit_pct.min(800.0), 800.0);
+        let zoom = if pct <= fit_pct { Zoom::Fit } else { Zoom::Percent(pct) };
+        let size = fit_rect(area, aspect, zoom, native, ppp, (0.5, 0.5)).size();
+        let offset = area.center() - scrub.anchor;
+        let pan = bounded_pan(area, size, (scrub.point.x + offset.x / size.x.max(1.0), scrub.point.y + offset.y / size.y.max(1.0)));
+        let _ = app.run("view.navigate", json!({"zoom": zoom, "pan": pan}));
+        ui.ctx().request_repaint();
+    }
+    true
 }
 
 /// A drag with the middle button (the mouse wheel pressed) pans the zoomed photo whatever tool is
@@ -218,6 +268,9 @@ fn wheel_notches(events: &[egui::Event]) -> f32 {
 
 /// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
 pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+    if scrub_zoom(app, ui, resp, area, img, native) {
+        return true;
+    }
     if !resp.hovered() {
         return false;
     }
@@ -1592,6 +1645,16 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
     let cursor = match app.ui.tool.as_str() {
         "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
+        "zoom" if !ui.input(|i| i.key_down(egui::Key::Space)) => {
+            if matches!(app.gesture, Some(Gesture::ScrubZoom(_))) {
+                egui::CursorIcon::ResizeHorizontal
+            } else if matches!(app.ui.zoom, Zoom::Fit) {
+                egui::CursorIcon::ZoomIn
+            } else {
+                egui::CursorIcon::ZoomOut
+            }
+        }
+        "" if ui.input(|i| app.ui.zoom_scrub_allowed(i.modifiers.shift, i.key_down(egui::Key::Space))) => egui::CursorIcon::ResizeHorizontal,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
                 egui::CursorIcon::Grabbing
@@ -1599,6 +1662,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
                 egui::CursorIcon::Grab
             }
         }
+        "" => egui::CursorIcon::ZoomIn,
         _ => return,
     };
     ui.ctx().set_cursor_icon(cursor);
@@ -1647,21 +1711,30 @@ fn general_interaction(
     // click toggles Fit ↔ the chosen click-zoom ratio at the clicked point; drag pans when zoomed
     let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
+        let to = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
             let v = ((q.y - img.top()) / img.height()).clamp(0.0, 1.0);
-            app.ui.pan = (u, v);
+            app.ui.pan = if app.ui.tool == "zoom" {
+                // the magnifier keeps the clicked point under the pointer, as in Compare and Reference
+                let size = fit_rect(canvas, aspect, to, native, ui.ctx().pixels_per_point(), (0.5, 0.5)).size();
+                let offset = canvas.center() - q;
+                bounded_pan(canvas, size, (u + offset.x / size.x.max(1.0), v + offset.y / size.y.max(1.0)))
+            } else {
+                (u, v)
+            };
         }
-        app.ui.zoom = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+        app.ui.zoom = to;
         app.ui.zoom_anim = true;
     } else if resp.clicked() && zoomed {
         app.ui.zoom = Zoom::Fit;
         app.ui.zoom_anim = true;
     }
-    if zoomed && resp.dragged() {
+    // any button pans, as before the magnifier; with it selected the primary button scrubs unless Space is held
+    let magnifier_scrubs = app.ui.tool == "zoom" && !ui.input(|i| i.key_down(egui::Key::Space));
+    if zoomed && resp.dragged() && !(magnifier_scrubs && resp.dragged_by(egui::PointerButton::Primary)) {
         pan_image(app, canvas, img, resp.drag_delta());
     }
-    let _ = (native, aspect);
 }
 
 // ------------------------------------------------------------------------ crop

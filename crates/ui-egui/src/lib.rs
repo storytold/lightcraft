@@ -655,6 +655,17 @@ impl LightcraftApp {
             return result.map_err(CommandError::from);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
+            // A command between a Space press and its release that leaves the magnifier's context
+            // drops the tap (checked before revealing a panel, which can fail)
+            if self.ui.space_zoom_tap.is_some_and(|(view, fullscreen, _)| {
+                !self.ui.zoom_scrub_allowed(false, false)
+                    || self.ui.view != view
+                    || self.ui.fullscreen != fullscreen
+                    || self.ui.slideshow.is_some()
+                    || self.ui.dialog.is_some()
+            }) {
+                self.ui.space_zoom_tap = None;
+            }
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
             }

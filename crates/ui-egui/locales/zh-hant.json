@@ -2154,5 +2154,7 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Zoom Tool": "縮放工具",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "縮放工具：按一下切換縮放；向右拖曳放大，向左拖曳縮小。按住 Shift 拖曳時，不選此工具也能縮放。輕按空白鍵會在放開時切換縮放；按住空白鍵拖曳可平移而不切換縮放。"
 }

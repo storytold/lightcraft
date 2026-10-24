@@ -2346,5 +2346,7 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Zoom Tool": "Инструмент «Масштаб»",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Инструмент «Масштаб»: щелчок переключает масштаб; перетаскивание вправо увеличивает, влево уменьшает. Перетаскивание с Shift тоже меняет масштаб без этого инструмента. Короткое нажатие пробела переключает масштаб при отпускании; удерживайте пробел и перетаскивайте, чтобы сдвигать без переключения."
 }

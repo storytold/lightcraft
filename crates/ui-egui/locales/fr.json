@@ -2387,5 +2387,7 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Zoom Tool": "Outil Zoom",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Outil Zoom : cliquez pour basculer le zoom ; faites glisser vers la droite pour agrandir, vers la gauche pour réduire. Un glissement avec Maj zoome aussi sans cet outil. Une pression sur Espace bascule le zoom au relâchement ; maintenez Espace et faites glisser pour déplacer sans basculer."
 }

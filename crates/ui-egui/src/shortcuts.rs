@@ -355,19 +355,23 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     // Dialogs own their keys (including Esc and text editing); background photo actions wait.
     if app.ui.dialog.is_some() {
+        app.ui.space_zoom_tap = None;
         return;
     }
     if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
+        app.ui.space_zoom_tap = None;
         return;
     }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
+        app.ui.space_zoom_tap = None;
         return;
     }
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
+    let space_scrub_allowed = app.ui.zoom_scrub_allowed(false, false);
     let keymap = &app.ui.settings.keymap;
     let grid = library_grid(app);
     // The grid navigation keys act on the photos in view, so they wait while the full-screen preview
@@ -377,10 +381,78 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
-    let popup_open = egui::Popup::is_any_open(ctx);
+    let space_popup = egui::Popup::is_any_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
-    let popup_open = popup_open || app.text_focus;
+    let popup_open = space_popup || app.text_focus;
+    // The magnifier owns Space only where it can scrub: under an editing panel (Masking, Remove…)
+    // the tool stays selected, and Space keeps its usual press-time toggle.
+    let space_zoom = app.ui.tool == "zoom" && app.ui.slideshow.is_none() && space_scrub_allowed;
+    let space_binding = (Modifiers::NONE, Key::Space);
+    let space_zoom_binding =
+        !native("Space") && (!taken.contains(&space_binding) || shortcut_of(keymap, "view.zoomToggle").and_then(parse) == Some(space_binding));
+    let tap_context = (app.ui.view, app.ui.fullscreen, ctx.memory(|m| m.focused()));
     ctx.input(|i| {
+        // The magnifier distinguishes a Space tap from temporary pan. Repeats never re-arm
+        // a cancelled tap, and a drag already underway (including a scrub) owns the release.
+        if !space_zoom
+            || !space_zoom_binding
+            || space_popup
+            || !i.focused
+            || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
+            || app.ui.space_zoom_tap.is_some_and(|tap| tap != tap_context)
+        {
+            app.ui.space_zoom_tap = None;
+        } else {
+            // A scrub left behind by a view change mid-drag ends with the button: it no longer owns Space.
+            if i.pointer.is_decidedly_dragging()
+                || matches!(app.gesture, Some(crate::panels::detail::Gesture::Pan { .. }))
+                || matches!(app.gesture, Some(crate::panels::detail::Gesture::ScrubZoom(_)) if i.pointer.primary_down())
+            {
+                app.ui.space_zoom_tap = None;
+            }
+            // Recover the buttons' state before this batch: the first event for each button
+            // describes its transition, while egui's PointerState is already at the batch end.
+            let buttons = [
+                egui::PointerButton::Primary,
+                egui::PointerButton::Secondary,
+                egui::PointerButton::Middle,
+                egui::PointerButton::Extra1,
+                egui::PointerButton::Extra2,
+            ];
+            let mut pointer_down = buttons.map(|button| {
+                i.events
+                    .iter()
+                    .find_map(|event| match event {
+                        egui::Event::PointerButton { button: changed, pressed, .. } if *changed == button => Some(!pressed),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| i.pointer.button_down(button))
+            });
+            for event in &i.events {
+                match event {
+                    egui::Event::PointerButton { button, pressed, .. } => {
+                        if let Some(down) = pointer_down.get_mut(*button as usize) {
+                            *down = *pressed;
+                        }
+                        // A pointer interaction owns this Space hold even when the entire drag
+                        // is delivered in one batch and egui never reports Response::dragged.
+                        app.ui.space_zoom_tap = None;
+                    }
+                    egui::Event::Key { key: Key::Space, pressed: true, repeat: false, modifiers, .. }
+                        if *modifiers == Modifiers::NONE && !pointer_down.iter().any(|down| *down) =>
+                    {
+                        app.ui.space_zoom_tap = Some(tap_context);
+                    }
+                    egui::Event::Key { key: Key::Space, pressed: false, .. } if app.ui.space_zoom_tap.take().is_some() => {
+                        aliased.push(("view.zoomToggle", json!({})));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !i.key_down(Key::Space) {
+            app.ui.space_zoom_tap = None;
+        }
         // Enter opens the active grid photo; widgets, popups and custom bindings keep the key.
         if grid
             && app.session.active().is_some()
@@ -396,6 +468,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
+                && !(space_zoom && b.id == "view.zoomToggle" && (m, k) == space_binding)
                 && matches(i, m, k)
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
@@ -406,6 +479,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
                 && !(k == Key::Escape && popup_open)
                 && !taken.contains(&(m, k))
+                && !(space_zoom && *id == "view.zoomToggle" && (m, k) == space_binding)
                 && matches(i, m, k)
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
