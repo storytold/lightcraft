@@ -62,6 +62,7 @@ guard.detail(&file_name);
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
+| Browser library backup | `crates/ui-egui/src/menus.rs`, `apps/lightcraft-web/src/web.rs` | shared File/recovery dispatch passes the guard into the host callback; the async backup owns it through completion or failure (`Cancel::No`) |
 
 ## Testing
 

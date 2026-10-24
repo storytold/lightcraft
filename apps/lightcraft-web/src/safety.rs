@@ -13,8 +13,8 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::backend::Backend;
 use crate::backup::{
-    ACTIVE_LIBRARY, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, restored_dir_name, tail_len,
-    valid_hash, verify, verify_original,
+    ACTIVE_LIBRARY, BackupReport, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, restored_dir_name,
+    tail_len, valid_hash, verify, verify_original,
 };
 use crate::files::{Files, LIBRARY_FILES};
 use crate::store::storage_key;
@@ -49,6 +49,10 @@ pub fn confirm(text: &str) -> bool {
 /// Cover the page with a message (the app can't continue, or must not start).
 pub fn show_blocking(text: &str) {
     let Some(doc) = document() else { return };
+    // A modal recovery dialog occupies the browser's top layer and would hide this fatal message.
+    if let Some(recovery) = doc.get_element_by_id("lightcraft_graphics_recovery") {
+        recovery.remove();
+    }
     let el = match doc.get_element_by_id("lightcraft_blocking") {
         Some(el) => el,
         None => {
@@ -152,7 +156,12 @@ pub fn download_blob(name: &str, blob: &web_sys::Blob) -> Result<(), String> {
 /// File ▸ Back Up Library…: a zip of the library files (as the app has them, saved or not) and
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
 /// heap) and downloaded. `names`: content hash → the photo's file name.
-pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>) -> Result<(usize, f64), String> {
+pub async fn backup(
+    files: Files,
+    backend: Option<Backend>,
+    resident: HashMap<String, std::sync::Arc<[u8]>>,
+    names: HashMap<String, String>,
+) -> Result<BackupReport, String> {
     let parts = js_sys::Array::new();
     let mut zip = ZipWriter::default();
     let mut bytes = 0f64;
@@ -170,19 +179,64 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
         }
     }
     let mut originals = 0;
-    for hash in backend.list("originals").await? {
-        if !valid_hash(&hash) {
+    let mut missing = Vec::new();
+    let mut warnings = Vec::new();
+    // Catalog and resident keys remain usable even when storage cannot enumerate its originals.
+    let stored = match &backend {
+        Some(b) => match b.list("originals").await {
+            Ok(stored) => stored,
+            Err(error) => {
+                warnings.push(format!(
+                    "{} ({error})",
+                    lightcraft_ui_egui::i18n::tr(
+                        "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately."
+                    )
+                ));
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
+    let mut hashes: Vec<&str> = names.keys().chain(stored.iter()).chain(resident.keys()).map(String::as_str).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    for hash in hashes {
+        if !valid_hash(hash) {
             continue;
         }
-        match backend.read(&storage_key(&hash)).await {
-            Ok(Some(data)) => {
-                let name = names.get(&hash).map_or("original", String::as_str);
-                add(&mut zip, &original_entry(&hash, name), &data)?;
+        let in_memory = || resident.get(hash).map(|data| std::borrow::Cow::Borrowed(data.as_ref()));
+        let data = match &backend {
+            Some(b) => match b.read(&storage_key(hash)).await {
+                Ok(data) => data.map(std::borrow::Cow::Owned).or_else(in_memory),
+                Err(error) => {
+                    if let Some(data) = in_memory() {
+                        Some(data)
+                    } else {
+                        missing.push(format!("{} ({hash}): {error}", names.get(hash).map_or("original", String::as_str)));
+                        continue;
+                    }
+                }
+            },
+            None => in_memory(),
+        };
+        match data {
+            Some(data) => {
+                let name = names.get(hash).map_or("original", String::as_str);
+                add(&mut zip, &original_entry(hash, name), &data)?;
                 originals += 1;
             }
-            Ok(None) => {}
-            Err(e) => return Err(format!("reading an original from browser storage: {e}")),
+            None => missing.push(format!("{} ({hash})", names.get(hash).map_or("original", String::as_str))),
         }
+    }
+    if !missing.is_empty() {
+        let warning = format!(
+            "These originals were unavailable and are NOT included in this backup. The catalog and edits are included. Keep or locate these source photos separately:\n\n{}\n",
+            missing.join("\n")
+        );
+        add(&mut zip, "MISSING-ORIGINALS.txt", warning.as_bytes())?;
+    }
+    if !warnings.is_empty() {
+        add(&mut zip, "BACKUP-WARNINGS.txt", warnings.join("\n\n").as_bytes())?;
     }
     let tail = zip.finish()?;
     parts.push(&Uint8Array::from(&tail[..]));
@@ -191,7 +245,47 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
     download_blob(&format!("lightcraft-library-backup-{day}.zip"), &blob)?;
-    Ok((originals, bytes + tail.len() as f64))
+    Ok(BackupReport { originals, bytes: bytes + tail.len() as f64, missing, warnings })
+}
+
+/// Complete a host backup in both the normal UI and the graphics-loss DOM panel.
+pub fn backup_completed(backup_id: u32, result: Result<BackupReport, String>) {
+    let detail = match result {
+        Ok(report) => {
+            if report.missing.is_empty() && report.warnings.is_empty() {
+                notice(lightcraft_ui_egui::i18n::tr("Library backup download started. Confirm the ZIP is saved before reloading."));
+            } else {
+                let mut outcome =
+                    lightcraft_ui_egui::i18n::tr("Library backup download started. Confirm the ZIP is saved before reloading.").to_string();
+                for warning in &report.warnings {
+                    outcome.push('\n');
+                    outcome.push_str(warning);
+                }
+                if !report.missing.is_empty() {
+                    outcome.push('\n');
+                    outcome.push_str(lightcraft_ui_egui::i18n::tr("Backup excludes unavailable originals. Keep these source photos separately:"));
+                    outcome.push('\n');
+                    outcome.push_str(&report.missing.join("\n"));
+                }
+                notice(outcome);
+            }
+            serde_json::json!({"backupId": backup_id, "report": report})
+        }
+        Err(error) => {
+            notice(format!(
+                "{} {error}",
+                lightcraft_ui_egui::i18n::tr("Backup failed. Keep this page open; do not reload until your work is protected.")
+            ));
+            serde_json::json!({"backupId": backup_id, "error": error})
+        }
+    };
+    let options = web_sys::CustomEventInit::new();
+    if let Ok(detail) = js_sys::JSON::parse(&detail.to_string()) {
+        options.set_detail(&detail);
+        if let (Some(doc), Ok(event)) = (document(), web_sys::CustomEvent::new_with_event_init_dict("lightcraft-backup-complete", &options)) {
+            let _ = doc.dispatch_event(&event);
+        }
+    }
 }
 
 /// Bytes `start..end` of a picked file.

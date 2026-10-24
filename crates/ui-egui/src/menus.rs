@@ -236,6 +236,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
+    ("web.recoveryBackup", "Back up library", None, ""),
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
@@ -835,13 +836,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.recentLibraries" => crate::panels::settings::recent_libraries(app, p),
         "app.clearRecentLibraries" => crate::panels::settings::recent_libraries(app, &json!({"clear": true})),
         "app.displayProfile" => crate::panels::settings::display_profile(app, p),
-        "file.backupLibrary" | "file.restoreLibrary" => {
-            let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
-            match action {
-                Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+        "file.backupLibrary" | "web.recoveryBackup" => match app.services.backup_library.as_mut() {
+            Some(f) => {
+                let task = app.session.activity.start("backup", "Backing up library", lightcraft_engine::activity::Cancel::No);
+                f(&mut app.session, &app.ui, task)
             }
-        }
+            None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+        },
+        "file.restoreLibrary" => match app.services.restore_library.as_mut() {
+            Some(f) => f(&mut app.session),
+            None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+        },
         "view.filmstrip" => {
             app.ui.filmstrip = !app.ui.filmstrip;
             Ok(Value::Null)
@@ -2279,7 +2284,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),
         "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
-        "file.backupLibrary" => app.services.backup_library.is_some(),
+        "file.backupLibrary" | "web.recoveryBackup" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "app.clearRecentLibraries" => !app.ui.settings.recent_libraries.is_empty(),

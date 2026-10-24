@@ -2405,5 +2405,17 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "The browser's graphics connection was lost": "Grafické připojení prohlížeče bylo přerušeno",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "Vaše relace úprav je stále otevřená. Před opětovným načtením vytvořte zálohu. Záloha obsahuje úpravy a dostupné originály. Uchovejte si také zdrojové fotografie.",
+  "Back up library": "Zálohovat knihovnu",
+  "Reload after backup": "Znovu načíst po zálohování",
+  "Preparing the backup. Keep this page open…": "Připravuje se záloha. Nechte tuto stránku otevřenou…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Stahování zálohy knihovny bylo zahájeno. Před opětovným načtením ověřte, že je soubor ZIP uložený.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Zálohování se nezdařilo. Nechte tuto stránku otevřenou; nenačítejte ji znovu, dokud vaše práce nebude v bezpečí.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "Záloha neobsahuje nedostupné originály. Tyto zdrojové fotografie si uchovejte zvlášť:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Uložili jste zálohu ZIP a uchovali všechny chybějící zdrojové fotografie? Opětovné načtení zahodí dočasnou relaci a neuložené změny. Obnovte ZIP pomocí Soubor > Obnovit knihovnu ze zálohy v relaci využívající úložiště prohlížeče.",
+  "Graphics restored — restart after protecting your work": "Grafika obnovena — restartujte po zabezpečení své práce",
+  "Backing up library": "Zálohování knihovny",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Nepodařilo se vypsat uložené originály. Tato záloha nemusí obsahovat zdrojové fotografie, které nejsou ani v aktuálním katalogu, ani v paměti. Zdrojové fotografie si uchovejte zvlášť."
 }

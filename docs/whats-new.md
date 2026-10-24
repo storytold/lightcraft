@@ -258,6 +258,17 @@
   another ratio (4 × 5, 2 × 3…) keeps it portrait, as in Lightroom, and a Custom ratio taller than wide gives a
   portrait crop.
 
+### Browser recovery keeps available work
+- A WebGL recovery backup and File ▸ Back Up Library now save the catalog, edits and available
+  originals even if other source photos are missing. A warning names the omitted files and the
+  ZIP includes `MISSING-ORIGINALS.txt`; keep those source photos separately. The recovery panel
+  follows the active UI language, and its backup uses the registered `web.recoveryBackup` command.
+  While a save is failing, backup still refuses to start and says why (issue #1508); otherwise it
+  captures the latest edits directly into a separate snapshot. Recovery reload waits for its own backup, not an older download.
+  A failed original-list operation no longer blocks saving catalogued or resident photos: the ZIP and
+  outcome warn that other stored originals may be omitted. Backup work uses the shared activity stack.
+  The recovery dialog keeps keyboard focus inside its controls until the work is protected and reloaded.
+
 ## 2026-10-16
 
 ### Synchronize Folder shows that it is listing the folder
@@ -271,7 +282,6 @@
 - While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
-
 ## 2026-10-15
 
 ### Photo Merge takes each photo once

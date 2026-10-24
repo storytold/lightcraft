@@ -2154,5 +2154,17 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "The browser's graphics connection was lost": "瀏覽器的圖形連線已中斷",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "您的編輯工作階段仍然開啟。請先備份，再重新載入。備份包含編輯內容和可用的原始檔案。也請保留來源照片。",
+  "Back up library": "備份圖庫",
+  "Reload after backup": "備份後重新載入",
+  "Preparing the backup. Keep this page open…": "正在準備備份。請保持此頁面開啟…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "圖庫備份已開始下載。重新載入前，請確認 ZIP 檔案已儲存。",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "備份失敗。請保持此頁面開啟；在您的工作妥善儲存前，請勿重新載入。",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "備份不包含無法取得的原始檔案。請另外保留以下來源照片：",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "您是否已儲存備份 ZIP 檔案，並保留所有遺失的來源照片？重新載入會捨棄暫存工作階段和未儲存的變更。請在使用瀏覽器儲存空間的工作階段中，透過「檔案 > 從備份還原圖庫」還原 ZIP 檔案。",
+  "Graphics restored — restart after protecting your work": "圖形連線已恢復 — 請先妥善儲存您的工作，再重新啟動",
+  "Backing up library": "正在備份圖庫",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "無法列出已儲存的原始檔案。此備份可能遺漏目前目錄和記憶體中均不存在的來源照片。請另外保留您的來源照片。"
 }

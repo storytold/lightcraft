@@ -3437,5 +3437,17 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "The browser's graphics connection was lost": "Die Grafikverbindung des Browsers wurde unterbrochen",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "Ihre Bearbeitungssitzung ist noch geöffnet. Erstellen Sie vor dem Neuladen eine Sicherung. Die Sicherung enthält Bearbeitungen und verfügbare Originale. Bewahren Sie auch Ihre Quelldateien auf.",
+  "Back up library": "Bibliothek sichern",
+  "Reload after backup": "Nach der Sicherung neu laden",
+  "Preparing the backup. Keep this page open…": "Sicherung wird vorbereitet. Lassen Sie diese Seite geöffnet …",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Der Download der Bibliothekssicherung wurde gestartet. Vergewissern Sie sich vor dem Neuladen, dass die ZIP-Datei gespeichert ist.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Die Sicherung ist fehlgeschlagen. Lassen Sie diese Seite geöffnet und laden Sie sie erst neu, wenn Ihre Arbeit gesichert ist.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "Nicht verfügbare Originale sind nicht in der Sicherung enthalten. Bewahren Sie diese Quelldateien separat auf:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Haben Sie die ZIP-Sicherung gespeichert und alle fehlenden Quelldateien aufbewahrt? Beim Neuladen werden eine temporäre Sitzung und ungespeicherte Änderungen verworfen. Stellen Sie die ZIP-Datei in einer Sitzung mit Browserspeicher über Datei > Bibliothek aus Sicherung wiederherstellen wieder her.",
+  "Graphics restored — restart after protecting your work": "Grafik wiederhergestellt — starten Sie neu, nachdem Sie Ihre Arbeit gesichert haben",
+  "Backing up library": "Bibliothek wird gesichert",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Die gespeicherten Originale konnten nicht aufgelistet werden. Diese Sicherung enthält möglicherweise keine Quelldateien, die weder im aktuellen Katalog noch im Arbeitsspeicher vorhanden sind. Bewahren Sie Ihre Quelldateien separat auf."
 }

@@ -2353,5 +2353,17 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "The browser's graphics connection was lost": "ブラウザーのグラフィックス接続が失われました",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "編集セッションはまだ開いています。再読み込みする前にバックアップしてください。バックアップには編集内容と利用可能なオリジナルが含まれます。元の写真も保管してください。",
+  "Back up library": "ライブラリをバックアップ",
+  "Reload after backup": "バックアップ後に再読み込み",
+  "Preparing the backup. Keep this page open…": "バックアップを準備しています。このページを開いたままにしてください…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "ライブラリのバックアップのダウンロードが始まりました。再読み込みする前に ZIP が保存されたことを確認してください。",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "バックアップに失敗しました。このページを開いたままにして、作業内容を安全に保存できるまで再読み込みしないでください。",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "利用できないオリジナルはバックアップに含まれません。次の元の写真は別途保管してください：",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "バックアップの ZIP を保存し、不足している元の写真も保管しましたか？再読み込みすると、一時セッションと未保存の変更は破棄されます。ブラウザーストレージを使用するセッションで「ファイル > バックアップからライブラリを復元」を選び、ZIP から復元してください。",
+  "Graphics restored — restart after protecting your work": "グラフィックスが復旧しました — 作業内容を安全に保存してから再起動してください",
+  "Backing up library": "ライブラリをバックアップ中",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "保存済みのオリジナルを一覧表示できませんでした。現在のカタログにもメモリにもない元の写真は、このバックアップに含まれない可能性があります。元の写真は別途保管してください。"
 }

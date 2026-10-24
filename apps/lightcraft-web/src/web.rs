@@ -171,15 +171,31 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
 fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen: Rc<Cell<bool>>, ctx: egui::Context) -> Services {
     let (backup_backend, backup_files) = (backend.clone(), files);
     let restore_backend = backend.clone();
+    let backup_originals = originals.clone();
+    let next_backup = Cell::new(0u32);
     Services {
         picker: None,
         pick_display_profile: None,
         screen_profile: None,
-        backup_library: Some(Box::new(move |session: &mut Session| {
-            let Some(b) = backup_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
+        backup_library: Some(Box::new(move |session: &mut Session, ui: &UiState, task| {
+            session.end_interaction().map_err(|e| e.to_string())?;
+            session.save_view();
+            // presets, prefs and view state are copied from storage, so a failing save would leave
+            // them stale in the zip (issue #1508)
             if let Some(why) = crate::backup::unsaved_refusal(session.unsaved()) {
                 return Err(why);
             }
+            // a failed view save is only logged, not counted as unsaved: check storage itself
+            if let Some(e) = backup_files.error() {
+                return Err(format!(
+                    "Backup not started: browser storage is failing ({e}), so the view state in the backup would be out of date. \
+                     Free up storage space; LightCraft retries the save with every change."
+                ));
+            }
+            let files = crate::backup::capture_library(session, ui, &backup_files)?;
+            let backup_id = next_backup.get().wrapping_add(1);
+            next_backup.set(backup_id);
+            let b = backup_backend.clone();
             // the photos' own names for the originals in the zip
             let names: std::collections::HashMap<String, String> = session
                 .catalog
@@ -189,19 +205,12 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
                     _ => None,
                 })
                 .collect();
-            let files = backup_files.clone();
-            notice("Backing up the library… (the download starts when it's ready)");
+            let resident = backup_originals.snapshot();
             wasm_bindgen_futures::spawn_local(async move {
-                match safety::backup(files, b, names).await {
-                    Ok((n, bytes)) => notice(format!(
-                        "Library backed up: {n} original{} ({:.1} MB). Keep the file somewhere safe.",
-                        if n == 1 { "" } else { "s" },
-                        bytes / 1e6
-                    )),
-                    Err(e) => notice(format!("Backup failed: {e}")),
-                }
+                let _task = task;
+                safety::backup_completed(backup_id, safety::backup(files, b, resident, names).await);
             });
-            Ok(json!({"started": true}))
+            Ok(json!({"started": true, "backupId": backup_id}))
         })),
         restore_library: Some(Box::new(move |_session: &mut Session| {
             let Some(b) = restore_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
@@ -639,6 +648,24 @@ pub fn command(id: String, params: String) -> js_sys::Promise {
         INBOX.with(|q| q.borrow_mut().push((id.clone(), params.clone(), (resolve, reject))));
         CTX.with(|c| c.borrow().as_ref().map(|c| c.request_repaint()));
     })
+}
+
+/// Recovery UI uses the same active language and catalogs as the canvas UI, even without WebGL.
+#[wasm_bindgen]
+pub fn recovery_messages() -> String {
+    use lightcraft_ui_egui::i18n::tr;
+    json!({
+        "title": tr("The browser's graphics connection was lost"),
+        "explanation": tr("Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too."),
+        "backup": tr("Back up library"),
+        "reload": tr("Reload after backup"),
+        "preparing": tr("Preparing the backup. Keep this page open…"),
+        "complete": tr("Library backup download started. Confirm the ZIP is saved before reloading."),
+        "failed": tr("Backup failed. Keep this page open; do not reload until your work is protected."),
+        "missing": tr("Backup excludes unavailable originals. Keep these source photos separately:"),
+        "confirm": tr("Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session."),
+        "restored": tr("Graphics restored — restart after protecting your work")
+    }).to_string()
 }
 
 impl WebApp {

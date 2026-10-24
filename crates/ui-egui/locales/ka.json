@@ -2731,5 +2731,17 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "The browser's graphics connection was lost": "ბრაუზერის კავშირი გრაფიკულ სისტემასთან დაიკარგა",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "რედაქტირების სესია ჯერ კიდევ გახსნილია. ხელახლა ჩატვირთვამდე შექმენით სარეზერვო ასლი. ის შეიცავს შესწორებებსა და ხელმისაწვდომ ორიგინალებს. შეინახეთ საწყისი ფოტოებიც.",
+  "Back up library": "ბიბლიოთეკის სარეზერვო ასლის შექმნა",
+  "Reload after backup": "ხელახლა ჩატვირთვა სარეზერვო ასლის შექმნის შემდეგ",
+  "Preparing the backup. Keep this page open…": "მზადდება სარეზერვო ასლი. არ დახუროთ ეს გვერდი…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "ბიბლიოთეკის სარეზერვო ასლის ჩამოტვირთვა დაიწყო. ხელახლა ჩატვირთვამდე დარწმუნდით, რომ ZIP-არქივი შენახულია.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "სარეზერვო ასლის შექმნა ვერ მოხერხდა. არ დახუროთ ეს გვერდი და არ ჩატვირთოთ ხელახლა, სანამ თქვენს ნამუშევარს უსაფრთხოდ არ შეინახავთ.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "სარეზერვო ასლი არ შეიცავს მიუწვდომელ ორიგინალებს. ეს საწყისი ფოტოები ცალკე შეინახეთ:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "შეინახეთ სარეზერვო ZIP-არქივი და ყველა ნაკლული საწყისი ფოტო? ხელახლა ჩატვირთვისას დროებითი სესია და შეუნახავი ცვლილებები დაიკარგება. ბრაუზერის საცავის გამოყენებით გახსნილ სესიაში ZIP-არქივიდან აღსადგენად აირჩიეთ „ფაილი > ბიბლიოთეკის აღდგენა სარეზერვო ასლიდან“.",
+  "Graphics restored — restart after protecting your work": "გრაფიკის მუშაობა აღდგა — გადატვირთეთ ნამუშევრის უსაფრთხოდ შენახვის შემდეგ",
+  "Backing up library": "ბიბლიოთეკის სარეზერვო ასლის შექმნა",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "შენახული ორიგინალების სიის მიღება ვერ მოხერხდა. ამ სარეზერვო ასლში შეიძლება არ მოხვდეს საწყისი ფოტოები, რომლებიც არც მიმდინარე კატალოგშია და არც მეხსიერებაში. თქვენი საწყისი ფოტოები ცალკე შეინახეთ."
 }
