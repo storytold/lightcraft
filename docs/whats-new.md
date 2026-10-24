@@ -12,6 +12,13 @@
 - Saving a sidecar keeps another application's properties even when its namespace uses prefixes such as `lc`
   or `xmp`. Those foreign properties no longer become LightCraft settings or ratings when imported.
 
+### The log can show every thumbnail and preview LightCraft asks for
+- With `RUST_LOG=warn,lightcraft*=info,lightcraft_ui_egui::render=debug` (or `LIGHTCRAFT_LOG=debug`), the log has a
+  line for each picture LightCraft asks for, with its file, and one for how it ended: drawn, or dropped and why.
+  Before, only failures were logged, so the log couldn't tell a file asked for 37 times from one asked for once and
+  failing inside (issue #2682).
+  The usual log is unchanged. See [Get help with a problem](user/troubleshooting/get-help.md).
+
 ### Find Missing Photos finds the files of a library made on Windows
 - A library made on Windows records its originals with Windows paths. Opened on macOS or Linux, its photos are
   missing until relinked, and Find Missing Photos found them only by their content, so it missed every photo it had
