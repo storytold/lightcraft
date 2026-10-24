@@ -245,6 +245,126 @@ fn record_codec() {
 }
 
 #[test]
+fn fragmented_record_keeps_nested_seq_values_and_escaped_strings() {
+    let rules = serde_json::from_value(serde_json::json!({
+        "rules": [{"field": "title", "op": "contains", "value": {"seq": {"text": "braces { } and quotes \" \\"}}}]
+    }))
+    .unwrap();
+    let album =
+        Album { smart: Some(Box::new(Filter { rule_set: Some(rules), ..Default::default() })), ..Album::new(AlbumId(1), "Größe ✓ { \" \\") };
+    let op = Op::AddAlbum { album: album.clone() };
+    let record = encode_record(1, &op);
+    assert_eq!(record.matches("{\"seq\":").count(), 2);
+    for fragment in [b"{\"seq\":".as_slice(), b"\xff\"{\\", b"garbage}"] {
+        for ending in [b"\n".as_slice(), b"\r\n", b""] {
+            let m = MemStore::new();
+            let mut log = fragment.to_vec();
+            log.extend_from_slice(record.as_bytes());
+            log.extend_from_slice(ending);
+            m.set(LOG, log);
+            let (_, loaded, report) = open(&m);
+            assert_eq!(loaded.album(album.id), Some(&album));
+            assert_eq!((report.replayed, report.torn_fragments, report.torn_bytes), (1, 1, 0));
+            assert!(report.damaged.is_none());
+        }
+    }
+}
+
+#[test]
+fn repeated_record_markers_do_not_hide_a_retried_record() {
+    let m = MemStore::new();
+    let (mut journal, catalog, _) = open(&m);
+    journal.snapshot(&catalog).unwrap();
+    drop(journal);
+    let fragment = b"{\"seq\":".repeat(300_000);
+    m.set(LOG, fragment.clone());
+    // Quadratic resync over 300,000 markers takes minutes; linear recovery takes milliseconds.
+    let start = std::time::Instant::now();
+    let (_, loaded, report) = open(&m);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+    assert_eq!(loaded.to_snapshot(), catalog.to_snapshot());
+    assert_eq!(report.torn_bytes as usize, fragment.len());
+    assert!(m.get(LOG).unwrap().is_empty());
+
+    let album = Album::new(AlbumId(1), "Recovered");
+    let mut log = fragment;
+    log.extend_from_slice(encode_record(1, &Op::AddAlbum { album: album.clone() }).as_bytes());
+    log.push(b'\n');
+    m.set(LOG, log);
+    let start = std::time::Instant::now();
+    let (_, loaded, report) = open(&m);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+    assert_eq!(loaded.album(album.id), Some(&album));
+    assert_eq!((report.replayed, report.torn_fragments, report.torn_bytes), (1, 1, 0));
+    assert!(report.damaged.is_none());
+}
+
+#[test]
+fn stale_fragment_and_unterminated_retry_keep_later_appends() {
+    let m = MemStore::new();
+    let (mut journal, mut catalog, _) = open(&m);
+    let album = Album::new(AlbumId(1), "Before snapshot");
+    let add = Op::AddAlbum { album: album.clone() };
+    catalog.apply(add.clone()).unwrap();
+    journal.append(std::slice::from_ref(&add)).unwrap();
+    journal.snapshot(&catalog).unwrap();
+    drop(journal);
+
+    let rename = Op::RenameAlbum { id: album.id, name: "Retried ✓".into() };
+    let stale = encode_record(1, &add);
+    let next = encode_record(2, &rename);
+    m.set(LOG, format!("fragment{stale}\r\n{next}").into_bytes());
+    let (mut journal, mut loaded, report) = open(&m);
+    assert_eq!(loaded.album(album.id).unwrap().name, "Retried ✓");
+    assert_eq!((report.stale, report.replayed, report.torn_fragments, report.torn_bytes), (1, 1, 1, 0));
+    assert!(report.damaged.is_none());
+    assert_eq!(m.get(LOG).unwrap().last(), Some(&b'\n'));
+
+    let later = Op::RenameAlbum { id: album.id, name: "After recovery".into() };
+    loaded.apply(later.clone()).unwrap();
+    journal.append(&[later]).unwrap();
+    drop(journal);
+    let (_, reopened, report) = open(&m);
+    assert_eq!(reopened.to_snapshot(), loaded.to_snapshot());
+    assert_eq!((report.stale, report.replayed, report.torn_fragments, report.torn_bytes), (1, 2, 1, 0));
+    assert!(report.damaged.is_none());
+}
+
+#[test]
+fn fragmented_record_with_bad_crc_or_sequence_is_damage() {
+    let album = Album::new(AlbumId(1), "Valid");
+    let op = Op::AddAlbum { album };
+    let good = encode_record(1, &op);
+    for bad in [good.replace("Valid", "Wrong"), encode_record(2, &op)] {
+        let m = MemStore::new();
+        m.set(LOG, format!("fragment{bad}\n{good}\n").into_bytes());
+        let (_, loaded, report) = open(&m);
+        assert_eq!(loaded.to_snapshot(), Catalog::new().to_snapshot());
+        assert_eq!((report.replayed, report.torn_fragments), (0, 0));
+        let damaged = report.damaged.expect("the following good record makes this mid-log damage");
+        assert_eq!(m.get(&damaged).unwrap(), format!("fragment{bad}\n{good}\n").into_bytes());
+    }
+}
+
+#[test]
+fn a_retried_record_after_damage_keeps_the_log_as_damaged() {
+    let kept = Album::new(AlbumId(1), "Kept");
+    let behind = Album::new(AlbumId(2), "Behind the damage");
+    let first = encode_record(1, &Op::AddAlbum { album: kept.clone() });
+    let retried = encode_record(2, &Op::AddAlbum { album: behind });
+    for ending in ["\n", "\r\n", ""] {
+        let log = format!("{first}\n<garbage>\nfragment{retried}{ending}").into_bytes();
+        let m = MemStore::new();
+        m.set(LOG, log.clone());
+        let (_, loaded, report) = open(&m);
+        assert_eq!(loaded.album(kept.id), Some(&kept));
+        assert_eq!(report.torn_bytes, 0, "not truncated as a torn tail");
+        let damaged = report.damaged.expect("the CRC-valid retried record after the damage is preserved");
+        assert_eq!(m.get(&damaged).unwrap(), log);
+    }
+}
+
+#[test]
 fn push_history_is_bounded_and_invertible() {
     let mut c = Catalog::new();
     let id = c.alloc_photo_id();
