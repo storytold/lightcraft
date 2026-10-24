@@ -305,5 +305,7 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Regel {n} av {m}: {what}. Flytta med piltangenterna",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupp {n} av {m}: matcha {mode}, antal i gruppen: {count}. Flytta med piltangenterna"
 }

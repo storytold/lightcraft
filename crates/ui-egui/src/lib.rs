@@ -184,6 +184,8 @@ mod tests_rename_person;
 #[cfg(test)]
 mod tests_rules_editor;
 #[cfg(test)]
+mod tests_rules_reorder;
+#[cfg(test)]
 mod tests_sam_setup;
 #[cfg(test)]
 mod tests_scroll;
