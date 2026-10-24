@@ -118,7 +118,7 @@ fn dragging_within_search_does_not_move_the_window() {
     assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
 }
 
-// Scenario: a window with its native title bar (Windows, Linux) leaves the bar alone
+// Scenario: a window with its native title bar (macOS or opt-out) leaves the bar alone
 #[test]
 fn without_the_integrated_title_bar_the_bar_is_not_a_window_handle() {
     let services = Services { png: None, ..Default::default() };
@@ -168,4 +168,20 @@ fn full_screen_moves_the_left_buttons_into_the_traffic_lights_space() {
     play(&mut h);
     assert!(!h.app.window_is_fullscreen);
     assert_eq!(widget(&h, "icon:sidebar").left(), windowed, "leaving full screen restores the room for the traffic lights");
+}
+
+// Scenario: custom title bar provides caption buttons and drag area
+#[test]
+fn custom_titlebar_provides_caption_buttons() {
+    let services = Services { png: None, ..Default::default() };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.custom_titlebar = true;
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(Duration::from_secs(120));
+    assert!(h.app.custom_titlebar);
+    for c in crate::titlebar::CAPTIONS {
+        let id = crate::titlebar::caption_id(c);
+        let resp = h.view.ctx.read_response(id);
+        assert!(resp.is_some(), "missing caption button {:?}", c);
+    }
 }

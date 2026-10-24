@@ -47,6 +47,7 @@ fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, bar: Rect, search_rect:
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let custom = app.custom_titlebar;
     // room for the traffic lights; in full screen they are gone, and the sidebar button sits as far
     // from the left edge as the Discord button from the right (12 margin + 4)
     let left = match (app.integrated_titlebar, app.window_is_fullscreen) {
@@ -54,19 +55,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         (true, true) => 16,
         (false, _) => 10,
     };
-    egui::Panel::top("top_bar")
+    let right_margin = if custom { 0 } else { 12 };
+    // Windows and Linux custom title bar: the caption buttons sit right of the icons
+    let caption_room = if custom { crate::titlebar::WIDTH + 14.0 - 18.0 } else { 0.0 };
+    let panel = egui::Panel::top("top_bar")
         .exact_size(t.top_bar_h)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right: 12, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right: right_margin, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
+            if custom {
+                crate::titlebar::drag_area(ui, full);
+            }
             // The whole bar, its margins included. The search field is centred on this and not on
             // `full`, which is only what the margins leave: on macOS the left margin holds the
             // traffic lights' room, and full screen gives that room back. Centring on `full` moved
             // the field, and changed its width, every time that room changed (issue #2365).
-            let bar = Rect::from_min_max(pos2(full.left() - left as f32, full.top()), pos2(full.right() + 12.0, full.bottom()));
+            let bar = Rect::from_min_max(pos2(full.left() - left as f32, full.top()), pos2(full.right() + right_margin as f32, full.bottom()));
             // The field stops short of the filter icon and the seven icons on the right; centred,
             // it is twice the room between the window's centre and them.
-            let mut sw = 640.0f32.min(2.0 * (full.right() - 310.0 - bar.center().x)).max(190.0);
+            let mut sw = 640.0f32.min(2.0 * (full.right() - 310.0 - caption_room - bar.center().x)).max(190.0);
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
@@ -165,7 +172,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("view.filterBar", json!({}));
             }
             // right icons
-            let mut x = full.right() - 18.0;
+            let mut x = full.right() - 18.0 - caption_room;
             // saving is failing: the cloud icon turns into a warning until a save succeeds
             let unsaved = app.session.unsaved().map(|(n, e)| {
                 crate::i18n::tr_format!(
@@ -256,6 +263,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             });
             let _ = Align2::CENTER_CENTER;
         });
+    if custom {
+        crate::titlebar::caption_buttons(app, ui, panel.response.rect);
+    }
 }
 
 /// The appearance button's icon and the mode's name for its tooltip.

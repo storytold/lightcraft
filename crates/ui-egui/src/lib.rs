@@ -357,6 +357,9 @@ pub struct LightcraftApp {
     pub perf: Perf,
     /// macOS: the host draws the traffic lights over our top bar.
     pub integrated_titlebar: bool,
+    /// Windows and Linux: the window has no OS decorations, so the app bar is the title bar (drag,
+    /// double-click to maximize, caption buttons) and invisible edge zones resize the window.
+    pub custom_titlebar: bool,
     /// The host installed a native menu bar (no in-window menus then).
     pub native_menu: bool,
     /// Shortcuts the native menu bar currently handles (`Cmd+Z`, `G`…): the egui shortcut handler
@@ -501,6 +504,7 @@ impl LightcraftApp {
             perf: Perf::default(),
             caches: Caches::default(),
             integrated_titlebar: false,
+            custom_titlebar: false,
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
@@ -1510,6 +1514,9 @@ impl LightcraftApp {
         panels::left::section_drag_feedback(self, &ctx);
         panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);
+        if self.custom_titlebar {
+            titlebar::resize_zones(ui);
+        }
         self.widgets = widgets::take_registry(&ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);

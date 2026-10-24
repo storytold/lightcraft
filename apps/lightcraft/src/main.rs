@@ -925,11 +925,15 @@ fn main() -> eframe::Result {
     let came_up_app = came_up.clone();
     // how the window was when the app was last used (checked: the settings file is a file)
     let opens_as = prefs.as_ref().and_then(|ui| ui.window).and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
+    // Windows and Linux: no OS title bar; the app bar is the title bar (`lightcraft_ui_egui::titlebar`).
+    // macOS keeps its traffic lights over the integrated title strip.
+    let custom_titlebar = !cfg!(target_os = "macos");
     let options = eframe::NativeOptions {
         renderer,
         viewport: as_remembered(egui::ViewportBuilder::default().with_title("LightCraft"), opens_as)
             .with_min_inner_size(lightcraft_ui_egui::window_place::MIN_SIZE)
             .with_drag_and_drop(true)
+            .with_decorations(!custom_titlebar)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
@@ -974,6 +978,7 @@ fn main() -> eframe::Result {
                 }
                 lightcraft_ui_egui::i18n::set_language(app.ui.language);
                 app.integrated_titlebar = cfg!(target_os = "macos");
+                app.custom_titlebar = custom_titlebar;
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);

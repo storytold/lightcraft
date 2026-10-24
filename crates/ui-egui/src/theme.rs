@@ -77,6 +77,9 @@ pub struct Tokens {
     pub slider_row_h: f32,
     pub section_h: f32,
     pub film_h: f32,
+    /// Window Close button (custom title bar) when hovered, and its glyph there.
+    pub caption_close: Color32,
+    pub caption_close_text: Color32,
 }
 
 /// An interface theme. Each belongs to the dark or the light family.
@@ -155,6 +158,8 @@ impl Default for Tokens {
             slider_row_h: 45.0,
             section_h: 57.0,
             film_h: 142.0,
+            caption_close: Color32::from_rgb(0xc4, 0x2b, 0x1c),
+            caption_close_text: Color32::WHITE,
         }
     }
 }
