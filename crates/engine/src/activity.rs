@@ -7,14 +7,80 @@
 //! check between files or photos: the guard adopts it ([`Cancel::Flag`]), so the stack's ✕, `activity.cancel` and the
 //! job's own Cancel all set the same atomic. Numbers are worded by the frontend from `done`, `total` and [`Unit`]; a
 //! detail set here is a name (a file, a model), never a sentence, so the frontend can translate everything else.
+//!
+//! Jobs that must not run side by side share a [`Lane`]. One asked for while its lane is busy can wait in line
+//! ([`Activity::enqueue`]): it keeps what it was asked ([`Request`], the command and its parameters) and runs it
+//! when the jobs ahead of it are over ([`crate::Session::start_waiting`]), planning its work then, not when it was
+//! asked. Nothing waits across another library: the files may have changed meanwhile.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
+use serde_json::Value;
 
 /// The longest label or detail kept, in characters (a file name can be anything).
 const MAX_TEXT: usize = 200;
+/// The most tasks waiting in line, in all lanes.
+pub const MAX_WAITING: usize = 100;
+
+/// Jobs that must not run side by side: one waits for those ahead of it to end. Kinds without a lane run as they
+/// always did (and are refused while one of their kind runs, where that is the rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Lane {
+    /// Build Previews and Build / Discard Smart Previews: one preview build at a time (`Session::preview_build`).
+    Previews,
+}
+
+impl Lane {
+    /// The lane of tasks of `kind` ([`TaskInfo::kind`]).
+    pub fn of(kind: &str) -> Option<Lane> {
+        match kind {
+            "previews" | "smartPreviews" => Some(Lane::Previews),
+            _ => None,
+        }
+    }
+}
+
+/// What a job was asked: the command and its parameters, with everything that depends on the moment (the
+/// selection, the photos in view) written out, so that running it later does the same work.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Request {
+    pub command: String,
+    pub params: Value,
+}
+
+/// A task waiting in line ([`Activity::enqueue`]), as [`Activity::take_ready`] hands it over to be started.
+#[derive(Debug)]
+pub struct Waiting {
+    pub id: u64,
+    pub kind: &'static str,
+    pub label: String,
+    pub lane: Lane,
+    pub request: Request,
+    queued: web_time::Instant,
+}
+
+impl Waiting {
+    fn info(&self, place: usize) -> TaskInfo {
+        TaskInfo {
+            id: self.id,
+            kind: self.kind,
+            label: self.label.clone(),
+            done: 0,
+            total: 0,
+            unit: Unit::Count,
+            detail: String::new(),
+            cancellable: true,
+            cancelling: false,
+            age_ms: millis(self.queued.elapsed()),
+            waiting: true,
+            place,
+            lane: Some(self.lane),
+        }
+    }
+}
 
 /// The background tasks in flight. Cheap to clone (one `Arc`), so worker threads can hold it.
 #[derive(Clone, Default)]
@@ -26,6 +92,10 @@ pub struct Activity {
 struct Inner {
     /// Oldest first.
     tasks: Mutex<Vec<Arc<Entry>>>,
+    /// The tasks waiting in line, in the order they were asked for.
+    waiting: Mutex<Vec<Waiting>>,
+    /// The id the waiting task being started keeps (its kind, its id): see [`Activity::take_ready`].
+    reserved: Mutex<Option<(&'static str, u64)>>,
     next: AtomicU64,
 }
 
@@ -87,6 +157,11 @@ pub struct TaskInfo {
     /// Cancel was asked for; the job stops at its next check.
     pub cancelling: bool,
     pub age_ms: u64,
+    /// It waits in line for the tasks ahead of it in its lane (nothing done yet: `done` and `total` are 0).
+    pub waiting: bool,
+    /// Its place in its lane's line, from 1; 0 for a running task.
+    pub place: usize,
+    pub lane: Option<Lane>,
 }
 
 struct Entry {
@@ -162,7 +237,10 @@ impl Entry {
             detail: lock(&self.detail).clone(),
             cancellable: self.is_cancellable(),
             cancelling: self.is_cancelled(),
-            age_ms: u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            age_ms: millis(self.started.elapsed()),
+            waiting: false,
+            place: 0,
+            lane: Lane::of(self.kind),
         }
     }
 }
@@ -171,7 +249,9 @@ impl Activity {
     /// Register a task; it is listed until the returned guard is dropped. `label` is English (the frontend
     /// translates it).
     pub fn start(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
-        let id = self.inner.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        // a task that waited in line keeps the id it had there
+        let reserved = lock(&self.inner.reserved).take_if(|(k, _)| *k == kind).map(|(_, id)| id);
+        let id = reserved.unwrap_or_else(|| self.inner.next.fetch_add(1, Ordering::Relaxed).saturating_add(1));
         let cancel = match cancel {
             Cancel::No => None,
             Cancel::Yes => Some(Arc::new(AtomicBool::new(false))),
@@ -194,29 +274,130 @@ impl Activity {
         TaskGuard { activity: self.clone(), entry }
     }
 
-    /// Every task in flight, oldest first.
+    /// Every task in flight, oldest first, then those waiting in line, in the order they were asked for.
     pub fn list(&self) -> Vec<TaskInfo> {
-        lock(&self.inner.tasks).iter().map(|e| e.info()).collect()
+        let mut rows: Vec<TaskInfo> = lock(&self.inner.tasks).iter().map(|e| e.info()).collect();
+        rows.extend(self.waiting());
+        rows
     }
 
-    /// Ask task `id` to stop (it stops at its next check). An unknown id (the task may have just ended) or a task
-    /// that can't be cancelled is an error.
+    /// The tasks waiting in line, in the order they were asked for, each with its place in its lane.
+    pub fn waiting(&self) -> Vec<TaskInfo> {
+        let waiting = lock(&self.inner.waiting);
+        let mut ahead: Vec<(Lane, usize)> = Vec::new();
+        waiting
+            .iter()
+            .map(|w| {
+                let place = match ahead.iter_mut().find(|(lane, _)| *lane == w.lane) {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n
+                    }
+                    None => {
+                        ahead.push((w.lane, 1));
+                        1
+                    }
+                };
+                w.info(place)
+            })
+            .collect()
+    }
+
+    /// Ask task `id` to stop (it stops at its next check), or take it out of the line if it waits. An unknown id
+    /// (the task may have just ended) or a task that can't be cancelled is an error.
     pub fn cancel(&self, id: u64) -> Result<(), String> {
+        {
+            let mut waiting = lock(&self.inner.waiting);
+            if let Some(at) = waiting.iter().position(|w| w.id == id) {
+                waiting.remove(at);
+                return Ok(());
+            }
+        }
         let tasks = lock(&self.inner.tasks);
         let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
         if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", entry.label)) }
     }
 
-    /// Ask every cancellable task to stop; returns how many were asked.
+    /// Ask every cancellable task to stop, and empty the line (what waits would start as soon as they stopped);
+    /// returns how many were asked or taken out.
     pub fn cancel_all(&self) -> usize {
+        let dropped = std::mem::take(&mut *lock(&self.inner.waiting)).len();
         let tasks = lock(&self.inner.tasks);
-        tasks.iter().filter(|e| e.try_cancel()).count()
+        dropped + tasks.iter().filter(|e| e.try_cancel()).count()
     }
 
     /// Tasks that quitting would cut short: cancellable ones not already stopping.
     pub fn running_cancellable(&self) -> Vec<TaskInfo> {
         lock(&self.inner.tasks).iter().filter(|e| e.is_cancellable() && !e.is_cancelled()).map(|e| e.info()).collect()
     }
+
+    /// Put a task of `kind` in line behind the others of its lane; it runs `request` when its turn comes. Returns
+    /// its id and its place in the line. A kind without a lane, or a line already [`MAX_WAITING`] long, is an error.
+    pub fn enqueue(&self, kind: &'static str, label: &str, request: Request) -> Result<(u64, usize), String> {
+        let lane = Lane::of(kind).ok_or_else(|| format!("{kind} tasks don't wait in line"))?;
+        let mut waiting = lock(&self.inner.waiting);
+        if waiting.len() >= MAX_WAITING {
+            return Err(format!("{MAX_WAITING} tasks are waiting already"));
+        }
+        let id = self.inner.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        waiting.push(Waiting { id, kind, label: capped(label), lane, request, queued: web_time::Instant::now() });
+        let place = waiting.iter().filter(|w| w.lane == lane).count();
+        Ok((id, place))
+    }
+
+    /// Whether a task of `lane` runs now.
+    pub fn lane_busy(&self, lane: Lane) -> bool {
+        lock(&self.inner.tasks).iter().any(|e| Lane::of(e.kind) == Some(lane))
+    }
+
+    /// Whether a task waits in `lane`'s line.
+    pub fn lane_waiting(&self, lane: Lane) -> bool {
+        lock(&self.inner.waiting).iter().any(|w| w.lane == lane)
+    }
+
+    /// Take the first waiting task whose lane is free out of the line, to be started now. The next task of its
+    /// kind started ([`Activity::start`]) keeps its id, until [`Activity::started`] says the attempt is over.
+    pub fn take_ready(&self) -> Option<Waiting> {
+        self.take_ready_if(|_| true)
+    }
+
+    /// [`Activity::take_ready`] among the tasks whose request `runs` can run: each frontend starts what it knows how to
+    /// (the engine its commands, the app its own). Only the first in each lane's line is looked at: one the caller
+    /// can't run holds its lane, as it would if it had started.
+    pub fn take_ready_if(&self, runs: impl Fn(&Request) -> bool) -> Option<Waiting> {
+        let mut waiting = lock(&self.inner.waiting);
+        let mut held: Vec<Lane> = lock(&self.inner.tasks).iter().filter_map(|e| Lane::of(e.kind)).collect();
+        let mut at = None;
+        for (i, w) in waiting.iter().enumerate() {
+            if held.contains(&w.lane) {
+                continue;
+            }
+            if runs(&w.request) {
+                at = Some(i);
+                break;
+            }
+            held.push(w.lane);
+        }
+        let w = waiting.remove(at?);
+        *lock(&self.inner.reserved) = Some((w.kind, w.id));
+        Some(w)
+    }
+
+    /// The attempt to start the task [`Activity::take_ready`] handed over is over (it started, or it could not).
+    pub fn started(&self) {
+        *lock(&self.inner.reserved) = None;
+    }
+
+    /// Another library was opened: what waited in line was about the old one's photos and folders, so the line
+    /// empties. Returns how many tasks waited.
+    pub fn library_changed(&self) -> usize {
+        std::mem::take(&mut *lock(&self.inner.waiting)).len()
+    }
+}
+
+/// Milliseconds, saturating.
+fn millis(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A task's place in the list, held by whoever owns the job; dropping it removes the row.
@@ -434,5 +615,94 @@ mod tests {
         let h = g.handle();
         std::thread::spawn(move || h.progress(3, 7)).join().unwrap();
         assert_eq!((a.list()[0].done, a.list()[0].total), (3, 7));
+    }
+
+    fn request(command: &str) -> Request {
+        Request { command: command.into(), params: serde_json::json!({}) }
+    }
+
+    #[test]
+    fn a_task_of_a_kind_without_a_lane_does_not_wait() {
+        let a = Activity::default();
+        let e = a.enqueue("export", "Exporting", request("x")).unwrap_err();
+        assert!(e.contains("export"), "{e}");
+        assert!(a.list().is_empty());
+    }
+
+    #[test]
+    fn the_line_is_bounded_and_lists_places_per_lane() {
+        let a = Activity::default();
+        for place in 1..=MAX_WAITING {
+            assert_eq!(a.enqueue("previews", "P", request("x")).unwrap().1, place);
+        }
+        assert!(a.enqueue("smartPreviews", "S", request("x")).unwrap_err().contains("100"));
+        let rows = a.list();
+        assert_eq!(rows.len(), MAX_WAITING);
+        assert!(rows.iter().all(|r| r.waiting && r.lane == Some(Lane::Previews)));
+        assert_eq!(rows.iter().map(|r| r.place).collect::<Vec<_>>(), (1..=MAX_WAITING).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_waiting_task_starts_when_its_lane_is_free_and_keeps_its_id() {
+        let a = Activity::default();
+        let ahead = a.start("previews", "P", Cancel::Yes);
+        let (id, _) = a.enqueue("smartPreviews", "S", request("smart")).unwrap();
+        assert!(a.lane_busy(Lane::Previews) && a.lane_waiting(Lane::Previews));
+        assert!(a.take_ready().is_none(), "the lane is busy: one preview build at a time");
+        drop(ahead);
+        assert!(!a.lane_busy(Lane::Previews));
+        let w = a.take_ready().expect("the lane is free");
+        assert_eq!((w.id, w.request.command.as_str()), (id, "smart"));
+        assert!(!a.lane_waiting(Lane::Previews));
+        let g = a.start("smartPreviews", "S", Cancel::Yes);
+        a.started();
+        assert_eq!(g.id(), id, "it keeps the id it had in line");
+        assert!(!a.list()[0].waiting);
+        assert_ne!(a.start("export", "E", Cancel::Yes).id(), id);
+    }
+
+    #[test]
+    fn an_attempt_that_did_not_start_a_task_gives_its_id_up() {
+        let a = Activity::default();
+        let (id, _) = a.enqueue("previews", "P", request("x")).unwrap();
+        let w = a.take_ready().unwrap();
+        assert_eq!(w.id, id);
+        a.started(); // the command failed before starting anything
+        assert_ne!(a.start("previews", "P", Cancel::Yes).id(), id, "a later task of the kind doesn't take it");
+    }
+
+    #[test]
+    fn take_ready_if_skips_what_the_caller_cannot_run_but_keeps_its_lane_held() {
+        let a = Activity::default();
+        a.enqueue("previews", "mine", request("engine")).unwrap();
+        a.enqueue("previews", "next", request("engine")).unwrap();
+        assert!(a.take_ready_if(|r| r.command == "other").is_none(), "the first in the lane isn't ours: it holds the lane");
+        assert_eq!(a.take_ready_if(|_| true).map(|w| w.label), Some("mine".to_string()));
+    }
+
+    #[test]
+    fn cancelling_a_waiting_task_removes_it_and_cancel_all_empties_the_line() {
+        let a = Activity::default();
+        let _running = a.start("previews", "P", Cancel::Yes);
+        let (first, _) = a.enqueue("previews", "A", request("x")).unwrap();
+        a.enqueue("previews", "B", request("x")).unwrap();
+        a.enqueue("smartPreviews", "C", request("x")).unwrap();
+        a.cancel(first).unwrap();
+        assert!(a.cancel(first).is_err());
+        assert_eq!(a.waiting().iter().map(|t| (t.label.as_str(), t.place)).collect::<Vec<_>>(), vec![("B", 1), ("C", 2)]);
+        assert_eq!(a.cancel_all(), 3, "the running one and the two that waited");
+        assert!(a.waiting().is_empty() && !a.lane_waiting(Lane::Previews));
+    }
+
+    #[test]
+    fn a_library_change_empties_the_line() {
+        let a = Activity::default();
+        let running = a.start("previews", "P", Cancel::Yes);
+        a.enqueue("previews", "A", request("x")).unwrap();
+        a.enqueue("smartPreviews", "B", request("x")).unwrap();
+        assert_eq!(a.library_changed(), 2);
+        assert_eq!(a.list().len(), 1, "what runs goes on");
+        drop(running);
+        assert!(a.take_ready().is_none());
     }
 }
