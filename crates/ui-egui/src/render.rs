@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::Session;
+use lightcraft_engine::display::VECTORSCOPE_SAMPLES;
 use lightcraft_engine::media::{QuickJob, QuickSource, RenderJob, RenderResult};
 use lightcraft_engine::pipeline::StageCache;
 use lightcraft_preview::JobPool;
@@ -66,12 +67,21 @@ pub enum Slot {
     HdrHistogram,
 }
 
+/// The vectorscope of an sRGB render (a display profile's renders bring theirs, measured before
+/// their colours became the display's device values).
+fn scope_of_srgb(r: &RenderResult) -> Option<Arc<lightcraft_raster::Vectorscope>> {
+    let img = &r.rendered.as_ref().ok()?.image;
+    (r.display.is_none()).then(|| Arc::new(lightcraft_raster::Vectorscope::of_srgb8(img, VECTORSCOPE_SAMPLES)))
+}
+
 pub struct Tex {
     pub key: u64,
     pub photo: PhotoId,
     pub tex: egui::TextureHandle,
     pub size: [usize; 2],
     pub histogram: Option<Histogram>,
+    /// The loupe's colours on the chroma plane (`Slot::Main` only; the Vectorscope panel).
+    pub vectorscope: Option<std::sync::Arc<lightcraft_raster::Vectorscope>>,
     pub ms: f64,
     /// Set for stand-ins: where the image came from.
     pub quick: Option<QuickSource>,
@@ -433,9 +443,14 @@ impl Renderer {
     }
 
     /// Run `job` and make its image ready for `display` (on the worker thread).
-    fn run_for(job: impl FnOnce() -> RenderResult, display: &Option<Arc<lightcraft_engine::display::Display>>) -> Finished {
+    /// `slot`: the view it is for; only the loupe (`Slot::Main`) keeps a vectorscope.
+    fn run_for(slot: Slot, job: impl FnOnce() -> RenderResult, display: &Option<Arc<lightcraft_engine::display::Display>>) -> Finished {
         let mut r = job();
         if let Some(d) = display {
+            // the loupe's vectorscope reads the sRGB colours, before they become the display's
+            if slot == Slot::Main && r.vectorscope.is_none() {
+                r.vectorscope = scope_of_srgb(&r);
+            }
             lightcraft_engine::display::present(&mut r, d);
         }
         let color = r.rendered.as_ref().ok().map(|x| Arc::new(color_image(&x.image)));
@@ -507,7 +522,7 @@ impl Renderer {
             priority,
             Box::new(move || {
                 let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
-                Self::run_for(run, &display)
+                Self::run_for(slot, run, &display)
             }),
         );
     }
@@ -544,7 +559,7 @@ impl Renderer {
         self.requests.insert(slot, Requested { id: job.request_id, source });
         let key = job.key;
         let display = self.display.clone();
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
+        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(slot, || job.run(), &display)));
     }
 
     /// Render a slideshow title screen into `slot` (once per screen key, like [`Self::request`]):
@@ -562,7 +577,7 @@ impl Renderer {
         let request_id = lightcraft_preview::next_tick();
         self.requests.insert(slot, Requested { id: request_id, source: None });
         let display = self.display.clone();
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)));
+        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(slot, || compose.result(request_id), &display)));
     }
 
     /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one
@@ -859,6 +874,9 @@ impl Renderer {
             // (results from an offload, which doesn't know the display profile: converted here)
             if let Some(d) = &self.display {
                 let before = r.display;
+                if slot == Slot::Main && r.vectorscope.is_none() {
+                    r.vectorscope = scope_of_srgb(&r);
+                }
                 lightcraft_engine::display::present(&mut r, d);
                 if r.display != before {
                     color = None; // converted after the worker made its texture pixels
@@ -867,6 +885,9 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // measured on the sRGB colours: brought by a display profile's render, else read off
+            // the (sRGB) image; a display-encoded image without one gets none rather than a wrong one
+            let scope = if slot == Slot::Main { r.vectorscope.take().or_else(|| scope_of_srgb(&r)) } else { None };
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
@@ -906,6 +927,7 @@ impl Renderer {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
             let img = &rendered.image;
+            let vectorscope = scope;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
@@ -917,6 +939,7 @@ impl Renderer {
                     t.photo = r.photo;
                     t.size = [img.width, img.height];
                     t.histogram = Some(rendered.histogram);
+                    t.vectorscope = vectorscope;
                     t.ms = ms;
                     t.quick = r.quick;
                 }
@@ -930,6 +953,7 @@ impl Renderer {
                             tex,
                             size: [img.width, img.height],
                             histogram: Some(rendered.histogram),
+                            vectorscope,
                             ms,
                             quick: r.quick,
                             pixels,
@@ -1839,15 +1863,18 @@ mod stage_budget_tests {
 
     const MB: usize = 1 << 20;
 
-    // Given a zoomed view showing a window, the app idling does not free the GPU copy of the
-    // original the next window is cut from; once the windows are gone the idle trim runs again
+    /// Given a zoomed view showing a window, the app idling does not free the GPU copy of the
+    /// original the next window is cut from; once the windows are gone the idle trim runs again
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_zoomed_view_is_not_trimmed_while_idle() {
         let ctx = egui::Context::default();
         let mut r = Renderer::default();
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
-        r.textures.insert(Slot::Region, Tex { key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None });
+        r.textures.insert(
+            Slot::Region,
+            Tex { key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, vectorscope: None, ms: 0.0, quick: None, pixels: None },
+        );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
@@ -1944,7 +1971,7 @@ mod stage_budget_tests {
 mod color_image_tests {
     use super::*;
 
-    // The texture a render becomes is what egui would make of its bytes, whatever the alpha
+    /// The texture a render becomes is what egui would make of its bytes, whatever the alpha
     #[test]
     fn the_fast_conversion_equals_eguis() {
         let img = lightcraft_raster::Rgba8::from_fn(37, 29, |x, y| {
@@ -1962,8 +1989,34 @@ mod color_image_tests {
         assert_eq!(got.pixels, want.pixels);
     }
 
-    // Given a finished render, the worker hands back its texture pixels with it (the UI thread no
-    // longer converts a 10 MP window on every slider step); a failed render has none
+    /// The vectorscope reads sRGB colours: an sRGB render's own image, never a display profile's
+    /// device values (those renders bring a vectorscope measured before the conversion)
+    #[test]
+    fn the_vectorscope_is_read_only_off_srgb_pixels() {
+        let image = lightcraft_raster::Rgba8::from_fn(8, 6, |x, y| [(x * 30) as u8, (y * 40) as u8, 90, 255]);
+        let result = |display| RenderResult {
+            request_id: 1,
+            source_key: None,
+            photo: PhotoId(1),
+            level: lightcraft_engine::SourceLevel::Preview,
+            key: 1,
+            rendered: Ok(lightcraft_engine::pipeline::Rendered { image: image.clone(), histogram: Histogram::of_srgb8(&image), deep: None }),
+            gpu_fallback: None,
+            loaded: None,
+            quick: None,
+            display,
+            vectorscope: None,
+        };
+        let srgb = scope_of_srgb(&result(None)).expect("an sRGB render is measured");
+        assert_eq!(srgb.total, 48);
+        assert_eq!(*srgb, lightcraft_raster::Vectorscope::of_srgb8(&image, VECTORSCOPE_SAMPLES));
+        assert!(scope_of_srgb(&result(Some(7))).is_none(), "display device values are not read as sRGB");
+        let failed = RenderResult { rendered: Err("no".into()), ..result(None) };
+        assert!(scope_of_srgb(&failed).is_none());
+    }
+
+    /// Given a finished render, the worker hands back its texture pixels with it (the UI thread no
+    /// longer converts a 10 MP window on every slider step); a failed render has none
     #[test]
     fn the_worker_converts_the_texture_pixels() {
         let image = lightcraft_raster::Rgba8::from_fn(5, 3, |x, y| [(x * 40) as u8, (y * 80) as u8, 7, 255]);
@@ -1978,11 +2031,16 @@ mod color_image_tests {
             loaded: None,
             quick: None,
             display: None,
+            vectorscope: None,
         };
         let histogram = Histogram::of_srgb8(&image);
-        let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
+        let ok = Renderer::run_for(
+            Slot::Thumb(PhotoId(1)),
+            || result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })),
+            &None,
+        );
         assert_eq!(ok.color.map(|c| c.pixels.clone()), Some(color_image(&image).pixels));
-        let failed = Renderer::run_for(|| result(Err("unreadable".into())), &None);
+        let failed = Renderer::run_for(Slot::Thumb(PhotoId(1)), || result(Err("unreadable".into())), &None);
         assert!(failed.color.is_none());
     }
 

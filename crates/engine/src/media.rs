@@ -821,6 +821,10 @@ pub struct RenderResult {
     /// The display profile (id) the image is encoded for; `None`: sRGB (see
     /// [`crate::display::present`]).
     pub display: Option<u64>,
+    /// A view render for a display profile: its colours on the chroma plane, measured on the sRGB
+    /// version (the image itself holds the display's device values). `None` for an sRGB image,
+    /// whose vectorscope is read off the image itself.
+    pub vectorscope: Option<Arc<lightcraft_raster::Vectorscope>>,
 }
 
 impl RenderJob {
@@ -936,6 +940,7 @@ impl RenderJob {
             loaded: None,
             quick: None,
             display: None,
+            vectorscope: None,
         }
     }
 
@@ -979,6 +984,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                vectorscope: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -999,6 +1005,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                vectorscope: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
@@ -1021,10 +1028,12 @@ impl RenderJob {
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
+                let mut vectorscope = None;
                 let display = match (&self.display, self.request.display) {
                     (Some(d), Some(_)) => {
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
-                        let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
+                        let (s, h, v) = crate::display::finish_render(&mut rendered.image, d, keep);
+                        vectorscope = v;
                         // (an HDR edit's HDR histogram stays)
                         if let Some(h) = h.filter(|_| rendered.histogram.hdr.is_none()) {
                             rendered.histogram = h;
@@ -1063,6 +1072,7 @@ impl RenderJob {
                     loaded: (!was_loaded).then_some(source),
                     quick: None,
                     display,
+                    vectorscope,
                 }
             }
             Err(e) => self.failed(e),
@@ -1168,9 +1178,11 @@ impl QuickJob {
             loaded: None,
             quick: None,
             display: None,
+            vectorscope: None,
         })
     }
 
+    /// The stand-in's image, from the first source that has one (inside [`Self::run`]'s guard).
     fn run_unguarded(self) -> RenderResult {
         let (photo, key) = (self.photo, self.key);
         let request_id = self.request_id;
@@ -1185,6 +1197,7 @@ impl QuickJob {
             loaded: None,
             quick,
             display: None,
+            vectorscope: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);

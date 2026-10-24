@@ -10,7 +10,7 @@
 pub use lightcraft_codecs::display::DisplayKind;
 use lightcraft_codecs::display::{DisplayProfile, MAX_PROFILE_BYTES};
 use lightcraft_pipeline::DisplaySpace;
-use lightcraft_raster::{Histogram, Rgba8};
+use lightcraft_raster::{Histogram, Rgba8, Vectorscope};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -89,27 +89,30 @@ pub fn present(r: &mut RenderResult, display: &Display) {
 }
 
 /// A render into `display`'s primaries (sRGB curve) → in place, the display's device values; and
-/// its sRGB histogram, plus (`full_srgb`: for the cached view preview) its whole sRGB version.
-/// The histogram samples the same pixels [`Histogram::of_srgb8`] would, so only those are
-/// converted when the sRGB image itself isn't needed (slider drags).
-pub(crate) fn finish_render(image: &mut Rgba8, display: &Display, full_srgb: bool) -> (Option<Rgba8>, Option<Histogram>) {
+/// its sRGB histogram and vectorscope, plus (`full_srgb`: for the cached view preview) its whole
+/// sRGB version. The histogram and vectorscope read the same pixels [`Histogram::of_srgb8`] would,
+/// so only those are converted when the sRGB image itself isn't needed (slider drags).
+pub(crate) fn finish_render(image: &mut Rgba8, display: &Display, full_srgb: bool) -> (Option<Rgba8>, Option<Histogram>, Option<Arc<Vectorscope>>) {
     let warn = |e: String| log::warn!("display profile: {e}");
-    let (srgb, histogram) = if full_srgb {
+    let scope = |s: &Rgba8| Arc::new(Vectorscope::of_srgb8(s, VECTORSCOPE_SAMPLES));
+    let (srgb, histogram, vectorscope) = if full_srgb {
         let srgb = display.profile.to_srgb(image).map_err(warn).ok();
         let h = srgb.as_ref().map(Histogram::of_srgb8);
-        (srgb, h)
+        let v = srgb.as_ref().map(scope);
+        (srgb, h, v)
     } else {
-        let sample = histogram_sample(image);
-        (None, display.profile.to_srgb(&sample).map_err(warn).ok().map(|s| Histogram::of_srgb8(&s)))
+        let sample = display.profile.to_srgb(&histogram_sample(image)).map_err(warn).ok();
+        (None, sample.as_ref().map(Histogram::of_srgb8), sample.as_ref().map(scope))
     };
     if let Err(e) = display.profile.correct(image) {
         warn(e);
     }
-    (srgb, histogram)
+    (srgb, histogram, vectorscope)
 }
 
-/// The pixels [`Histogram::of_srgb8`] reads (at most ~1 MP, a regular grid), as an image of
-/// their own (which it then reads whole).
+/// Pixels a vectorscope reads at most (evenly spread): plenty for its 128-cell grid.
+pub const VECTORSCOPE_SAMPLES: usize = 250_000;
+
 fn histogram_sample(img: &Rgba8) -> Rgba8 {
     let step = ((img.len() as f64 / 1_000_000.0).sqrt().ceil() as usize).max(1);
     if step == 1 {
@@ -144,8 +147,12 @@ mod tests {
         for (w, h) in [(40, 30), (1500, 1100), (2561, 1709)] {
             let img = picture(w, h);
             let (mut a, mut b) = (img.clone(), img.clone());
-            let (srgb, full) = finish_render(&mut a, &d, true);
-            let (none, sampled) = finish_render(&mut b, &d, false);
+            let (srgb, full, full_scope) = finish_render(&mut a, &d, true);
+            let (none, sampled, sampled_scope) = finish_render(&mut b, &d, false);
+            assert!(
+                full_scope.is_some_and(|v| v.total > 0) && sampled_scope.is_some_and(|v| v.total > 0),
+                "both carry a vectorscope of the sRGB pixels"
+            );
             assert!(srgb.is_some() && none.is_none());
             assert_eq!(full.unwrap(), sampled.unwrap(), "{w}x{h}");
             assert_eq!(a, b);

@@ -116,6 +116,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
     ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "View"),
+    ("view.vectorscope", "Vectorscope", None, "View"),
     ("view.maskOverlay", "Show Mask Overlay", Some("O"), "View"),
     // Ctrl+Shift+O / Cmd+Shift+O: every mask's region at once, not just the selected one
     ("view.maskOverlayAll", "Show All Mask Overlays", Some("Cmd+Shift+O"), "View"),
@@ -1043,6 +1044,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.histogram" => {
             app.ui.histogram = !app.ui.histogram;
             Ok(Value::Null)
+        }
+        "view.vectorscope" => {
+            app.ui.vectorscope = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.vectorscope);
+            Ok(json!({"vectorscope": app.ui.vectorscope}))
         }
         "view.maskOverlay" => {
             app.ui.mask_overlay = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_overlay);

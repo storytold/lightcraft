@@ -487,6 +487,7 @@ pub struct BwMix {
 }
 
 impl BwMix {
+    /// The eight band values, red to magenta (`MIXER_BANDS` order).
     pub fn bands(&self) -> [f64; 8] {
         [self.red, self.orange, self.yellow, self.green, self.aqua, self.blue, self.purple, self.magenta]
     }
@@ -503,6 +504,17 @@ pub struct Wheel {
     pub lum: f64,
 }
 
+impl Wheel {
+    /// No hue push and no luminance shift (the hue alone does nothing at zero saturation).
+    pub fn is_neutral(&self) -> bool {
+        self.sat == 0.0 && self.lum == 0.0
+    }
+    /// Exactly the default (hue included): not written to settings files.
+    pub fn is_default(&self) -> bool {
+        *self == Wheel::default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorGrading {
@@ -514,9 +526,24 @@ pub struct ColorGrading {
     pub blending: f64,
     /// −100..100.
     pub balance: f64,
+    /// Primary wheels, as in video grading (DaVinci Resolve's Lift / Gamma / Gain / Offset):
+    /// applied per channel on display-encoded values after the 3-way wheels. Lift moves the
+    /// blacks (white stays), Gain scales towards white (black stays), Gamma bends the midtones
+    /// (both ends stay) and Offset shifts everything. Hue + saturation push a colour; luminance
+    /// is the master amount. Not written while neutral, so other settings keep their JSON and
+    /// hash (every cached preview stays valid).
+    #[serde(skip_serializing_if = "Wheel::is_default")]
+    pub lift: Wheel,
+    #[serde(skip_serializing_if = "Wheel::is_default")]
+    pub gamma: Wheel,
+    #[serde(skip_serializing_if = "Wheel::is_default")]
+    pub gain: Wheel,
+    #[serde(skip_serializing_if = "Wheel::is_default")]
+    pub offset: Wheel,
 }
 
 impl Default for ColorGrading {
+    /// Neutral wheels, Blending 50, Balance 0.
     fn default() -> Self {
         Self {
             shadows: Wheel::default(),
@@ -525,13 +552,26 @@ impl Default for ColorGrading {
             global: Wheel::default(),
             blending: 50.0,
             balance: 0.0,
+            lift: Wheel::default(),
+            gamma: Wheel::default(),
+            gain: Wheel::default(),
+            offset: Wheel::default(),
         }
     }
 }
 
 impl ColorGrading {
+    /// Nothing graded: the 3-way wheels and the primary wheels are all neutral.
     pub fn is_neutral(&self) -> bool {
-        [self.shadows, self.midtones, self.highlights, self.global].iter().all(|w| w.sat == 0.0 && w.lum == 0.0)
+        self.three_way_neutral() && self.primaries_neutral()
+    }
+    /// The shadows / midtones / highlights / global wheels do nothing.
+    pub fn three_way_neutral(&self) -> bool {
+        [self.shadows, self.midtones, self.highlights, self.global].iter().all(Wheel::is_neutral)
+    }
+    /// The Lift / Gamma / Gain / Offset wheels do nothing.
+    pub fn primaries_neutral(&self) -> bool {
+        [self.lift, self.gamma, self.gain, self.offset].iter().all(Wheel::is_neutral)
     }
 }
 

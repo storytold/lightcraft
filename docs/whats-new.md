@@ -1,5 +1,18 @@
 # What's new in LightCraft
 
+## 2026-10-24
+
+### Lift, Gamma, Gain and Offset wheels
+- **Color Grading** has a new tab with four wheels, as in video grading: **Lift** tints and brightens the shadows
+  (white stays), **Gamma** the midtones (black and white stay), **Gain** the highlights (black stays) and **Offset**
+  everything. Drag a wheel's dot towards a colour; the slider under the wheels brightens or darkens.
+  See [Grade colour with Lift, Gamma, Gain and Offset](user/guides/grade-with-lift-gamma-gain.md).
+
+### Vectorscope
+- **View** > **Vectorscope** shows the photo's colours on a round chart under the histogram: the direction is the
+  hue, the distance from the centre the saturation, with boxes for red, yellow, green, cyan, blue and magenta and a
+  line where skin tones fall. See [Read the vectorscope](user/guides/read-the-vectorscope.md).
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts

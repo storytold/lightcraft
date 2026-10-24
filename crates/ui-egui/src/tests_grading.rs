@@ -375,3 +375,56 @@ fn wheel_rim_is_fully_saturated_and_the_centre_neutral() {
     let (hi, lo) = (p.r().max(p.g()).max(p.b()), p.r().min(p.g()).min(p.b()));
     assert!(hi - lo <= 40 && lo >= 100, "centre is not a neutral grey: {p:?}");
 }
+
+/// The Lift / Gamma / Gain / Offset tab shows its four wheels and sliders, and a drag sets one wheel in one undo step.
+#[test]
+fn the_primaries_tab_shows_lift_gamma_gain_offset_and_a_drag_sets_a_wheel() {
+    let mut h = demo();
+    assert!(widget(&h, "icon:grading-primaries").is_some());
+    click(&mut h, "icon:grading-primaries");
+    assert_eq!(h.app.ui.grading_mode, "primaries");
+    for k in ["lift", "gamma", "gain", "offset"] {
+        assert!(widget(&h, &format!("wheel:{k}")).is_some(), "wheel {k}");
+        assert!(h.app.widgets.iter().any(|(w, _)| w.contains(&format!("grading.{k}.lum"))), "master slider {k}");
+    }
+    assert!(widget(&h, "wheel:shadows").is_none(), "the 3-way wheels are on their own tab");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.contains("grading.blending")), "Blending belongs to the 3-way wheels");
+    // drag the Gain wheel's puck from the centre towards orange (up and to the right)
+    let w = widget(&h, "wheel:gain").unwrap().width();
+    let undo = h.app.session.undo.len();
+    let r = h.request("ui.dragWidget", json!({"id": "wheel:gain", "fx": 0.5, "fy": 0.5, "dx": w * 0.3, "dy": -w * 0.2, "steps": 8}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let g = h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().develop.grading;
+    assert!(g.gain.sat > 20.0 && (20.0..60.0).contains(&g.gain.hue), "gain {:?}", g.gain);
+    assert!(g.lift.is_neutral() && g.gamma.is_neutral() && g.offset.is_neutral());
+    assert_eq!(h.app.session.undo.len() - undo, 1, "one undo step per drag");
+    // primary wheels have no eye: hiding is for the 3-way wheels
+    let r = h.request("ui.hoverWidget", json!({"id": "wheel:gain"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(widget(&h, "wheelEye:gain").is_none());
+}
+
+/// View ▸ Vectorscope shows the loupe's scope under the histogram and hides it again.
+#[test]
+fn view_vectorscope_shows_the_loupes_colours_under_the_histogram() {
+    let mut h = demo();
+    assert!(!h.app.ui.vectorscope && widget(&h, "vectorscope").is_none(), "off by default");
+    let r = h.request("engine.execute", json!({"command": "view.vectorscope"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.vectorscope);
+    let scope_rect = widget(&h, "vectorscope").expect("the panel");
+    let hist = widget(&h, "histogram").expect("the histogram stays");
+    assert!(scope_rect.top() >= hist.bottom() - 1.0, "under the histogram");
+    let scope = h.app.renderer.textures.get(&crate::render::Slot::Main).and_then(|t| t.vectorscope.clone()).expect("the loupe render brings one");
+    assert!(scope.total > 1000, "{}", scope.total);
+    // and View ▸ Vectorscope again hides it
+    let r = h.request("engine.execute", json!({"command": "view.vectorscope", "params": {"show": false}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(widget(&h, "vectorscope").is_none());
+}

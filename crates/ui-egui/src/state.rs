@@ -746,6 +746,8 @@ pub struct UiState {
     pub single_panel: bool,
     pub show_clipping: bool,
     pub histogram: bool,
+    /// The Vectorscope panel under the histogram (View ▸ Vectorscope).
+    pub vectorscope: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
     pub proof: lightcraft_engine::pipeline::Proof,
@@ -1357,6 +1359,7 @@ impl SyncCounts {
 }
 
 impl Default for UiState {
+    /// The UI as a new install starts it.
     fn default() -> Self {
         UiState {
             window: None,
@@ -1385,6 +1388,7 @@ impl Default for UiState {
             single_panel: false,
             show_clipping: false,
             histogram: true,
+            vectorscope: false,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
             proof_profile: None,

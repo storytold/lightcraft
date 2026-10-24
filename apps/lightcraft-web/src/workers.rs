@@ -282,6 +282,7 @@ impl Workers {
         w
     }
 
+    /// A worker failed: report its job as a failed render and free the worker.
     fn on_error(&self, i: usize, e: JsValue) {
         let msg = get(&e, "message").as_string().unwrap_or_else(|| format!("{e:?}"));
         log::error!("render worker {i} failed: {msg}");
@@ -301,6 +302,7 @@ impl Workers {
                     loaded: None,
                     quick: None,
                     display: None,
+                    vectorscope: None,
                 };
                 g.done.push((b.slot, r, 0.0));
             }
@@ -308,6 +310,7 @@ impl Workers {
         g.ctx.request_repaint();
     }
 
+    /// A worker answered: turn its message into a render result and free the worker.
     fn on_message(&self, i: usize, data: JsValue) {
         let mut g = self.0.borrow_mut();
         let g = &mut *g;
@@ -392,6 +395,7 @@ impl Workers {
                 loaded: None,
                 quick: None,
                 display: None,
+                vectorscope: None,
             },
             ms,
         ));
@@ -423,6 +427,7 @@ impl Workers {
 }
 
 impl RenderOffload for Workers {
+    /// Hand `job` to a free worker; give it back when every worker is busy.
     fn try_start(&mut self, slot: Slot, job: RenderJob) -> Option<RenderJob> {
         let mut g = self.0.borrow_mut();
         let g = &mut *g;
@@ -446,6 +451,7 @@ impl RenderOffload for Workers {
                 loaded: None,
                 quick: None,
                 display: None,
+                vectorscope: None,
             };
             g.done.push((slot, r, 0.0));
             return None;

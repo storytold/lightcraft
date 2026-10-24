@@ -92,6 +92,7 @@ fn frames() -> usize {
     std::env::var("FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(300).max(1)
 }
 
+/// Time the thumbnail requests of a grid of `points` (with requests still `pending` or not).
 fn micro(points: usize, pending: bool) {
     let frames = frames();
     let n = 200;
@@ -113,7 +114,7 @@ fn micro(points: usize, pending: bool) {
             let key = app.session.thumb_job(id, 384).unwrap().key;
             app.renderer.textures.insert(
                 Slot::Thumb(id),
-                Tex { key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+                Tex { key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, vectorscope: None, ms: 0.0, quick: None, pixels: None },
             );
         }
         request_thumb(&mut app, id, 384, 10);

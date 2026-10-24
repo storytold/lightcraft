@@ -74,6 +74,7 @@ fn rel_to_k(r: f64) -> f64 {
     1e6 / (1e6 / 6500.0 - r * 0.8)
 }
 
+/// The Edit panel for photo `id`: histogram, vectorscope, header and the develop sections.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
@@ -98,6 +99,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
     if app.ui.histogram {
         histogram(app, ui, id);
+    }
+    if app.ui.vectorscope {
+        vectorscope(app, ui, id);
     }
     if app.ui.soft_proof {
         soft_proofing(app, ui, id);
@@ -542,6 +546,7 @@ pub fn sub_title(ui: &mut egui::Ui, title: &str) {
     ui.painter().text(pos2(r.left() + 24.0, r.center().y + 4.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.0), t.text_label);
 }
 
+/// A foldable Edit section: its header row (title, eye, reset) and, when open, `body`.
 fn section(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
@@ -576,6 +581,103 @@ fn section(
         body(app, ui, d);
     }
     divider(ui);
+}
+
+// ------------------------------------------------------------------------------ vectorscope
+
+/// BT.709 R'G'B' (0..1, clamped) of luma `y` and chroma `(cb, cr)`: the inverse of
+/// [`lightcraft_raster::Vectorscope::cbcr`].
+fn ycbcr_rgb(y: f32, cb: f32, cr: f32) -> [f32; 3] {
+    [y + 1.5748 * cr, y - 0.187_324 * cb - 0.468_124 * cr, y + 1.8556 * cb].map(|v| v.clamp(0.0, 1.0))
+}
+
+/// The scope's picture: each cell lit by how many pixels fall in it (square root, so faint
+/// colours still show), in the colour it stands for.
+fn vectorscope_image(s: &lightcraft_raster::Vectorscope) -> egui::ColorImage {
+    let n = s.n.max(1);
+    let peak = s.peak().max(1) as f32;
+    let n1 = n.saturating_sub(1).max(1) as f32;
+    let pixels = (0..n * n)
+        .map(|i| {
+            let count = s.bins.get(i).copied().unwrap_or(0);
+            if count == 0 {
+                return Color32::TRANSPARENT;
+            }
+            let (cx, cy) = ((i % n) as f32, (i / n) as f32);
+            let (cb, cr) = (cx / n1 - 0.5, 0.5 - cy / n1);
+            let k = (count as f32 / peak).sqrt().clamp(0.15, 1.0);
+            let [r, g, b] = ycbcr_rgb(0.65, cb, cr).map(|v| (v * 255.0) as u8);
+            Color32::from_rgba_unmultiplied(r, g, b, (k * 255.0) as u8)
+        })
+        .collect();
+    egui::ColorImage { size: [n, n], pixels, source_size: vec2(n as f32, n as f32) }
+}
+
+/// The Vectorscope panel: the loupe's colours on the chroma plane, with the 75 % colour targets
+/// (R, Yl, G, Cy, B, Mg) and the skin tone line. Hue is the angle, saturation the distance from
+/// the centre.
+fn vectorscope(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let side = (w - 40.0).clamp(80.0, 220.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(w, side + 24.0), Sense::hover());
+    crate::widgets::announce(&resp, crate::i18n::tr("Vectorscope"));
+    register(ui.ctx(), "vectorscope", r);
+    let p = ui.painter();
+    p.rect_filled(r, 0.0, t.button);
+    let c = pos2(r.center().x, r.top() + 12.0 + side / 2.0);
+    let rad = side / 2.0;
+    // graticule: the edge of the chroma plane, faint rings at 25 / 50 / 75 %, the axes
+    let grid = Color32::from_white_alpha(28);
+    p.circle_filled(c, rad, Color32::from_black_alpha(90));
+    for f in [0.25, 0.5, 0.75, 1.0] {
+        p.circle_stroke(c, rad * f, Stroke::new(1.0, grid));
+    }
+    p.line_segment([c - vec2(rad, 0.0), c + vec2(rad, 0.0)], Stroke::new(1.0, grid));
+    p.line_segment([c - vec2(0.0, rad), c + vec2(0.0, rad)], Stroke::new(1.0, grid));
+    // the skin tone line
+    let a = lightcraft_raster::scope::SKIN_TONE_DEGREES.to_radians();
+    p.line_segment([c, c + vec2(a.cos(), -a.sin()) * rad], Stroke::new(1.0, Color32::from_rgba_unmultiplied(230, 180, 140, 140)));
+    // the picture
+    let scope = app.renderer.textures.get(&Slot::Main).filter(|tx| tx.photo == id).and_then(|tx| tx.vectorscope.clone());
+    if let Some(s) = &scope {
+        // one texture, rebuilt when a new render brings a new scope: the scope it was made from is
+        // kept with it and compared by identity (an address alone could be reused once freed)
+        let key = egui::Id::new("vectorscopeTex");
+        type Held = (std::sync::Arc<lightcraft_raster::Vectorscope>, egui::TextureHandle);
+        let held = ui.ctx().data(|d| d.get_temp::<Held>(key));
+        let tex = match held {
+            Some((at, tex)) if std::sync::Arc::ptr_eq(&at, s) => tex,
+            _ => {
+                let tex = ui.ctx().load_texture("vectorscope", vectorscope_image(s), egui::TextureOptions::LINEAR);
+                ui.ctx().data_mut(|d| d.insert_temp::<Held>(key, (s.clone(), tex.clone())));
+                tex
+            }
+        };
+        let img = Rect::from_center_size(c, vec2(side, side));
+        p.image(tex.id(), img, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
+    // the 75 % colour targets
+    for (rgb, label) in [
+        ([0.75, 0.0, 0.0], "R"),
+        ([0.75, 0.75, 0.0], "Yl"),
+        ([0.0, 0.75, 0.0], "G"),
+        ([0.0, 0.75, 0.75], "Cy"),
+        ([0.0, 0.0, 0.75], "B"),
+        ([0.75, 0.0, 0.75], "Mg"),
+    ] {
+        let (cb, cr) = lightcraft_raster::Vectorscope::cbcr(rgb);
+        let at = c + vec2(cb, -cr) * (side / 1.0);
+        p.rect_stroke(Rect::from_center_size(at, vec2(8.0, 8.0)), 0.0, Stroke::new(1.0, Color32::from_white_alpha(110)), egui::StrokeKind::Middle);
+        let out = (at - c).normalized() * 11.0;
+        p.text(at + out, Align2::CENTER_CENTER, label, t.font(9.5), t.text_label);
+    }
+    if scope.is_none() {
+        p.text(c, Align2::CENTER_CENTER, crate::i18n::tr("No preview yet"), t.font(11.0), t.text_label);
+    }
+    ui.interact(r, egui::Id::new("vectorscopeHelp"), Sense::hover()).on_hover_text(crate::i18n::tr(
+        "Where the photo's colours sit: the angle is the hue, the distance from the centre the saturation. Boxes mark 75 % red, yellow, green, cyan, blue and magenta; the line marks skin tones.",
+    ));
 }
 
 // ------------------------------------------------------------------------------ histogram
@@ -1454,8 +1556,9 @@ fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
 // ------------------------------------------------------------------------------ colour grading
 
 /// The colour grading tabs: key, tooltip, icon.
-const GRADING_TABS: [(&str, &str, Icon); 4] = [
+const GRADING_TABS: [(&str, &str, Icon); 5] = [
     ("3way", "3-Way", Icon::GradeAll),
+    ("primaries", "Lift / Gamma / Gain / Offset", Icon::GradePrimaries),
     ("shadows", "Shadows", Icon::GradeShadows),
     ("midtones", "Midtones", Icon::GradeMidtones),
     ("highlights", "Highlights", Icon::GradeHighlights),
@@ -1464,6 +1567,10 @@ const GRADING_TABS: [(&str, &str, Icon); 4] = [
 /// The wheels, in the order of `UiState::grading_hidden`.
 const GRADING_WHEELS: [(&str, &str); 3] = [("shadows", "Shadows"), ("midtones", "Midtones"), ("highlights", "Highlights")];
 
+/// The primary wheels (video grading), in panel order: key and label.
+const PRIMARY_WHEELS: [(&str, &str); 4] = [("lift", "Lift"), ("gamma", "Gamma"), ("gain", "Gain"), ("offset", "Offset")];
+
+/// The Color Grading flyout: its tabs, then the 3-way wheels, one range wheel, or the Lift / Gamma / Gain / Offset wheels.
 fn grading(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, photo: PhotoId) {
     let mode = GRADING_TABS.iter().find(|(k, ..)| *k == app.ui.grading_mode).map_or("3way", |(k, ..)| *k);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
@@ -1479,6 +1586,33 @@ fn grading(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, phot
         });
     });
     let w = ui.available_width();
+    if mode == "primaries" {
+        // Lift / Gamma / Gain on top as in a grading panel, Offset below; each wheel's
+        // luminance is its master slider underneath
+        let rad = 34.0;
+        // room for each wheel's hover readout above it and its label below: Offset's readout
+        // clears the row's labels and its own label stays inside the area
+        let (area, _) = ui.allocate_exact_size(vec2(w, 224.0), Sense::hover());
+        let at = [
+            pos2(area.left() + w * 0.2, area.top() + 56.0),
+            pos2(area.center().x, area.top() + 56.0),
+            pos2(area.left() + w * 0.8, area.top() + 56.0),
+            pos2(area.center().x, area.top() + 168.0),
+        ];
+        for ((key, label), c) in PRIMARY_WHEELS.into_iter().zip(at) {
+            let wh = match key {
+                "lift" => d.grading.lift,
+                "gamma" => d.grading.gamma,
+                "gain" => d.grading.gain,
+                _ => d.grading.offset,
+            };
+            wheel_control(app, ui, key, label, wh, None, c, rad, true);
+        }
+        for (key, _) in PRIMARY_WHEELS {
+            control(app, ui, d, &format!("grading.{key}.lum"), true);
+        }
+        return;
+    }
     if mode == "3way" {
         // three wheels of one size: midtones on top, shadows and highlights below
         let rad = 40.0;
@@ -1514,14 +1648,32 @@ fn grading(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, phot
 /// hovered (3-Way); otherwise the wheel is the large one and gets saturation guide rings.
 #[allow(clippy::too_many_arguments)]
 fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, photo: PhotoId, i: usize, c: Pos2, rad: f32, readout: bool) {
-    let t = Tokens::get(ui.ctx());
     let Some(&(key, label)) = GRADING_WHEELS.get(i) else { return };
     let wh = match key {
         "shadows" => d.grading.shadows,
         "midtones" => d.grading.midtones,
         _ => d.grading.highlights,
     };
-    let hidden = app.ui.grading_hidden_for(photo).get(i).copied().unwrap_or(false);
+    wheel_control(app, ui, key, label, wh, Some((photo, i)), c, rad, readout);
+}
+
+/// A grading wheel for the `grading.{key}.hue` / `.sat` controls showing `wh`, centred on `c`.
+/// `eye`: the photo and index into `UiState::grading_hidden` for the show / hide eye (3-way
+/// wheels); `None` draws no eye.
+#[allow(clippy::too_many_arguments)]
+fn wheel_control(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    key: &str,
+    label: &str,
+    wh: lightcraft_develop::Wheel,
+    eye: Option<(PhotoId, usize)>,
+    c: Pos2,
+    rad: f32,
+    readout: bool,
+) {
+    let t = Tokens::get(ui.ctx());
+    let hidden = eye.is_some_and(|(photo, i)| app.ui.grading_hidden_for(photo).get(i).copied().unwrap_or(false));
     let r = Rect::from_center_size(c, vec2(rad * 2.0, rad * 2.0));
     // the corners (eye, readout) count as the wheel for hovering
     let zone = r.expand(10.0);
@@ -1614,7 +1766,9 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
         );
     }
     // the eye: on top of the wheel, shown while hovering or while the wheel is hidden
-    if hovering || hidden {
+    if let Some((photo, i)) = eye
+        && (hovering || hidden)
+    {
         let eye = Rect::from_center_size(r.left_bottom() + vec2(2.0, -2.0), vec2(16.0, 16.0));
         let er = ui.interact(eye, egui::Id::new(("wheelEye", key)), Sense::click());
         crate::widgets::announce(&er, crate::i18n::tr("Show / hide"));

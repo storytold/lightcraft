@@ -914,10 +914,26 @@ mod tests {
         println!("CHILD: survived");
     }
 
+    /// Workgroup counts stay under the 65535-per-axis limit for very large images.
     #[test]
     fn dispatches_stay_within_the_workgroup_limit() {
         // 1-D kernels over a 100 MP image and 2-D ones over 16k × 16k stay under 65535 per axis
         assert!(super::groups1(100_000_000 * 3).iter().all(|g| *g <= 65535));
         assert!(super::groups2(16384, 16384, [16, 16]).iter().all(|g| *g <= 65535));
+    }
+
+    /// Every compute module parses and validates as WGSL on any machine, GPU or not (naga, the
+    /// compiler wgpu runs): a shader typo fails here instead of only where a GPU is.
+    #[test]
+    fn every_shader_module_validates_without_a_gpu() {
+        use wgpu::naga;
+        let consts = super::constants();
+        for m in super::MODULES {
+            let src = super::module_source(m, &consts);
+            let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        }
     }
 }

@@ -15,8 +15,10 @@ pub mod histogram;
 pub mod morph;
 pub mod resample;
 pub mod sample;
+pub mod scope;
 
 pub use histogram::{HdrBins, Histogram};
+pub use scope::Vectorscope;
 
 /// Run `f` over row chunks, in parallel when the `parallel` feature is on.
 pub fn par_rows<T: Send>(data: &mut [T], row_len: usize, f: impl Fn(usize, &mut [T]) + Sync + Send) {

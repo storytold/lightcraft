@@ -167,7 +167,25 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
             lab.x += pf(F_WHEELS + 3u * k + 2u) * wt;
         }
     }
-    return oklab_inv(lab);
+    return primaries(oklab_inv(lab));
+}
+
+// `colorops::Primaries::apply`: lift, gain, offset, then gamma, per channel on values encoded
+// with a power of 1/2.4 (`colorops::PRIMARY_GAMMA`).
+fn primaries(rgb: vec3<f32>) -> vec3<f32> {
+    if (pu(F_PRIM) == 0u) {
+        return rgb;
+    }
+    let lift = vec3<f32>(pf(F_PRIM_K), pf(F_PRIM_K + 1u), pf(F_PRIM_K + 2u));
+    let gain = vec3<f32>(pf(F_PRIM_K + 3u), pf(F_PRIM_K + 4u), pf(F_PRIM_K + 5u));
+    let offset = vec3<f32>(pf(F_PRIM_K + 6u), pf(F_PRIM_K + 7u), pf(F_PRIM_K + 8u));
+    let gamma = vec3<f32>(pf(F_PRIM_K + 9u), pf(F_PRIM_K + 10u), pf(F_PRIM_K + 11u));
+    var e = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4));
+    e = e + lift * max(vec3<f32>(1.0) - e, vec3<f32>(0.0));
+    e = e * max(vec3<f32>(1.0) + gain, vec3<f32>(0.0));
+    e = e + offset;
+    e = pow(max(e, vec3<f32>(0.0)), exp2(-gamma));
+    return pow(e, vec3<f32>(2.4));
 }
 
 // `colorops::calibrate`: primaries matrix, then the shadows tint (luminance kept).

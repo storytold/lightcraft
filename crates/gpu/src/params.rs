@@ -47,6 +47,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("WHEELS", 12),
     ("BLENDING", 1),
     ("BALANCE", 1),
+    ("PRIM", 1),
+    ("PRIM_K", 12),
     ("SKIN", 1),
     ("BANDH", 8),
     ("VIG", 1),
@@ -201,6 +203,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("WHEELS", &w);
         p.f("BLENDING", *blending);
         p.f("BALANCE", *balance);
+    }
+    if let Some(prim) = &ops.primaries {
+        p.b("PRIM", true);
+        p.fs("PRIM_K", &prim.words());
     }
     p.f("SKIN", ops.skin);
     p.fs("BANDH", lightcraft_pipeline::colorops::band_hues());
