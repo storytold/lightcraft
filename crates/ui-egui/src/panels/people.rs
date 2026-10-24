@@ -174,7 +174,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     p.rect_filled(pill, 4.0, Color32::from_black_alpha(175));
     p.galley(pill.min + vec2(5.0, 3.0), g, Color32::WHITE);
     if selected {
-        p.rect_stroke(face, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+        super::grid::selection_ring(p, &t, face, lightcraft_engine::SelectionState::Active);
     } else if resp.hovered() {
         p.rect_stroke(face, 3.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
     }
