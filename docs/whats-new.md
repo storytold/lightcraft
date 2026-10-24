@@ -84,6 +84,15 @@
 
 ## 2026-10-22
 
+### Export presets: update, rename and delete in the Export dialog
+- The Export dialog's Preset menu keeps showing the preset you chose, with a * once you change its options. Choosing
+  one of your own presets also puts its name in the Save preset field (issue #2510).
+- A menu beside one of your presets updates it with the current settings, renames it right there (Return renames,
+  Esc leaves it as it was), duplicates it or deletes it (after asking), without retyping its name. The copy gets the
+  preset's saved settings and becomes the preset shown; changes you had made in the dialog stay there, marked with *.
+- Save asks before it replaces a preset of the same name: the button turns into Replace, and a second click
+  replaces it.
+
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
   is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's

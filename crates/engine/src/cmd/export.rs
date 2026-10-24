@@ -101,6 +101,64 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
+/// `export.renamePreset {name, to}`. `name` is looked up among the user's presets only, so one
+/// saved before a built-in of its name existed can be renamed away from it.
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "export.renamePreset";
+    let text = |k: &str| p.get(k).and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+    let name = text("name").ok_or_else(|| bad(ID, "missing `name`"))?;
+    let to = text("to").ok_or_else(|| bad(ID, "missing `to`"))?;
+    let i =
+        s.export_presets.iter().position(|x| x.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(ID, format!("no user export preset `{name}`")))?;
+    if builtin_presets().iter().any(|b| b.name.eq_ignore_ascii_case(to)) {
+        return Err(bad(ID, format!("`{to}` is a built-in preset; choose another name")));
+    }
+    // a change of letter case alone is a rename, not a clash
+    if s.export_presets.iter().enumerate().any(|(j, x)| j != i && x.name.eq_ignore_ascii_case(to)) {
+        return Err(bad(ID, format!("an export preset named `{to}` exists already")));
+    }
+    if let Some(x) = s.export_presets.get_mut(i) {
+        x.name = to.to_string();
+    }
+    s.save_prefs()?;
+    Ok(list(s))
+}
+
+/// A name like `base` that no export preset has, built-ins included: `base`, `base 2`, `base 3`…
+fn free_name(s: &Session, base: &str) -> Option<String> {
+    let all = s.all_export_presets();
+    (1..10_000)
+        .map(|n| if n == 1 { base.to_string() } else { format!("{base} {n}") })
+        .find(|n| !all.iter().any(|(x, _)| x.name.eq_ignore_ascii_case(n)))
+}
+
+/// `export.duplicatePreset {name, to?}`: a new user preset with the saved settings of the user
+/// preset `name`, named `to` or the first free "<name> copy", "<name> copy 2"…
+fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "export.duplicatePreset";
+    let text = |k: &str| p.get(k).and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+    let name = text("name").ok_or_else(|| bad(ID, "missing `name`"))?;
+    let from = s
+        .export_presets
+        .iter()
+        .find(|x| x.name.eq_ignore_ascii_case(name))
+        .cloned()
+        .ok_or_else(|| bad(ID, format!("no user export preset `{name}`")))?;
+    let to = match text("to") {
+        Some(to) if builtin_presets().iter().any(|b| b.name.eq_ignore_ascii_case(to)) => {
+            return Err(bad(ID, format!("`{to}` is a built-in preset; choose another name")));
+        }
+        Some(to) if s.export_presets.iter().any(|x| x.name.eq_ignore_ascii_case(to)) => {
+            return Err(bad(ID, format!("an export preset named `{to}` exists already")));
+        }
+        Some(to) => to.to_string(),
+        None => free_name(s, &format!("{} copy", from.name)).ok_or_else(|| bad(ID, format!("no free name for a copy of `{}`", from.name)))?,
+    };
+    s.export_presets.push(ExportPreset { name: to.clone(), params: from.params });
+    s.save_prefs()?;
+    Ok(json!({"name": to, "presets": list(s)}))
+}
+
 /// `export.addToPhotos`: there is a runner (the desktop app and lightcraft-cli on macOS).
 #[cfg(not(target_arch = "wasm32"))]
 fn photos_enabled(s: &Session) -> std::result::Result<(), String> {
@@ -201,6 +259,24 @@ pub fn specs() -> Vec<CommandSpec> {
             save
         ),
         cmd!("export.deletePreset", "Delete Export Preset", [], None, "{name} — removes a user preset → presets", always, delete),
+        cmd!(
+            "export.renamePreset",
+            "Rename Export Preset",
+            [],
+            None,
+            "{name, to} — renames a user preset, keeping its settings; `to` can't be a built-in's or another preset's name → presets",
+            always,
+            rename
+        ),
+        cmd!(
+            "export.duplicatePreset",
+            "Duplicate Export Preset",
+            [],
+            None,
+            "{name, to?} (default \"<name> copy\") — a new user preset with the saved settings of user preset `name` → {name, presets}",
+            always,
+            duplicate
+        ),
         cmd!(
             query "export.checkTarget",
             "Check Output Path",

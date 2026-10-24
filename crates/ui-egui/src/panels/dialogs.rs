@@ -784,36 +784,149 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(crate::i18n::tr("150 dpi · sRGB · current edits · fit without cropping"));
                     ui.label(crate::i18n::tr("Choose a PDF destination after confirming. Print the PDF from your viewer."));
                 }
-                Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
+                Dialog::Export { opts, full_size, resize, preset_name, preset, limit_kb, dir } => {
                     use lightcraft_engine::export::{ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
+                    use crate::state::ExportPresetPending as Pending;
                     let n = app.session.selection.ids.len().max(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
-                    // Preset: load a built-in or saved set of options into the dialog
+                    // a user preset renamed or deleted elsewhere (MCP, the control channel) while the
+                    // dialog is open is no longer the one loaded: Update would bring it back
+                    if let Some((name, false)) = &preset.loaded
+                        && !app.session.export_presets.iter().any(|p| p.name == *name)
+                    {
+                        preset.loaded = None;
+                        preset.params = serde_json::Value::Null;
+                        if !matches!(preset.pending, Some(Pending::Replace(_))) {
+                            preset.pending = None;
+                        }
+                    }
+                    // Preset: load a built-in or saved set of options into the dialog. The one loaded
+                    // stays named there, with a * once the options differ from it; a user preset has
+                    // a menu beside it to update, rename, duplicate or delete it.
+                    let current = export_dialog_params(opts, *full_size, resize, *limit_kb);
+                    let modified = !preset.params.is_null() && preset.params != current;
                     field(ui, "Preset", |ui| {
+                        // Rename…: the name is edited in place; Return or a click elsewhere renames it,
+                        // Esc leaves it as it was
+                        if let Some((name, false)) = preset.loaded.clone()
+                            && let Some(Pending::Rename(mut text)) = preset.pending.clone()
+                        {
+                            let r = crate::text_field::TextField::singleline("field:exportPresetRename", &mut text).width(220.0).select_on_focus(true).show(ui);
+                            if !r.editing && r.ending.is_none() {
+                                r.response.request_focus();
+                            }
+                            if r.committed() {
+                                preset.pending = None;
+                                let to = text.trim();
+                                if !to.is_empty() && to != name {
+                                    match app.run("export.renamePreset", json!({"name": name, "to": to})) {
+                                        Ok(_) => {
+                                            if preset_name.trim().eq_ignore_ascii_case(&name) {
+                                                *preset_name = to.to_string();
+                                            }
+                                            preset.loaded = Some((to.to_string(), false));
+                                        }
+                                        Err(e) => app.toast(ui.ctx(), e),
+                                    }
+                                }
+                            } else if r.cancelled() {
+                                // the rename's Esc, not also the dialog's
+                                crate::widgets::take_escape(ui.ctx());
+                                preset.pending = None;
+                            } else {
+                                preset.pending = Some(Pending::Rename(text));
+                            }
+                            return;
+                        }
+                        let shown = match preset.loaded.as_ref() {
+                            Some((name, b)) => format!("{}{}", crate::i18n::builtin_label(name, *b), if modified { "*" } else { "" }),
+                            None => crate::i18n::tr("Choose…").to_string(),
+                        };
                         let mut chosen = None;
-                        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
+                        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(shown).show_ui(ui, |ui| {
                             let mut builtin = true;
                             for (p, b) in app.session.all_export_presets() {
                                 if builtin && !b {
                                     ui.separator();
                                 }
                                 builtin = b;
-                                if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
-                                    chosen = Some(p.name);
+                                let on = preset.loaded.as_ref().is_some_and(|(name, pb)| *name == p.name && *pb == b);
+                                let r = ui.selectable_label(on, crate::i18n::builtin_label(&p.name, b));
+                                crate::widgets::register(ui.ctx(), format!("button:exportPreset-{}", p.name), r.rect);
+                                if r.clicked() {
+                                    chosen = Some((p, b));
                                 }
                             }
                         });
                         crate::widgets::register(ui.ctx(), "combo:exportPreset", c.response.rect);
-                        if let Some(name) = chosen
-                            && let Ok(params) = app.session.export_params(&json!({"preset": name}))
-                        {
-                            let o = lightcraft_engine::export::ExportOptions::from_json(&params);
+                        if let Some((p, b)) = chosen {
+                            // the item's own settings, as `app.export {preset}` reads them (by name it
+                            // would find a built-in first, also for an older user preset of its name)
+                            let o = lightcraft_engine::export::ExportOptions::from_json(&lightcraft_engine::export::ExportOptions::known_keys_only(&p.params));
                             *full_size = o.resize.is_none();
                             *resize = o.resize.unwrap_or_default();
                             *limit_kb = o.limit_kb.unwrap_or(0);
                             *opts = o;
+                            // Save writes to a user preset's name; a built-in's is reserved
+                            *preset_name = if b { String::new() } else { p.name.clone() };
+                            preset.loaded = Some((p.name, b));
+                            // taken at the end of this frame, once the options below have settled (a
+                            // format's own bit depth, no Apple Photos where there is none)
+                            preset.params = serde_json::Value::Null;
+                            preset.pending = None;
+                        }
+                        let Some((name, false)) = preset.loaded.clone() else { return };
+                        let more = crate::widgets::icon_button(ui, "exportPresetActions", crate::icons::Icon::More, egui::vec2(24.0, 24.0), false, true, "Preset actions");
+                        let action = egui::Popup::menu(&more).show(|ui| preset_menu(ui, modified)).and_then(|r| r.inner);
+                        if action.is_some() {
+                            preset.pending = None;
+                        }
+                        match action {
+                            Some(PresetAction::Update) => match app.run("export.savePreset", json!({"name": name, "params": current})) {
+                                Ok(_) => {
+                                    app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", name));
+                                    preset.params = serde_json::Value::Null;
+                                }
+                                Err(e) => app.toast(ui.ctx(), e),
+                            },
+                            Some(PresetAction::Rename) => preset.pending = Some(Pending::Rename(name)),
+                            // the copy has the preset's saved settings, not the dialog's changes to them
+                            // (so a * still shows them), and is the one loaded now
+                            Some(PresetAction::Duplicate) => match app.run("export.duplicatePreset", json!({"name": name})) {
+                                Ok(r) => {
+                                    if let Some(copy) = r.get("name").and_then(serde_json::Value::as_str) {
+                                        app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", copy));
+                                        *preset_name = copy.to_string();
+                                        preset.loaded = Some((copy.to_string(), false));
+                                    }
+                                }
+                                Err(e) => app.toast(ui.ctx(), e),
+                            },
+                            Some(PresetAction::Delete) => preset.pending = Some(Pending::Delete(name)),
+                            None => {}
                         }
                     });
+                    if let Some(Pending::Delete(name)) = preset.pending.clone() {
+                        ui.label(egui::RichText::new(crate::i18n::tr_format!("Delete “{name}”?", name = name)).color(t.caution));
+                        ui.horizontal(|ui| {
+                            if crate::widgets::text_button(ui, "exportDeletePresetConfirm", "Delete", false).clicked() {
+                                preset.pending = None;
+                                match app.run("export.deletePreset", json!({"name": name})) {
+                                    Ok(_) => {
+                                        if preset_name.trim().eq_ignore_ascii_case(&name) {
+                                            preset_name.clear();
+                                        }
+                                        preset.loaded = None;
+                                        preset.params = serde_json::Value::Null;
+                                    }
+                                    Err(e) => app.toast(ui.ctx(), e),
+                                }
+                            }
+                            if crate::widgets::text_button(ui, "exportDeletePresetCancel", "Cancel", false).clicked() {
+                                preset.pending = None;
+                            }
+                        });
+                    }
                     ui.add_space(4.0);
                     let before = opts.format;
                     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
@@ -1112,22 +1225,43 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         opts.add_to_photos = false;
                     }
                     ui.add_space(4.0);
+                    // Save onto the name of a user preset asks first: the second click (Replace)
+                    // replaces it, as long as the name typed is still the same
+                    let typed = preset_name.trim().to_string();
+                    let replace = Some(Pending::Replace(typed.clone()));
+                    let armed = preset.pending == replace;
                     field(ui, "Save preset", |ui| {
                         trailing_button_row(ui, |ui| {
-                            let named = !preset_name.trim().is_empty();
-                            if crate::widgets::text_button(ui, "exportSavePreset", crate::i18n::tr("Save"), false).clicked() && named {
-                                let params = export_dialog_params(opts, *full_size, resize, *limit_kb);
-                                match app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params})) {
-                                    Ok(_) => {
-                                        app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", preset_name.trim()));
-                                        preset_name.clear();
+                            let label = if armed { "Replace" } else { "Save" };
+                            if crate::widgets::text_button(ui, "exportSavePreset", crate::i18n::tr(label), false).clicked() && !typed.is_empty() {
+                                if !armed && app.session.export_presets.iter().any(|p| p.name.eq_ignore_ascii_case(&typed)) {
+                                    preset.pending = replace.clone();
+                                } else {
+                                    let params = export_dialog_params(opts, *full_size, resize, *limit_kb);
+                                    match app.run("export.savePreset", json!({"name": typed, "params": params})) {
+                                        Ok(_) => {
+                                            app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", typed));
+                                            preset.loaded = Some((typed.clone(), false));
+                                            preset.params = serde_json::Value::Null;
+                                            preset.pending = None;
+                                        }
+                                        Err(e) => app.toast(ui.ctx(), e),
                                     }
-                                    Err(e) => app.toast(ui.ctx(), e),
                                 }
                             }
-                            crate::widgets::named(ui.add(egui::TextEdit::singleline(preset_name).hint_text(crate::i18n::tr("Preset name")).desired_width(ui.available_width())), crate::i18n::tr("Preset name"));
+                            let r = crate::widgets::named(ui.add(egui::TextEdit::singleline(preset_name).hint_text(crate::i18n::tr("Preset name")).desired_width(ui.available_width())), crate::i18n::tr("Preset name"));
+                            if r.changed() && matches!(preset.pending, Some(Pending::Replace(_))) {
+                                preset.pending = None;
+                            }
                         });
                     });
+                    if preset.pending == replace {
+                        ui.label(egui::RichText::new(crate::i18n::tr("A preset with this name exists. Click Replace to overwrite it.")).color(t.text_dim));
+                    }
+                    // what a preset loaded this frame set, now that every option above has settled
+                    if preset.loaded.is_some() && preset.params.is_null() {
+                        preset.params = export_dialog_params(opts, *full_size, resize, *limit_kb);
+                    }
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
@@ -2130,6 +2264,34 @@ fn export_dialog_params(
         ..opts.clone()
     };
     o.to_json()
+}
+
+/// What the menu of the user preset loaded in the Export dialog was asked to do.
+#[derive(Clone, Copy)]
+enum PresetAction {
+    Update,
+    Rename,
+    Duplicate,
+    Delete,
+}
+
+/// The menu of the user preset loaded in the Export dialog (items `button:export{Update,Rename,
+/// Duplicate,Delete}Preset`).
+fn preset_menu(ui: &mut egui::Ui, modified: bool) -> Option<PresetAction> {
+    let mut chosen = None;
+    let mut item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, action: PresetAction| {
+        let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
+        crate::widgets::register(ui.ctx(), format!("button:{id}"), r.rect);
+        if r.clicked() {
+            chosen = Some(action);
+        }
+    };
+    item(ui, "exportUpdatePreset", "Update with Current Settings", modified, PresetAction::Update);
+    item(ui, "exportRenamePreset", "Rename…", true, PresetAction::Rename);
+    item(ui, "exportDuplicatePreset", "Duplicate", true, PresetAction::Duplicate);
+    ui.separator();
+    item(ui, "exportDeletePreset", "Delete", true, PresetAction::Delete);
+    chosen
 }
 
 // ------------------------------------------------------------------------------------------ dialog widgets

@@ -128,10 +128,18 @@ fn preferences_persist_with_the_library() {
     assert_eq!(r["persistent"], true);
     // export presets are library preferences too
     s.execute("export.savePreset", &json!({"name": "Proof", "params": {"format": "jpeg", "percent": 25}})).unwrap();
+    // …renamed and duplicated ones as well (issue #2510)
+    s.execute("export.savePreset", &json!({"name": "Draft", "params": {"format": "png"}})).unwrap();
+    s.execute("export.renamePreset", &json!({"name": "Draft", "to": "Final"})).unwrap();
+    s.execute("export.duplicatePreset", &json!({"name": "Final"})).unwrap();
     drop(s); // one session per library (issue #99)
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     assert_eq!(s.export_params(&json!({"preset": "Proof"})).unwrap(), json!({"format": "jpeg", "percent": 25}));
+    for name in ["Final", "Final copy"] {
+        assert_eq!(s.export_params(&json!({"preset": name})).unwrap(), json!({"format": "png"}), "{name}");
+    }
+    assert!(s.export_params(&json!({"preset": "Draft"})).is_err(), "renamed, not copied");
     // older prefs.json files (snake_case `last_export`, no import section) still load
     std::fs::write(lib.join("prefs.json"), r#"{"xmp": {"autoWrite": false}, "last_export": {"format": "png"}}"#).unwrap();
     drop(s);

@@ -2364,6 +2364,143 @@ mod tests {
         assert_eq!(opened(&mut h, json!({"format": "tiff", "bitDepth": 32})).bit_depth, Some(32));
     }
 
+    /// Issue #2510: the preset loaded in the Export dialog stays named there, its name in the Save
+    /// field, with a * once the options change (not when they settle as the dialog draws them: a
+    /// PNG preset without a bit depth). Save onto a preset's name asks first, and only for the
+    /// name it asked about; the menu beside a user preset updates it, renames it in place,
+    /// duplicates its saved settings and deletes it, without the name being typed again.
+    #[test]
+    fn export_dialog_manages_a_loaded_preset() {
+        use crate::state::{Dialog, ExportPresetPending as Pending};
+        use lightcraft_engine::export::{ExportFormat, ExportOptions, ExportPreset};
+        let mut h = demo([1200.0, 1100.0]);
+        let t = Duration::from_secs(10);
+        let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
+            let r = h.request(method, params, t);
+            assert_eq!(r["ok"], true, "{method}: {r}");
+            h.step();
+            h.step();
+        };
+        let click = |h: &mut Headless, id: &str| ask(h, "ui.clickWidget", json!({"id": id}));
+        let load = |h: &mut Headless, name: &str| {
+            click(h, "combo:exportPreset");
+            click(h, &format!("button:exportPreset-{name}"));
+        };
+        let menu = |h: &mut Headless, item: &str| {
+            click(h, "icon:exportPresetActions");
+            click(h, &format!("button:{item}"));
+        };
+        let edit = |h: &mut Headless, change: &dyn Fn(&mut ExportOptions, &mut String)| {
+            if let Some(Dialog::Export { opts, preset_name, .. }) = &mut h.app.ui.dialog {
+                change(opts, preset_name);
+            }
+            h.step();
+            h.step();
+        };
+        let state = |h: &Headless| match &h.app.ui.dialog {
+            Some(Dialog::Export { preset_name, preset, .. }) => (preset_name.clone(), preset.loaded.clone(), preset.pending.clone()),
+            _ => panic!("the export dialog is open"),
+        };
+        let opts = |h: &Headless| match &h.app.ui.dialog {
+            Some(Dialog::Export { opts, .. }) => opts.clone(),
+            _ => panic!("the export dialog is open"),
+        };
+        let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
+        let names = |h: &Headless| h.app.session.export_presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let quality =
+            |h: &Headless, name: &str| h.app.session.export_presets.iter().find(|p| p.name == name).and_then(|p| p.params["quality"].as_u64());
+        let shows = |h: &Headless, text: &str| h.painted_text().iter().any(|p| p == text);
+        h.app.session.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "jpeg", "quality": 70}})).unwrap();
+        h.app.session.execute("export.savePreset", &json!({"name": "Small PNG", "params": {"format": "png", "width": 64}})).unwrap();
+        h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+        h.settle(SETTLE);
+
+        load(&mut h, "Small PNG");
+        assert_eq!(state(&h), ("Small PNG".into(), Some(("Small PNG".into(), false)), None));
+        assert!(shows(&h, "Small PNG") && !shows(&h, "Small PNG*"), "{:?}", h.painted_text());
+        // a built-in's name is reserved: nothing to save to, no menu
+        load(&mut h, "JPEG (Small)");
+        assert_eq!(state(&h), (String::new(), Some(("JPEG (Small)".into(), true)), None));
+        assert!(shows(&h, "JPEG (Small)"), "the menu names it: {:?}", h.painted_text());
+        assert!(!has(&h, "icon:exportPresetActions"));
+
+        load(&mut h, "Web");
+        assert_eq!(state(&h), ("Web".into(), Some(("Web".into(), false)), None));
+        assert!(!shows(&h, "Web*"));
+        edit(&mut h, &|o, _| o.quality = 90);
+        assert!(shows(&h, "Web*"), "{:?}", h.painted_text());
+        // Save onto an existing name asks first
+        click(&mut h, "button:exportSavePreset");
+        assert_eq!(quality(&h, "Web"), Some(70), "not replaced yet");
+        assert_eq!(state(&h).2, Some(Pending::Replace("Web".into())));
+        assert!(shows(&h, "Replace"));
+        // …for the name it asked about: another one asks again
+        edit(&mut h, &|_, name| *name = "Small PNG".into());
+        click(&mut h, "button:exportSavePreset");
+        assert_eq!(state(&h).2, Some(Pending::Replace("Small PNG".into())));
+        assert_eq!(h.app.session.export_presets[1].params["format"], "png", "not replaced");
+        edit(&mut h, &|_, name| *name = "Web".into());
+        click(&mut h, "button:exportSavePreset");
+        assert_eq!(quality(&h, "Web"), Some(70));
+        click(&mut h, "button:exportSavePreset");
+        assert_eq!(quality(&h, "Web"), Some(90), "the second click replaces it");
+        assert_eq!(state(&h), ("Web".into(), Some(("Web".into(), false)), None));
+        assert!(!shows(&h, "Web*"));
+
+        edit(&mut h, &|o, _| o.quality = 60);
+        menu(&mut h, "exportUpdatePreset");
+        assert_eq!(quality(&h, "Web"), Some(60));
+        assert!(!shows(&h, "Web*"));
+        // Rename… edits the name where the menu is: Esc leaves it, and the dialog, as they were…
+        menu(&mut h, "exportRenamePreset");
+        assert!(has(&h, "field:exportPresetRename") && !has(&h, "combo:exportPreset"));
+        ask(&mut h, "ui.text", json!({"text": "Nope"}));
+        assert_eq!(state(&h).2, Some(Pending::Rename("Nope".into())));
+        ask(&mut h, "ui.key", json!({"key": "Escape"}));
+        assert_eq!(names(&h), ["Web", "Small PNG"]);
+        assert_eq!(state(&h), ("Web".into(), Some(("Web".into(), false)), None), "the dialog stays open");
+        assert!(has(&h, "combo:exportPreset"));
+        // …Return renames it, and Save follows
+        menu(&mut h, "exportRenamePreset");
+        ask(&mut h, "ui.key", json!({"key": "a", "cmd": true}));
+        ask(&mut h, "ui.text", json!({"text": "Web Small"}));
+        ask(&mut h, "ui.key", json!({"key": "enter"}));
+        assert_eq!(names(&h), ["Web Small", "Small PNG"]);
+        assert_eq!(quality(&h, "Web Small"), Some(60));
+        assert_eq!(state(&h), ("Web Small".into(), Some(("Web Small".into(), false)), None));
+        // Duplicate copies the saved settings, not the changes made in the dialog since; those
+        // stay in the dialog, unsaved, against the copy now loaded
+        edit(&mut h, &|o, _| o.quality = 40);
+        menu(&mut h, "exportDuplicatePreset");
+        assert_eq!(names(&h), ["Web Small", "Small PNG", "Web Small copy"]);
+        assert_eq!((quality(&h, "Web Small"), quality(&h, "Web Small copy")), (Some(60), Some(60)));
+        assert_eq!(state(&h), ("Web Small copy".into(), Some(("Web Small copy".into(), false)), None));
+        assert_eq!(opts(&h).quality, 40);
+        assert!(shows(&h, "Web Small copy*"), "{:?}", h.painted_text());
+        // Delete asks first
+        menu(&mut h, "exportDeletePreset");
+        assert_eq!(names(&h).len(), 3, "not deleted yet");
+        assert_eq!(state(&h).2, Some(Pending::Delete("Web Small copy".into())));
+        click(&mut h, "button:exportDeletePresetCancel");
+        assert_eq!(state(&h).2, None);
+        menu(&mut h, "exportDeletePreset");
+        click(&mut h, "button:exportDeletePresetConfirm");
+        assert_eq!(names(&h), ["Web Small", "Small PNG"]);
+        assert_eq!(state(&h), (String::new(), None, None));
+
+        // an older user preset named like a built-in loads its own settings, not the built-in's
+        h.app.session.export_presets.push(ExportPreset { name: "DNG".into(), params: json!({"format": "png", "width": 64}) });
+        load(&mut h, "DNG");
+        assert_eq!(state(&h).1, Some(("DNG".into(), false)));
+        assert_eq!(opts(&h).format, ExportFormat::Png);
+        // renamed elsewhere (MCP, the control channel): no longer the one loaded
+        h.app.session.execute("export.renamePreset", &json!({"name": "DNG", "to": "Old DNG"})).unwrap();
+        h.step();
+        h.step();
+        assert_eq!(state(&h).1, None);
+        assert!(!has(&h, "icon:exportPresetActions") && shows(&h, "Choose…"), "{:?}", h.painted_text());
+    }
+
     /// Review of #1966: a `path` whose extension names no format exports JPEG here, so its
     /// `bitDepth` is checked against JPEG's, not let through to an 8-bit file.
     #[test]
