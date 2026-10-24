@@ -152,3 +152,72 @@ fn a_keyword_renamed_while_off_is_followed_by_the_filter_put_aside() {
     assert_eq!(s.filter.keyword.as_deref(), Some("dog"), "the put-aside filter follows the rename");
     assert_eq!(s.visible().len(), 1);
 }
+
+/// The session's photos plus one photo that carries the keyword "cat".
+fn session_with_a_cat() -> Session {
+    let mut s = session().unwrap();
+    let mut photo = Photo::new(PhotoId(5), Source::File { path: "/lightcraft-enable-filters/5.jpg".into() }, "5.jpg", "JPEG", 40, 30, "2026-10-23");
+    photo.meta.keywords = vec!["cat".into()];
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    s
+}
+
+#[test]
+fn deleting_the_only_keyword_put_aside_leaves_filtering_on() {
+    let mut s = session_with_a_cat();
+    s.execute("library.filter", &json!({"keyword": "cat"})).unwrap();
+    assert_eq!(s.visible().len(), 1);
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert!(s.filters_off());
+    s.execute("keyword.delete", &json!({"keyword": "cat"})).unwrap();
+    assert!(!s.filters_off(), "an empty filter is not left put aside");
+    let r = s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!((r["enabled"].clone(), r["count"].clone()), (json!(true), json!(5)), "nothing was put aside, so nothing is switched off");
+    assert_eq!(s.filter, Filter::default());
+}
+
+#[test]
+fn deleting_a_keyword_put_aside_keeps_the_rest_of_the_filter() {
+    let mut s = session_with_a_cat();
+    s.execute("library.filter", &json!({"keyword": "cat", "rating": 4})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("keyword.delete", &json!({"keyword": "cat"})).unwrap();
+    assert!(s.filters_off(), "the stars are still put aside");
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(s.filter, Filter { rating: 4, ..Default::default() });
+}
+
+#[test]
+fn a_rating_operator_without_stars_does_not_keep_an_emptied_filter_put_aside() {
+    let mut s = session_with_a_cat();
+    // the filter bar's operator picker can be set with no stars chosen; it filters nothing
+    s.execute("library.filter", &json!({"keyword": "cat", "ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert!(s.filters_off());
+    s.execute("keyword.delete", &json!({"keyword": "cat"})).unwrap();
+    assert!(!s.filters_off(), "only an operator with no stars is left: nothing to bring back");
+    let r = s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(r["enabled"], json!(true));
+}
+
+#[test]
+fn a_rating_operator_put_aside_survives_a_keyword_change_that_does_not_touch_it() {
+    let mut s = session_with_a_cat();
+    s.execute("library.filter", &json!({"ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert!(s.filters_off());
+    s.execute("keyword.rename", &json!({"from": "cat", "to": "dog"})).unwrap();
+    assert!(s.filters_off(), "the filter put aside held no keyword, so the rename leaves it alone");
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(s.filter.rating_op, lightcraft_catalog::RatingOp::Exactly);
+}
+
+#[test]
+fn a_rating_operator_with_stars_is_kept_when_the_keyword_goes() {
+    let mut s = session_with_a_cat();
+    s.execute("library.filter", &json!({"keyword": "cat", "rating": 4, "ratingOp": "exactly"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("keyword.delete", &json!({"keyword": "cat"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!((s.filter.rating, s.filter.rating_op), (4, lightcraft_catalog::RatingOp::Exactly));
+}
