@@ -20,12 +20,14 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("people", Icon::Subject, ViewMode::People, "People"),
 ];
 
-/// The command whose key a view button shows: the grids share the G toggle.
-fn view_key_command(id: &str) -> String {
-    match id {
-        "photoGrid" | "squareGrid" => "view.gridToggle".to_string(),
-        _ => format!("view.{id}"),
+/// The command whose key a view button shows: the view's own binding when it has one, else (for the
+/// two grids) the G toggle they share, as View ▸ Photo Grid and Square Grid do.
+fn view_key_command(id: &str, keymap: &crate::shortcuts::Keymap) -> String {
+    let own = format!("view.{id}");
+    if matches!(id, "photoGrid" | "squareGrid") && crate::shortcuts::shortcut_of(keymap, &own).is_none() {
+        return "view.gridToggle".to_string();
     }
+    own
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -47,7 +49,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             // the key each view has now
                             let tip = crate::kbd::tip_with_shortcut(
                                 crate::i18n::tr(tip),
-                                &view_key_command(id),
+                                &view_key_command(id, &app.ui.settings.keymap),
                                 &app.ui.settings.keymap,
                                 crate::kbd::is_mac(ui.ctx()),
                             );
@@ -72,7 +74,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         );
                         egui::Popup::menu(&more).show(|ui| {
                             for &(id, _, mode, label) in VIEW_MODES {
-                                let keys = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, &view_key_command(id)).map(str::to_string);
+                                let keys = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, &view_key_command(id, &app.ui.settings.keymap))
+                                    .map(str::to_string);
                                 let mut item = MenuItem::new(crate::i18n::tr(label)).selected(app.ui.view == mode);
                                 if let Some(k) = &keys {
                                     item = item.shortcut(k);
@@ -536,5 +539,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Given a grid button, When its own command has a binding, Then that key is the one it shows;
+    /// without one, the grids show the key of the G toggle they share.
+    #[test]
+    fn a_grid_button_shows_its_own_binding_before_the_shared_toggle() {
+        let mut keymap = crate::shortcuts::Keymap::new();
+        assert_eq!(view_key_command("photoGrid", &keymap), "view.gridToggle");
+        assert_eq!(view_key_command("squareGrid", &keymap), "view.gridToggle");
+        crate::shortcuts::assign(&mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+        assert_eq!(view_key_command("photoGrid", &keymap), "view.photoGrid");
+        assert_eq!(view_key_command("squareGrid", &keymap), "view.gridToggle", "the other grid still has only the toggle");
+        assert_eq!(view_key_command("detail", &keymap), "view.detail");
     }
 }
