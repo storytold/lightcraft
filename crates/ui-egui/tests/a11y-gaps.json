@@ -1,0 +1,73 @@
+{
+  "Context menu of a photo": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Context menu of an album": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Dialog Settings import": {
+    "ComboBox without a name in Settings": 2,
+    "TextInput without a name in Settings": 2
+  },
+  "Dialog Settings slideshow": {
+    "ColorWell without a name in Settings": 1,
+    "Slider without a name in Settings": 3,
+    "SpinButton without a name in Settings": 3,
+    "Unknown without a name in Settings": 5
+  },
+  "Dialog Shortcuts": {
+    "Button without a name in Keyboard Shortcuts": 2,
+    "TextInput without a name in Keyboard Shortcuts": 1
+  },
+  "Dialog ViewOptions": {
+    "ComboBox without a name in View Options": 6
+  },
+  "Dialog dialog.autoStack": {
+    "SpinButton without a name in Auto-Stack by Capture Time": 1
+  },
+  "Dialog dialog.captureTime": {
+    "TextInput without a name in Edit Capture Time": 1
+  },
+  "Dialog dialog.contactSheet": {
+    "ComboBox without a name in Contact Sheet PDF": 1,
+    "SpinButton without a name in Contact Sheet PDF": 2
+  },
+  "Dialog dialog.export": {
+    "ComboBox without a name in Export": 2
+  },
+  "Dialog dialog.rename": {
+    "SpinButton without a name in Rename Photos": 1
+  },
+  "Import review": {
+    "ComboBox without a name in Import Photos": 1,
+    "TextInput without a name in Import Photos": 1
+  },
+  "Menu Edit": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Menu File": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Menu Help": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Menu Photo": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Menu View": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Menu Window": {
+    "Unknown without a name in (top level)": 1
+  },
+  "Right panel Crop": {
+    "SpinButton without a name in (top level)": 1
+  },
+  "Right panel Info": {
+    "ComboBox without a name in (top level)": 1
+  },
+  "Right panel Keywords": {
+    "Button without a name in (top level)": 2,
+    "ComboBox without a name in (top level)": 1
+  }
+}
