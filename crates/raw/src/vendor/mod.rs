@@ -225,6 +225,24 @@ fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
     x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
+/// Test helper: make the single-strip `StripByteCounts` entry (LONG, count 1) that holds `len` declare `declared`
+/// bytes instead, as a file cut short or a hostile header does.
+#[cfg(test)]
+pub(crate) fn declare_strip_len(file: &mut [u8], len: u32, declared: u32) {
+    let big = file.starts_with(b"MM");
+    let entry = |v: u32| -> Vec<u8> {
+        if big {
+            [&279u16.to_be_bytes()[..], &4u16.to_be_bytes(), &1u32.to_be_bytes(), &v.to_be_bytes()].concat()
+        } else {
+            [&279u16.to_le_bytes()[..], &4u16.to_le_bytes(), &1u32.to_le_bytes(), &v.to_le_bytes()].concat()
+        }
+    };
+    let (old, new) = (entry(len), entry(declared));
+    let at: Vec<usize> = file.windows(old.len()).enumerate().filter(|(_, w)| *w == old.as_slice()).map(|(i, _)| i).collect();
+    assert_eq!(at.len(), 1, "one StripByteCounts entry of {len} bytes");
+    file[at[0]..at[0] + new.len()].copy_from_slice(&new);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

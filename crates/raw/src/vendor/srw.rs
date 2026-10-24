@@ -107,6 +107,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     let data = if mode == Mode::Full {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("SRW strip outside file".into()))?;
+        if src.len() as u64 != strip {
+            return Err(RawError::Corrupt("SRW strip shorter than its rows".into()));
+        }
         let mut d = vec![0u16; n];
         match coding {
             Coding::Words => read_u16s(src, ByteOrder::Little, &mut d),
@@ -538,6 +541,18 @@ mod tests {
         for cut in [10, bytes.len() / 2, bytes.len() - 20] {
             let _ = decode(&bytes[..cut]);
             let _ = probe_info(&bytes[..cut]);
+        }
+    }
+
+    /// #2561: a small file whose strip declares a large frame is refused before the full decode allocates the frame.
+    #[test]
+    fn a_strip_cut_short_is_refused_before_allocating() {
+        let (w, h) = (3000u32, 2000u32);
+        for (compression, declared) in [(32769, w * h * 2), (32770, w * h / 2 * 3)] {
+            let mut f = srw(Spec { w, h, compression, strip: vec![0u8; 12], pattern: Some([0, 1, 1, 2]), note: None, picture: None });
+            crate::vendor::declare_strip_len(&mut f, 12, declared);
+            assert_eq!(probe(&f), Some(crate::RawFormat::Srw));
+            assert!(matches!(decode(&f), Err(RawError::Corrupt(_))), "compression {compression}");
         }
     }
 }
