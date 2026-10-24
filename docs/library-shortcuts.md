@@ -83,7 +83,18 @@ Survey and Reference, and leave text fields alone, so the search box still types
 commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
 return `{"size"}`); the size is saved with the other interface settings.
 
-Public behaviour references, checked 2026-10-08 (thumbnail size: 2026-10-13):
+## Keyword sets
+
+`⌥1`–`⌥9` (`Alt+1`–`Alt+9` on Windows and Linux) add or remove the current keyword set's keywords on
+the selected photos. `⌥0` makes the next keyword set current and `⌥⇧0` the previous one (`Alt+0` /
+`Alt+Shift+0`), in the order of the Keywords panel's Keyword Set menu: Recent Keywords, then the saved
+sets. After the last set comes Recent Keywords again, and before Recent Keywords comes the last set;
+with no saved sets the keys leave Recent Keywords current. The shortcut list does not say what happens
+past either end; wrapping around is LightCraft's choice. The same steps are the Next / Previous
+Keyword Set commands (`keyword.nextSet`, `keyword.previousSet`), which return what `keyword.sets`
+returns, and both keys can be reassigned in Help → Keyboard Shortcuts.
+
+Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyword sets: 2026-10-24):
 
 - [Lightroom Classic keyboard shortcuts](https://helpx.adobe.com/lightroom-classic/help/keyboard-shortcuts.html)
 - [Lightroom Classic flagging, labelling and rating](https://helpx.adobe.com/lightroom-classic/help/flag-label-rate-photos.html)

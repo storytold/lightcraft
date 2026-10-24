@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -71,6 +71,8 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 **Grid thumbnail size (KEYC-COMPARE):** Classic's `=` and `-` increase and decrease the Grid thumbnail size (same keys on macOS and Windows; `+` also works for the larger size here, as Shift+`=` or the keypad). They step the bottom-bar slider by 30 pt inside its 90–480 pt range, in Photo Grid, Square Grid and People only; Detail, Compare, Survey and Reference ignore them, and ⌘= / ⌘− stay Zoom In / Out. See [library shortcuts](library-shortcuts.md).
 
 **Library navigation keys (KEYC-COMPARE):** in Photo Grid and Square Grid, `Home` / `End` make the first / last photo of the view the active, selected one, and `Shift+Left` / `Shift+Right` add the previous / next photo of the view to the selection (the added photo becomes active; the keys never remove a photo from the selection, and do nothing at either end of the view). They wait in the other views, in the full-screen preview, while a text field or a dialog has the keyboard, and when you gave the key to a command; they are listed under Fixed keys in Help → Keyboard Shortcuts. `Cmd+O` (`Ctrl+O` on Windows and Linux) runs File → Open Library… ; View → Visualize HDR has no default key (`Shift+H` cycles the Tool Overlay, issue #224; `Cmd+Shift+H` stays the Histogram). Covered by `crates/ui-egui/src/tests_keymap.rs`; the macOS native menu path for `Cmd+O` is not exercised by the headless tests.
+
+**Keyword sets (KEYC-METADATA):** `⌥0` / `⌥⇧0` (`Alt+0` / `Alt+Shift+0` on Windows and Linux) make the next / previous keyword set current (`keyword.nextSet`, `keyword.previousSet`), in the Keyword Set menu's order: Recent Keywords, then the saved sets. After the last set comes Recent Keywords, and before Recent Keywords comes the last set (not documented by Adobe, our choice). `⌥1`–`⌥9` then apply the new set's keywords. Both keys can be reassigned in Help → Keyboard Shortcuts.
 
 **Still missing / broken:**
 - Tab / ⇧Tab (hide the side panels / all panels): Tab moves the keyboard focus here (accessibility), so it is
@@ -148,6 +150,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | KEYC-METADATA: ⌥0 / ⌥⇧0 (Alt+0 / Alt+Shift+0) go to the next / previous keyword set, Recent Keywords first, wrapping around at either end |
 | 2026-10-15 | patch | Context menus: a right-click elsewhere on the same widget while its menu is open moves the menu to the pointer; before it flashed at the new spot and closed (issue #1877); every site uses `widgets::context_menu`; 70% unchanged |
 | 2026-10-23 | patch | KEYC-RATING: ⌘L / Ctrl+L (Library ▸ Enable Filters) switches the filter off and on, restoring it as it was |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); ⌘L is the filter-bar key left |

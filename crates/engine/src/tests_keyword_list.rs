@@ -263,6 +263,29 @@ fn set_names_match_whatever_their_case() {
     assert!(set_named(&mut s, "ÉTÉ").is_null(), "deleted");
 }
 
+/// Next / Previous Keyword Set (⌥0 / ⌥⇧0) step through the sets in the Keyword Set menu's order,
+/// Recent Keywords first, and wrap around at either end; with no saved sets they stay on Recent
+/// Keywords.
+#[test]
+fn next_and_previous_keyword_set_wrap_around_the_sets() {
+    let mut s = Session::with_demo();
+    let current = |r: serde_json::Value| r["current"].as_str().unwrap_or_default().to_string();
+    assert_eq!(current(s.execute("keyword.nextSet", &json!({})).unwrap()), "Recent Keywords", "no sets: nothing to go to");
+    assert_eq!(current(s.execute("keyword.previousSet", &json!({})).unwrap()), "Recent Keywords");
+    s.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony"]})).unwrap();
+    s.execute("keyword.saveSet", &json!({"name": "Travel", "keywords": ["harbor"]})).unwrap();
+    s.execute("keyword.useSet", &json!({"name": "Recent Keywords"})).unwrap();
+    let forward: Vec<String> = (0..3).map(|_| current(s.execute("keyword.nextSet", &json!({})).unwrap())).collect();
+    assert_eq!(forward, ["Weddings", "Travel", "Recent Keywords"]);
+    let back: Vec<String> = (0..3).map(|_| current(s.execute("keyword.previousSet", &json!({})).unwrap())).collect();
+    assert_eq!(back, ["Travel", "Weddings", "Recent Keywords"]);
+    let r = s.execute("keyword.nextSet", &json!({})).unwrap();
+    assert_eq!(r["keywords"], json!(["ceremony"]), "⌥1–⌥9 now apply the set's keywords");
+    // a current set that is no longer there counts as Recent Keywords
+    s.keyword_set = Some("Gone".into());
+    assert_eq!(current(s.execute("keyword.nextSet", &json!({})).unwrap()), "Weddings");
+}
+
 /// Export Keywords writes the keyword list file, and names the keywords Capture One's importer
 /// refuses (it allows none of ; , < > in a list); without a path it gives the text.
 #[test]
