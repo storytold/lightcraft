@@ -586,7 +586,10 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
-    let status = if !gpu::available() {
+    // `available` would wait for a device still being created (issue #136)
+    let status = if gpu::enabled() && !gpu::ready() {
+        "GPU: starting…".to_string()
+    } else if !gpu::available() {
         match gpu::unavailable_reason() {
             Some(why) => crate::i18n::tr_format!("Rendering on the CPU: {why}", why = why),
             None => "No usable GPU found: rendering on the CPU".to_string(),

@@ -436,7 +436,12 @@ fn snapshot_defaults_to_cpu_without_gpu_environment_overrides() {
     let script = tmp("default-cpu.jsonl");
     std::fs::write(
         &script,
-        format!("{}\n{}\n", json!({"method": "engine.execute", "params": {"command": "app.gpu"}}), json!({"method": "ui.screenshot"})),
+        format!(
+            "{}\n{}\n{}\n",
+            json!({"method": "engine.execute", "params": {"command": "app.gpu", "params": {"wait": false}}}),
+            json!({"method": "engine.execute", "params": {"command": "app.gpu"}}),
+            json!({"method": "ui.screenshot"})
+        ),
     )
     .unwrap();
     let image = tmp("default-cpu.png");
@@ -450,11 +455,13 @@ fn snapshot_defaults_to_cpu_without_gpu_environment_overrides() {
     assert!(output.status.success(), "status {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
     let replies: Vec<Value> = String::from_utf8_lossy(&output.stdout).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     assert!(replies.iter().all(|reply| reply["ok"] == true), "{replies:?}");
-    let gpu = &replies[0]["result"];
-    assert_eq!(gpu["enabled"], false, "{gpu}");
-    assert_eq!(gpu["available"], false, "{gpu}");
-    assert_eq!(gpu["adapter"], Value::Null, "no device is created: {gpu}");
-    assert!(gpu["reason"].as_str().is_some_and(|reason| reason.contains("preference")), "{gpu}");
+    // `wait: false` (what the UI sends) still says why the GPU is off: no device is being created
+    for gpu in [&replies[0]["result"], &replies[1]["result"]] {
+        assert_eq!(gpu["enabled"], false, "{gpu}");
+        assert_eq!(gpu["available"], false, "{gpu}");
+        assert_eq!(gpu["adapter"], Value::Null, "no device is created: {gpu}");
+        assert!(gpu["reason"].as_str().is_some_and(|reason| reason.contains("preference")), "{gpu}");
+    }
     let decoded = lightcraft_codecs::decode(&std::fs::read(image).unwrap(), Default::default()).unwrap();
     assert_eq!((decoded.width, decoded.height), (480, 320));
 }
