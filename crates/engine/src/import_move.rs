@@ -56,6 +56,8 @@ pub(crate) enum Fault {
     Corrupt,
     /// Removing the source fails (as on a read-only card).
     FailRemove,
+    /// Syncing the destination's folder to disk fails.
+    FailDirSync,
     /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
     /// an import's copies run side by side.
     Slow,
@@ -147,7 +149,7 @@ pub(crate) fn sidecars_of(src: &Path) -> Vec<(PathBuf, bool)> {
 /// Put `src` into `dir` as `name` (-1, -2… when taken) with its sidecars, leaving the source
 /// untouched. On failure nothing is left at the destination.
 pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String> {
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    create_dir_durable(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
         _ => (name.to_string(), String::new()),
@@ -240,6 +242,11 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
     if injected(Fault::FailRemove) {
         return Err("could not remove the original (injected): it stays where it was".into());
     }
+    // the copy's contents are on disk (synced when written); its name in the folder must be too before the original
+    // goes, or a crash in between could keep the deletion and lose the new name (issue #1501)
+    if let Some(dir) = p.dst.parent() {
+        sync_dir(dir).map_err(|e| format!("could not make the copy's folder durable ({e}): the original is kept"))?;
+    }
     fs::remove_file(&p.src).map_err(|e| format!("could not remove the original ({e}): it stays where it was"))?;
     let mut kept = Vec::new();
     for sc in &p.sidecars {
@@ -269,6 +276,47 @@ pub(crate) fn sibling_photo(sidecar: &Path) -> Option<String> {
         let ok = f.file_stem().is_some_and(|s| s.to_string_lossy() == stem) && crate::import::is_supported(&f);
         ok.then(|| f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
     })
+}
+
+/// Flush folder `dir`'s entries (the names in it) to disk. A file's own sync doesn't cover the folder entry that names
+/// it. Windows can't open a folder for this; NTFS journals those entries itself, so there it does nothing.
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+    if injected(Fault::FailDirSync) {
+        return Err(io::Error::other("folder sync failed (injected)"));
+    }
+    #[cfg(unix)]
+    {
+        File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+/// [`fs::create_dir_all`], with every folder it creates made durable: each new folder's entry is in its parent, so
+/// the parent is synced too.
+fn create_dir_durable(dir: &Path) -> io::Result<()> {
+    let mut missing: Vec<&Path> = Vec::new();
+    let mut at = Some(dir);
+    while let Some(d) = at.filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+        missing.push(d);
+        at = d.parent();
+    }
+    fs::create_dir_all(dir)?;
+    for d in &missing {
+        // (a relative top folder's parent is the current one)
+        let parent = d.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+        if let Err(e) = sync_dir(parent) {
+            // nothing is left at the destination on failure: the folders made here go again, deepest first
+            for d in &missing {
+                let _ = fs::remove_dir(d);
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 /// `dst` = `src` without touching `src`: a hard link, else a verified copy. Never overwrites
