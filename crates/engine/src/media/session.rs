@@ -25,6 +25,7 @@ impl crate::Session {
         Some(job)
     }
 
+    /// Build a source-backed render job for an image, or return `None` for videos and photos without source.
     fn build_job(
         &mut self,
         id: PhotoId,

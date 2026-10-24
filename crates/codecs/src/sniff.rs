@@ -52,6 +52,7 @@ impl Format {
         }
     }
 
+    /// Standard MIME type for this image or video container format.
     pub fn mime(self) -> &'static str {
         match self {
             Format::Jpeg => "image/jpeg",
@@ -156,6 +157,7 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     None
 }
 
+/// Detect ISO Base Media File Format container (MP4, MOV, HEIF, CR3, AVIF) by checking the ftyp box.
 fn sniff_bmff(b: &[u8]) -> Option<Format> {
     let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
     let end = size.clamp(12, b.len().min(4096));
@@ -248,6 +250,7 @@ fn tiff_is_raw(b: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Test sniffing signatures for supported image and video formats.
     #[test]
     fn magic_numbers() {
         assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some(Format::Jpeg));

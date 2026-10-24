@@ -2786,6 +2786,7 @@ fn a_file_arriving_beside_its_raws_stem_reads_its_own_sidecar() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Helper to append a 4-byte-typed box with big-endian size to a byte buffer.
 fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
     let size = (body.len() + 8) as u32;
     out.extend_from_slice(&size.to_be_bytes());
@@ -2793,6 +2794,7 @@ fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
     out.extend_from_slice(body);
 }
 
+/// Construct a minimal synthetic MP4 byte stream containing ftyp and moov boxes for testing.
 fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creation_time: u32) -> Vec<u8> {
     let mut out = Vec::new();
 
@@ -2870,6 +2872,7 @@ fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creatio
     out
 }
 
+/// Verify importing MP4/MOV videos catalogs them with MediaKind::Video and correct duration.
 #[test]
 fn video_files_import_with_duration_and_kind() {
     let src = temp_dir("video-import");
@@ -2913,6 +2916,7 @@ fn video_files_import_with_duration_and_kind() {
     assert!(crate::files::probe_bytes("bad.mp4", truncated_ftyp).is_err());
 }
 
+/// Verify importing videos supports Copy mode with date-based folder organization.
 #[test]
 fn video_files_support_copy_and_date_organization() {
     let src = temp_dir("video-copy-src");
@@ -2954,6 +2958,7 @@ fn video_files_support_copy_and_date_organization() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// Verify video smart collection rules match on kind and duration.
 #[test]
 fn video_smart_collections_and_rule_matching() {
     let src = temp_dir("video-rules");
@@ -2991,10 +2996,13 @@ fn video_smart_collections_and_rule_matching() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Verify catalogued videos are never scheduled for render, thumbnail, variant, or smart preview jobs.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {
     use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let lib = temp_dir("video-smart-previews");
     let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
     for (id, kind, name) in [(1u64, MediaKind::Video, "clip.mp4"), (2, MediaKind::Image, "photo.jpg")] {
         let format = if kind == MediaKind::Video { "MP4" } else { "JPEG" };
         let mut p =
@@ -3004,6 +3012,7 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     }
     let video = PhotoId(1);
     let still = PhotoId(2);
+    assert!(s.catalog.photo(video).is_some(), "video remains catalogued in the open library");
     // There is no frame decoder yet: nothing to render, and a job would read the whole file to
     // fail (the UI draws its own video placeholder and card).
     assert!(s.thumb_job(video, 512).is_none(), "no thumbnail decode of a video");
@@ -3015,14 +3024,13 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     assert!(s.thumb_job(still, 512).is_some(), "a still still renders");
 
     // Smart previews skip catalogued videos
-    let lib = temp_dir("video-smart-previews");
-    s.open_library(&lib, false).unwrap();
     let r = s.execute("library.smartPreviews", &json!({"ids": [video.0]})).unwrap();
     assert_eq!(r["built"], 0, "smart previews skip video");
     assert_eq!(r["failed"].as_array().map(|a| a.len()), Some(0));
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// Verify video duplicate detection by path and by content hash.
 #[test]
 fn video_duplicate_detection_by_path_and_content() {
     let src = temp_dir("video-dup");
