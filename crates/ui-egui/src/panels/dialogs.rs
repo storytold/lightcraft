@@ -1122,7 +1122,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                                         app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", preset_name.trim()));
                                         preset_name.clear();
                                     }
-                                    Err(e) => app.toast(ui.ctx(), e),
+                                    Err(e) => app.toast_error(ui.ctx(), e),
                                 }
                             }
                             crate::widgets::named(ui.add(egui::TextEdit::singleline(preset_name).hint_text(crate::i18n::tr("Preset name")).desired_width(ui.available_width())), crate::i18n::tr("Preset name"));
@@ -1537,7 +1537,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         | Dialog::CaptureTime { .. }
                 ) =>
             {
-                app.toast(ctx, e)
+                app.toast_error(ctx, e)
             }
             // the SAM 3 dialog stays open to show the download (or why it can't start)
             Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
@@ -1559,19 +1559,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 close = true;
             }
             Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
-                app.toast(ctx, e);
+                app.toast_error(ctx, e);
                 close = true;
             }
             // photos whose capture time doesn't read are left as they were: say so
             Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["unreadable"].as_u64().is_some_and(|n| n > 0) => {
-                app.toast(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
+                app.toast_error(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
                 close = true;
             }
             // where a Lightroom catalog goes: stays open to be corrected (a folder that isn't
             // empty), unless the library it names has gone
             Err(e) if matches!(dlg, Dialog::LightroomDestination { .. }) => {
                 close = !crate::lightroom_destination::keeps_open_on_error(app, &dlg);
-                app.toast(ctx, e);
+                app.toast_error(ctx, e);
             }
             Ok(_) if keeps_open(app, &dlg) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
@@ -1870,7 +1870,7 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
             if r.clicked()
                 && let Err(e) = crate::links::open(app, SAM_HELP)
             {
-                app.toast(ui.ctx(), e);
+                app.toast_error(ui.ctx(), e);
             }
         });
     }

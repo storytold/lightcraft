@@ -320,14 +320,14 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     Err(e) => {
                         app.ui.status = e.to_string();
-                        app.toast(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what));
+                        app.toast_error(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what));
                     }
                 }
                 // a failed set doesn't stop the others
                 while !app.merge.batch.is_empty() {
                     match next_in_batch(app) {
                         Ok(()) => break,
-                        Err(e) => app.toast(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what)),
+                        Err(e) => app.toast_error(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what)),
                     }
                 }
             }

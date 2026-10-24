@@ -1043,7 +1043,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         if let Err(e) = r
             && matches!(id.as_str(), "app.export" | "app.exportPrevious" | "file.backupLibrary" | "file.restoreLibrary")
         {
-            app.toast(ui.ctx(), e);
+            app.toast_error(ui.ctx(), e);
         }
     }
     ui.cursor().left() - start
@@ -1622,7 +1622,7 @@ mod tests {
             h.step();
         }
         // (read at once: a toast keeps the UI repainting until it expires, so settling would outlive it)
-        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        let toast = h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         assert!(toast.contains(refusal), "the refusal is shown: {toast:?}");
     }
 
@@ -1653,7 +1653,7 @@ mod tests {
         let bad_dir = dir.join("nonexistent_subdir");
         let err = run_item(&mut app, "file.findMissing", json!({"folder": bad_dir.to_string_lossy(), "wait": true})).unwrap_err();
         assert!(err.contains("not a folder"), "expected 'not a folder' error, got: {err}");
-        assert!(app.ui.toast.as_ref().map(|t| t.0.contains("not a folder")).unwrap_or(false), "toast should reflect failure");
+        assert!(app.ui.toast.as_ref().map(|t| t.text.contains("not a folder")).unwrap_or(false), "toast should reflect failure");
         assert!(app.ui.last_find_missing.is_none(), "last_find_missing must remain None on failure");
 
         // 2. Invalid timeout parameters are rejected cleanly

@@ -2299,7 +2299,7 @@ fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Respons
         let n = map.norm(q);
         let add = ui.input(|i| i.modifiers.shift);
         if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
-            app.toast(ui.ctx(), e);
+            app.toast_error(ui.ctx(), e);
         }
     }
 }
@@ -3014,7 +3014,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     app.run("library.select", json!({"ids": [id.0], "mode": mode}))
                 };
                 if compare && let Err(e) = r {
-                    app.toast(ui.ctx(), e);
+                    app.toast_error(ui.ctx(), e);
                 }
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
