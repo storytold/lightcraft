@@ -1576,6 +1576,39 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// A file that shares its stem with another catalogued file never reads the stem sidecar the
+/// other one owns, whichever naming the library uses (issue #1523).
+#[test]
+fn a_non_owner_does_not_read_its_siblings_stem_sidecar() {
+    let src = temp_dir("stem-read");
+    let lib = temp_dir("stem-read-lib");
+    write_png(&src.join("IMG_1.png"), 1);
+    let img = lightcraft_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
+    let jpg =
+        crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Jpeg, ..Default::default() }).unwrap();
+    std::fs::write(src.join("IMG_1.jpg"), jpg).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (j, p) = (id(&s, "IMG_1.jpg"), id(&s, "IMG_1.png"));
+    s.execute("photo.rate", &json!({"ids": [j.0], "rating": 2})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [j.0]})).unwrap();
+    assert!(src.join("IMG_1.xmp").is_file());
+    assert!(!src.join("IMG_1.png.xmp").exists());
+    for naming in [crate::sidecar::SidecarNaming::Stem, crate::sidecar::SidecarNaming::Full] {
+        s.xmp.naming = naming;
+        // the owner reads its packet; the other file has none of its own
+        assert!(s.read_sidecar_op(j).unwrap().is_some(), "{naming:?}");
+        assert!(s.read_sidecar_op(p).unwrap().is_none(), "{naming:?}");
+        let (jpg_file, png_file) = (src.join("IMG_1.jpg"), src.join("IMG_1.png"));
+        assert_eq!(s.sidecar_lookup(j).find(&jpg_file.to_string_lossy()), Some(src.join("IMG_1.xmp")), "{naming:?}");
+        assert_eq!(s.sidecar_lookup(p).find(&png_file.to_string_lossy()), None, "{naming:?}");
+    }
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Lossy DNG export: demosaiced JPEG tiles at the resize long edge, smaller than lossless, colour tags kept.
 #[test]
 fn lossy_dng_export_scales_and_shrinks() {

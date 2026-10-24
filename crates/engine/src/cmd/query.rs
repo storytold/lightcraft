@@ -142,7 +142,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
             // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
-            let packet = match crate::sidecar::find_sidecar(path, s.sidecar_naming(ph.id)) {
+            let packet = match s.sidecar_lookup(ph.id).find(path) {
                 Some(sc) => std::fs::read_to_string(sc).ok(),
                 None => lightcraft_meta::embedded(&bytes).xmp,
             };
