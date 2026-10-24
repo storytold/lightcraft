@@ -313,6 +313,26 @@ fn curve_preset_export_never_overwrites_originals_or_sidecars() {
     preset_export_preserves_originals("curve.exportPresets", json!({"names": ["Linear"]}), "curve-export-guard");
 }
 
+/// A new file named like a photo's sidecar, in the photo's folder, would be read back as that
+/// photo's edits: refused even though nothing is there yet.
+#[test]
+fn preset_export_never_creates_a_photos_sidecar() {
+    let (mut s, _, dir, _, _) = library_with_jpeg("preset-export-new-sidecar");
+    std::fs::create_dir_all(dir.join("presets")).unwrap();
+    for name in ["IMG_1.xmp", "IMG_1.jpg.xmp", "presets/../IMG_1.xmp"] {
+        let path = dir.join(name);
+        assert!(!path.exists(), "{name} isn't there before the export");
+        let error = s.execute("preset.export", &json!({"ids": ["lc.warm-glow"], "path": path.to_string_lossy()})).unwrap_err().to_string();
+        assert!(error.contains("XMP sidecar of IMG_1.jpg"), "{error}");
+        assert!(!path.exists(), "{name} was not created");
+    }
+    // the same name in another folder is an ordinary preset file
+    let elsewhere = dir.join("presets/IMG_1.xmp");
+    s.execute("preset.export", &json!({"ids": ["lc.warm-glow"], "path": elsewhere.to_string_lossy()})).unwrap();
+    assert!(elsewhere.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// #1944: Export Keywords went straight to `std::fs::write`, replacing a library original.
 #[test]
 fn keyword_export_never_overwrites_originals_or_sidecars() {
