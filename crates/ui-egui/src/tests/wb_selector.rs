@@ -42,3 +42,56 @@ fn wb_selector_button_in_compare_opens_detail_like_w() {
     h.settle(SETTLE);
     assert_eq!(h.app.ui.tool, "", "a second click disarms it");
 }
+
+/// Test notes 2026-10-25 note 13: W toggles the selector (W again puts it away without sampling);
+/// while it is armed, a magnified loupe by the pointer outlines the sample and the mouse wheel
+/// changes the sample's size instead of zooming the photo.
+#[test]
+fn w_toggles_the_selector_and_the_wheel_sizes_its_sample() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let id = h.app.session.visible_cloned()[2];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    h.app.ui.view = ViewMode::Detail;
+    h.settle(SETTLE);
+    let wb = |h: &Headless| h.app.session.catalog.photo(id).map(|p| (p.develop.wb.temp, p.develop.wb.tint));
+    let before = wb(&h);
+
+    h.request("ui.key", json!({"key": "w"}), T);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.tool, "wbPicker", "W arms the selector");
+    h.request("ui.key", json!({"key": "w"}), T);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.tool, "", "W again puts it away");
+    assert_eq!(wb(&h), before, "without sampling");
+
+    h.request("ui.key", json!({"key": "w"}), T);
+    h.settle(SETTLE);
+    let img = h.app.image_rect.expect("the photo on screen");
+    let at = img.center();
+    h.app.synthetic.push(egui::Event::PointerMoved(at));
+    h.settle(SETTLE);
+    h.step();
+    let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r);
+    let loupe = rect(&h, "wbLoupe").expect("a loupe by the pointer while the selector is armed");
+    assert!(!loupe.contains(at), "beside the pointer, not under it");
+    let small = rect(&h, "wbLoupe:sample").expect("the sample outlined");
+    let (size, zoom) = (h.app.ui.wb_sample, h.app.ui.zoom);
+    for _ in 0..2 {
+        h.app.synthetic.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Default::default(),
+            source: egui::MouseWheelSource::Wheel,
+        });
+        h.step();
+    }
+    h.settle(SETTLE);
+    h.step();
+    assert_eq!(h.app.ui.wb_sample, size + 4, "two notches up: a larger sample");
+    assert_eq!(h.app.ui.zoom, zoom, "the wheel doesn't zoom while the selector is armed");
+    assert_eq!(h.app.ui.tool, "wbPicker");
+    let large = rect(&h, "wbLoupe:sample").expect("the sample outlined");
+    assert!(large.width() > small.width(), "the outline grows with the sample: {small:?} → {large:?}");
+}

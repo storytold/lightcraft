@@ -140,9 +140,33 @@ fn wheel_notches(events: &[egui::Event]) -> f32 {
         .sum()
 }
 
+/// While the White Balance Selector is armed, a notched mouse wheel changes its sample's size
+/// instead of zooming (test notes 2026-10-25 note 13); the smoothed scroll it leaves for the next
+/// frames is swallowed too, so the photo neither zooms nor pans. True while that is going on.
+fn wb_sample_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui) -> bool {
+    let id = egui::Id::unique("loupe-wb-wheel");
+    let notches = ui.input(|i| wheel_notches(&i.events));
+    if notches != 0.0 {
+        app.ui.wb_sample = crate::wb_loupe::step(app.ui.wb_sample, notches);
+        ui.data_mut(|d| d.insert_temp(id, true));
+    }
+    if !ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        return false;
+    }
+    if ui.input(|i| i.smooth_scroll_delta.y) == 0.0 && notches == 0.0 {
+        ui.data_mut(|d| d.remove_temp::<bool>(id));
+    }
+    ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+    ui.ctx().request_repaint();
+    true
+}
+
 /// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
 pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
     if !resp.hovered() {
+        return false;
+    }
+    if app.ui.tool == "wbPicker" && wb_sample_wheel(app, ui) {
         return false;
     }
     let (mut factor, mut delta, anchor) =

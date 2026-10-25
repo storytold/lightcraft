@@ -2389,5 +2389,8 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "此处太亮，无法读取颜色：请点击稍暗一些的中性区域",
+  "This spot is too dark to read its colour: click a brighter neutral area": "此处太暗，无法读取颜色：请点击更亮的中性区域",
+  "This spot can't be read": "无法读取此处"
 }

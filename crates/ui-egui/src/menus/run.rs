@@ -1089,6 +1089,8 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = tool.into();
                     return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
                 }
+                // W again puts the selector away without sampling (test notes 2026-10-25 note 13)
+                "wbPicker" if app.ui.tool == "wbPicker" => app.ui.tool.clear(),
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;
                     app.ui.view = ViewMode::Detail;

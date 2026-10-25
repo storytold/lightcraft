@@ -519,35 +519,47 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"temp": t, "tint": tint}))
             }
         ),
-        cmd!("develop.wbPick", "White Balance Selector", [], Some("W"), "{x, y} normalized image coords of a neutral point", has_active, |s, p| {
-            let (x, y) = (f64_req(p, "x", "develop.wbPick")?, f64_req(p, "y", "develop.wbPick")?);
-            let id = active(s, "develop.wbPick")?;
-            let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wbPick", e))?;
-            let info = s.source_info(id);
-            let d = s.develop_of(id).unwrap_or_default();
-            // Sample a small neighbourhood in the oriented source.
-            let o = src.oriented(d.orientation);
-            let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
-            let mut acc = [0.0f32; 3];
-            for dy in -2..=2 {
-                for dx in -2..=2 {
-                    let c = o.get_clamped(cx + dx, cy + dy);
-                    for i in 0..3 {
-                        acc[i] += c[i] / 25.0;
+        cmd!(
+            "develop.wbPick",
+            "White Balance Selector",
+            [],
+            Some("W"),
+            "{x, y} normalized image coords of a neutral point, size?: the sample's side as a fraction of the photo's long edge (default about 1 %) → {temp, tint}, or {applied: false, refused: bright|dark, message} for a spot whose colour can't be read (clipped, near white or near black): nothing changes",
+            has_active,
+            |s, p| {
+                let (x, y) = (f64_req(p, "x", "develop.wbPick")?, f64_req(p, "y", "develop.wbPick")?);
+                let size = p.get("size").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(WB_SAMPLE_DEFAULT).min(0.25);
+                let id = active(s, "develop.wbPick")?;
+                // the larger level when it is there: a sample of a few pixels means a few of the photo's
+                let src =
+                    s.source_now(id, SourceLevel::Preview).or_else(|_| s.source_now(id, SourceLevel::Thumb)).map_err(|e| bad("develop.wbPick", e))?;
+                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                let o = src.oriented(d.orientation);
+                let acc = match wb_sample(&o, x, y, size) {
+                    WbSample::Neutral(c) => c,
+                    // test notes 2026-10-25 note 13: a white balance from a spot with no colour left is
+                    // wrong; nothing changes and the picker stays out
+                    refused => {
+                        let (why, message) = match refused {
+                            WbSample::TooDark => ("dark", "This spot is too dark to read its colour: click a brighter neutral area"),
+                            _ => ("bright", "This spot is too bright to read its colour: click a slightly darker neutral area"),
+                        };
+                        return Ok(json!({"applied": false, "refused": why, "message": message}));
                     }
-                }
+                };
+                let patch = lightcraft_raster::Rgb32f::filled(4, 4, acc);
+                let (t, tint) = lightcraft_pipeline::auto::auto_wb(&patch, &info);
+                edit(s, "develop.wbPick", "White Balance", |d| {
+                    lightcraft_pipeline::local::normalize_wb(d, &info);
+                    d.wb.mode = WbMode::Custom;
+                    d.wb.temp = t;
+                    d.wb.tint = tint;
+                    Ok(())
+                })?;
+                Ok(json!({"applied": true, "temp": t, "tint": tint}))
             }
-            let patch = lightcraft_raster::Rgb32f::filled(4, 4, acc);
-            let (t, tint) = lightcraft_pipeline::auto::auto_wb(&patch, &info);
-            edit(s, "develop.wbPick", "White Balance", |d| {
-                lightcraft_pipeline::local::normalize_wb(d, &info);
-                d.wb.mode = WbMode::Custom;
-                d.wb.temp = t;
-                d.wb.tint = tint;
-                Ok(())
-            })?;
-            Ok(json!({"temp": t, "tint": tint}))
-        }),
+        ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
                 let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);
@@ -1294,4 +1306,86 @@ fn has_history_after(s: &Session) -> std::result::Result<(), String> {
     } else {
         Err("at the latest History step".into())
     }
+}
+
+/// The White Balance Selector's sample when none is given: the side of 5 thumbnail pixels, as a
+/// fraction of the long edge (what it always read).
+const WB_SAMPLE_DEFAULT: f64 = 5.0 / 512.0;
+/// A channel this close to the photo's top (its brightest value of that channel) has lost its
+/// colour: clipped, or about to be. Relative, as sources are scene-referred (a raw's or a
+/// procedural scene's values pass 1.0).
+const WB_CLIPPED: f32 = 0.97;
+/// A sample whose mean is this close to the top in some channel is near white.
+const WB_NEAR_WHITE: f32 = 0.9;
+/// Below this (linear, the brightest channel) a spot is noise, not colour.
+const WB_DARK: f32 = 0.004;
+
+/// What the White Balance Selector reads at a spot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum WbSample {
+    /// The mean colour of the sample.
+    Neutral([f32; 3]),
+    /// Clipped or near white: no colour left to read.
+    TooBright,
+    /// Near black: noise.
+    TooDark,
+}
+
+/// The photo's top in each channel: white (1.0), or its brightest value where a scene-referred
+/// source passes that; read on every other pixel. Never below white, so the brightest part of a
+/// photo that isn't clipped (a grey card in a dim room) is still read.
+fn wb_top(img: &lightcraft_raster::Rgb32f) -> [f32; 3] {
+    let mut top = [1.0f32; 3];
+    for c in img.data.iter().step_by(2) {
+        for i in 0..3 {
+            if c[i].is_finite() && c[i] > top[i] {
+                top[i] = c[i];
+            }
+        }
+    }
+    top
+}
+
+/// The sample of side `size` (a fraction of the long edge, at least one pixel) centred on the
+/// normalized point (`x`, `y`) of `img` (test notes 2026-10-25 note 13): its mean colour, unless a
+/// quarter of it is clipped (a channel at the photo's top), its mean is near white, or it is near
+/// black. At most 64 × 64 pixels are read, evenly spread over a large sample.
+pub(crate) fn wb_sample(img: &lightcraft_raster::Rgb32f, x: f64, y: f64, size: f64) -> WbSample {
+    let top = wb_top(img);
+    let long = img.width.max(img.height).max(1) as f64;
+    let side = (size.clamp(0.0, 1.0) * long).round().clamp(1.0, long) as isize;
+    let (x, y) = (if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.5 }, if y.is_finite() { y.clamp(0.0, 1.0) } else { 0.5 });
+    let (cx, cy) = ((x * img.width as f64) as isize, (y * img.height as f64) as isize);
+    let stride = ((side + 63) / 64).max(1);
+    let half = side / 2;
+    let (mut acc, mut n, mut clipped) = ([0.0f64; 3], 0usize, 0usize);
+    let mut dy = -half;
+    while dy < side - half {
+        let mut dx = -half;
+        while dx < side - half {
+            let c = img.get_clamped(cx + dx, cy + dy);
+            if c.iter().all(|v| v.is_finite()) {
+                if (0..3).any(|i| c[i] >= WB_CLIPPED * top[i]) {
+                    clipped += 1;
+                }
+                for i in 0..3 {
+                    acc[i] += f64::from(c[i]);
+                }
+                n += 1;
+            }
+            dx += stride;
+        }
+        dy += stride;
+    }
+    if n == 0 {
+        return WbSample::TooDark;
+    }
+    let mean = acc.map(|v| (v / n as f64) as f32);
+    if clipped * 4 > n || (0..3).any(|i| mean[i] >= WB_NEAR_WHITE * top[i]) {
+        return WbSample::TooBright;
+    }
+    if mean[0].max(mean[1]).max(mean[2]) < WB_DARK {
+        return WbSample::TooDark;
+    }
+    WbSample::Neutral(mean)
 }

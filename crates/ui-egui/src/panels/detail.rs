@@ -985,6 +985,16 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
     if !resp.dragged() && !resp.hovered() {
         return;
     }
+    // the White Balance Selector shows what it reads: the pixels by the pointer, magnified, the
+    // sample outlined (test notes 2026-10-25 note 13)
+    if app.ui.tool == "wbPicker"
+        && let Some(q) = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()))
+        && img.contains(q)
+        && let Some(id) = app.session.active()
+        && let Some(t) = app.renderer.textures.get(&crate::render::Slot::Main).filter(|t| t.photo == id)
+    {
+        crate::wb_loupe::show(ui.ctx(), t.tex.id(), img, q, app.ui.wb_sample, ui.ctx().pixels_per_point());
+    }
     let cursor = match app.ui.tool.as_str() {
         "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
@@ -1018,8 +1028,18 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             && let Some(q) = resp.interact_pointer_pos()
         {
             let n = map.norm(q);
-            let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
-            app.ui.tool.clear();
+            // the sample: its side in screen pixels, as a fraction of the photo's long edge on screen
+            let ppp = ui.ctx().pixels_per_point().max(0.1);
+            let size = crate::wb_loupe::sample_fraction(app.ui.wb_sample, img, ppp);
+            match app.run("develop.wbPick", json!({"x": n.x, "y": n.y, "size": size})) {
+                // a spot with no colour left (clipped, near white or near black): nothing changes,
+                // the selector stays out and says why (test notes 2026-10-25 note 13)
+                Ok(r) if r["applied"] == false => {
+                    let message = r["message"].as_str().unwrap_or("This spot can't be read").to_string();
+                    app.toast(ui.ctx(), crate::i18n::tr(&message));
+                }
+                _ => app.ui.tool.clear(),
+            }
         }
         return;
     }

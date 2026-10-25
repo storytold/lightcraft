@@ -2356,5 +2356,8 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "Tämä kohta on liian kirkas sen värin lukemiseen: napsauta hieman tummempaa neutraalia aluetta",
+  "This spot is too dark to read its colour: click a brighter neutral area": "Tämä kohta on liian tumma sen värin lukemiseen: napsauta kirkkaampaa neutraalia aluetta",
+  "This spot can't be read": "Tätä kohtaa ei voi lukea"
 }

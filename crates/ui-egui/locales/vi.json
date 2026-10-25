@@ -2684,5 +2684,8 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "This spot is too bright to read its colour: click a slightly darker neutral area": "Điểm này quá sáng để đọc màu: hãy nhấp vào một vùng trung tính tối hơn một chút",
+  "This spot is too dark to read its colour: click a brighter neutral area": "Điểm này quá tối để đọc màu: hãy nhấp vào một vùng trung tính sáng hơn",
+  "This spot can't be read": "Không đọc được điểm này"
 }
