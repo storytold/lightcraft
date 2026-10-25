@@ -90,7 +90,7 @@ fn the_review_says_how_many_files_were_skipped() {
     open_review(&mut h, &dir);
     let d = review(&mut h);
     assert_eq!(d.candidates.len(), 2);
-    assert_eq!((d.truncated, d.unreadable, d.unsupported), (false, 0, 1));
+    assert_eq!((d.scan_limited, d.unreadable, d.unsupported), (false, 0, 1));
     h.step();
     assert!(shows(&h, "1 file skipped (not a supported photo type)"), "{:?}", h.painted_text());
     assert!(has_note_widget(&mut h), "the line is a registered widget");
@@ -107,7 +107,7 @@ fn xmp_sidecars_do_not_make_the_review_say_files_were_skipped() {
     let mut h = headless();
     open_review(&mut h, &dir);
     let d = review(&mut h);
-    assert_eq!((d.candidates.len(), d.truncated, d.unreadable, d.unsupported), (1, false, 0, 0));
+    assert_eq!((d.candidates.len(), d.scan_limited, d.unreadable, d.unsupported), (1, false, 0, 0));
     h.step();
     assert!(!shows_any_note(&h), "{:?}", h.painted_text());
     assert!(!has_note_widget(&mut h));
@@ -133,7 +133,7 @@ fn the_review_says_when_the_scan_stopped_at_its_limit() {
     let mut h = headless();
     open_review(&mut h, &dir);
     let d = review(&mut h);
-    assert_eq!((d.candidates.len(), d.truncated, d.unreadable, d.unsupported), (1, true, 0, 0));
+    assert_eq!((d.candidates.len(), d.scan_limited, d.unreadable, d.unsupported), (1, true, 0, 0));
     h.step();
     assert!(shows(&h, STOPPED), "{:?}", h.painted_text());
 }
@@ -147,7 +147,7 @@ fn the_review_has_no_note_when_the_scan_left_nothing_out() {
     let mut h = headless();
     open_review(&mut h, &dir);
     let d = review(&mut h);
-    assert_eq!((d.candidates.len(), d.truncated, d.unreadable, d.unsupported), (2, false, 0, 0));
+    assert_eq!((d.candidates.len(), d.scan_limited, d.unreadable, d.unsupported), (2, false, 0, 0));
     h.step();
     assert!(!shows_any_note(&h), "{:?}", h.painted_text());
     assert!(!has_note_widget(&mut h));
@@ -165,7 +165,7 @@ fn the_note_follows_the_counters_and_the_language() {
     let all = format!("{STOPPED} · 2 folders could not be read · 3 files skipped (not a supported photo type)");
     {
         let d = review(&mut h);
-        (d.truncated, d.unreadable, d.unsupported) = (true, 2, 3);
+        (d.scan_limited, d.unreadable, d.unsupported) = (true, 2, 3);
     }
     h.step();
     h.step();
@@ -173,7 +173,7 @@ fn the_note_follows_the_counters_and_the_language() {
 
     {
         let d = review(&mut h);
-        (d.truncated, d.unreadable, d.unsupported) = (false, 1, 1);
+        (d.scan_limited, d.unreadable, d.unsupported) = (false, 1, 1);
     }
     h.step();
     h.step();
@@ -181,7 +181,7 @@ fn the_note_follows_the_counters_and_the_language() {
 
     {
         let d = review(&mut h);
-        (d.truncated, d.unreadable, d.unsupported) = (true, 1, 1);
+        (d.scan_limited, d.unreadable, d.unsupported) = (true, 1, 1);
     }
     assert_eq!(h.request("engine.execute", json!({"command": "app.language.german"}), T)["ok"], true);
     h.settle(SETTLE);
@@ -191,7 +191,7 @@ fn the_note_follows_the_counters_and_the_language() {
 
     {
         let d = review(&mut h);
-        (d.truncated, d.unreadable, d.unsupported) = (false, 0, 0);
+        (d.scan_limited, d.unreadable, d.unsupported) = (false, 0, 0);
     }
     h.step();
     h.step();
@@ -201,7 +201,7 @@ fn the_note_follows_the_counters_and_the_language() {
 /// The wording, one part per thing left out, joined into one line; singular and plural.
 #[test]
 fn the_note_names_each_thing_that_was_left_out() {
-    let note = |truncated, unreadable, unsupported| scan_note(&ImportDialog { truncated, unreadable, unsupported, ..Default::default() });
+    let note = |scan_limited, unreadable, unsupported| scan_note(&ImportDialog { scan_limited, unreadable, unsupported, ..Default::default() });
     assert_eq!(note(false, 0, 0), None);
     assert_eq!(note(true, 0, 0).as_deref(), Some(STOPPED));
     assert_eq!(note(false, 1, 0).as_deref(), Some("1 folder could not be read"));

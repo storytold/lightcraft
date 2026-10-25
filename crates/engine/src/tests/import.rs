@@ -2174,7 +2174,7 @@ fn import_preview_reports_what_the_scan_skipped() {
     let r = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!((r["scanned"].clone(), r["duplicates"].clone()), (json!(2), json!(0)), "{r}");
     assert_eq!(ids(&r, "candidates"), 2, "{r}");
-    assert_eq!(r["truncated"], false, "{r}");
+    assert_eq!(r["scanLimited"], false, "{r}");
     assert_eq!(r["skipped"], json!({"unreadable": 0, "unsupported": 2}), "notes.txt and readme.md are reported: {r}");
     for f in [src.join("a.png"), src.join("sub").join("b.png")] {
         let key = f.to_string_lossy().to_string();
@@ -2200,7 +2200,7 @@ fn import_preview_reports_what_the_scan_skipped() {
     write_png(&deep.join("top.png"), 3);
     nested(&deep, crate::walk::MAX_DEPTH);
     let r = s.execute("library.importPreview", &json!({"paths": [deep.to_string_lossy()]})).unwrap();
-    assert_eq!((r["scanned"].clone(), r["truncated"].clone()), (json!(1), json!(true)), "{r}");
+    assert_eq!((r["scanned"].clone(), r["scanLimited"].clone()), (json!(1), json!(true)), "{r}");
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&deep);
 }

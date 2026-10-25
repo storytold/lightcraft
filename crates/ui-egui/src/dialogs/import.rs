@@ -83,8 +83,8 @@ pub struct ImportDialog {
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
     /// The scan's folder walk stopped at a depth or entry limit: there may be more photos than the
-    /// review lists ([`ScanOutput::truncated`]).
-    pub truncated: bool,
+    /// review lists ([`ScanOutput::truncated`]; `scanLimited` in the `library.importPreview` reply).
+    pub scan_limited: bool,
     /// Folders the scan couldn't list ([`ScanOutput::unreadable`]).
     pub unreadable: usize,
     /// Files in the scanned folders that are not a supported photo type, XMP sidecars not counted

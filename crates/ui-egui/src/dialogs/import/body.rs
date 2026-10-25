@@ -84,7 +84,7 @@ pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
 pub(crate) fn scan_note(d: &ImportDialog) -> Option<String> {
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let mut parts: Vec<String> = Vec::new();
-    if d.truncated {
+    if d.scan_limited {
         parts.push(crate::i18n::tr("Stopped at the scan limit: there may be more photos").to_string());
     }
     if d.unreadable > 0 {
