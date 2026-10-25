@@ -682,6 +682,112 @@ fn remove_location_refuses_a_raw_that_embeds_gps() {
 }
 
 #[test]
+fn extended_xmp_original_export_refuses_embedded_gps() {
+    use crate::export::Destination;
+
+    let dir = temp_dir("extended-xmp-export-gps");
+    let src = dir.join("source");
+    let dest = dir.join("destination");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    let original = src.join("gps.jpg");
+    let bytes = crate::tests_xmp::extended_xmp_jpeg(
+        "A1234567890123456789012345678901",
+        "",
+        r#"xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="45,0N" exif:GPSLongitude="7,0E""#,
+        true,
+    );
+    std::fs::write(&original, bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    assert_eq!(s.catalog.photo(id).unwrap().meta.gps, Some((45.0, 7.0)));
+    let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true, "naming": "{name}"}));
+    let error = disk_batch(&mut s, id, &options, &Destination { dir: dest.to_string_lossy().into_owned(), exact: None }).unwrap_err();
+    assert!(error.contains("can't remove the location"), "{error}");
+    assert!(!dest.join("gps.jpg").exists());
+    assert!(!dest.join("gps.xmp").exists());
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "refused export leaves no original or sidecar");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn extended_xmp_original_export_refuses_unreadable_reference() {
+    use crate::export::Destination;
+
+    let dir = temp_dir("extended-xmp-export-invalid");
+    let src = dir.join("source");
+    let dest = dir.join("destination");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    let original = src.join("unknown.jpg");
+    let bytes = crate::tests_xmp::extended_xmp_jpeg(
+        "B1234567890123456789012345678901",
+        "",
+        r#"xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="45,0N" exif:GPSLongitude="7,0E""#,
+        false,
+    );
+    std::fs::write(&original, bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    assert!(s.catalog.photo(id).unwrap().meta.gps.is_none(), "the incomplete extension cannot supply GPS");
+    let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true, "naming": "{name}"}));
+    let error = disk_batch(&mut s, id, &options, &Destination { dir: dest.to_string_lossy().into_owned(), exact: None }).unwrap_err();
+    assert!(error.contains("can't verify location metadata") && error.contains("Extended XMP"), "{error}");
+    assert!(!dest.join("unknown.jpg").exists());
+    assert!(!dest.join("unknown.xmp").exists());
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "refused export leaves no original or sidecar");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_original_with_malformed_non_psd_xmp() {
+    use crate::export::Destination;
+
+    let dir = temp_dir("export-noloc-jpeg-xmp");
+    let src = dir.join("source");
+    let dest = dir.join("destination");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dest).unwrap();
+    let original = src.join("invalid.jpg");
+    let pixels = lightcraft_raster::Rgba8::from_fn(2, 2, |x, y| [(x * 80) as u8, (y * 80) as u8, 90, 255]);
+    let xmp = "<x:xmpmeta><broken";
+    let image = lightcraft_codecs::EncodeImage::rgba8(&pixels);
+    let meta = lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_jpeg(&image, 90, Default::default(), &meta).unwrap();
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none());
+    assert!(lightcraft_meta::try_extract(&bytes).is_err(), "fallible extraction must surface malformed JPEG XMP");
+    std::fs::write(&original, bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [original.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true, "naming": "{name}"}));
+    let error = disk_batch(&mut s, id, &options, &Destination { dir: dest.to_string_lossy().into_owned(), exact: None }).unwrap_err();
+    assert!(error.contains("can't verify location metadata") && error.contains("malformed embedded XMP"), "{error}");
+    assert!(!dest.join("invalid.jpg").exists());
+    assert!(!dest.join("invalid.xmp").exists());
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "refused export leaves no original or sidecar");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_allows_gps_free_original() {
+    use crate::export::Destination;
+
+    let (mut s, id, dir, source, original) = library_with_jpeg("remove-location-gps-free-original");
+    let dest = dir.join("destination");
+    std::fs::create_dir_all(&dest).unwrap();
+    let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true, "naming": "{name}"}));
+    let files = disk_batch(&mut s, id, &options, &Destination { dir: dest.to_string_lossy().into_owned(), exact: None }).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(std::fs::read(dest.join("IMG_1.jpg")).unwrap(), original);
+    assert!(dest.join("IMG_1.xmp").is_file(), "the edit sidecar is still written");
+    assert_eq!(std::fs::read(source).unwrap(), original, "the source remains byte-identical");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn remove_location_refuses_a_psd_that_embeds_gps() {
     let dir = temp_dir("export-noloc-psd");
     let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };

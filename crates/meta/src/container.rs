@@ -19,9 +19,9 @@ use lightcraft_tiff::{Tiff, tags};
 pub struct Embedded {
     /// TIFF-structured Exif block (without the `Exif\0\0` prefix).
     pub exif: Option<Vec<u8>>,
-    /// XMP packet (the main one; extended XMP is appended by [`Embedded::xmp_extended`]).
+    /// Standard XMP packet.
     pub xmp: Option<String>,
-    /// Extended XMP (JPEG only), reassembled.
+    /// Referenced Extended XMP packet (JPEG only), reassembled after chunk validation.
     pub xmp_extended: Option<String>,
     pub icc: Option<Vec<u8>>,
     /// IPTC-IIM stream.
@@ -34,12 +34,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
         return crate::psd::embedded(bytes);
     }
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
-        // Fujifilm RAF: metadata lives in the embedded JPEG whose (offset, length) are big-endian u32s at byte 84
-        let be = |i: usize| bytes.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
-        return match (be(84), be(88)) {
-            (Some(o), Some(l)) if o > 0 => bytes.get(o..o.saturating_add(l).min(bytes.len())).map(jpeg_segments).unwrap_or_default(),
-            _ => Embedded::default(),
-        };
+        return raf_jpeg(bytes).map(jpeg_segments).unwrap_or_default();
     }
     if let Some(m) = crate::mrw::parse(bytes) {
         // Minolta MRW: the `TTW` block is a complete TIFF with the Exif data
@@ -75,6 +70,24 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     }
 }
 
+/// Return the JPEG payload embedded in a Fujifilm RAF, if its offsets are readable.
+pub(crate) fn raf_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    if !bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return None;
+    }
+    let read_be_u32 = |offset: usize| {
+        let end = offset.checked_add(4)?;
+        let encoded: [u8; 4] = bytes.get(offset..end)?.try_into().ok()?;
+        Some(u32::from_be_bytes(encoded))
+    };
+    let offset = usize::try_from(read_be_u32(84)?).ok()?;
+    let length = usize::try_from(read_be_u32(88)?).ok()?;
+    if offset == 0 {
+        return None;
+    }
+    bytes.get(offset..offset.saturating_add(length).min(bytes.len()))
+}
+
 /// Locate metadata blocks while preserving PSD/PSB resource-structure errors for callers that
 /// must establish whether embedded GPS is absent. Other containers keep their best-effort walk.
 pub(crate) fn try_embedded(bytes: &[u8]) -> Result<Embedded, crate::ExtractError> {
@@ -83,21 +96,93 @@ pub(crate) fn try_embedded(bytes: &[u8]) -> Result<Embedded, crate::ExtractError
 
 const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+const MAX_EXTENDED_XMP_BYTES: usize = 16 * 1024 * 1024;
+const MAX_EXTENDED_XMP_CHUNKS: usize = 4096;
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExtendedXmpChunk {
+    guid: String,
+    total_length: u32,
+    offset: u32,
+    data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct JpegXmpPackets {
+    /// Whether any Extended XMP APP1 marker was present, used to reject unreferenced extensions.
+    pub(crate) saw_extension: bool,
+    /// Validation errors for the referenced GUID selected by the caller.
+    pub(crate) extension_error: Option<String>,
+    pub(crate) chunks: Vec<ExtendedXmpChunk>,
+    received_bytes: usize,
+}
+
+impl JpegXmpPackets {
+    pub(crate) fn assemble(&self, expected_guid: &str) -> Result<String, String> {
+        if let Some(error) = &self.extension_error {
+            return Err(error.clone());
+        }
+        let mut chunks: Vec<&ExtendedXmpChunk> = self.chunks.iter().filter(|chunk| chunk.guid == expected_guid).collect();
+        if chunks.is_empty() {
+            return Err(format!("no Extended XMP chunks match GUID {expected_guid}"));
+        }
+        if chunks.len() > MAX_EXTENDED_XMP_CHUNKS {
+            return Err("Extended XMP has too many chunks".into());
+        }
+        let Some(total_length) = chunks.first().map(|chunk| chunk.total_length) else {
+            return Err("Extended XMP has no chunks".into());
+        };
+        let total = usize::try_from(total_length).map_err(|_| "Extended XMP length is too large")?;
+        if total == 0 || total > MAX_EXTENDED_XMP_BYTES {
+            return Err("Extended XMP length exceeds the 16 MiB limit".into());
+        }
+        if chunks.iter().any(|chunk| chunk.total_length != total_length) {
+            return Err("Extended XMP chunks declare different full lengths".into());
+        }
+        chunks.sort_by_key(|chunk| chunk.offset);
+
+        let mut assembled = Vec::new();
+        let mut next_offset = 0u32;
+        for chunk in chunks {
+            if chunk.offset != next_offset {
+                return Err("Extended XMP chunks have a gap, overlap or duplicate offset".into());
+            }
+            let part_length = u32::try_from(chunk.data.len()).map_err(|_| "Extended XMP chunk is too large")?;
+            next_offset = chunk.offset.checked_add(part_length).ok_or("Extended XMP chunk offset overflow")?;
+            if next_offset > total_length {
+                return Err("Extended XMP chunks exceed their declared full length".into());
+            }
+            assembled.extend_from_slice(&chunk.data);
+        }
+        if next_offset != total_length || assembled.len() != total {
+            return Err("Extended XMP chunks do not cover the declared full length".into());
+        }
+        String::from_utf8(assembled).map_err(|_| "Extended XMP packet is not UTF-8".into())
+    }
+}
 
 /// Walk JPEG markers up to SOS and collect APP1 Exif / XMP, APP2 ICC and APP13 IPTC.
 pub fn jpeg_segments(b: &[u8]) -> Embedded {
+    crate::jpeg_embedded(b).0
+}
+
+/// Collect JPEG metadata and, when supplied, only validate and retain chunks for the referenced GUID.
+/// Passing `None` discovers the standard packet and extension presence without accumulating chunks,
+/// allowing the caller to apply chunk and byte limits only after resolving the reference.
+pub(crate) fn jpeg_segments_with_packets(b: &[u8], expected_guid: Option<&str>) -> (Embedded, JpegXmpPackets) {
     let mut out = Embedded::default();
     if !b.starts_with(&[0xff, 0xd8]) {
-        return out;
+        return (out, JpegXmpPackets::default());
     }
     let mut icc_parts: Vec<(u8, Vec<u8>)> = Vec::new();
-    let mut ext: Vec<(u32, Vec<u8>)> = Vec::new();
+    let mut packets = JpegXmpPackets::default();
     let mut i = 2usize;
-    while i + 4 <= b.len() {
-        if b[i] != 0xff {
+    while let Some(header_end) = i.checked_add(4).filter(|end| *end <= b.len()) {
+        let Some(header) = b.get(i..header_end) else { break };
+        if header.first() != Some(&0xff) {
             break;
         }
-        let marker = b[i + 1];
+        let Some(marker) = header.get(1).copied() else { break };
         if marker == 0xff {
             i += 1; // fill byte
             continue;
@@ -109,40 +194,95 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         if marker == 0xd9 || marker == 0xda {
             break;
         }
-        let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+        let Some(length_bytes) = header.get(2..4) else { break };
+        let len = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
         if len < 2 {
             break;
         }
-        let end = (i + 2 + len).min(b.len());
-        let payload = &b[i + 4..end];
+        let Some(segment_end) = i.checked_add(2).and_then(|start| start.checked_add(len)) else { break };
+        let payload_start = header_end;
+        let available_end = segment_end.min(b.len());
+        let Some(payload) = b.get(payload_start..available_end) else { break };
+        let complete = segment_end <= b.len();
         match marker {
-            0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
-            0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
-                out.xmp = Some(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
+            0xe1 if expected_guid.is_none() && payload.starts_with(b"Exif\0") && out.exif.is_none() => {
+                out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec());
+            }
+            0xe1 if expected_guid.is_none() && payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
+                out.xmp = Some(String::from_utf8_lossy(payload.get(XMP_SIG.len()..).unwrap_or(&[])).into_owned());
             }
             0xe1 if payload.starts_with(XMP_EXT_SIG) => {
-                // GUID (32) + full length (4) + offset (4) + data
-                let p = &payload[XMP_EXT_SIG.len()..];
-                if p.len() >= 40 {
-                    let off = u32::from_be_bytes([p[36], p[37], p[38], p[39]]);
-                    ext.push((off, p[40..].to_vec()));
+                packets.saw_extension = true;
+                if let Some(expected_guid) = expected_guid.filter(|_| packets.extension_error.is_none()) {
+                    match parse_extended_xmp_chunk(payload.get(XMP_EXT_SIG.len()..), complete, expected_guid) {
+                        Ok(Some(chunk)) => {
+                            let Some(received) = packets.received_bytes.checked_add(chunk.data.len()) else {
+                                packets.extension_error = Some("Extended XMP received length overflow".into());
+                                i = segment_end;
+                                continue;
+                            };
+                            if usize::try_from(chunk.total_length).map_or(true, |length| length > MAX_EXTENDED_XMP_BYTES) {
+                                packets.extension_error = Some("Extended XMP length exceeds the 16 MiB limit".into());
+                            } else if packets.chunks.len() >= MAX_EXTENDED_XMP_CHUNKS {
+                                packets.extension_error = Some("Extended XMP has too many chunks".into());
+                            } else if received > MAX_EXTENDED_XMP_BYTES {
+                                packets.extension_error = Some("Extended XMP received data exceeds the 16 MiB limit".into());
+                            } else {
+                                packets.received_bytes = received;
+                                packets.chunks.push(chunk);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => packets.extension_error = Some(error),
+                    }
                 }
             }
-            0xe2 if payload.starts_with(b"ICC_PROFILE\0") && payload.len() >= 14 => icc_parts.push((payload[12], payload[14..].to_vec())),
-            0xed if payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => out.iptc = photoshop_iptc(&payload[14..]),
+            0xe2 if expected_guid.is_none() && payload.starts_with(b"ICC_PROFILE\0") && payload.len() >= 14 => {
+                if let (Some(sequence), Some(data)) = (payload.get(12), payload.get(14..)) {
+                    icc_parts.push((*sequence, data.to_vec()));
+                }
+            }
+            0xed if expected_guid.is_none() && payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => {
+                out.iptc = photoshop_iptc(payload.get(14..).unwrap_or(&[]));
+            }
             _ => {}
         }
-        i = end;
+        if !complete {
+            break;
+        }
+        i = segment_end;
     }
     if !icc_parts.is_empty() {
         icc_parts.sort_by_key(|p| p.0);
         out.icc = Some(icc_parts.into_iter().flat_map(|p| p.1).collect());
     }
-    if !ext.is_empty() {
-        ext.sort_by_key(|p| p.0);
-        out.xmp_extended = Some(String::from_utf8_lossy(&ext.into_iter().flat_map(|p| p.1).collect::<Vec<u8>>()).into_owned());
+    (out, packets)
+}
+
+fn normalized_guid(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 32 || !bytes.iter().all(u8::is_ascii_hexdigit) {
+        return None;
     }
-    out
+    Some(bytes.iter().map(|byte| char::from(*byte).to_ascii_uppercase()).collect())
+}
+
+fn parse_extended_xmp_chunk(payload: Option<&[u8]>, complete: bool, expected_guid: &str) -> Result<Option<ExtendedXmpChunk>, String> {
+    let Some(payload) = payload else { return Ok(None) };
+    let Some(guid_bytes) = payload.get(..32) else { return Ok(None) };
+    let Some(guid) = normalized_guid(guid_bytes) else { return Ok(None) };
+    if guid != expected_guid {
+        return Ok(None);
+    }
+    if !complete {
+        return Err("Extended XMP APP1 segment is truncated".into());
+    }
+    if payload.len() < 40 {
+        return Err("Extended XMP APP1 header is truncated".into());
+    }
+    let length_bytes = payload.get(32..36).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()).ok_or("Extended XMP full length is truncated")?;
+    let offset_bytes = payload.get(36..40).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()).ok_or("Extended XMP offset is truncated")?;
+    let data = payload.get(40..).ok_or("Extended XMP data is truncated")?;
+    Ok(Some(ExtendedXmpChunk { guid, total_length: u32::from_be_bytes(length_bytes), offset: u32::from_be_bytes(offset_bytes), data: data.to_vec() }))
 }
 
 /// IPTC-IIM block (resource 0x0404) from a Photoshop image-resource stream (`8BIM` records).
@@ -269,16 +409,25 @@ mod tests {
 
     #[test]
     fn jpeg_extended_xmp() {
+        let guid = "A1234567890123456789012345678901";
+        let extension = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Extended title"/></rdf:RDF></x:xmpmeta>"#;
+        let standard = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:note="http://ns.adobe.com/xmp/note/" note:HasExtendedXMP="{guid}"/></rdf:RDF></x:xmpmeta>"#
+        );
         let mut j = vec![0xff, 0xd8];
-        for (off, part) in [(5u32, &b"world"[..]), (0, b"hello")] {
+        let mut standard_payload = XMP_SIG.to_vec();
+        standard_payload.extend_from_slice(standard.as_bytes());
+        j.extend(seg(0xe1, &standard_payload));
+        let split = extension.len() / 2;
+        for (off, part) in [(split as u32, extension.as_bytes().get(split..).unwrap_or(&[])), (0, extension.as_bytes().get(..split).unwrap_or(&[]))] {
             let mut p = XMP_EXT_SIG.to_vec();
-            p.extend_from_slice(&[b'A'; 32]);
-            p.extend_from_slice(&10u32.to_be_bytes());
+            p.extend_from_slice(guid.as_bytes());
+            p.extend_from_slice(&(extension.len() as u32).to_be_bytes());
             p.extend_from_slice(&off.to_be_bytes());
             p.extend_from_slice(part);
             j.extend(seg(0xe1, &p));
         }
-        assert_eq!(jpeg_segments(&j).xmp_extended.as_deref(), Some("helloworld"));
+        assert_eq!(jpeg_segments(&j).xmp_extended.as_deref(), Some(extension));
     }
 
     #[test]

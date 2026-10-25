@@ -653,13 +653,55 @@ fn jpeg_xmp_packet(rating: i8, title: &str) -> String {
     lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { rating: Some(rating), title: Some(title.into()), ..Default::default() }, None)
 }
 
-fn write_jpeg_xmp(path: &Path, packet: &str) -> Vec<u8> {
+fn encode_jpeg_xmp(packet: &str) -> Vec<u8> {
     let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
     let meta = lightcraft_codecs::EncodeMeta { xmp: Some(packet), ..Default::default() };
     let bytes = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
     assert_eq!(lightcraft_meta::embedded(&bytes).xmp.as_deref(), Some(packet), "the procedural JPEG carries the requested packet");
+    bytes
+}
+
+fn write_jpeg_xmp(path: &Path, packet: &str) -> Vec<u8> {
+    let bytes = encode_jpeg_xmp(packet);
     std::fs::write(path, &bytes).unwrap();
     bytes
+}
+
+fn test_jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+    let len = u16::try_from(payload.len() + 2).expect("test JPEG segment fits u16");
+    let mut segment = vec![0xff, marker];
+    segment.extend_from_slice(&len.to_be_bytes());
+    segment.extend_from_slice(payload);
+    segment
+}
+
+/// A generated JPEG with a referenced, two-part Extended XMP packet. The parts are deliberately
+/// written in reverse order to exercise offset-based assembly.
+pub(crate) fn extended_xmp_jpeg(guid: &str, standard_properties: &str, extension_properties: &str, complete: bool) -> Vec<u8> {
+    const XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+    let standard = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:ref="http://ns.adobe.com/xmp/note/" ref:HasExtendedXMP="{guid}" {standard_properties}/></rdf:RDF></x:xmpmeta>"#
+    );
+    let extension = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {extension_properties}/></rdf:RDF></x:xmpmeta>"#
+    );
+    let mut base = encode_jpeg_xmp(&standard);
+    let mut out = base.get(..2).unwrap_or(&[]).to_vec();
+    let split = extension.len() / 2;
+    let mut pieces = vec![(split as u32, extension.as_bytes().get(split..).unwrap_or(&[]))];
+    if complete {
+        pieces.push((0, extension.as_bytes().get(..split).unwrap_or(&[])));
+    }
+    for (offset, piece) in pieces {
+        let mut payload = XMP_EXT_SIG.to_vec();
+        payload.extend_from_slice(guid.as_bytes());
+        payload.extend_from_slice(&(extension.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&offset.to_be_bytes());
+        payload.extend_from_slice(piece);
+        out.extend(test_jpeg_segment(0xe1, &payload));
+    }
+    out.extend(base.drain(2..));
+    out
 }
 
 #[test]
@@ -854,6 +896,61 @@ fn embedded_jpeg_xmp_reread_all_metadata_uses_supplied_bytes() {
     assert_eq!(photo.develop, before.develop);
     assert_eq!(std::fs::read(&file).unwrap(), original);
     assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), packet);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn extended_xmp_all_metadata_includes_extension() {
+    let src = temp_dir("extended-xmp-all-metadata");
+    let file = src.join("photo.jpg");
+    let bytes = extended_xmp_jpeg(
+        "A1234567890123456789012345678901",
+        r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Standard title""#,
+        r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:description="Extended caption" xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="45,0N" exif:GPSLongitude="7,0E""#,
+        true,
+    );
+    std::fs::write(&file, &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.gps, Some((45.0, 7.0)));
+
+    let query = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    let xmp = query["xmp"].as_array().unwrap();
+    assert!(xmp.iter().any(|x| x["name"] == "dc:title" && x["value"] == "Standard title"), "{query}");
+    assert!(xmp.iter().any(|x| x["name"] == "dc:description" && x["value"] == "Extended caption"), "{query}");
+    assert!(xmp.iter().any(|x| x["name"] == "exif:GPSLatitude" && x["value"] == "45,0N"), "{query}");
+
+    // A sidecar remains authoritative for All Metadata when one exists.
+    let sidecar = src.join("photo.xmp");
+    let sidecar_packet = jpeg_xmp_packet(2, "Sidecar title");
+    std::fs::write(&sidecar, &sidecar_packet).unwrap();
+    let query = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    let xmp = query["xmp"].as_array().unwrap();
+    assert!(xmp.iter().any(|x| x["name"] == "dc:title" && x["value"] == "Sidecar title"), "{query}");
+    assert!(!xmp.iter().any(|x| x["name"] == "dc:description"), "sidecar precedence excludes embedded fields: {query}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn extended_xmp_all_metadata_keeps_standard_fields_when_extension_is_invalid() {
+    let src = temp_dir("extended-xmp-all-metadata-invalid");
+    let file = src.join("photo.jpg");
+    let bytes = extended_xmp_jpeg(
+        "C1234567890123456789012345678901",
+        r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Standard title""#,
+        r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:description="Incomplete extension""#,
+        false,
+    );
+    std::fs::write(&file, bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let query = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    let xmp = query["xmp"].as_array().unwrap();
+    assert!(xmp.iter().any(|x| x["name"] == "dc:title" && x["value"] == "Standard title"), "{query}");
+    assert!(!xmp.iter().any(|x| x["name"] == "dc:description"), "invalid extension properties stay hidden: {query}");
+    assert!(!xmp.iter().any(|x| x["name"] == "xmpNote:HasExtendedXMP"), "the internal selector is not exposed: {query}");
     let _ = std::fs::remove_dir_all(&src);
 }
 

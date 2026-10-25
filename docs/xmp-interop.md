@@ -10,7 +10,7 @@ other tools), and let LightCraft pick up edits made elsewhere.
 |---|---|
 | Name | `<stem>.xmp` by default (`IMG_0001.CR3` → `IMG_0001.xmp`); `<file>.xmp` (`IMG_0001.CR3.xmp`) with `naming: "full"`. Reading accepts either (preferred first) and `.XMP`. With stem naming, files sharing a stem don't share a sidecar: see *Shared names* below. |
 | Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
-| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). Manual rereading uses embedded XMP in raw/DNG and JPEG files when no sidecar exists. A discovered sidecar that cannot be read or parsed is reported in `failed`, without applying embedded values. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). A file arriving in an import is ranked as if it were catalogued already: it reads its own `<file>.xmp` when another file of its stem (a raw first) owns the shared stem sidecar (issue #1905). |
+| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). Embedded extraction and `photo.allMetadata` compose a valid, referenced JPEG Extended XMP packet. Manual rereading uses embedded XMP in raw/DNG and JPEG files when no sidecar exists; its JPEG reader remains standard-APP1-only. A discovered sidecar that cannot be read or parsed is reported in `failed`, without applying embedded values. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). A file arriving in an import is ranked as if it were catalogued already: it reads its own `<file>.xmp` when another file of its stem (a raw first) owns the shared stem sidecar (issue #1905). |
 | Preferences | `library.xmpPreferences {autoWrite?, naming?: stem\|full}`, stored in the library's `prefs.json`. |
 
 What we write (standard namespaces, so other tools can read the metadata):
@@ -57,12 +57,30 @@ XMP beyond those limits therefore cannot be manually reread through this path. E
 packets between scans are not supported by manual JPEG rereading.
 
 Packet completeness is stricter than the shared best-effort JPEG extractor; it is not strict whole-JPEG
-validation. A complete early XMP packet can be returned without examining the remaining file. Import and
-`photo.allMetadata` retain their existing extraction paths. Command regressions in
+validation. A complete early XMP packet can be returned without examining the remaining file. This bounded
+manual reader intentionally remains standard-APP1-only: it does not assemble Extended XMP or read packets
+between scans. Import and `photo.allMetadata` use the shared extension-aware embedded extractor described
+below. Command regressions in
 `crates/engine/src/tests_xmp.rs` cover metadata/undo and sidecar precedence, an over-nested XMP packet and a
 truncated APP1 without an XMP signature. Separate reader cases in `sidecar::jpeg_header_tests` use small
 counted readers and injected limits for span/step boundaries, complete versus truncated APP1, early stopping,
 short reads and I/O errors.
+
+## Embedded JPEG Extended XMP (2026-10-22)
+
+Import, `photo.allMetadata`'s embedded fallback and Original export with **Remove location info** use the shared
+embedded-XMP composition path. The standard APP1 packet must contain a namespace-qualified
+`xmpNote:HasExtendedXMP` property with a 32-character hexadecimal GUID. Only APP1 extension chunks with that GUID
+are assembled. Chunks may arrive in any order, but their GUIDs and declared full lengths must agree, offsets must
+cover the packet exactly without gaps or overlap, and every APP1 payload must be complete. Assembly is bounded to
+16 MiB and 4,096 chunks.
+
+The standard and extension RDF properties and structured values are composed before LightCraft projects metadata,
+so fields split between packets (for example, latitude and longitude) remain usable. When assembly or parsing fails,
+ordinary metadata reads keep the parsed standard-packet fields and omit extension data. Original export uses the
+fallible `try_extract` path: with **Remove location info**, it refuses a GPS-bearing file, malformed embedded XMP, or
+a referenced extension it cannot inspect. The ordinary `extract` path remains best-effort. Sidecars still take
+precedence for `photo.allMetadata`.
 
 ## Saving into an existing sidecar
 

@@ -8,12 +8,13 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 |---|---|
 | `read_exif(&[u8]) -> Metadata` | TIFF-structured Exif block (whole TIFF/DNG/raw file, or JPEG APP1 payload with/without `Exif\0\0`). `try_read_exif` reports header errors. |
 | `from_tiff(&Tiff) -> Metadata` | Same, from an already parsed stream (used by `lightcraft-raw`). |
-| `embedded(&[u8]) -> Embedded` | Sniffs JPEG / PNG / WebP / TIFF / PSD / PSB and returns the Exif, XMP (+ extended XMP), ICC and IPTC blocks. PSD/PSB EXIF resource 1058 and XMP resource 1060 are read from the bounded image-resource section without decoding pixels. `jpeg_segments`, `png_chunks`, `webp_chunks` are the per-container walkers. |
+| `embedded(&[u8]) -> Embedded` | Sniffs JPEG / PNG / WebP / TIFF / PSD / PSB and returns the Exif, XMP (including a validated, referenced JPEG Extended XMP packet), ICC and IPTC blocks. PSD/PSB EXIF resource 1058 and XMP resource 1060 are read from the bounded image-resource section without decoding pixels. `jpeg_segments`, `png_chunks`, `webp_chunks` are the per-container walkers. |
 | `parse_xmp(&str) -> Result<XmpData>` | Metadata + the opaque `lc:settings` JSON + every property (`prefix:name`, structs flattened as `a:b/c:d`). |
+| `parse_embedded_xmp(&[u8]) -> Result<Option<XmpData>, EmbeddedXmpError>` | Parses embedded XMP and composes a referenced JPEG Extended XMP packet before projecting metadata. On malformed XMP or an invalid extension, the error retains parsed standard-packet data for best-effort reads when available. |
 | `write_xmp(&Metadata, Option<&str>) -> String` | Complete `<?xpacket?>` packet; the second argument is LightCraft's full develop settings JSON. |
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
-| `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
-| `try_extract(&[u8]) -> Result<Metadata, ExtractError>` | Like `extract`, but reports malformed PSD/PSB headers, image-resource sections, or embedded EXIF/XMP structure (including duplicate EXIF/XMP resources) so callers can fail closed when location absence cannot be established. Other formats remain best-effort. |
+| `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP (including valid referenced JPEG Extended XMP) overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
+| `try_extract(&[u8]) -> Result<Metadata, ExtractError>` | Like `extract`, but reports malformed PSD/PSB structure and malformed embedded XMP (including invalid referenced JPEG Extended XMP) so callers can fail closed when metadata absence cannot be established. EXIF remains best-effort outside PSD/PSB. |
 
 `Metadata` carries camera (make, model, serial, software), lens (make, model, serial, specification), capture
 (date-time with UTC offset and milliseconds, exposure time, f-number, ISO incl. extended ISO, focal length and
@@ -34,6 +35,19 @@ hex encoding keeps `/` reserved for struct paths. Other unknown prefixes keep th
 Merging preserves the original foreign XML rather than writing these opaque keys into the packet.
 The parser and merge scanner each cap generated opaque names at 8 MiB per packet, returning `TooComplex`
 if repeated use of a long namespace URI would exceed that budget.
+
+## JPEG Extended XMP
+
+Embedded extraction follows only the extension selected by the standard packet's namespace-qualified
+`xmpNote:HasExtendedXMP` property. It matches the 32-character hexadecimal GUID, requires consistent declared
+lengths and complete, nonoverlapping chunk coverage, and accepts chunks in any order. Assembly is limited to 16 MiB
+and 4,096 chunks; truncated APP1 payloads, malformed headers, gaps, overlaps, duplicate offsets and invalid UTF-8
+are rejected. A failed extension leaves the standard packet available to best-effort extraction, while
+`parse_embedded_xmp` and `try_extract` report why the referenced packet could not be inspected.
+
+This applies to embedded extraction and `photo.allMetadata`. The separately bounded **Read Metadata from File**
+JPEG reader remains standard-APP1-only; it does not assemble Extended XMP or inspect packets between scans (details
+in [XMP interop](../../docs/xmp-interop.md)).
 
 ## Robustness
 

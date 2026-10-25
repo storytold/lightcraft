@@ -84,6 +84,13 @@
 
 ## 2026-10-22
 
+### JPEG Extended XMP metadata reaches the library
+- Import and All Metadata now compose the standard JPEG XMP packet with its referenced Extended XMP packet, so
+  split GPS coordinates and descriptive fields are visible together. Extension chunks are checked for a matching
+  GUID and complete coverage. Original export with **Remove location info** now refuses a GPS-bearing file or
+  embedded XMP it cannot inspect. The separately bounded Read Metadata from File JPEG reader remains
+  standard-APP1-only.
+
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
   is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's
