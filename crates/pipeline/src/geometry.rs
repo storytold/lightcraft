@@ -37,6 +37,9 @@ pub struct Frame {
     /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
     /// frame's transformed image, like spots and the crop.
     pub masks_on_photo: bool,
+    /// Filter of the area downscale ahead of the bilinear resample ([`Frame::sample`]); see
+    /// [`crate::Downscale`].
+    pub downscale: Filter,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -82,6 +85,7 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
             masks_on_photo: false,
+            downscale: Filter::Mitchell,
         };
         if apply_crop {
             f.constrain_to_image(s.geometry.constrain_crop);
@@ -333,7 +337,7 @@ impl Frame {
         let o = oriented.as_ref().unwrap_or(src);
         let plan = self.sample_plan(src.width, src.height, w, h);
         let base = match plan.prefilter {
-            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
+            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, self.downscale)),
             None => std::borrow::Cow::Borrowed(o),
         };
         self.sample_base(base, plan, w, h)
@@ -355,7 +359,7 @@ impl Frame {
         let mut bases: Vec<((usize, usize), Rgb32f)> = Vec::new();
         for dims in plans.iter().filter_map(|p| p.1.prefilter) {
             if !bases.iter().any(|b| b.0 == dims) {
-                bases.push((dims, resize(o, dims.0, dims.1, Filter::Mitchell)));
+                bases.push((dims, resize(o, dims.0, dims.1, self.downscale)));
             }
         }
         plans
@@ -443,7 +447,7 @@ pub struct SamplePlan {
     /// Oriented source size.
     pub ow: usize,
     pub oh: usize,
-    /// Size of the Mitchell prefilter (area downscale before the bilinear resample), if any.
+    /// Size of the prefilter ([`Frame::downscale`]: area downscale before the bilinear resample), if any.
     pub prefilter: Option<(usize, usize)>,
     /// Oriented-source px → prefiltered px.
     pub sx: f64,

@@ -245,6 +245,36 @@ const SHARPENED: [u64; 9] = [
     0x139f_6d78_b1f2_a910,
 ];
 
+/// Output sharpening (#2970): each step crisper than the one before, Screen / Standard roughly a
+/// typical web export's, and no wide light or dark rim along a strong edge (overshoot stays
+/// within a tenth of the edge's contrast). Colour is left alone: a grey edge stays grey.
+#[test]
+fn sharpen_steps_are_crisper_without_halos() {
+    let edge = || {
+        let mut img = Rgba8::new(32, 8);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            let v = if i % 32 < 16 { 40 } else { 220 };
+            *p = [v, v, v, 255];
+        }
+        img
+    };
+    let mut last = 0u8;
+    for amount in [SharpenAmount::Low, SharpenAmount::Standard, SharpenAmount::High] {
+        let mut img = edge();
+        output_sharpen(&mut img, SharpenFor::Screen, amount);
+        let (dark, light) = (img.data[15], img.data[16]);
+        let spread = (40 - dark[0]).max(light[0] - 220);
+        assert!(spread >= last && spread > 0, "{amount:?}: {dark:?} {light:?}");
+        assert!(dark[0] >= 40 - 18 && light[0] <= 220 + 18, "{amount:?}: {dark:?} {light:?}");
+        assert!(dark[0] == dark[1] && dark[1] == dark[2] && light[0] == light[2], "grey stays grey");
+        assert_eq!(img.data[0][0], 40, "{amount:?}: flat areas untouched");
+        last = spread;
+    }
+    let mut none = edge();
+    output_sharpen(&mut none, SharpenFor::None, SharpenAmount::High);
+    assert_eq!(none.data, edge().data);
+}
+
 /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
 /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
 /// a keyword left out of export. They used to carry the `a|b` paths in `dc:subject`.
