@@ -356,7 +356,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         // what the library doesn't know yet joins the Local view
         let queue: Vec<String> =
-            out.candidates.iter().filter(|c| c.duplicate != Some("path".into()) && c.error.is_none()).map(|c| c.path.clone()).collect();
+            out.candidates.iter().filter(|c| c.duplicate != Some("path".into()) && !c.local && c.error.is_none()).map(|c| c.path.clone()).collect();
         if !queue.is_empty() {
             let undo0 = app.session.undo.len();
             let total = queue.len();

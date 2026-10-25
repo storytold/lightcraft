@@ -38,7 +38,7 @@ pub struct ImportJob {
     /// as the options said when the import was set up).
     pub(super) library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
-    pub(super) by_path: HashMap<String, (PhotoId, bool)>,
+    pub(super) by_path: HashMap<String, (PhotoId, bool, Option<String>)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     pub(super) probe: Option<crate::media::FileProbe>,
@@ -240,9 +240,12 @@ impl ImportJob {
                 continue;
             }
             if let Source::File { path } = &p.source {
-                self.by_path.insert(path.clone(), (p.id, p.local));
+                self.by_path.insert(path.clone(), (p.id, p.local, p.content_hash.clone()));
             }
-            if let Some(h) = &p.content_hash {
+            // (a copy that was only browsed in Local isn't in the library)
+            if !p.local
+                && let Some(h) = &p.content_hash
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -259,14 +262,24 @@ impl ImportJob {
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
         let mut todo = Vec::new();
         for f in files {
-            match self.by_path.get(f.as_str()).copied() {
-                Some((id, true)) if !opts.local => {
+            match self.by_path.get(f.as_str()).cloned() {
+                Some((id, true, hash)) if !opts.local => {
+                    // a library photo with the same content comes first, and a file promoted earlier
+                    // (here or in a previous batch) counts as the library's from then on
+                    if let Some(h) = &hash {
+                        if let Some(existing) = self.by_hash.get(h) {
+                            out.items.push(PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash });
+                            self.done.fetch_add(1, Relaxed);
+                            continue;
+                        }
+                        self.by_hash.insert(h.clone(), Some(id));
+                    }
                     // a file that was only browsed (Local) joins the library when it is imported for real
-                    self.by_path.insert(f, (id, false));
+                    self.by_path.insert(f, (id, false, hash));
                     out.items.push(PreparedItem::Promote(id));
                     self.done.fetch_add(1, Relaxed);
                 }
-                Some((id, _)) => {
+                Some((id, _, _)) => {
                     out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, file: None });
                     self.done.fetch_add(1, Relaxed);
                 }
