@@ -275,6 +275,25 @@ fn sharpen_steps_are_crisper_without_halos() {
     assert_eq!(none.data, edge().data);
 }
 
+/// Output sharpening of a float image with NaN and infinite samples does not panic (#2970 review):
+/// they are sharpened as black and every result is finite.
+#[test]
+fn sharpen_deep_survives_non_finite_samples() {
+    let (nan, inf) = (f32::NAN, f32::INFINITY);
+    let mut samples = vec![0.5f32; 27];
+    samples[..9].copy_from_slice(&[nan, nan, nan, inf, inf, inf, -inf, nan, inf]);
+    samples[12] = nan;
+    samples[20] = inf;
+    for target in [SharpenFor::Screen, SharpenFor::Glossy, SharpenFor::Matte] {
+        let mut img = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(samples.clone()) };
+        output_sharpen_deep(&mut img, target, SharpenAmount::High);
+        let DeepSamples::F32(out) = &img.samples else { unreachable!() };
+        assert!(out.iter().all(|v| v.is_finite() && *v >= 0.0), "{target:?}: {out:?}");
+    }
+    let mut all_nan = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(vec![nan; 27]) };
+    output_sharpen_deep(&mut all_nan, SharpenFor::Screen, SharpenAmount::Standard);
+}
+
 /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
 /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
 /// a keyword left out of export. They used to carry the `a|b` paths in `dc:subject`.

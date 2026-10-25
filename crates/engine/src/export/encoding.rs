@@ -37,7 +37,8 @@ pub fn output_sharpen_deep(img: &mut DeepImage, target: SharpenFor, amount: Shar
             }
         }
         DeepSamples::F32(v) => {
-            let src: Vec<[f32; 3]> = v.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect();
+            // A NaN or infinite sample would poison its neighbours' blur and local range; treat it as black.
+            let src: Vec<[f32; 3]> = v.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]].map(|x| if x.is_finite() { x } else { 0.0 })).collect();
             if let Some(out) = unsharp(w, h, &src, target, amount) {
                 for (d, s) in v.iter_mut().zip(out.as_flattened()) {
                     *d = s.max(0.0);
@@ -93,7 +94,8 @@ fn unsharp(w: usize, h: usize, src: &[[f32; 3]], target: SharpenFor, amount: Sha
             .enumerate()
             .map(|(i, p)| {
                 let (y, margin) = (luma[i], (hi[i] - lo[i]) * SHARPEN_OVERSHOOT);
-                let sharp = (y + (y - blur[i]) * k).clamp(lo[i] - margin, hi[i] + margin);
+                // max/min rather than clamp: never panics, even on bounds a non-finite input left inverted or NaN.
+                let sharp = (y + (y - blur[i]) * k).max(lo[i] - margin).min(hi[i] + margin);
                 p.map(|v| v + sharp - y)
             })
             .collect(),
