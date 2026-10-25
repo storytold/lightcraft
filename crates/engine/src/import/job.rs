@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes};
+use super::files::{Seen, expand_knowing, probe_all, reusable_probes};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, ListedFolders, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -45,9 +45,9 @@ pub struct ImportJob {
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
     pub(super) cache: HashMap<String, ProbeInfo>,
-    naming: crate::sidecar::SidecarNaming,
+    pub(super) naming: crate::sidecar::SidecarNaming,
     /// The `.xmp` names in the folders [`ImportJob::expand`] listed.
-    listed: ListedFolders,
+    pub(super) listed: ListedFolders,
     now: String,
     /// Next rename number; `None` once the final representable value has been reserved.
     seq: Option<usize>,

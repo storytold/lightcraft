@@ -1,4 +1,4 @@
-use super::fs::{MoveFs, RealFs, folded_path, is_respelling, move_one, sidecars};
+use super::fs::{ListedSources, MoveFs, RealFs, folded_path, is_respelling, move_one, sidecars};
 use super::sidecar::{RetainedPacket, SidecarMove, advance_packets, note_companions, packet_aliases};
 use super::{HashMap, HashSet, Op, Path, PathBuf, SidecarNaming, Source};
 

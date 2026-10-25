@@ -118,10 +118,23 @@ fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::wa
     expand_report_knowing(paths, skip, limits, note, false, &|_| false)
 }
 
-/// [`expand_report_noting`], taking the paths `known_file` says are files as files without asking the
+/// [`expand_noting`], taking the paths `known_file` says are files as files without asking the
 /// disk (a review hands over thousands of them, and telling a file from a folder is a round trip
 /// each on a network share). With `timed`, each folder's modification time goes to `note` too
 /// ([`crate::walk::files_in_noting_timed`]).
+pub(super) fn expand_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
+) -> (Vec<String>, bool) {
+    let e = expand_report_knowing(paths, skip, limits, note, timed, known_file);
+    (e.files, e.truncated)
+}
+
+/// [`expand_knowing`] keeping the walks' diagnostics ([`Expansion`]).
 pub(super) fn expand_report_knowing(
     paths: &[String],
     skip: Option<&Path>,

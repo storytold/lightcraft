@@ -41,9 +41,9 @@ impl MoveFs for Counting {
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
         RealFs.stem_sibling(sidecar)
     }
-    fn list_dir(&self, dir: &Path) -> Option<Vec<std::ffi::OsString>> {
+    fn list_dir(&self, dir: &Path, budget: usize) -> Option<Vec<std::ffi::OsString>> {
         self.listings.set(self.listings.get() + 1);
-        if self.can_list { RealFs.list_dir(dir) } else { None }
+        if self.can_list { RealFs.list_dir(dir, budget) } else { None }
     }
 }
 
@@ -135,4 +135,36 @@ fn a_folder_that_cannot_be_listed_or_is_too_small_is_probed_photo_by_photo() {
         assert_eq!(fs.listings.get(), usize::from(can_list && photos >= LIST_FOLDER_AT) + usize::from(!can_list), "{can_list} {photos}");
         let _ = std::fs::remove_dir_all(from.parent().unwrap());
     }
+}
+
+/// Given a folder that holds more entries than the listing budget, when its photos are moved,
+/// then the folder is not collected (the read stops at the budget) and each photo's sidecar is
+/// still probed and moved with it.
+#[test]
+fn a_folder_past_the_listing_budget_is_not_listed_and_is_probed_photo_by_photo() {
+    let (from, to) = scratch("budget");
+    let all = moves(&from, &to, 12);
+    for (src, _) in &all {
+        std::fs::write(src, b"x").unwrap();
+    }
+    std::fs::write(from.join("p00.XMP"), b"<x/>").unwrap();
+    // 13 entries: 12 photos and a sidecar
+    assert!(RealFs.list_dir(&from, 12).is_none(), "one entry past the budget");
+    assert_eq!(RealFs.list_dir(&from, 13).map(|n| n.len()), Some(13), "a budget of exactly its size lists it");
+
+    let fs = Counting::new(true);
+    let listed = ListedSources::with_budget(&fs, &all, 12);
+    assert!(listed.folders.borrow().is_empty(), "the folder is past the budget");
+    let listed = ListedSources::with_budget(&fs, &all, 13);
+    assert_eq!(listed.folders.borrow().len(), 1, "and within it, listed");
+
+    // the move itself goes photo by photo: every photo asks the disk, the sidecar still follows
+    let probing = Counting::new(true);
+    let listed = ListedSources::with_budget(&probing, &all, 12);
+    for (a, b) in &all {
+        move_file_with(&listed, a, b).unwrap();
+    }
+    assert!(probing.xmp_asked.get() >= 12 * 4, "each photo is probed: {}", probing.xmp_asked.get());
+    assert!(names_lower(&to).contains(&"p00.xmp".to_string()));
+    let _ = std::fs::remove_dir_all(from.parent().unwrap());
 }

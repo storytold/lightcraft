@@ -38,9 +38,9 @@ mod plan;
 mod sidecar;
 mod tokens;
 
-pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
-use fs::{folded_path, same_contents};
+use fs::{LIST_FOLDER_AT, ListedSources, folded_path, same_contents};
+pub(crate) use fs::{MoveFs, RealFs};
 pub(crate) use moves::move_all;
 #[cfg(test)]
 pub(crate) use moves::move_file_with;
