@@ -21,7 +21,7 @@
 
 use egui::{Color32, Painter, Rect, Ui};
 use lightcraft_catalog::PhotoId;
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 // Re-exported so a host application, and a test, can name these types without
 // depending on the crates they come from.
@@ -381,6 +381,18 @@ impl CloudApp for LightcraftApp {
         Some("The photo is exported as a developed image in the format the destination expects.".into())
     }
 
+    fn recents(&self) -> Vec<String> {
+        self.ui.settings.recent_libraries.clone()
+    }
+
+    fn open_recent(&mut self, path: &str) {
+        let _ = self.run("file.open", json!({"path": path}));
+    }
+
+    fn browse_local(&mut self) {
+        let _ = self.run("file.open", json!({}));
+    }
+
     fn style(&self, ui: &Ui) -> craft_ui::cloud::CloudStyle {
         let t = Tokens::get(ui.ctx());
         craft_ui::cloud::CloudStyle {
@@ -398,25 +410,15 @@ impl CloudApp for LightcraftApp {
 
 // ---------------------------------------------------------------- where the pages are drawn
 
-/// Draw the cloud Open page inside an existing panel.
-///
-/// Drawn only when a service is configured. An empty list where a heading
-/// should be reads to a user as a broken window.
+/// File › Open chrome: Recent, Cloud, Shared with me, and This computer.
 pub fn open_section(app: &mut LightcraftApp, ui: &mut Ui) {
-    if !available(app) {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    ui.add_space(12.0);
-    ui.label(egui::RichText::new("Cloud Storage").font(egui::FontId::new(15.0, egui::FontFamily::Name("semibold".into()))).color(t.text));
-    ui.add_space(8.0);
     open_page(app, ui);
 }
 
 /// The cloud Open and Save pages as a modal, reached from the File menu.
 pub fn modal(app: &mut LightcraftApp, page: CloudPage, ctx: &egui::Context) {
     let title = match page {
-        CloudPage::Open => "Open from Cloud Storage",
+        CloudPage::Open => "Open",
         CloudPage::Save => "Save to Cloud Storage",
     };
     let mut close = false;
