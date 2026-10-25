@@ -53,19 +53,27 @@ pub(crate) fn covers_other_disks(s: &Session, path: &str, ids: &[PhotoId]) -> bo
 /// can't test another smart album): refuse up front, naming it, instead of letting the rules'
 /// check say so without the cause.
 pub(super) fn several_smart_refused(s: &Session, cmd: &str) -> Result<()> {
-    let shown = s.source_albums();
-    if shown.len() < 2 {
-        return Ok(());
-    }
-    match shown.iter().find_map(|a| s.catalog.album(*a).filter(|a| a.is_smart())) {
-        Some(smart) => Err(bad(
-            cmd,
-            format!(
-                "the view shows several albums and \"{}\" is a smart album: smart album rules can't test another smart album. Show only albums that aren't smart, or save the smart album's own view",
-                smart.name
-            ),
-        )),
-        None => Ok(()),
+    s.view_save_refusal().map_or(Ok(()), |why| Err(bad(cmd, why)))
+}
+
+impl Session {
+    /// Why the current view can't be saved as smart-album rules (Create Smart Album from Filter,
+    /// Update Rules from Current Filter), or `None` when it can. The one check behind the menu
+    /// item's grey-out and the refusal of `album.createSmart` / `album.setRules {fromView}`.
+    pub fn view_save_refusal(&self) -> Option<String> {
+        // (asked every frame by the menus: most views name no second album, so say so without a list)
+        if self.also_albums.is_empty() {
+            return None;
+        }
+        let shown = self.source_albums();
+        if shown.len() < 2 {
+            return None;
+        }
+        let smart = shown.iter().find_map(|a| self.catalog.album(*a).filter(|a| a.is_smart()))?;
+        Some(format!(
+            "the view shows several albums and \"{}\" is a smart album: smart album rules can't test another smart album. Show only albums that aren't smart, or save the smart album's own view",
+            smart.name
+        ))
     }
 }
 

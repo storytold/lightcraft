@@ -474,3 +474,27 @@ fn albums_in_a_filter_put_aside_do_not_come_back_beside_an_album_source() {
     assert_eq!(shown(&mut s), vec![ids[0], ids[1]]);
     assert!(filter_chips(&s.filter, &s.catalog).is_empty());
 }
+
+#[test]
+fn a_view_of_several_albums_with_a_smart_one_says_why_it_cannot_be_saved() {
+    let mut s = Session::new();
+    let (_, a, b) = two_albums(&mut s);
+    let smart = s.execute("album.createSmart", &json!({"name": "Rated", "rules": {"rating": 1}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("library.source", &json!({"kind": "album", "ids": [a, b]})).unwrap();
+    assert_eq!(s.view_save_refusal(), None);
+    s.execute("library.source", &json!({"kind": "album", "ids": [a, smart]})).unwrap();
+    let why = s.view_save_refusal().expect("refused");
+    assert!(why.contains("\"Rated\" is a smart album"), "{why}");
+    // the commands refuse with that same sentence, and nothing is created or changed
+    let before = s.catalog.to_snapshot();
+    for (cmd, params) in [("album.createSmart", json!({"name": "Both"})), ("album.setRules", json!({"id": smart, "fromView": true}))] {
+        let e = s.execute(cmd, &params).unwrap_err().to_string();
+        assert!(e.contains(&why), "{cmd}: {e}");
+    }
+    assert_eq!(s.catalog.to_snapshot(), before);
+    // rules given in the call don't depend on the view
+    s.execute("album.createSmart", &json!({"name": "Explicit", "rules": {"rating": 2}})).unwrap();
+    // one smart album alone is saved as its own rules
+    s.execute("library.source", &json!({"kind": "album", "id": smart})).unwrap();
+    assert_eq!(s.view_save_refusal(), None);
+}
