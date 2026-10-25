@@ -12,7 +12,7 @@ use crate::*;
 
 /// Settings with nothing stated, as every saved library reads them: every value its default,
 /// on the first rendering process (a missing process never means "the default one").
-fn base() -> DevelopSettings {
+pub(crate) fn base() -> DevelopSettings {
     serde_json::from_str("{}").unwrap()
 }
 
@@ -32,7 +32,7 @@ fn plain(id: u64) -> Photo {
 
 // ---- fixtures (also used, as they are, to write `fixtures/v<N>-catalog.*` with the build of format N)
 
-fn edited(d: impl FnOnce(&mut DevelopSettings)) -> Arc<DevelopSettings> {
+pub(crate) fn edited(d: impl FnOnce(&mut DevelopSettings)) -> Arc<DevelopSettings> {
     let mut s = base();
     d(&mut s);
     Arc::new(s)
@@ -40,7 +40,7 @@ fn edited(d: impl FnOnce(&mut DevelopSettings)) -> Arc<DevelopSettings> {
 
 /// Settings with lists, choices and optional values: masks of several kinds, curve points,
 /// guides, an Upright transform, a locked crop aspect, spots, red eye, point colours.
-fn rich() -> DevelopSettings {
+pub(crate) fn rich() -> DevelopSettings {
     use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape, PointColor, RedEye, SegMask, Spot};
     use lightcraft_geom::{Homography, Point};
     let at = |x: f64, y: f64| Point { x, y };
