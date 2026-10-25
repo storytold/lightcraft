@@ -2358,5 +2358,17 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "The browser's graphics connection was lost": "Se perdió la conexión gráfica del navegador",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "La sesión de edición sigue abierta. Haz una copia de seguridad antes de recargar. La copia incluye los ajustes y los originales disponibles. Conserva también tus fotos de origen.",
+  "Back up library": "Crear copia de seguridad de la biblioteca",
+  "Reload after backup": "Recargar tras la copia de seguridad",
+  "Preparing the backup. Keep this page open…": "Preparando la copia de seguridad. Mantén esta página abierta…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Se inició la descarga de la copia de seguridad de la biblioteca. Comprueba que el ZIP esté guardado antes de recargar.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Falló la copia de seguridad. Mantén esta página abierta; no la recargues hasta que tu trabajo esté protegido.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "La copia de seguridad no incluye los originales no disponibles. Conserva estas fotos de origen por separado:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "¿Has guardado el ZIP de la copia de seguridad y conservado las fotos de origen que faltan? Al recargar se descartan la sesión temporal y los cambios sin guardar. Restaura el ZIP mediante Archivo > Restaurar biblioteca desde copia de seguridad en una sesión con almacenamiento del navegador.",
+  "Graphics restored — restart after protecting your work": "Conexión gráfica restablecida — reinicia después de proteger tu trabajo",
+  "Backing up library": "Creando copia de seguridad de la biblioteca",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "No se pudieron enumerar los originales almacenados. Esta copia de seguridad puede omitir fotos de origen que no estén ni en el catálogo actual ni en la memoria. Conserva tus fotos de origen por separado."
 }

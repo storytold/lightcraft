@@ -2361,5 +2361,17 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "The browser's graphics connection was lost": "La connessione grafica del browser è stata persa",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "La sessione di modifica è ancora aperta. Crea un backup prima di ricaricare. Il backup include le modifiche e gli originali disponibili. Conserva anche le foto sorgente.",
+  "Back up library": "Crea un backup della libreria",
+  "Reload after backup": "Ricarica dopo il backup",
+  "Preparing the backup. Keep this page open…": "Preparazione del backup. Tieni aperta questa pagina…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Il download del backup della libreria è iniziato. Verifica che il file ZIP sia stato salvato prima di ricaricare.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Backup non riuscito. Tieni aperta questa pagina; non ricaricarla finché il tuo lavoro non è al sicuro.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "Il backup esclude gli originali non disponibili. Conserva queste foto sorgente separatamente:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Hai salvato il file ZIP del backup e conservato le foto sorgente mancanti? Ricaricando si perdono la sessione temporanea e le modifiche non salvate. Ripristina il file ZIP con File > Ripristina libreria da backup in una sessione che utilizza l’archiviazione del browser.",
+  "Graphics restored — restart after protecting your work": "Connessione grafica ripristinata — riavvia dopo aver messo al sicuro il tuo lavoro",
+  "Backing up library": "Backup della libreria in corso",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Non è stato possibile elencare gli originali archiviati. Questo backup potrebbe non includere le foto sorgente che non si trovano né nel catalogo attuale né in memoria. Conserva le tue foto sorgente separatamente."
 }

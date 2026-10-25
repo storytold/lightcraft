@@ -141,6 +141,11 @@ impl Originals {
         (g.bytes.len(), g.total)
     }
 
+    /// Keep resident originals alive while a memory-session backup is assembled.
+    pub fn snapshot(&self) -> HashMap<String, Arc<[u8]>> {
+        self.lock().bytes.iter().map(|(hash, (bytes, _))| (hash.clone(), Arc::clone(bytes))).collect()
+    }
+
     /// Engine hooks that decode/probe from memory.
     pub fn hooks(&self) -> (FileLoader, FileProbe) {
         let s = self.clone();

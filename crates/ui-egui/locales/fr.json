@@ -2390,5 +2390,17 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "The browser's graphics connection was lost": "La connexion graphique du navigateur a été perdue",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "Votre session de retouche est toujours ouverte. Effectuez une sauvegarde avant de recharger la page. Elle inclut les retouches et les originaux disponibles. Conservez également vos photos sources.",
+  "Back up library": "Sauvegarder la photothèque",
+  "Reload after backup": "Recharger après la sauvegarde",
+  "Preparing the backup. Keep this page open…": "Préparation de la sauvegarde. Gardez cette page ouverte…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Le téléchargement de la sauvegarde de la photothèque a commencé. Vérifiez que le fichier ZIP est enregistré avant de recharger la page.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "La sauvegarde a échoué. Gardez cette page ouverte ; ne la rechargez pas tant que votre travail n’est pas sauvegardé.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "La sauvegarde n’inclut pas les originaux indisponibles. Conservez ces photos sources séparément :",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Avez-vous enregistré le fichier ZIP de sauvegarde et conservé les photos sources manquantes ? Le rechargement supprime la session temporaire et les modifications non enregistrées. Restaurez le ZIP via Fichier > Restaurer la photothèque depuis une sauvegarde dans une session utilisant le stockage du navigateur.",
+  "Graphics restored — restart after protecting your work": "Connexion graphique rétablie — redémarrez après avoir sauvegardé votre travail",
+  "Backing up library": "Sauvegarde de la photothèque en cours",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Impossible de répertorier les originaux stockés. Cette sauvegarde peut ne pas inclure les photos sources qui ne sont ni dans le catalogue actuel ni en mémoire. Conservez vos photos sources séparément."
 }

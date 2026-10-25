@@ -2354,5 +2354,17 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "The browser's graphics connection was lost": "Браузер утратив з’єднання з графічною системою",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "Сеанс редагування досі відкритий. Перед перезавантаженням створіть резервну копію. Вона містить редагування й доступні оригінали. Також збережіть вихідні фотографії.",
+  "Back up library": "Створити резервну копію бібліотеки",
+  "Reload after backup": "Перезавантажити після резервного копіювання",
+  "Preparing the backup. Keep this page open…": "Підготовка резервної копії. Не закривайте цю сторінку…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Завантаження резервної копії бібліотеки почалося. Перед перезавантаженням переконайтеся, що ZIP-архів збережено.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Не вдалося створити резервну копію. Не закривайте цю сторінку й не перезавантажуйте її, доки не збережете свою роботу в надійному місці.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "Недоступні оригінали не входять до резервної копії. Збережіть ці вихідні фотографії окремо:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Ви зберегли ZIP-архів резервної копії та всі відсутні вихідні фотографії? Перезавантаження призведе до втрати тимчасового сеансу й незбережених змін. У сеансі зі сховищем браузера відновіть дані із ZIP-архіву через меню «Файл > Відновити бібліотеку з резервної копії».",
+  "Graphics restored — restart after protecting your work": "Роботу графіки відновлено — перезапустіть після надійного збереження роботи",
+  "Backing up library": "Створення резервної копії бібліотеки",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Не вдалося отримати список збережених оригіналів. До цієї резервної копії можуть не ввійти вихідні фотографії, яких немає ні в поточному каталозі, ні в пам’яті. Зберігайте вихідні фотографії окремо."
 }

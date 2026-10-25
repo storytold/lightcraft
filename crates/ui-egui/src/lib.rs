@@ -261,6 +261,10 @@ pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 
+/// Back up the library and current host UI preferences together. The host keeps the task guard
+/// until the backup completes or fails, including any asynchronous work after this returns.
+pub type BackupLibraryFn = Box<dyn FnMut(&mut Session, &UiState, lightcraft_engine::activity::TaskGuard) -> Result<Value, String>>;
+
 /// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
@@ -340,7 +344,7 @@ pub struct Services {
     /// File ▸ Back Up Library…: save the whole library (catalog and originals) as one file the
     /// user keeps (web only: there the library lives in browser storage, which the browser may
     /// clear; on the desktop it is a folder backed up like any other).
-    pub backup_library: Option<HostAction>,
+    pub backup_library: Option<BackupLibraryFn>,
     /// File ▸ Restore Library from Backup… (web only; keeps the current library).
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.

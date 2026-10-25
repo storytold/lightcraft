@@ -2283,5 +2283,17 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "The browser's graphics connection was lost": "Utracono połączenie graficzne przeglądarki",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "Sesja edycji jest nadal otwarta. Utwórz kopię zapasową przed ponownym załadowaniem strony. Kopia zawiera zmiany i dostępne oryginały. Zachowaj również zdjęcia źródłowe.",
+  "Back up library": "Utwórz kopię zapasową biblioteki",
+  "Reload after backup": "Załaduj ponownie po utworzeniu kopii",
+  "Preparing the backup. Keep this page open…": "Przygotowywanie kopii zapasowej. Pozostaw tę stronę otwartą…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "Rozpoczęto pobieranie kopii zapasowej biblioteki. Przed ponownym załadowaniem strony upewnij się, że plik ZIP został zapisany.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Tworzenie kopii zapasowej nie powiodło się. Pozostaw tę stronę otwartą; nie ładuj jej ponownie, dopóki Twoja praca nie będzie zabezpieczona.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "Kopia zapasowa nie zawiera niedostępnych oryginałów. Zachowaj te zdjęcia źródłowe osobno:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Czy plik ZIP kopii zapasowej został zapisany, a brakujące zdjęcia źródłowe zachowane? Ponowne załadowanie odrzuci sesję tymczasową i niezapisane zmiany. Przywróć plik ZIP przez Plik > Przywróć bibliotekę z kopii zapasowej w sesji korzystającej z pamięci przeglądarki.",
+  "Graphics restored — restart after protecting your work": "Przywrócono grafikę — uruchom ponownie po zabezpieczeniu swojej pracy",
+  "Backing up library": "Tworzenie kopii zapasowej biblioteki",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Nie udało się wyświetlić listy zapisanych oryginałów. Ta kopia zapasowa może nie zawierać zdjęć źródłowych, których nie ma ani w bieżącym katalogu, ani w pamięci. Zachowaj swoje zdjęcia źródłowe osobno."
 }

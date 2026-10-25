@@ -2185,6 +2185,16 @@
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Um modelo de rostos só usa a GPU quando uma verificação mostra que ela dá os mesmos resultados mais rápido.",
   "Checking the GPU for faces": "Verificando a GPU para rostos",
+  "The browser's graphics connection was lost": "A conexão gráfica do navegador foi perdida",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "Sua sessão de edição ainda está aberta. Faça um backup antes de recarregar. O backup inclui as edições e os originais disponíveis. Guarde também suas fotos de origem.",
+  "Back up library": "Fazer backup da biblioteca",
+  "Reload after backup": "Recarregar após o backup",
+  "Preparing the backup. Keep this page open…": "Preparando o backup. Mantenha esta página aberta…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "O download do backup da biblioteca foi iniciado. Confirme que o ZIP foi salvo antes de recarregar.",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "Falha no backup. Mantenha esta página aberta; não recarregue até que seu trabalho esteja protegido.",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "O backup não inclui originais indisponíveis. Guarde estas fotos de origem separadamente:",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "Você salvou o ZIP do backup e guardou as fotos de origem ausentes? Recarregar descarta a sessão temporária e as alterações não salvas. Restaure o ZIP por Arquivo > Restaurar biblioteca a partir de backup em uma sessão que use o armazenamento do navegador.",
+  "Graphics restored — restart after protecting your work": "Conexão gráfica restaurada — reinicie após proteger seu trabalho",
   "Include selected photos": "Incluir fotos selecionadas",
   "Color Overlay": "Sobreposição de cor",
   "Color Overlay on B&W": "Sobreposição de cor em P&B",
@@ -2202,5 +2212,7 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Backing up library": "Fazendo backup da biblioteca",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "Não foi possível listar os originais armazenados. Este backup pode deixar de incluir fotos de origem que não estejam nem no catálogo atual nem na memória. Guarde suas fotos de origem separadamente."
 }

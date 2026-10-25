@@ -109,11 +109,12 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 - **Keeping the library safe** (experimental: the library lives only in this browser):
   - The app asks for persistent storage (`navigator.storage.persist()`); when the browser doesn't
     grant it, a notice says the library may be evicted under storage pressure.
-  - **File ▸ Back Up Library…** downloads a zip of the library files and every stored original
-    (`originals/<hash>/<file name>`, so an unzipped backup is browsable; entries are stored, not
+  - **File ▸ Back Up Library…** downloads a zip of the library files and the stored originals
+    it can read (known missing or unreadable ones are named in `MISSING-ORIGINALS.txt`;
+    `originals/<hash>/<file name>`, so an unzipped backup is browsable; entries are stored, not
     compressed; at most 4 GB). While a save is failing it refuses to start and says how many
-    changes are unsaved and why: the zip copies the stored library files, so it would miss them
-    (issue #1508). **File ▸ Restore Library from Backup…** reads such a zip into a
+    changes are unsaved and why: presets, prefs and view state come from the stored files, so
+    it would miss them (issue #1508). **File ▸ Restore Library from Backup…** reads such a zip into a
     new library folder (`library-restored-<time>/`; originals already stored are skipped, every
     entry's checksum is verified, and each restored original must match its content hash) and
     only then switches to it (`active-library` names the folder in use) and reloads: the previous
@@ -138,6 +139,29 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     is saved; the stored library is left as it was.
   - A panic (wasm is built with `panic = "abort"`) replaces the page with a message saying the
     stored library is kept and to reload, instead of a frozen canvas.
+  - A lost WebGL connection leaves the editing session open and shows a keyboard-accessible
+    recovery panel instead of a blank canvas. **Back up library** downloads the current catalog,
+    edits, and available originals; only then is **Reload after backup** enabled. Confirm that
+    the ZIP is saved before reloading. In `?store=memory`, reload discards the temporary session:
+    restore its backup in a browser-storage session and keep the source photos. There is no
+    automatic graphics restart or silent reload.
+    The recovery panel uses the active UI language's locale catalog. Its registered
+    `web.recoveryBackup` command and File ▸ Back Up Library share the same backup action.
+    Missing or unreadable originals do not prevent saving the catalog, edits, and available
+    photos: a visible warning names them, and `MISSING-ORIGINALS.txt` inside the ZIP records the
+    same omissions. Keep those source files separately. This also covers originals evicted from
+    a temporary memory session. A failed ZIP build or download keeps reload disabled.
+    If browser storage cannot list its originals, backup still reads the known catalog and
+    resident-memory originals. The completion warning and `BACKUP-WARNINGS.txt` explain that
+    other stored photos may be omitted; a successful download does not certify complete source
+    coverage. The completion event's `report.warnings` carries the same warnings separately
+    from its named `report.missing` photos.
+    Backup captures a separate current catalog snapshot, including queued edits, without
+    requiring browser-storage writes to succeed. A normal backup already in flight cannot
+    enable the recovery panel's reload: completion must match that panel's requested backup.
+    Both backup entry points hold one non-cancellable **Backing up library** activity row until
+    the ZIP download starts or backup fails. The recovery panel also keeps its own backup button
+    disabled while that same action is running; File backup has no separate preparing toast.
 - **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⌘⇧I</kbd>) opens the
   browser's file picker. You can also drop files anywhere on the page. The bytes are written to
   storage, then imported and decoded by the same engine code as the desktop app

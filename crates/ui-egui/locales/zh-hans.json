@@ -2200,5 +2200,17 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "The browser's graphics connection was lost": "浏览器的图形连接已断开",
+  "Your editing session is still open. Back up before reloading. The backup includes edits and available originals. Keep your source photos too.": "您的编辑会话仍然打开。请先备份，再重新加载。备份包含编辑内容和可用的原始文件。也请保留源照片。",
+  "Back up library": "备份图库",
+  "Reload after backup": "备份后重新加载",
+  "Preparing the backup. Keep this page open…": "正在准备备份。请保持此页面打开…",
+  "Library backup download started. Confirm the ZIP is saved before reloading.": "图库备份已开始下载。重新加载前，请确认 ZIP 文件已保存。",
+  "Backup failed. Keep this page open; do not reload until your work is protected.": "备份失败。请保持此页面打开；在您的工作得到妥善保存前，请勿重新加载。",
+  "Backup excludes unavailable originals. Keep these source photos separately:": "备份不包含无法获取的原始文件。请单独保留以下源照片：",
+  "Have you saved the backup ZIP and kept any missing source photos? Reloading discards a temporary session and unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.": "您是否已保存备份 ZIP 文件，并保留了所有缺失的源照片？重新加载会丢弃临时会话和未保存的更改。请在使用浏览器存储的会话中，通过“文件 > 从备份恢复图库”恢复 ZIP 文件。",
+  "Graphics restored — restart after protecting your work": "图形连接已恢复 — 请先妥善保存您的工作，再重新启动",
+  "Backing up library": "正在备份图库",
+  "Stored originals could not be listed. This backup may omit source photos that are not in the current catalog or memory. Keep your source photos separately.": "无法列出已存储的原始文件。此备份可能遗漏当前目录和内存中均不存在的源照片。请单独保留您的源照片。"
 }
