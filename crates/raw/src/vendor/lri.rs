@@ -146,13 +146,16 @@ impl<'a> Msg<'a> {
         self.all(num).find_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None })
     }
 
-    /// Every sub-message `num` that parses.
-    fn subs(&self, num: u64) -> impl Iterator<Item = Msg<'a>> + '_ {
-        self.all(num).filter_map(|v| if let Val::Bytes(b) = v { Msg::parse(b).ok() } else { None })
+    /// All sub-messages `num`; malformed nested messages are corrupt input.
+    fn subs(&self, num: u64) -> Result<Vec<Msg<'a>>> {
+        self.all(num)
+            .filter_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None })
+            .map(Msg::parse)
+            .collect()
     }
 
-    fn sub(&self, num: u64) -> Option<Msg<'a>> {
-        self.subs(num).next()
+    fn sub(&self, num: u64) -> Result<Option<Msg<'a>>> {
+        Ok(self.subs(num)?.into_iter().next())
     }
 }
 
@@ -160,6 +163,7 @@ impl<'a> Msg<'a> {
 struct Block<'a> {
     bytes: &'a [u8],
     msg: Msg<'a>,
+    msg_at: usize,
     kind: u8,
 }
 
@@ -188,7 +192,7 @@ fn blocks(bytes: &[u8]) -> Result<Vec<Block<'_>>> {
             .and_then(|end| block.get(msg_at..end))
             .ok_or_else(|| corrupt(&format!("message of the block at byte {at} outside the block")))?;
         let kind = block.get(24).copied().unwrap_or_default();
-        out.push(Block { bytes: block, msg: Msg::parse(msg)?, kind });
+        out.push(Block { bytes: block, msg: Msg::parse(msg)?, msg_at, kind });
         at += len;
     }
     Ok(out)
@@ -208,28 +212,38 @@ struct Module<'a> {
     lens_position: u64,
 }
 
-fn module<'a>(block: &'a [u8], m: &Msg<'a>) -> Option<Module<'a>> {
-    let id = m.varint(2)?;
+fn module<'a>(block: &'a [u8], msg_at: usize, m: &Msg<'a>) -> Result<Option<Module<'a>>> {
+    let Some(id) = m.varint(2) else { return Ok(None) };
     if id > 15 {
-        return None;
+        return Ok(None);
     }
-    let surface = m.sub(9)?;
-    let size = surface.sub(2)?;
-    let (width, height) = (usize::try_from(size.varint(1)?).ok()?, usize::try_from(size.varint(2)?).ok()?);
-    let stride = usize::try_from(surface.varint(4)?).ok()?;
-    let offset = usize::try_from(surface.varint(5)?).ok()?;
-    let row_bytes = width.checked_mul(10)?.div_ceil(8);
+    let Some(surface) = m.sub(9)? else { return Ok(None) };
+    let Some(size) = surface.sub(2)? else { return Ok(None) };
+    let (Some(width), Some(height)) = (
+        size.varint(1).and_then(|v| usize::try_from(v).ok()),
+        size.varint(2).and_then(|v| usize::try_from(v).ok()),
+    ) else { return Ok(None) };
+    let (Some(stride), Some(offset)) = (
+        surface.varint(4).and_then(|v| usize::try_from(v).ok()),
+        surface.varint(5).and_then(|v| usize::try_from(v).ok()),
+    ) else { return Ok(None) };
+    let Some(row_bytes) = width.checked_mul(10).map(|v| v.div_ceil(8)) else { return Ok(None) };
     // even dimensions: whole 2x2 cells
-    if surface.varint(3)? != FORMAT_PACKED10 || width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 || stride < row_bytes {
-        return None;
+    if surface.varint(3) != Some(FORMAT_PACKED10) || width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 || stride < row_bytes {
+        return Ok(None);
     }
-    let end = stride.checked_mul(height - 1)?.checked_add(row_bytes)?.checked_add(offset)?;
-    let data = block.get(offset..end)?;
-    let red = m.sub(13).and_then(|b| match (b.int(1)?, b.int(2)?) {
+    let Some(end) = stride.checked_mul(height - 1).and_then(|v| v.checked_add(row_bytes)).and_then(|v| v.checked_add(offset)) else {
+        return Ok(None);
+    };
+    if offset < HEADER || end > msg_at {
+        return Err(corrupt("module sample span outside the data area"));
+    }
+    let data = block.get(offset..end).ok_or_else(|| corrupt("module sample span outside the block"))?;
+    let red = m.sub(13)?.and_then(|b| match (b.int(1)?, b.int(2)?) {
         (x @ 0..=1, y @ 0..=1) => Some((x as usize, y as usize)),
         _ => None,
     });
-    Some(Module { id, width, height, stride, data, red, exposure_ns: m.varint(8), lens_position: m.varint(4).unwrap_or(0) })
+    Ok(Some(Module { id, width, height, stride, data, red, exposure_ns: m.varint(8), lens_position: m.varint(4).unwrap_or(0) }))
 }
 
 /// A Bayer cell with red at (`x`, `y`): blue on the opposite corner, green on the other two.
@@ -250,18 +264,20 @@ fn mat3(m: &Msg) -> Option<Mat3> {
 
 /// The module's colour matrices (XYZ → camera) and forward matrices under standard A and D65, from its calibration
 /// records.
-fn colour(calibration: &[Msg]) -> ColorData {
+fn colour(calibration: &[Msg]) -> Result<ColorData> {
     let mut color = ColorData::default();
-    for c in calibration.iter().flat_map(|cal| cal.subs(2)) {
-        let slot = match c.varint(1) {
-            Some(ILLUMINANT_A) => 0,
-            Some(ILLUMINANT_D65) => 1,
-            _ => continue,
-        };
-        let (Some(forward), Some(matrix)) = (c.sub(2).as_ref().and_then(mat3), c.sub(3).as_ref().and_then(mat3)) else { continue };
-        color.illuminant[slot] = [EXIF_STANDARD_A, EXIF_D65][slot];
-        color.color_matrix[slot] = Some(matrix);
-        color.forward_matrix[slot] = Some(forward);
+    for cal in calibration {
+        for c in cal.subs(2)? {
+            let slot = match c.varint(1) {
+                Some(ILLUMINANT_A) => 0,
+                Some(ILLUMINANT_D65) => 1,
+                _ => continue,
+            };
+            let (Some(forward), Some(matrix)) = (c.sub(2)?.as_ref().and_then(mat3), c.sub(3)?.as_ref().and_then(mat3)) else { continue };
+            color.illuminant[slot] = [EXIF_STANDARD_A, EXIF_D65][slot];
+            color.color_matrix[slot] = Some(matrix);
+            color.forward_matrix[slot] = Some(forward);
+        }
     }
     // one illuminant alone sits in the first slot, as a single-illuminant DNG has it
     if color.color_matrix[0].is_none() {
@@ -269,48 +285,63 @@ fn colour(calibration: &[Msg]) -> ColorData {
         color.color_matrix = [color.color_matrix[1], None];
         color.forward_matrix = [color.forward_matrix[1], None];
     }
-    color
+    Ok(color)
 }
 
 /// The module's vignetting gains, from its calibration records, as an `OpcodeList2` gain map over the
 /// `width x height` frame (the grid nearest `lens_position`).
-fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usize) -> Option<Opcode> {
-    let grids: Vec<(u64, Msg)> = calibration
-        .iter()
-        .filter_map(|c| c.sub(4))
-        .flat_map(|v| v.subs(2).filter_map(|g| Some((g.varint(1).unwrap_or(0), g.sub(2)?))).collect::<Vec<_>>())
-        .collect();
-    let (_, grid) = grids.iter().min_by_key(|(at, _)| at.abs_diff(lens_position))?;
-    let (cols, rows) = (usize::try_from(grid.varint(1)?).ok()?, usize::try_from(grid.varint(2)?).ok()?);
-    let n = cols.checked_mul(rows).filter(|&n| (4..=MAX_GRID_POINTS).contains(&n) && cols >= 2 && rows >= 2)?;
-    let raw = grid.bytes(3)?;
-    if raw.len() != n.checked_mul(4)? {
-        return None;
+fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usize) -> Result<Option<Opcode>> {
+    let mut grids: Vec<(u64, Msg)> = Vec::new();
+    for c in calibration {
+        if let Some(v) = c.sub(4)? {
+            for g in v.subs(2)? {
+                if let Some(grid) = g.sub(2)? {
+                    grids.push((g.varint(1).unwrap_or(0), grid));
+                }
+            }
+        }
+    }
+    let Some((_, grid)) = grids.iter().min_by_key(|(at, _)| at.abs_diff(lens_position)) else { return Ok(None) };
+    let (Some(cols), Some(rows)) = (
+        grid.varint(1).and_then(|v| usize::try_from(v).ok()),
+        grid.varint(2).and_then(|v| usize::try_from(v).ok()),
+    ) else { return Ok(None) };
+    let Some(n) = cols.checked_mul(rows).filter(|&n| (4..=MAX_GRID_POINTS).contains(&n) && cols >= 2 && rows >= 2) else { return Ok(None) };
+    let Some(raw) = grid.bytes(3) else { return Ok(None) };
+    if raw.len() != n.checked_mul(4).unwrap_or(usize::MAX) {
+        return Ok(None);
     }
     let gains: Vec<f32> = raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
     // a gain map that darkens, or a NaN, is not a vignetting correction
     if gains.iter().any(|g| !(g.is_finite() && (0.5..=16.0).contains(g))) {
-        return None;
+        return Ok(None);
     }
     let area = Area { top: 0, left: 0, bottom: height as u32, right: width as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
     // the gain-map reader places pixel `y` at `y / height`, so the last row and column sit at `(n - 1) / n`: spacing
     // the grid over that span puts its outer points on the frame's edge pixels
     let span = |n: usize| n.saturating_sub(1) as f64 / n.max(1) as f64;
     let spacing = [span(height) / (rows - 1) as f64, span(width) / (cols - 1) as f64];
-    Some(Opcode::GainMap { area, points_v: rows as u32, points_h: cols as u32, spacing, origin: [0.0, 0.0], map_planes: 1, gains })
+    Ok(Some(Opcode::GainMap { area, points_v: rows as u32, points_h: cols as u32, spacing, origin: [0.0, 0.0], map_planes: 1, gains }))
 }
 
 /// Camera RGB of the as-shot white from the view settings' gains.
-fn as_shot_neutral(blocks: &[Block]) -> Option<[f64; 3]> {
-    let g = blocks.iter().filter(|b| b.kind == 1).find_map(|b| b.msg.sub(15))?;
+fn as_shot_neutral(blocks: &[Block]) -> Result<Option<[f64; 3]>> {
+    let mut g = None;
+    for b in blocks.iter().filter(|b| b.kind == 1) {
+        if let Some(value) = b.msg.sub(15)? {
+            g = Some(value);
+            break;
+        }
+    }
+    let Some(g) = g else { return Ok(None) };
     let (r, gr, gb, b) = (g.f32(1)?, g.f32(2)?, g.f32(3)?, g.f32(4)?);
     let green = f64::from(gr + gb) / 2.0;
     let n = [green / f64::from(r), 1.0, green / f64::from(b)];
-    n.iter().all(|v| v.is_finite() && *v > 0.0).then_some(n)
+    Ok(n.iter().all(|v| v.is_finite() && *v > 0.0).then_some(n))
 }
 
-fn capture_time(m: &Msg) -> Option<lightcraft_meta::DateTime> {
-    let t = m.sub(3)?;
+fn capture_time(m: &Msg) -> Result<Option<lightcraft_meta::DateTime>> {
+    let Some(t) = m.sub(3)? else { return Ok(None) };
     let part = |n| t.varint(n).and_then(|v| u8::try_from(v).ok());
     let date_time = lightcraft_meta::DateTime {
         year: u16::try_from(t.varint(1)?).ok()?,
@@ -322,13 +353,20 @@ fn capture_time(m: &Msg) -> Option<lightcraft_meta::DateTime> {
         millis: 0,
         offset_minutes: None,
     };
-    lightcraft_meta::DateTime::parse_exif(&date_time.to_exif())
+    Ok(lightcraft_meta::DateTime::parse_exif(&date_time.to_exif()))
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let blocks = blocks(bytes)?;
     let headers: Vec<&Block> = blocks.iter().filter(|b| b.kind == 0).collect();
-    let modules: Vec<Module> = headers.iter().flat_map(|b| b.msg.subs(12).filter_map(|m| module(b.bytes, &m)).collect::<Vec<_>>()).collect();
+    let mut modules = Vec::new();
+    for b in &headers {
+        for msg in b.msg.subs(12)? {
+            if let Some(m) = module(b.bytes, b.msg_at, &msg)? {
+                modules.push(m);
+            }
+        }
+    }
     let m = modules
         .iter()
         .filter(|m| m.red.is_some())
@@ -337,14 +375,23 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let (w, h) = (m.width, m.height);
     let n = w.checked_mul(h).filter(|n| *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let (rx, ry) = m.red.unwrap_or_default();
-    let calibration: Vec<Msg> = headers.iter().flat_map(|b| b.msg.subs(13)).filter(|c| c.varint(1) == Some(m.id)).collect();
-    let sensor = headers.iter().find_map(|b| b.msg.sub(16)).and_then(|s| s.sub(2));
+    let mut calibration = Vec::new();
+    for b in &headers {
+        calibration.extend(b.msg.subs(13)?.into_iter().filter(|c| c.varint(1) == Some(m.id)));
+    }
+    let mut sensor = None;
+    for b in &headers {
+        if let Some(s) = b.msg.sub(16)? {
+            sensor = s.sub(2)?;
+            if sensor.is_some() { break; }
+        }
+    }
     let black = sensor.as_ref().and_then(|s| s.f32(1)).filter(|v| (0.0..1023.0).contains(v)).unwrap_or(DEFAULT_BLACK);
     let white = sensor.as_ref().and_then(|s| s.f32(2)).filter(|v| *v > black && *v <= 1023.0).unwrap_or(DEFAULT_WHITE);
-    let mut color = colour(&calibration);
-    color.as_shot_neutral = as_shot_neutral(&blocks);
+    let mut color = colour(&calibration)?;
+    color.as_shot_neutral = as_shot_neutral(&blocks)?;
     let mut opcodes = OpcodeLists::default();
-    opcodes.list2.extend(vignetting(&calibration, m.lens_position, w, h));
+    opcodes.list2.extend(vignetting(&calibration, m.lens_position, w, h)?);
     let data = if mode == Mode::Full {
         let mut d = vec![0u16; n];
         use rayon::prelude::*;
@@ -359,7 +406,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let metadata = lightcraft_meta::Metadata {
         make: Some("Light".into()),
         model: headers.iter().find_map(|b| b.msg.bytes(8)).map(|s| String::from_utf8_lossy(s).trim().to_string()).filter(|s| !s.is_empty()),
-        capture_time: headers.iter().find_map(|b| capture_time(&b.msg)),
+        capture_time: {
+            let mut time = None;
+            for b in &headers {
+                if let Some(t) = capture_time(&b.msg)? {
+                    time = Some(t);
+                    break;
+                }
+            }
+            time
+        },
         exposure_time: m.exposure_ns.filter(|&ns| ns > 0).map(|ns| ns as f64 * 1e-9),
         // the modules' 35 mm equivalent focal lengths (the camera's specification: 28, 70 and 150 mm)
         focal_length_35mm: match m.id {
