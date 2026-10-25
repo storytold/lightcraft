@@ -1140,6 +1140,9 @@ impl Session {
                 }
                 _ => self.catalog.query(&f, &self.sort),
             };
+            // after the query: a big view has just made the order it needed itself (and this does nothing); a small one
+            // has not, and the first big view in this sort later is then not sorted in a frame the user waits for
+            self.catalog.prebuild_order_holding(&self.sort, || self.activity.start("sort", "Sorting the library", activity::Cancel::No));
             // what the view shows now is what the next edit is followed from, and what it holds until it is
             // refreshed (taken before stacks are arranged, so a photo folded into a stack is held with it)
             self.base = (!whole || holds).then(|| (view, self.catalog.revision, visible.clone()));

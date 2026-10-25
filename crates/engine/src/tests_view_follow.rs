@@ -433,3 +433,49 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         assert_eq!(shown(&tally), fresh(&s));
     }
 }
+
+/// In a big library, showing a small view (Picks) makes the order of the current sort in the background, so that
+/// All Photos, shown later, lists without sorting every photo on the thread that draws.
+#[test]
+fn a_small_view_makes_the_order_for_the_big_view_that_follows() {
+    let mut s = Session::new();
+    let ops: Vec<Op> = (0..50_000usize)
+        .map(|i| {
+            let id = s.catalog.alloc_photo_id();
+            let mut p = Photo::new(
+                id,
+                Source::File { path: format!("/pics/{}/{i}.jpg", i % 3) },
+                &format!("IMG_{i:05}.jpg"),
+                "JPEG",
+                60,
+                40,
+                "2026-01-01T10:00:00",
+            );
+            p.captured = Some(format!("2025-{:02}-{:02}T10:00:{:02}", 1 + i % 12, 1 + i % 28, i % 60));
+            Op::AddPhoto { photo: Box::new(p) }
+        })
+        .collect();
+    s.commit("Add", Op::Batch { ops }).unwrap();
+    s.execute("library.sort", &json!({"key": "captureDate", "ascending": true})).unwrap();
+    // (the id the next row gets tells whether a row was started meanwhile)
+    let before = s.activity.start("probe", "Probe", crate::activity::Cancel::No).id();
+    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+    assert!(s.visible().is_empty());
+    let after = s.activity.start("probe", "Probe", crate::activity::Cancel::No);
+    assert_eq!(after.id(), before + 2, "making the order started no activity row (one that is listed while it runs)");
+    drop(after);
+    let key = lightcraft_catalog::SortKey::CaptureDate;
+    let by = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !s.catalog.order_ready(key) || !s.activity.list().is_empty() {
+        assert!(std::time::Instant::now() < by, "the order was not made, or its row not removed, in a minute");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let before = s.catalog.full_sorts();
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    let all = s.visible().to_vec();
+    assert_eq!(all.len(), 50_000);
+    assert_eq!(s.catalog.full_sorts(), before, "All Photos sorted every photo");
+    let mut want: Vec<_> = s.catalog.photos().collect();
+    want.sort_by(|a, b| s.sort.order(a, b));
+    assert_eq!(all, want.iter().map(|p| p.id).collect::<Vec<_>>());
+}
