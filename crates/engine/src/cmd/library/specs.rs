@@ -1321,7 +1321,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Review Import",
             [],
             None,
-            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned, truncated: bool (a folder walk stopped at its depth or entry limit: there may be more photos), skipped: {unreadable (folders that could not be listed), unsupported (files in the folders that are not a supported photo type, XMP sidecars not counted; a file named in paths is always tried)}} — nothing is added",
+            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned, scanLimited: bool (the folder walk stopped at its scan limit: there may be more photos), skipped: {unreadable (folders that could not be listed), unsupported (files in the folders that are not a supported photo type, XMP sidecars not counted; a file named in paths is always tried)}} — nothing is added",
             always,
             |s, p| {
                 let paths = strs(p, "paths");
@@ -1334,7 +1334,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     "scanned": out.candidates.len(),
                     "duplicates": dups,
                     "candidates": out.candidates,
-                    "truncated": out.truncated,
+                    "scanLimited": out.truncated,
                     "skipped": {"unreadable": out.unreadable, "unsupported": out.unsupported},
                 }))
             }
