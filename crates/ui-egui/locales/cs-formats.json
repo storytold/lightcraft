@@ -317,5 +317,7 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
 }
