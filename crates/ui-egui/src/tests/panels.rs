@@ -2897,3 +2897,26 @@ fn a_date_chip_names_every_date_in_another_language() {
     set_language(Locale::En);
     assert!(dates.iter().all(|d| label.contains(d.as_str())), "{label} names {dates:?}");
 }
+
+/// Keyword, album and folder chips that list several values join them with the language's own
+/// "or", as the date and label chips do, not with the engine's English one.
+#[test]
+fn keyword_album_and_folder_chips_join_their_values_in_the_language_s_own_or() {
+    use crate::i18n::{Locale, set_language};
+    let s = lightcraft_engine::Session::new();
+    let filter = lightcraft_catalog::Filter {
+        keywords: vec!["alps".into(), "beach".into()],
+        albums: vec![lightcraft_catalog::AlbumId(901), lightcraft_catalog::AlbumId(902)],
+        library_folders: vec!["/lib/Trips".into(), "/lib/Work".into()],
+        ..Default::default()
+    };
+    let chips = lightcraft_engine::filter_chips(&filter, &s.catalog);
+    assert_eq!(chips.len(), 3);
+    set_language(Locale::De);
+    let labels: Vec<String> = chips.iter().map(|c| crate::panels::chips::display_label(c, &filter, &s.catalog)).collect();
+    let or = Locale::De.tr("or");
+    set_language(Locale::En);
+    for label in &labels {
+        assert!(label.contains(&format!(" {or} ")) && !label.contains(" or "), "{label} joins with {or:?}");
+    }
+}
