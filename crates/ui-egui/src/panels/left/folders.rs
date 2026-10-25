@@ -596,6 +596,8 @@ enum FolderRow {
 /// One row of a folder's context menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FolderItem {
+    ImportHere,
+    AddToMyPhotos,
     Synchronize,
     LocateMissing,
     NewFolder,
@@ -618,10 +620,10 @@ fn folder_menu_groups(row: FolderRow) -> &'static [&'static [FolderItem]] {
     use FolderItem::*;
     match row {
         FolderRow::Library => {
-            &[&[Synchronize, LocateMissing], &[NewFolder, Rename, Move, MovePhotosHere], &[ColorLabel], &[Reveal], &[RemoveFromLibrary]]
+            &[&[ImportHere, Synchronize, LocateMissing], &[NewFolder, Rename, Move, MovePhotosHere], &[ColorLabel], &[Reveal], &[RemoveFromLibrary]]
         }
         FolderRow::Disk => &[&[Synchronize, LocateMissing], &[ColorLabel], &[RemoveDisk]],
-        FolderRow::Local { .. } => &[&[Synchronize], &[Rename, Move], &[Reveal], &[KeepInLocal, RemoveFromLocal]],
+        FolderRow::Local { .. } => &[&[AddToMyPhotos, Synchronize], &[Rename, Move], &[Reveal], &[KeepInLocal, RemoveFromLocal]],
     }
 }
 
@@ -665,6 +667,7 @@ fn folder_item_available(app: &LightcraftApp, row: FolderRow, item: FolderItem, 
         // (`folder_drop_target`), so the menu doesn't offer it either
         FolderItem::MovePhotosHere if node.is_some_and(|n| !n.selectable) => false,
         FolderItem::Move => app.services.pick_folder.is_some() || app.services.picker.is_some(),
+        FolderItem::ImportHere => app.services.pick_folder.is_some(),
         FolderItem::Reveal => app.services.reveal.is_some(),
         FolderItem::LocateMissing | FolderItem::ColorLabel | FolderItem::RemoveFromLibrary | FolderItem::RemoveDisk => node.is_some(),
         _ => true,
@@ -684,6 +687,33 @@ fn folder_item(
 ) {
     let (name, label) = names;
     match item {
+        FolderItem::ImportHere => {
+            let r = ui
+                .add_enabled(crate::import::can_open(app), egui::Button::new(crate::i18n::tr("Import to This Folder…")))
+                .on_hover_text(crate::i18n::tr("Copies the photos of a folder you choose into this folder; the review lets you change that"))
+                .on_disabled_hover_text(crate::i18n::tr("An import is running"));
+            register(ui, "folderImportHere", r.rect);
+            if r.clicked() {
+                // the folder picker, then the Import review copying into this folder
+                if let Err(e) = app.run("file.addFolder", json!({"destination": path})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        }
+        FolderItem::AddToMyPhotos => {
+            let r = ui
+                .add_enabled(crate::import::can_open(app), egui::Button::new(crate::i18n::tr("Add to My Photos…")))
+                .on_hover_text(crate::i18n::tr("Reviews the photos in this folder, then adds them to the library where they are; no file is touched"))
+                .on_disabled_hover_text(crate::i18n::tr("An import is running"));
+            register(ui, "folderAddToMyPhotos", r.rect);
+            if r.clicked() {
+                if let Err(e) = app.run("file.addFolder", json!({"path": path})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        }
         FolderItem::Synchronize => match (row, node) {
             (FolderRow::Disk, Some(n)) => synchronize_item(app, ui, Some((n, &n.name))),
             (_, Some(n)) => synchronize_item(app, ui, Some((n, label))),

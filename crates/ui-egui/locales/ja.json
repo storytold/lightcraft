@@ -2428,5 +2428,10 @@
   "No photo in this folder is in the library yet": "このフォルダの写真はまだライブラリにありません",
   "Select the photos to move in the grid first": "先にグリッドで移動する写真を選択してください",
   "This place is kept in Local already": "この場所はすでにローカルに残されています",
-  "Only a place at the top of Local can be removed from it": "ローカルから除けるのは、ローカルの最上位にある場所だけです"
+  "Only a place at the top of Local can be removed from it": "ローカルから除けるのは、ローカルの最上位にある場所だけです",
+  "Import to This Folder…": "このフォルダに読み込む…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "選んだフォルダの写真をこのフォルダにコピーします。レビューで変更できます",
+  "Add to My Photos…": "マイフォトに追加…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "このフォルダの写真をレビューしてから、そのままの場所でライブラリに追加します。ファイルには触れません",
+  "Keywords and presets apply to new files only, not to photos already in Local": "キーワードとプリセットは新しいファイルにのみ適用され、すでにローカルにある写真には適用されません"
 }

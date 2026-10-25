@@ -2387,5 +2387,10 @@
   "No photo in this folder is in the library yet": "Tämän kansion kuvia ei ole vielä kirjastossa",
   "Select the photos to move in the grid first": "Valitse ensin siirrettävät kuvat ruudukosta",
   "This place is kept in Local already": "Tämä paikka on jo säilytetty Paikallisessa",
-  "Only a place at the top of Local can be removed from it": "Paikallisesta voi poistaa vain sen ylimmän tason paikan"
+  "Only a place at the top of Local can be removed from it": "Paikallisesta voi poistaa vain sen ylimmän tason paikan",
+  "Import to This Folder…": "Tuo tähän kansioon…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Kopioi valitsemasi kansion kuvat tähän kansioon; tarkistuksessa voit muuttaa tätä",
+  "Add to My Photos…": "Lisää Omiin kuviin…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Näyttää tämän kansion kuvat tarkistettavaksi ja lisää ne sitten kirjastoon paikoilleen; tiedostoihin ei kosketa",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Avainsanat ja esiasetukset koskevat vain uusia tiedostoja, eivät kuvia, jotka ovat jo Paikallisessa"
 }

@@ -2152,6 +2152,7 @@ fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
     in_order(
         &h,
         &[
+            "folderImportHere",
             "folderSynchronize",
             "folderLocateMissing",
             "folderNewFolder",
@@ -2167,6 +2168,7 @@ fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
     h.step();
     h.step();
     right_click(&mut h, "source:libfolder:/Volumes/nas");
+    assert!(!has(&h, "folderImportHere"), "a disk's row doesn't import into its root");
     in_order(&h, &["folderSynchronize", "folderLocateMissing", "folderLabelMenu", "folderRemove"]);
 }
 
@@ -2182,7 +2184,7 @@ fn a_folder_that_cant_be_shown_in_the_file_manager_says_why() {
     assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("no file manager")), "{:?}", h.app.ui.toast);
 }
 
-/// A Local place's menu takes the Folders order: Synchronize first, then the disk, the file
+/// A Local place's menu takes the Folders order: Add to My Photos… and Synchronize first, then the disk, the file
 /// manager, and last what lists it in Local. A folder inside a place lists Remove from Local
 /// grayed out, since only a place can be removed, while its Add to Local makes it a place.
 #[test]
@@ -2203,7 +2205,10 @@ fn a_local_folders_menu_takes_the_folders_order_and_grays_out_remove_inside_a_pl
     h.app.run("local.addRoot", json!({"path": place})).unwrap();
     assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == format!("source:local:{place}"))));
     right_click(&mut h, &format!("source:local:{place}"));
-    in_order(&h, &["folderSynchronize", "folderRename", "folderMoveTo", "folderReveal", "folderKeepInLocal", "folderRemoveFromLocal"]);
+    in_order(
+        &h,
+        &["folderAddToMyPhotos", "folderSynchronize", "folderRename", "folderMoveTo", "folderReveal", "folderKeepInLocal", "folderRemoveFromLocal"],
+    );
     // Rename starts from the folder's own name on disk, not what dialogs call it ("parent/name")
     click(&mut h, "folderRename");
     assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::TextPrompt { value, .. }) if value == "place"), "{:?}", h.app.ui.dialog);

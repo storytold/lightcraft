@@ -2401,5 +2401,10 @@
   "No photo in this folder is in the library yet": "Belum ada foto dari folder ini di pustaka",
   "Select the photos to move in the grid first": "Pilih dulu foto yang akan dipindahkan di grid",
   "This place is kept in Local already": "Tempat ini sudah disimpan di Lokal",
-  "Only a place at the top of Local can be removed from it": "Hanya tempat di tingkat teratas Lokal yang bisa dikeluarkan dari Lokal"
+  "Only a place at the top of Local can be removed from it": "Hanya tempat di tingkat teratas Lokal yang bisa dikeluarkan dari Lokal",
+  "Import to This Folder…": "Impor ke folder ini…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Menyalin foto dari folder yang Anda pilih ke folder ini; di tinjauan Anda bisa mengubahnya",
+  "Add to My Photos…": "Tambahkan ke Foto saya…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Meninjau foto di folder ini, lalu menambahkannya ke pustaka di tempatnya; tidak ada berkas yang disentuh",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Kata kunci dan prasetel hanya berlaku untuk berkas baru, bukan foto yang sudah ada di Lokal"
 }

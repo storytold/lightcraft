@@ -2715,5 +2715,10 @@
   "No photo in this folder is in the library yet": "Chưa có ảnh nào trong thư mục này nằm trong thư viện",
   "Select the photos to move in the grid first": "Trước tiên hãy chọn trên lưới các ảnh cần di chuyển",
   "This place is kept in Local already": "Nơi này đã được giữ trong Cục bộ",
-  "Only a place at the top of Local can be removed from it": "Chỉ có thể gỡ khỏi Cục bộ một nơi ở cấp trên cùng của Cục bộ"
+  "Only a place at the top of Local can be removed from it": "Chỉ có thể gỡ khỏi Cục bộ một nơi ở cấp trên cùng của Cục bộ",
+  "Import to This Folder…": "Nhập vào thư mục này…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Sao chép ảnh từ một thư mục bạn chọn vào thư mục này; bạn có thể đổi điều đó ở bước xem lại",
+  "Add to My Photos…": "Thêm vào Ảnh của tôi…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Cho xem lại ảnh trong thư mục này, rồi thêm vào thư viện tại chỗ; không tệp nào bị đụng đến",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Từ khóa và cài đặt sẵn chỉ áp dụng cho tệp mới, không áp dụng cho ảnh đã có trong Cục bộ"
 }
