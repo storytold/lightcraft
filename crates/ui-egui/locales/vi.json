@@ -2711,5 +2711,9 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "No photo in this folder is in the library yet": "Chưa có ảnh nào trong thư mục này nằm trong thư viện",
+  "Select the photos to move in the grid first": "Trước tiên hãy chọn trên lưới các ảnh cần di chuyển",
+  "This place is kept in Local already": "Nơi này đã được giữ trong Cục bộ",
+  "Only a place at the top of Local can be removed from it": "Chỉ có thể gỡ khỏi Cục bộ một nơi ở cấp trên cùng của Cục bộ"
 }
