@@ -2270,5 +2270,6 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Inicie o aplicativo com --control 7980 (ou LIGHTCRAFT_CONTROL_PORT) e o lightcraft-cli mcp --connect conecta um agente a ele.",
   "Welcome": "Bem-vindo",
   "Next": "Próximo",
-  "Get Started": "Começar"
+  "Get Started": "Começar",
+  "Sorting the library": "Ordenando a biblioteca"
 }

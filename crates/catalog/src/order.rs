@@ -236,6 +236,14 @@ impl Catalog {
     /// order, so it is never wrong; asked for before it is ready, the query sorts as it did. Nothing is started
     /// where a thread can't be (it only costs that sort).
     pub fn prebuild_order(&self, sort: &Sort) {
+        self.prebuild_order_holding(sort, || ());
+    }
+
+    /// [`Self::prebuild_order`] with something the thread holds while it works: `hold` is called once, on the calling
+    /// thread, only when a thread is about to start (not when nothing is to be made), and what it returns is moved
+    /// into the thread and dropped after the order is handed over. The engine passes an activity row, so a sort that
+    /// takes seconds on a big library is listed for as long as it runs.
+    pub fn prebuild_order_holding<H: Send + 'static>(&self, sort: &Sort, hold: impl FnOnce() -> H) {
         if sort.key == SortKey::Random || self.len() < PREBUILD_FROM || u32::try_from(self.len()).is_err() {
             return;
         }
@@ -248,7 +256,9 @@ impl Catalog {
         let revision = self.revision;
         let slot = Arc::new(Mutex::new(None));
         let theirs = Arc::downgrade(&slot);
+        let holding = hold();
         let work = move || {
+            let _holding = holding;
             let order = Order::of(photos.iter().map(|p| p.as_ref()), &sort);
             // (nobody to hand it to when the catalog is gone)
             if let Some(slot) = theirs.upgrade()
@@ -257,6 +267,7 @@ impl Catalog {
                 *s = Some(Built { revision, order });
             }
         };
+        // (a thread that can't start drops `work`, and with it what it holds)
         if std::thread::Builder::new().name("kept-order".into()).spawn(work).is_ok() {
             held.pending.insert(sort.key, slot);
         }

@@ -457,12 +457,17 @@ fn a_small_view_makes_the_order_for_the_big_view_that_follows() {
         .collect();
     s.commit("Add", Op::Batch { ops }).unwrap();
     s.execute("library.sort", &json!({"key": "captureDate", "ascending": true})).unwrap();
+    // (the id the next row gets tells whether a row was started meanwhile)
+    let before = s.activity.start("probe", "Probe", crate::activity::Cancel::No).id();
     s.execute("library.source", &json!({"kind": "picks"})).unwrap();
     assert!(s.visible().is_empty());
+    let after = s.activity.start("probe", "Probe", crate::activity::Cancel::No);
+    assert_eq!(after.id(), before + 2, "making the order started no activity row (one that is listed while it runs)");
+    drop(after);
     let key = lightcraft_catalog::SortKey::CaptureDate;
     let by = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !s.catalog.order_ready(key) {
-        assert!(std::time::Instant::now() < by, "the order was not made in a minute");
+    while !s.catalog.order_ready(key) || !s.activity.list().is_empty() {
+        assert!(std::time::Instant::now() < by, "the order was not made, or its row not removed, in a minute");
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     let before = s.catalog.full_sorts();

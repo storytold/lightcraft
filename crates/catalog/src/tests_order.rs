@@ -434,3 +434,35 @@ fn a_query_that_sorts_for_itself_drops_the_order_being_made() {
     assert!(!c.index.orders.pending(sort.key), "an order is still being held");
     assert_eq!(c.index.orders.count(), 1);
 }
+
+/// What the order's thread holds (the engine's activity row) is made on the calling thread, only when a thread is
+/// started, and is dropped by the thread once the order is ready: not before the sort, and not never.
+#[test]
+fn the_thread_making_an_order_holds_what_it_was_given_until_the_order_is_ready() {
+    use std::sync::mpsc::{Sender, channel};
+    use std::thread::ThreadId;
+    /// Says on which thread it was made and on which it was dropped.
+    struct Row(ThreadId, Sender<(ThreadId, ThreadId)>);
+    impl Drop for Row {
+        fn drop(&mut self) {
+            let _ = self.1.send((self.0, std::thread::current().id()));
+        }
+    }
+    let (tx, rx) = channel();
+    let row = || Row(std::thread::current().id(), tx.clone());
+
+    // nothing is started (too small, a shuffle, an order made or being made): nothing is held
+    library_of(400).prebuild_order_holding(&sort_of(SortKey::Rating), row);
+    let c = big();
+    c.prebuild_order_holding(&Sort { key: SortKey::Random, ..Sort::default() }, row);
+    assert!(rx.try_recv().is_err(), "a row was made where no thread starts");
+
+    let sort = sort_of(SortKey::Rating);
+    c.prebuild_order_holding(&sort, row);
+    c.prebuild_order_holding(&sort, row);
+    let (made_on, dropped_on) = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the row is dropped when the order is made");
+    assert_eq!(made_on, std::thread::current().id(), "made on the thread that asked");
+    assert_ne!(dropped_on, made_on, "dropped by the thread making the order");
+    assert!(c.order_ready(sort.key), "dropped before the order was handed over");
+    assert!(rx.try_recv().is_err(), "a second row was made for an order already being made");
+}
