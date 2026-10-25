@@ -60,6 +60,34 @@ pub(super) fn open_log_folder(app: &mut LightcraftApp) -> Result<Value, String> 
     Ok(json!({"path": path}))
 }
 
+/// The selected photos' originals, each once (a virtual copy shares its original's file);
+/// generated demo photos and other sources have none.
+fn selected_file_paths(app: &LightcraftApp) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    app.session
+        .selected()
+        .into_iter()
+        .filter_map(|id| match app.session.catalog.photo(id).map(|p| &p.source) {
+            Some(lightcraft_engine::catalog::Source::File { path }) => Some(path.clone()),
+            _ => None,
+        })
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
+/// `photo.copyPath`: the selected photos' file paths, one per line, on the clipboard.
+pub(super) fn copy_file_paths(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    let paths = selected_file_paths(app);
+    if paths.is_empty() {
+        return Err(crate::i18n::tr("The selected photos have no file on disk").to_string());
+    }
+    ctx.copy_text(paths.join("\n"));
+    let n = paths.len();
+    let text = if n == 1 { crate::i18n::tr("Copied the file path").to_string() } else { crate::i18n::tr_format!("Copied {n} file paths", n = n) };
+    app.toast(ctx, text);
+    Ok(json!({"paths": paths}))
+}
+
 /// Reveal the active photo's original in the system file manager.
 pub(super) fn show_in_finder(app: &mut LightcraftApp) -> Result<Value, String> {
     let id = app.session.active().ok_or("no photo selected")?;

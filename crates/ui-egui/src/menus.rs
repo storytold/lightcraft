@@ -63,6 +63,14 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
                     .is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. }))
         }
         "app.showInFolders" => show_in_folders_enabled(app, None),
+        // (asked every frame a menu is open: reads the selection in place, copies no path)
+        "photo.copyPath" => {
+            let on_disk = |id: &lightcraft_catalog::PhotoId| {
+                matches!(app.session.catalog.photo(*id).map(|p| &p.source), Some(lightcraft_engine::catalog::Source::File { .. }))
+            };
+            let sel = &app.session.selection;
+            if sel.ids.is_empty() { sel.active.as_ref().is_some_and(on_disk) } else { sel.ids.iter().any(on_disk) }
+        }
         "app.openSamModelFolder" => app.session.segmenter.dir.is_some() && app.services.open_with.is_some(),
         "file.exportPresets" => app.session.presets.iter().any(|p| !p.builtin),
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
