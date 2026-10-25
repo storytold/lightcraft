@@ -148,10 +148,7 @@ impl<'a> Msg<'a> {
 
     /// All sub-messages `num`; malformed nested messages are corrupt input.
     fn subs(&self, num: u64) -> Result<Vec<Msg<'a>>> {
-        self.all(num)
-            .filter_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None })
-            .map(Msg::parse)
-            .collect()
+        self.all(num).filter_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None }).map(Msg::parse).collect()
     }
 
     fn sub(&self, num: u64) -> Result<Option<Msg<'a>>> {
@@ -219,14 +216,15 @@ fn module<'a>(block: &'a [u8], msg_at: usize, m: &Msg<'a>) -> Result<Option<Modu
     }
     let Some(surface) = m.sub(9)? else { return Ok(None) };
     let Some(size) = surface.sub(2)? else { return Ok(None) };
-    let (Some(width), Some(height)) = (
-        size.varint(1).and_then(|v| usize::try_from(v).ok()),
-        size.varint(2).and_then(|v| usize::try_from(v).ok()),
-    ) else { return Ok(None) };
-    let (Some(stride), Some(offset)) = (
-        surface.varint(4).and_then(|v| usize::try_from(v).ok()),
-        surface.varint(5).and_then(|v| usize::try_from(v).ok()),
-    ) else { return Ok(None) };
+    let (Some(width), Some(height)) = (size.varint(1).and_then(|v| usize::try_from(v).ok()), size.varint(2).and_then(|v| usize::try_from(v).ok()))
+    else {
+        return Ok(None);
+    };
+    let (Some(stride), Some(offset)) =
+        (surface.varint(4).and_then(|v| usize::try_from(v).ok()), surface.varint(5).and_then(|v| usize::try_from(v).ok()))
+    else {
+        return Ok(None);
+    };
     let Some(row_bytes) = width.checked_mul(10).map(|v| v.div_ceil(8)) else { return Ok(None) };
     // even dimensions: whole 2x2 cells
     if surface.varint(3) != Some(FORMAT_PACKED10) || width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 || stride < row_bytes {
@@ -302,10 +300,10 @@ fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usi
         }
     }
     let Some((_, grid)) = grids.iter().min_by_key(|(at, _)| at.abs_diff(lens_position)) else { return Ok(None) };
-    let (Some(cols), Some(rows)) = (
-        grid.varint(1).and_then(|v| usize::try_from(v).ok()),
-        grid.varint(2).and_then(|v| usize::try_from(v).ok()),
-    ) else { return Ok(None) };
+    let (Some(cols), Some(rows)) = (grid.varint(1).and_then(|v| usize::try_from(v).ok()), grid.varint(2).and_then(|v| usize::try_from(v).ok()))
+    else {
+        return Ok(None);
+    };
     let Some(n) = cols.checked_mul(rows).filter(|&n| (4..=MAX_GRID_POINTS).contains(&n) && cols >= 2 && rows >= 2) else { return Ok(None) };
     let Some(raw) = grid.bytes(3) else { return Ok(None) };
     if raw.len() != n.checked_mul(4).unwrap_or(usize::MAX) {
@@ -389,7 +387,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     for b in &headers {
         if let Some(s) = b.msg.sub(16)? {
             sensor = s.sub(2)?;
-            if sensor.is_some() { break; }
+            if sensor.is_some() {
+                break;
+            }
         }
     }
     let black = sensor.as_ref().and_then(|s| s.f32(1)).filter(|v| (0.0..1023.0).contains(v)).unwrap_or(DEFAULT_BLACK);
