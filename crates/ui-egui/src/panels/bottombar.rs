@@ -8,7 +8,7 @@ use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
-use crate::widgets::{icon_button, register, stars};
+use crate::widgets::{icon_button, register};
 
 const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
@@ -105,7 +105,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
         ui.new_child(egui::UiBuilder::new().max_rect(pill.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     pill_ui.spacing_mut().item_spacing.x = 3.0;
     let rating = active.as_ref().map(|p| p.rating).unwrap_or(0);
-    if let Some(r) = stars(&mut pill_ui, "bottom", rating, 19.0) {
+    if let Some(r) = crate::rating::Rating::new("bottom", rating).show(&mut pill_ui) {
         let mut params = json!({"rating": r});
         crate::panels::compare::target_active(app, &mut params);
         let _ = app.run("photo.rate", params);
@@ -132,6 +132,8 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
         } else {
             t.icon
         };
+        // the Pick button shows the flag the photo carries: filled while it is a pick
+        let icon = if on && f == Flag::Pick { Icon::FlagPickFilled } else { icon };
         paint(pill_ui.painter(), r.shrink(3.0), icon, c);
         if resp.clicked() {
             let mut params = json!({"flag": match f { Flag::Pick => "pick", Flag::Reject => "reject", Flag::None => "none" }});

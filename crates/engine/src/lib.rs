@@ -29,6 +29,7 @@ pub mod demo;
 pub mod denoise;
 pub mod devices;
 pub mod display;
+pub mod doc_path;
 mod errors;
 pub mod export;
 pub mod face_download;
@@ -56,6 +57,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+pub mod open_path;
 pub mod originals;
 mod pdf;
 pub mod preset_import;
@@ -184,10 +186,39 @@ pub struct Interaction {
     pub label: String,
     pub photo: PhotoId,
     pub original: Arc<DevelopSettings>,
+    /// Whether an edit during the interaction changed the crop itself. If none did, the crop the
+    /// photo shows was fitted by Constrain Crop, and the final commit starts again from the original
+    /// crop, so Auto Sync carries the edit and not the active photo's fitted crop.
+    pub crop_edited: bool,
 }
 
 /// The most photos an edit may touch for the view to follow it photo by photo; a larger edit is worked out whole.
 const MAX_FOLLOWED: usize = 256;
+
+/// The established clock precision for relative-date views and sidebar counts.
+fn clock_minute(now: &str) -> &str {
+    now.get(..16).unwrap_or(now)
+}
+
+/// Whether a query can change membership without a catalog edit, including the smart albums it tests.
+fn filter_depends_on_clock(filter: &Filter, catalog: &Catalog) -> bool {
+    if filter.depends_on_now() {
+        return true;
+    }
+    let mut pending = filter.albums_tested();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(smart) = catalog.album(id).and_then(|album| album.smart.as_deref()) else { continue };
+        if smart.depends_on_now() {
+            return true;
+        }
+        pending.extend(smart.albums_tested());
+    }
+    false
+}
 
 /// Source of [`Session::visible_shared`] generations (process-wide, so two sessions never share one).
 static VISIBLE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -201,12 +232,16 @@ pub struct Session {
     pub catalog: Catalog,
     pub source: LibrarySource,
     pub filter: Filter,
+    /// The filter `library.toggleFilters` put aside (Library > Enable Filters off); not persisted.
+    pub(crate) shelved_filter: Option<Filter>,
     pub sort: Sort,
     pub selection: Selection,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
     visible: Arc<[PhotoId]>,
     visible_key: Option<(u64, String)>,
+    /// The minute used for a cached view whose rules depend on the session clock.
+    visible_clock_minute: Option<String>,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
     /// matching a smart album's rules, Picks or the filter bar leaves it where it is. Off: the photo goes at once.
     pub hold_view: bool,
@@ -226,7 +261,7 @@ pub struct Session {
     /// is recomputed, so frontends can key their per-view caches on it instead of hashing the ids.
     visible_gen: u64,
     /// Photos in the current source with no filter on (cached like `visible`).
-    total: Option<((u64, String), usize)>,
+    total: Option<((u64, String), usize, Option<String>)>,
     pub undo: Vec<UndoEntry>,
     /// Undo steps committed in this session, ever (the history drops its oldest past 1000, so
     /// its length can't tell how many steps a command just made; see [`Session::commits`]).
@@ -238,6 +273,8 @@ pub struct Session {
     /// Set by a command whose change must not rewrite the photo's XMP sidecar even with auto-write on
     /// (a catalog-only edit of data the sidecar writer does not emit); consumed when the command ends.
     pub(crate) skip_auto_write: bool,
+    /// The order of Reload from Disk runs, so an older one finishing late is dropped ([`cmd::reload`]).
+    pub(crate) reload_tickets: cmd::reload::Tickets,
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
@@ -298,6 +335,10 @@ pub struct Session {
     pub xmp: sidecar::XmpPrefs,
     /// Parameters of the last export (`app.export` params, minus targets), persisted in prefs.json.
     pub last_export: Option<serde_json::Value>,
+    /// The options of the last Photo Merge started, per command (`merge.hdr`, `merge.panorama`,
+    /// `merge.hdrPanorama`): the merge dialog opens with them and "… with Last Settings" uses
+    /// them. Persisted in prefs.json.
+    pub last_merge: std::collections::BTreeMap<String, serde_json::Value>,
     /// The user's export presets (built-ins: [`export::builtin_presets`]), persisted in prefs.json.
     pub export_presets: Vec<export::ExportPreset>,
     /// The Print module's current layout, image settings, page, guides and job (`print.*`). Lives
@@ -410,10 +451,12 @@ impl Session {
             catalog: Catalog::new(),
             source: LibrarySource::All,
             filter: Filter::default(),
+            shelved_filter: None,
             sort: Sort::default(),
             selection: Selection::default(),
             visible: Vec::new().into(),
             visible_key: None,
+            visible_clock_minute: None,
             hold_view: false,
             base: None,
             view_followed: 0,
@@ -428,6 +471,7 @@ impl Session {
             pending_sidecar_repairs: Vec::new(),
             interaction: None,
             skip_auto_write: false,
+            reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
             face_models_dir: None,
@@ -459,6 +503,7 @@ impl Session {
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
+            last_merge: Default::default(),
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
@@ -874,22 +919,58 @@ impl Session {
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
         let now = (self.clock)();
-        let settings = Arc::new(settings);
-        if let Some(i) = &self.interaction
+        // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990)
+        let requested = settings;
+        let settings = Arc::new(self.fit_constrained_crop(id, requested.clone()));
+        let crop_edited = self.develop_of(id).is_some_and(|d| d.crop.geometry != requested.crop.geometry);
+        if let Some(i) = &mut self.interaction
             && i.photo == id
         {
+            i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &settings, label));
+        ops.extend(self.auto_sync_ops(id, &requested, label));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
 
-    /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`) over to the
-    /// other selected photos: only the settings that changed; never spot removal or red eye (they
-    /// belong to one photo's pixels), nor the rendering process (Sync doesn't carry it either), nor
-    /// history / snapshot restores.
+    /// "Constrain Crop" keeps the stored crop inside the warped photo, as Lightroom does (issue
+    /// #1927): turning it on, or an edit that changes the warp (Geometry, Upright, lens corrections,
+    /// their sections' eyes) while it is on, shrinks the crop about its centre until no blank corner
+    /// is left, so the Crop tool shows what the render keeps. An edit of the crop itself is left as
+    /// drawn (the render still constrains it).
+    fn fit_constrained_crop(&self, id: PhotoId, mut d: DevelopSettings) -> DevelopSettings {
+        if !d.geometry.constrain_crop {
+            return d;
+        }
+        let Some(photo) = self.catalog.photo(id) else { return d };
+        let before = &photo.develop;
+        let turned_on = !before.geometry.constrain_crop;
+        let warp_changed = before.geometry != d.geometry
+            || before.optics != d.optics
+            || before.orientation != d.orientation
+            || ["geometry", "optics"].iter().any(|s| before.section_enabled(s) != d.section_enabled(s));
+        let crop_edited = before.crop.geometry != d.crop.geometry;
+        if !(turned_on || (warp_changed && !crop_edited)) {
+            return d;
+        }
+        let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+            photo.width.max(1) as usize,
+            photo.height.max(1) as usize,
+            &d,
+            true,
+            photo.embedded_lens.as_ref(),
+        );
+        d.crop.geometry.rect = frame.crop.rect;
+        d
+    }
+
+    /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`, as asked,
+    /// before its crop is fitted) over to the other selected photos: only the settings that changed;
+    /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
+    /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
+    /// photo's own crop: the active photo's fitted crop is never copied over another's.
     fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
         if !self.auto_sync
             || self.active() != Some(id)
@@ -900,7 +981,16 @@ impl Session {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
+        let mut old_json = old.to_json();
+        let mut new_json = new.to_json();
+        // False is omitted from stored profile JSON. Keep it explicit for this comparison so
+        // switching camera local tone mapping off is a change without copying untouched values.
+        old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
+        new_json["profile"]["camera_local_tone"] = Value::Bool(new.profile.camera_local_tone);
+        // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
+        old_json["hdr"] = serde_json::json!(old.hdr);
+        new_json["hdr"] = serde_json::json!(new.hdr);
+        let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
@@ -915,7 +1005,7 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
@@ -937,7 +1027,7 @@ impl Session {
         }
         let id = self.active().ok_or_else(|| EngineError::Other("no active photo".into()))?;
         let original = self.develop_of(id).unwrap_or_default();
-        self.interaction = Some(Interaction { label: label.into(), photo: id, original });
+        self.interaction = Some(Interaction { label: label.into(), photo: id, original, crop_edited: false });
         Ok(())
     }
 
@@ -948,9 +1038,15 @@ impl Session {
         if *cur == *i.original {
             return Ok(());
         }
-        // Restore the original silently, then commit the final value as one step.
+        // Restore the original silently, then commit the final value as one step. A crop nobody
+        // edited goes back to the original's: Constrain Crop fits it again for the final warp, and
+        // Auto Sync carries the edit, not the active photo's fitted crop (review of #1990).
         self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: None })?;
-        self.set_develop(i.photo, (*cur).clone(), &i.label)
+        let mut last = (*cur).clone();
+        if !i.crop_edited {
+            last.crop.geometry = i.original.crop.geometry;
+        }
+        self.set_develop(i.photo, last, &i.label)
     }
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
@@ -961,6 +1057,11 @@ impl Session {
     }
 
     // ---------------------------------------------------------------- library view
+
+    /// Library > Enable Filters is off: a filter is put aside (`library.toggleFilters`).
+    pub fn filters_off(&self) -> bool {
+        self.shelved_filter.is_some()
+    }
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
@@ -977,12 +1078,20 @@ impl Session {
         };
         let view = format!("{}|{rules}", key.1);
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
-            // the view fills in as the background checks find files gone
-            key.1.push_str(&format!("|{}", self.media.availability.generation()));
+            // the view fills in as the background checks find files gone (a file found there at
+            // its first check changes nothing it shows)
+            key.1.push_str(&format!("|{}", self.media.availability.gone_generation()));
         }
-        if self.visible_key.as_ref() != Some(&key) {
-            // "in the last N days" rules count back from the session's clock
-            lightcraft_catalog::rules::set_now(Some((self.clock)()));
+        let key_changed = self.visible_key.as_ref() != Some(&key);
+        // A time-dependent cache needs one clock read to test its minute stamp. A new view also
+        // needs one value for the query, even when its previous cached view did not use the clock.
+        let current_now = (key_changed || self.visible_clock_minute.is_some()).then(|| (self.clock)());
+        let current_minute = current_now.as_deref().map(clock_minute);
+        let clock_changed = self.visible_clock_minute.as_deref().is_some_and(|cached| current_minute != Some(cached));
+        if key_changed || clock_changed {
+            // Use this same value to evaluate relative rules and stamp the result.
+            let now = current_now.unwrap_or_else(|| (self.clock)());
+            lightcraft_catalog::rules::set_now(Some(now.clone()));
             let f = self.view_filter(self.source, &self.filter);
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
@@ -1009,8 +1118,7 @@ impl Session {
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
             // with the clock as well as with edits: a photo nobody touched can stop matching. It is asked whole.
-            let clocked = f.depends_on_now()
-                || (!f.albums_tested().is_empty() && self.catalog.albums().any(|al| al.smart.as_deref().is_some_and(Filter::depends_on_now)));
+            let clocked = filter_depends_on_clock(&f, &self.catalog);
             let base = self.base.take().filter(|(of, _, _)| *of == view);
             // A small edit to the same view: the photos it touched are taken out, asked about again, and put back
             // at their place in the order. The others neither stopped matching nor moved.
@@ -1084,6 +1192,7 @@ impl Session {
             self.visible = visible.into();
             self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.visible_key = Some(key);
+            self.visible_clock_minute = clocked.then(|| clock_minute(&now).to_owned());
         }
         &self.visible
     }
@@ -1116,12 +1225,20 @@ impl Session {
     /// view, so a list followed many times over is compared, not only one followed once.
     #[cfg(test)]
     pub(crate) fn visible_in_full(&mut self) -> Vec<PhotoId> {
-        let kept = (self.base.clone(), self.visible_key.clone(), self.visible.clone(), self.visible_gen, self.view_followed, self.view_worked_out);
+        let kept = (
+            self.base.clone(),
+            self.visible_key.clone(),
+            self.visible_clock_minute.clone(),
+            self.visible.clone(),
+            self.visible_gen,
+            self.view_followed,
+            self.view_worked_out,
+        );
         self.never_follow = true;
         self.visible_key = None;
         let whole = self.visible().to_vec();
         self.never_follow = false;
-        (self.base, self.visible_key, self.visible, self.visible_gen, self.view_followed, self.view_worked_out) = kept;
+        (self.base, self.visible_key, self.visible_clock_minute, self.visible, self.visible_gen, self.view_followed, self.view_worked_out) = kept;
         whole
     }
 
@@ -1149,7 +1266,15 @@ impl Session {
             }
         }
         let key = (self.catalog.revision, format!("{:?}|{:?}|{:?}", self.source, self.browse, self.library_folder));
-        if self.total.as_ref().map(|t| &t.0) != Some(&key) {
+        let key_changed = self.total.as_ref().map(|total| &total.0) != Some(&key);
+        let cached_minute = self.total.as_ref().and_then(|total| total.2.as_deref());
+        let current_now = cached_minute.map(|_| (self.clock)());
+        let current_minute = current_now.as_deref().map(clock_minute);
+        let clock_changed = cached_minute.is_some_and(|cached| current_minute != Some(cached));
+        if key_changed || clock_changed {
+            // The source count can be requested before `visible`; bind it to the session's clock itself.
+            let now = current_now.unwrap_or_else(|| (self.clock)());
+            lightcraft_catalog::rules::set_now(Some(now.clone()));
             let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
             if self.source == LibrarySource::Folder {
                 let b = self.browse.clone().unwrap_or_default();
@@ -1161,7 +1286,8 @@ impl Session {
             }
             // (how many, not which: nothing to put in order)
             let n = self.catalog.count(&f);
-            self.total = Some((key, n));
+            let clocked = filter_depends_on_clock(&f, &self.catalog);
+            self.total = Some((key, n, clocked.then(|| clock_minute(&now).to_owned())));
         }
         self.total.as_ref().map(|t| t.1)
     }
@@ -1242,7 +1368,11 @@ mod tests_albums_local;
 #[cfg(test)]
 mod tests_color;
 #[cfg(test)]
+mod tests_constrain_crop;
+#[cfg(test)]
 mod tests_crop_angle;
+#[cfg(test)]
+mod tests_crop_aspect;
 #[cfg(test)]
 mod tests_denoise;
 #[cfg(test)]
@@ -1267,6 +1397,8 @@ mod tests_forget_local;
 mod tests_history_cursor;
 #[cfg(test)]
 mod tests_hold_view;
+#[cfg(test)]
+mod tests_ids_params;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]

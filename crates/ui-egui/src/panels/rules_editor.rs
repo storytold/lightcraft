@@ -247,10 +247,9 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         }
         ui.separator();
         // submenu rows look like the items above them; the one holding the current field stands out
-        // (a transparent frame, not none: a frameless button drops its padding and hover fill)
-        let inactive = &mut ui.visuals_mut().widgets.inactive;
-        inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-        inactive.bg_stroke = egui::Stroke::NONE;
+        // (a transparent frame, not none: a frameless button drops its padding and hover fill; the
+        // list's style already drops the resting border)
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
         for (group, ids) in FIELD_GROUPS {
             let text = RichText::new(crate::i18n::tr(group));
             let text = if ids.contains(&current.as_str()) { text.strong() } else { text };
@@ -274,6 +273,12 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         *op = ops.first().map_or("is", |o| o.0).to_string();
     }
     *value = default_value(field, op);
+}
+
+/// How wide `ui.small_button(text)` is: its text and the button's padding.
+fn small_button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    galley.size().x + 2.0 * ui.spacing().button_padding.x
 }
 
 /// A rule's problem, shown under it in the caution colour (`ruleProblem:<salt>` for tests and
@@ -329,22 +334,25 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                         }
                     });
                     value_editor(ui, field, op, value, &rsalt, env);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let add = ui.small_button("+").on_hover_text(crate::i18n::tr("Add a rule (⌥-click: a group)"));
-                        register(ui.ctx(), format!("button:ruleAdd-{rsalt}"), add.rect);
-                        if add.clicked() {
-                            let group = ui.input(|i| i.modifiers.alt) && depth < 3;
-                            insert = Some((
-                                i + 1,
-                                if group { Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } } } else { new_rule() },
-                            ));
-                        }
-                        let del = ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this rule"));
-                        register(ui.ctx(), format!("button:ruleRemove-{rsalt}"), del.rect);
-                        if del.clicked() {
-                            remove = Some(i);
-                        }
-                    });
+                    // − and + at the end of the row, after the value however long it is: a
+                    // right-to-left layout put them over the value when the row had no room left
+                    // (#2353), and the dialog widens to the row instead
+                    let buttons = small_button_width(ui, "−") + ui.spacing().item_spacing.x + small_button_width(ui, "+");
+                    ui.add_space((ui.available_width() - buttons).max(0.0));
+                    let del = ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this rule"));
+                    register(ui.ctx(), format!("button:ruleRemove-{rsalt}"), del.rect);
+                    if del.clicked() {
+                        remove = Some(i);
+                    }
+                    let add = ui.small_button("+").on_hover_text(crate::i18n::tr("Add a rule (⌥-click: a group)"));
+                    register(ui.ctx(), format!("button:ruleAdd-{rsalt}"), add.rect);
+                    if add.clicked() {
+                        let group = ui.input(|i| i.modifiers.alt) && depth < 3;
+                        insert = Some((
+                            i + 1,
+                            if group { Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } } } else { new_rule() },
+                        ));
+                    }
                 });
                 problem_note(ui, problem, &rsalt);
             }

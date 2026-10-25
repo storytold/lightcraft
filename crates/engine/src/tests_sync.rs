@@ -314,6 +314,41 @@ fn a_cancelled_scan_stops_checking_files() {
     assert!(c.missing.is_empty() && c.metadata.is_empty(), "{c:?}");
 }
 
+/// While the folder is listed, before a single photo can be checked, the scan says how far the
+/// listing is: a folder tree on a network share takes minutes to list, and "0 of 64,085" all
+/// that while looks like a scan that has stopped.
+#[test]
+fn a_scan_says_how_many_folders_and_files_it_has_listed() {
+    let dir = Scratch::new("listed");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/day2/c.png"), 3);
+    std::fs::write(dir.path("trip/day2/notes.txt"), "not a photo").unwrap();
+    let input = crate::sync::SyncInput::new(&mut s, &dir.path("trip"), false).unwrap();
+    let progress = crate::sync::SyncProgress::default();
+    assert_eq!(progress.listing(), Some((0, 0)), "listing is the first thing a scan does");
+    crate::sync::scan_with(input, &progress);
+    assert_eq!(progress.listing(), None, "the listing is done once the scan is");
+    let (folders, files) =
+        (progress.folders_listed.load(std::sync::atomic::Ordering::Relaxed), progress.files_listed.load(std::sync::atomic::Ordering::Relaxed));
+    // trip, trip/day1, trip/day2; a.png, b.png, c.png and the note (every file is listed, photo or not)
+    assert_eq!((folders, files), (3, 4));
+}
+
+/// ✕ on a scan's row stops the listing too, not only the checks after it.
+#[test]
+fn a_cancelled_scan_stops_listing_the_folders() {
+    let dir = Scratch::new("cancel-listing");
+    let mut s = library(&dir);
+    for i in 0..20u8 {
+        write_png(&dir.path(&format!("trip/more/{i}/x.png")), i);
+    }
+    let input = crate::sync::SyncInput::new(&mut s, &dir.path("trip"), false).unwrap();
+    let progress = crate::sync::SyncProgress::default();
+    progress.files.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::sync::scan_with(input, &progress);
+    assert_eq!(progress.folders_listed.load(std::sync::atomic::Ordering::Relaxed), 1, "the walk stopped after the folder it was in");
+}
+
 #[test]
 fn many_photos_are_checked_in_parallel_with_the_same_answer() {
     let dir = Scratch::new("many");
@@ -684,4 +719,41 @@ fn sidecar_namings_for_many_photos_agree_with_one_at_a_time() {
     let one_by_one: Vec<_> = ids.iter().map(|id| s.sidecar_naming(*id)).collect();
     assert_eq!(s.sidecar_namings(&ids), one_by_one);
     assert!(one_by_one.contains(&crate::sidecar::SidecarNaming::Full), "the case that matters is there");
+}
+
+/// ✕ set after the listing, while the scan goes through the files: the probes a preceding scan
+/// kept are not checked against the disk one by one (a round trip per file on a network share);
+/// the files not reached come back as errors.
+#[test]
+fn a_cancelled_scan_does_not_check_the_cached_probes_against_the_disk() {
+    let dir = Scratch::new("cancel-cached");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/new.png"), 9);
+    let found = crate::import::scan(&mut s, &[dir.path("trip")]);
+    assert!(found.iter().any(|c| c.name == "new.png" && c.error.is_none()), "{found:?}");
+    assert!(!s.import_probes.is_empty(), "the scan kept the new file's probe");
+    let (input, paths) = crate::import::ScanInput::new(&mut s, &[dir.path("trip")]);
+    let progress = crate::import::ScanProgress::default();
+    progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    let out = crate::import::scan_with(input, &paths, &progress);
+    let new = out.candidates.iter().find(|c| c.name == "new.png").expect("new.png is a candidate");
+    assert!(new.error.is_some(), "the cached probe was used after ✕: {new:?}");
+}
+
+#[test]
+fn removing_missing_photos_takes_them_out_of_their_stacks() {
+    let dir = Scratch::new("remove-stacked");
+    let mut s = library(&dir);
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (a, b) = (id(&s, "a.png"), id(&s, "b.png"));
+    let group = s.catalog.group_ops(a, &[b], true).unwrap();
+    s.catalog.apply(group).unwrap();
+    assert!(s.catalog.stack_of(b).is_some());
+    std::fs::remove_file(dir.path("trip/day1/b.png")).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "removeMissing": true})).unwrap();
+    assert_eq!(r["removed"].as_u64(), Some(1), "{r}");
+    assert!(s.catalog.photo(b).unwrap().deleted);
+    assert!(s.catalog.stack_of(b).is_none(), "like photo.delete, a removed photo leaves its stack: {:?}", s.catalog.stack_of(b));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.stack_of(b).is_some(), "one undo step puts b back in its stack");
 }

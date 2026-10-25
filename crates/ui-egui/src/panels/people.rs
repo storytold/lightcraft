@@ -185,7 +185,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     p.text(pos2(r.left() + 2.0, face.bottom() + 32.0), Align2::LEFT_CENTER, photos, t.font(12.0), t.text_dim);
     let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
     let full = person.name.clone();
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         let r = ui.button(crate::i18n::tr("Rename Person…"));
         register(ui.ctx(), "personMenu:rename", r.rect);
         if r.clicked() {

@@ -31,7 +31,7 @@ pub fn load(s: &mut Session) {
             ..Default::default()
         };
         // one demo photo carries a camera focus point (as a Sony raw would), on the bloom's centre, so
-        // View ▸ Show Focus Point and Zoom to Focus Point can be tried without a camera file
+        // View ▸ Focus Point and Zoom to Focus Point can be tried without a camera file
         if sc.name == "Cosmos bloom" {
             p.meta.focus = Some(lightcraft_meta::FocusPoint {
                 rect: lightcraft_geom::Rect { x0: 0.42, y0: 0.433, x1: 0.50, y1: 0.487 },

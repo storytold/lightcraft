@@ -130,22 +130,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .map(|(l, k, op)| (l.to_string(), json!({"ratingOp": k}), f.rating_op == op))
             .collect(),
     );
-    for i in 1..=5u8 {
-        let (r, resp) = ui.allocate_exact_size(vec2(17.0, 26.0), Sense::click());
-        crate::widgets::announce(&resp, format!("{i} ★"));
-        register(ui.ctx(), format!("filter:star{i}"), r);
-        let filled = i <= f.rating;
-        let c = if filled {
-            t.star
-        } else if resp.hovered() {
-            t.text_label
-        } else {
-            t.icon
-        };
-        paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if filled { Icon::StarFilled } else { Icon::Star }, c);
-        if resp.clicked() {
-            filter(app, json!({"rating": if f.rating == i { 0 } else { i }}));
-        }
+    if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
+        filter(app, json!({"rating": r}));
     }
     ui.add_space(14.0);
 
@@ -162,6 +148,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             Flag::Reject if on => t.reject,
             _ => Color32::TRANSPARENT,
         };
+        let icon = if on && flag == Flag::Pick { Icon::FlagPickFilled } else { icon };
         let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
         if resp.clicked() {
             filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
@@ -171,13 +158,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // colour labels
     caption(ui, "Label");
-    // several labels can be on at once (any of them matches)
-    let mut chosen: Vec<ColorLabel> = f.labels.clone();
-    if let Some(l) = f.label
-        && !chosen.contains(&l)
-    {
-        chosen.push(l);
-    }
+    // several labels can be on at once (any of them matches); lit are those `label` and `labels` both let through
+    let chosen: Vec<ColorLabel> = f.labels_shown().unwrap_or_default();
     for l in ColorLabel::ALL {
         let on = chosen.contains(&l);
         let name = format!("{l:?}").to_lowercase();
@@ -291,7 +273,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if r.clicked() {
                 let _ = app.run("filter.applyPreset", json!({"name": n}));
             }
-            r.context_menu(|ui| {
+            crate::widgets::context_menu(&r, |ui| {
                 if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
                     let _ = app.run("filter.deletePreset", json!({"name": n}));
                 }

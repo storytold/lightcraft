@@ -33,6 +33,41 @@ pub fn signal(parameter_sets: &[&[u8]]) -> Option<Signal> {
     parse_sps(&unescape(sps.get(2..)?))
 }
 
+/// The uncropped picture size (`pic_width/height_in_luma_samples`) of every SPS among
+/// `parameter_sets`: what the decoder allocates before it applies the conformance window, so the
+/// pixel budget is checked against it (heic-rs reports only the first SPS, cropped). `None`: an
+/// SPS this reader can't follow.
+pub fn coded_sizes(parameter_sets: &[&[u8]]) -> Option<Vec<(u32, u32)>> {
+    parameter_sets
+        .iter()
+        .filter(|n| n.first().is_some_and(|b| (b >> 1) & 0x3f == SPS_NUT))
+        .map(|sps| {
+            let rbsp = unescape(sps.get(2..)?);
+            let r = &mut Bits { data: &rbsp, pos: 0 };
+            sps_size(r).map(|(w, h, _)| (w, h))
+        })
+        .collect()
+}
+
+/// Reads an SPS up to and including the picture size, leaving `r` after it: width, height and
+/// `sps_max_sub_layers_minus1`.
+fn sps_size(r: &mut Bits) -> Option<(u32, u32, u32)> {
+    r.skip(4)?; // sps_video_parameter_set_id
+    let max_sub_layers_minus1 = r.u(3)?;
+    if max_sub_layers_minus1 > 6 {
+        return None;
+    }
+    r.skip(1)?; // sps_temporal_id_nesting_flag
+    profile_tier_level(r, max_sub_layers_minus1)?;
+    r.ue()?; // sps_seq_parameter_set_id
+    if r.ue()? == 3 {
+        r.skip(1)?; // separate_colour_plane_flag
+    }
+    let width = r.ue()?; // pic_width_in_luma_samples
+    let height = r.ue()?; // pic_height_in_luma_samples
+    Some((width, height, max_sub_layers_minus1))
+}
+
 /// Removes emulation prevention bytes (`00 00 03` → `00 00`).
 fn unescape(nal: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(nal.len());
@@ -165,19 +200,7 @@ fn st_ref_pic_set(r: &mut Bits, idx: usize, num_delta_pocs: &[u32]) -> Option<u3
 
 fn parse_sps(rbsp: &[u8]) -> Option<Signal> {
     let r = &mut Bits { data: rbsp, pos: 0 };
-    r.skip(4)?; // sps_video_parameter_set_id
-    let max_sub_layers_minus1 = r.u(3)?;
-    if max_sub_layers_minus1 > 6 {
-        return None;
-    }
-    r.skip(1)?; // sps_temporal_id_nesting_flag
-    profile_tier_level(r, max_sub_layers_minus1)?;
-    r.ue()?; // sps_seq_parameter_set_id
-    if r.ue()? == 3 {
-        r.skip(1)?; // separate_colour_plane_flag
-    }
-    r.ue()?; // pic_width_in_luma_samples
-    r.ue()?; // pic_height_in_luma_samples
+    let (_, _, max_sub_layers_minus1) = sps_size(r)?;
     if r.flag()? {
         for _ in 0..4 {
             r.ue()?; // conf_win_*_offset

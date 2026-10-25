@@ -1,4 +1,4 @@
-//! Headless tests of the camera's focus point (#1480): View ▸ Show Focus Point draws the box where the
+//! Headless tests of the camera's focus point (#1480): View ▸ Focus Point draws the box where the
 //! camera focused, through the user's rotation and crop; Toggle Zoom (Z) centres on it; the Info panel
 //! names the focus mode.
 

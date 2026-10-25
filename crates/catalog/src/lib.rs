@@ -36,7 +36,7 @@ pub use folders::{FolderNode, FolderRecord};
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
 use lightcraft_develop::DevelopSettings;
-pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
+pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, LocalRecords, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
 pub use model::*;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
@@ -284,7 +284,8 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
-    /// Increments on every applied op.
+    /// Increments on every applied op, and when a batch fails and its rollback cannot undo it whole (the catalog
+    /// changed, so what is keyed by the revision is out of date).
     #[serde(skip)]
     pub revision: u64,
     /// Which photos the latest ops touched ([`Catalog::touched_since`]).
@@ -348,6 +349,8 @@ struct Changes {
     /// outside (a library just loaded takes a range of its own, so that nothing kept from another library is
     /// taken for this one's): nothing is known of how the catalog got to where it is.
     seen: u64,
+    /// A batch that failed could not be rolled back whole: what it changed stays, so what it noted must too.
+    torn: bool,
 }
 
 impl PartialEq for Changes {
@@ -610,13 +613,40 @@ impl Catalog {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))
     }
 
-    /// Apply an op; returns its inverse. On error nothing changes.
+    /// Apply an op; returns its inverse. On error the catalog is as it was, the revision included, and nothing is
+    /// remembered of the op in what the latest ops touched. The one exception is a batch whose rollback fails: the
+    /// catalog did change, so the revision advances and anything may be taken to have changed.
     pub fn apply(&mut self, op: Op) -> Result<Op> {
         if self.changes.seen != self.revision {
             // the revision was set from outside: what is remembered is of another past
             self.changes = Changes { floor: self.revision, seen: self.revision, ..Default::default() };
         }
-        let inv = self.apply_inner(op)?;
+        let broad = self.changes.broad;
+        self.changes.torn = false;
+        let inv = match self.apply_inner(op) {
+            Ok(inv) => inv,
+            Err(e) => {
+                let made = self.revision.saturating_add(1);
+                if self.changes.torn {
+                    // (a batch the rollback of which failed changed something and says not what: it makes a
+                    // revision, so what is kept for the one before is dropped, and anything may have changed, as
+                    // after an op of a wider reach)
+                    self.changes.torn = false;
+                    self.changes.broad = made;
+                    self.revision = made;
+                    self.changes.seen = made;
+                } else {
+                    // (everything the failed op, or the rollback of a batch, noted was made for the revision it
+                    // would have made: nothing earlier has that one. A note the cap already dropped stays
+                    // dropped, which only says less than is known, as the cap does.)
+                    while self.changes.touched.back().is_some_and(|(r, _, _)| *r == made) {
+                        self.changes.touched.pop_back();
+                    }
+                    self.changes.broad = broad;
+                }
+                return Err(e);
+            }
+        };
         self.revision += 1;
         self.changes.seen = self.revision;
         Ok(inv)
@@ -962,7 +992,9 @@ impl Catalog {
                         Err(e) => {
                             // roll back what was applied
                             for inv in inverses.into_iter().rev() {
-                                let _ = self.apply_inner(inv);
+                                if self.apply_inner(inv).is_err() {
+                                    self.changes.torn = true;
+                                }
                             }
                             return Err(e);
                         }
@@ -1067,21 +1099,50 @@ impl Catalog {
             st.photos.len() >= 2
         });
         let parents: Vec<(AlbumId, Option<AlbumId>)> = self.albums.values().map(|a| (a.id, a.parent)).collect();
+        // A folder chain is shared by every album under it, so each chain is validated once and its
+        // verdict is what later albums reused: a valid chain encoded in a flat snapshot made the old
+        // per-album walk quadratic in the album count (CWE-407).
+        enum Chain {
+            Ok,
+            Bad,
+        }
+        let mut chains: std::collections::HashMap<AlbumId, Chain> = std::collections::HashMap::new();
         for (id, parent) in parents {
             let Some(p) = parent else { continue };
-            let mut cur = Some(p);
-            let mut steps = 0usize;
-            let ok = loop {
-                match cur {
-                    None => break true,
-                    Some(c) if c == id || steps > self.albums.len() => break false,
-                    Some(c) => match self.albums.get(&c) {
-                        Some(a) if a.folder => cur = a.parent,
-                        _ => break false,
-                    },
+            if chains.contains_key(&id) {
+                continue;
+            }
+            // Walk up from `p` once, recording everything seen; what it reaches decides every node
+            // walked (a chain already judged by an earlier album stops the walk early — the rest of
+            // the chain was judged then).
+            let mut walked: Vec<AlbumId> = Vec::new();
+            let ok = {
+                let mut cur = Some(p);
+                let mut on: std::collections::HashSet<AlbumId> = std::collections::HashSet::new();
+                loop {
+                    match cur {
+                        None => break true,
+                        Some(c) => {
+                            if c == id || !on.insert(c) {
+                                break false;
+                            }
+                            match chains.get(&c) {
+                                Some(Chain::Bad) => break false,
+                                Some(Chain::Ok) => break true,
+                                None => {}
+                            }
+                            match self.albums.get(&c) {
+                                Some(a) if a.folder => walked.push(c),
+                                _ => break false,
+                            }
+                            cur = self.albums[&c].parent;
+                        }
+                    }
                 }
-                steps += 1;
             };
+            for c in walked {
+                chains.insert(c, if ok { Chain::Ok } else { Chain::Bad });
+            }
             if !ok && let Some(a) = self.albums.get_mut(&id) {
                 changed.push(format!("album {}: its folder {} is missing, not a folder or inside it: moved to the top level", id.0, p.0));
                 a.parent = None;
@@ -1163,5 +1224,7 @@ mod tests_lock;
 mod tests_repair;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_tally;
 #[cfg(test)]
 mod tests_torn_append;

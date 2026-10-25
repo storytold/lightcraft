@@ -38,6 +38,7 @@ pub mod previews;
 mod print;
 mod query;
 pub mod recheck;
+pub mod reload;
 mod slideshow;
 mod sync;
 mod xmp;
@@ -192,18 +193,50 @@ pub(crate) fn names_photos(p: &Value) -> bool {
     ["ids", "id"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()))
 }
 
+/// The photos `ids` names: `None` when it is missing or null (the command then falls back to the
+/// selection, or its own default), else every entry as a photo id. An `ids` that isn't a list of
+/// whole numbers is an error, never `None`: falling back would act on the selection instead of
+/// the photos the call meant (`{"ids": 3}`, `{"ids": ["3"]}`).
+pub(crate) fn photo_ids(p: &Value, cmd: &str) -> Result<Option<Vec<lightcraft_catalog::PhotoId>>> {
+    match p.get("ids") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_u64().map(lightcraft_catalog::PhotoId).ok_or_else(|| bad(cmd, "`ids` must be photo ids (whole numbers)")))
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
+        Some(_) => Err(bad(cmd, "`ids` must be a list of photo ids")),
+    }
+}
+
+/// The photo `id` names: `None` when it is missing or null (the command then uses the active
+/// photo), else that id. An `id` that isn't a whole number is an error, never `None`: falling back
+/// would act on the active photo instead of the one the call meant (`{"id": "5"}`).
+pub(crate) fn photo_id(p: &Value, cmd: &str) -> Result<Option<lightcraft_catalog::PhotoId>> {
+    match p.get("id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().map(|n| Some(lightcraft_catalog::PhotoId(n))).ok_or_else(|| bad(cmd, "`id` must be a photo id (a whole number)")),
+    }
+}
+
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 pub(crate) fn f64_req(p: &Value, key: &str, cmd: &str) -> Result<f64> {
     p.get(key).and_then(Value::as_f64).ok_or_else(|| bad(cmd, format!("missing number `{key}`")))
 }
-/// A non-negative integer parameter: `index: -1` must be an error, not element 0 (`-1.0 as usize`
-/// saturates to 0), just as `history.restore` already refuses a negative step index.
+/// A non-negative whole number that fits `usize`. Keep integer JSON exact; accept integral
+/// floating-point values for compatibility, without truncating or saturating their conversion.
 pub(crate) fn index_req(p: &Value, key: &str, cmd: &str) -> Result<usize> {
+    let invalid = || bad(cmd, format!("`{key}` must be a non-negative integer"));
+    if let Some(i) = p.get(key).and_then(Value::as_u64) {
+        return usize::try_from(i).map_err(|_| invalid());
+    }
     let i = f64_req(p, key, cmd)?;
-    if !(i.is_finite() && i >= 0.0) {
-        return Err(bad(cmd, format!("`{key}` must be a non-negative integer")));
+    // The exclusive bound is exactly representable, unlike usize::MAX on 64-bit targets.
+    let upper_bound = 2.0_f64.powi(usize::BITS as i32);
+    if !(i.is_finite() && i >= 0.0 && i.fract() == 0.0 && i < upper_bound) {
+        return Err(invalid());
     }
     Ok(i as usize)
 }
@@ -222,4 +255,30 @@ pub(crate) fn ok() -> Result<Value> {
 pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
     let a = p.get(key)?.as_array()?;
     Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::index_req;
+
+    #[test]
+    fn command_indices_preserve_integer_precision_and_check_usize_bounds() {
+        for i in [0, 1, usize::MAX] {
+            assert_eq!(index_req(&json!({"index": i}), "index", "test").unwrap(), i);
+        }
+        #[cfg(target_pointer_width = "64")]
+        {
+            let i = 9_007_199_254_740_993usize;
+            assert_eq!(index_req(&json!({"index": i}), "index", "test").unwrap(), i, "integer JSON must not round through f64");
+        }
+        let upper_bound = 2.0_f64.powi(usize::BITS as i32);
+        assert!(index_req(&json!({"index": upper_bound}), "index", "test").is_err(), "2^usize::BITS must not saturate");
+        #[cfg(target_pointer_width = "32")]
+        {
+            assert!(index_req(&json!({"index": u64::from(u32::MAX) + 1}), "index", "test").is_err());
+            assert_eq!(index_req(&json!({"index": f64::from(u32::MAX)}), "index", "test").unwrap(), usize::MAX);
+        }
+    }
 }

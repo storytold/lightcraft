@@ -32,10 +32,11 @@ use serde::{Deserialize, Serialize};
 use crate::Session;
 use crate::media::ProbeInfo;
 
-/// File extensions LightCraft imports (lower case).
+/// File extensions offered by import discovery and file pickers (lower case).
+/// This includes preview-only raws; the file probe decides whether sensor decoding is available.
 pub const EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd",
-    "jxl", "gif", "bmp",
+    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "sr2", "srf", "raf", "orf", "rw2", "rwl", "raw", "pef",
+    "srw", "psd", "psb", "jxl", "gif", "bmp",
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
     "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
@@ -373,6 +374,42 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
+/// The web file picker's accept list, derived from [`EXTENSIONS`]. Each extension
+/// is listed in both cases: browsers' `accept` matching is case-insensitive per
+/// spec, but some implementations (e.g. Windows/Edge) match case-sensitively and
+/// rejected uppercase `.NEF` files, so a lowercase-only list silently hid raws
+/// such as CR3, NRW, RAF, ORF, RW2, RWL, RAW, PEF and SRW from the picker.
+///
+/// The picker only offers files this build can actually import: `.avif` has no
+/// AV1 decoder in any build, and `.heic`/`.heif` decode only when the codecs'
+/// `heif` feature is enabled ([`lightcraft_codecs::Format::Heif::can_decode`]).
+/// [`EXTENSIONS`] itself stays complete — files on disk are still recognised,
+/// and import reports them as failed, saying why.
+pub fn accept_list() -> String {
+    let heif_decodable = lightcraft_codecs::Format::Heif.can_decode();
+    let mut out = String::new();
+    for &ext in EXTENSIONS {
+        // Skip extensions a web user could pick but this build could not import.
+        let pickable = match ext {
+            "avif" => false,
+            "heic" | "heif" => heif_decodable,
+            _ => true,
+        };
+        if !pickable {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(',');
+        }
+        out.push('.');
+        out.push_str(ext);
+        out.push(',');
+        out.push('.');
+        out.push_str(&ext.to_uppercase());
+    }
+    out
+}
+
 /// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
 /// is never descended into. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
 /// walk that stops at a bound is logged.
@@ -494,7 +531,7 @@ pub(crate) fn probe_with(probe: &crate::media::FileProbe, paths: &[String]) -> V
 
 /// Probe `paths` (several at once), counting each in `done`. Stops before the next file once
 /// `cancel` is set: the files not reached come back as errors.
-fn probe_all(
+pub(crate) fn probe_all(
     probe: Option<&crate::media::FileProbe>,
     paths: &[String],
     done: &std::sync::atomic::AtomicUsize,
@@ -691,6 +728,11 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         .iter()
         .map(|f| {
             let info = input.cache.remove(f)?;
+            // (✕ set while the files' cached probes are checked: no more round trips to the disk; what is
+            // not reached counts as not probed, like the files after it)
+            if progress.cancel.load(Relaxed) {
+                return None;
+            }
             let size = std::fs::metadata(f).map(|m| m.len()).ok();
             (size.is_none() || size == Some(info.file_size)).then_some(info)
         })
@@ -965,9 +1007,11 @@ impl ImportJob {
     }
 
     /// What the library held when the import was set up, by path and by content: made once, with
-    /// the first files (on the thread that prepares them), from the library as it was then.
-    fn look_up_library(&mut self) {
-        let Some((library, fresh)) = self.library.take() else { return };
+    /// the first files (on the thread that prepares them), from the library as it was then. The
+    /// snapshot comes back: the files the import is adding are ranked against it for the ownership
+    /// of the shared stem sidecars they read ([`crate::sidecar::ImportStems`]).
+    fn look_up_library(&mut self) -> Option<lightcraft_catalog::Catalog> {
+        let (library, fresh) = self.library.take()?;
         for p in library.photos() {
             // a trashed photo is replaced by a fresh import, so it doesn't count as a duplicate
             if p.deleted && fresh {
@@ -980,12 +1024,14 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
+        Some(library)
     }
 
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
     pub fn prepare_files(&mut self, files: Vec<String>, cancel: &std::sync::atomic::AtomicBool) -> Prepared {
         use std::sync::atomic::Ordering::Relaxed;
-        self.look_up_library();
+        // the library as it was, kept for the ownership of the shared stem sidecars below
+        let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
@@ -1025,6 +1071,13 @@ impl ImportJob {
         let probed: Vec<Result<ProbeInfo, String>> =
             cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
         crate::memory::release();
+        // Who owns the shared stem sidecar (`IMG_0001.xmp`) among the library's files and the ones
+        // arriving with this import: a JPEG or a TIFF arriving beside its raw reads its own sidecar
+        // and never the raw's packet (issue #1905).
+        let stems = crate::sidecar::ImportStems::for_import(
+            library.as_ref(),
+            todo.iter().zip(&probed).filter_map(|(path, info)| info.as_ref().ok().map(|i| (path.as_str(), i.kind))),
+        );
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -1063,7 +1116,7 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar(&path, self.naming)
+            let packet = crate::sidecar::find_sidecar_for_import(&stems, self.naming, &path)
                 .and_then(|f| std::fs::read_to_string(f).ok())
                 .or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
@@ -1566,6 +1619,7 @@ impl Session {
             display: None,
             slide: None,
             preview_cut: None,
+            display_fit: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),
@@ -1588,6 +1642,52 @@ mod tests_known;
 #[cfg(test)]
 mod prepared_tests {
     use super::*;
+
+    /// Extensions the picker may offer: every one in [`EXTENSIONS`], minus the
+    /// files this build cannot import (see [`accept_list`]).
+    fn pickable_extensions() -> Vec<&'static str> {
+        let heif_decodable = lightcraft_codecs::Format::Heif.can_decode();
+        EXTENSIONS
+            .iter()
+            .copied()
+            .filter(|ext| match *ext {
+                "avif" => false,
+                "heic" | "heif" => heif_decodable,
+                _ => true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accept_list_covers_every_pickable_extension_in_both_cases() {
+        let list = accept_list();
+        for ext in pickable_extensions() {
+            assert!(list.contains(&format!(".{ext}")), "lowercase .{ext} missing from accept list");
+            assert!(list.contains(&format!(".{}", ext.to_uppercase())), "uppercase .{} missing from accept list", ext.to_uppercase());
+        }
+    }
+
+    /// The web picker must not offer files this build cannot import: `.avif` has
+    /// no AV1 decoder in any build, so it is never listed, in either case.
+    #[test]
+    fn accept_list_never_offers_avif() {
+        let list = accept_list();
+        assert!(!list.contains(".avif"), "{list}");
+        assert!(!list.contains(".AVIF"), "{list}");
+    }
+
+    /// `.heic`/`.heif` follow the codecs' `heif` feature: listed (in both cases)
+    /// only when this build can decode them; otherwise hidden, so a web user
+    /// cannot pick a file that would fail to import.
+    #[test]
+    fn accept_list_offers_heic_heif_only_when_decodable() {
+        let list = accept_list();
+        let listed = lightcraft_codecs::Format::Heif.can_decode();
+        for ext in ["heic", "heif"] {
+            assert_eq!(list.contains(&format!(".{ext}")), listed, "lowercase .{ext}");
+            assert_eq!(list.contains(&format!(".{}", ext.to_uppercase())), listed, "uppercase .{ext}");
+        }
+    }
 
     #[test]
     fn revalidate_add_only_converts_matching_ready_item() {

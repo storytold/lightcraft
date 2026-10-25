@@ -8,7 +8,7 @@ prepare_fonts() {
     *) font_dir="$ROOT/$font_dir" ;;
   esac
 
-  if [ -z "${CRAFT_FONTS_DIR:-}" ] && [ ! -e "$font_dir" ]; then
+  if [[ -z "${CRAFT_FONTS_DIR:-}" ]] && [[ ! -e "$font_dir" ]]; then
     # Same revision as release.yml. Never update or reset an existing checkout.
     local revision=3d9ab3a132ed0eff457e424226a435a901da30d3
     echo "==> downloading craft-fonts ($revision) to $font_dir"
@@ -19,7 +19,7 @@ prepare_fonts() {
     fi
   fi
 
-  if [ ! -f "$font_dir/fonts/manifest.txt" ]; then
+  if [[ ! -f "$font_dir/fonts/manifest.txt" ]]; then
     echo "error: missing $font_dir/fonts/manifest.txt; set CRAFT_FONTS_DIR to a complete craft-fonts checkout" >&2
     return 1
   fi

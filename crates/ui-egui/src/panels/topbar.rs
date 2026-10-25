@@ -10,9 +10,8 @@ use crate::widgets::{icon_button, register};
 
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click zooms or restores it. Registered before the bar's widgets so they win the click.
-fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_left: f32, margin_right: f32, search_rect: Rect) {
+fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, bar: Rect, search_rect: Rect) {
     use crate::titlebar::{Gesture, WindowState, command_for};
-    let bar = Rect::from_min_max(pos2(content.left() - margin_left, content.top()), pos2(content.right() + margin_right, content.bottom()));
     register(ui.ctx(), "region:titlebar", bar);
     let handle = egui::Id::new("titlebar-handle");
     let resp = ui.interact(bar, handle, Sense::click_and_drag());
@@ -60,18 +59,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right: 12, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
-            // room for the filter icon and the seven icons on the right
-            // (the field is centred, so each icon on the right takes its width from both sides)
-            let mut sw = 640.0f32.min(full.width() - 620.0).max(190.0);
+            // The whole bar, its margins included. The search field is centred on this and not on
+            // `full`, which is only what the margins leave: on macOS the left margin holds the
+            // traffic lights' room, and full screen gives that room back. Centring on `full` moved
+            // the field, and changed its width, every time that room changed (issue #2365).
+            let bar = Rect::from_min_max(pos2(full.left() - left as f32, full.top()), pos2(full.right() + 12.0, full.bottom()));
+            // The field stops short of the filter icon and the seven icons on the right; centred,
+            // it is twice the room between the window's centre and them.
+            let mut sw = 640.0f32.min(2.0 * (full.right() - 310.0 - bar.center().x)).max(190.0);
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
-                sw = sw.min(2.0 * (full.center().x - menus_right)).max(190.0);
+                sw = sw.min(2.0 * (bar.center().x - menus_right)).max(190.0);
             }
-            let search_left = full.center().x - sw / 2.0;
-            let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
+            let search_left = bar.center().x - sw / 2.0;
+            let sr = Rect::from_center_size(pos2(bar.center().x, full.center().y), vec2(sw, 28.0));
             if app.integrated_titlebar {
-                window_handle(app, ui, full, left as f32, 12.0, sr);
+                window_handle(app, ui, bar, sr);
             }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -226,7 +230,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if resp.clicked() {
                 let _ = app.run("view.appearance", json!({}));
             }
-            resp.context_menu(|ui| {
+            crate::widgets::context_menu(&resp, |ui| {
                 let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
                 register(ui.ctx(), "menu:appearanceSettings", settings.rect);
                 if settings.clicked() {

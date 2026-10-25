@@ -4,7 +4,7 @@ use serde_json::json;
 
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, export_photo};
-use crate::tests_xmp::{synthetic_dng_with, temp_dir};
+use crate::tests_xmp::{synthetic_dng_with, synthetic_psd_with_metadata, temp_dir};
 
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
@@ -96,6 +96,43 @@ fn dng_export_rejects_non_raw_photos() {
     let err = export_photo(&mut s, id, &ExportOptions { format: ExportFormat::Dng, ..Default::default() }, 1).err().unwrap();
     assert!(err.contains("needs a raw photo"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #1966: a preset without `format` keeps its `bitDepth` until the format written is
+/// known. With `path: a.png` it writes the 16-bit PNG it asks for; a format without that depth
+/// gets its own, as stored settings do, while a depth the call itself passes is still refused.
+#[test]
+fn a_preset_depth_is_judged_against_the_format_written() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.export_presets.push(ExportPreset { name: "Deep".into(), params: json!({"bitDepth": 16, "longEdge": 64}) });
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.png"})).unwrap();
+    let o = ExportOptions::from_params(&p).unwrap();
+    assert_eq!((o.format, o.bit_depth), (ExportFormat::Png, Some(16)));
+    assert_eq!(export_photo(&mut s, id, &o, 1).unwrap().bytes[24], 16, "a 16-bit PNG");
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.jpg"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().bit_depth, None);
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.jpg", "bitDepth": 16})).unwrap();
+    assert!(ExportOptions::from_params(&p).unwrap_err().to_string().contains("`bitDepth` must be 8 for jpeg"));
+    // such a preset can be saved: its depth is judged when it exports; with a format, at once
+    s.execute("export.savePreset", &json!({"name": "Deep 2", "params": {"bitDepth": 16}})).unwrap();
+    assert!(s.execute("export.savePreset", &json!({"name": "Deep 3", "params": {"format": "jpeg", "bitDepth": 16}})).is_err());
+}
+
+/// Review of #1966: savePreset without `params` saves the previous export, a stored setting. A
+/// depth written before #1952 at the format's own depth is dropped, as Export with Previous does,
+/// instead of refusing the save; without `format`, the depth waits for the format written.
+#[test]
+fn a_preset_saved_from_the_previous_export_drops_its_unfit_depth() {
+    let mut s = Session::with_demo();
+    s.last_export = Some(json!({"format": "jpeg", "bitDepth": 16, "quality": 80, "dir": "/out"}));
+    s.execute("export.savePreset", &json!({"name": "Old"})).unwrap();
+    assert_eq!(s.export_presets[0].params, json!({"format": "jpeg", "quality": 80}));
+    s.last_export = Some(json!({"bitDepth": 16, "dir": "/out"}));
+    s.execute("export.savePreset", &json!({"name": "Deep"})).unwrap();
+    let p = s.export_params(&json!({"preset": "Deep", "path": "/out/a.png"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().bit_depth, Some(16));
 }
 
 #[test]
@@ -274,6 +311,30 @@ fn preset_export_never_overwrites_originals_or_sidecars() {
 #[test]
 fn curve_preset_export_never_overwrites_originals_or_sidecars() {
     preset_export_preserves_originals("curve.exportPresets", json!({"names": ["Linear"]}), "curve-export-guard");
+}
+
+/// #1944: Export Keywords went straight to `std::fs::write`, replacing a library original.
+#[test]
+fn keyword_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("keyword.export", json!({}), "keyword-export-guard");
+}
+
+#[test]
+fn keyword_export_preserves_the_previous_file_on_write_failure() {
+    let dir = temp_dir("keyword-export-failure");
+    let mut s = Session::with_demo();
+    let path = dir.join("keywords.txt");
+    let params = json!({"path": path.to_string_lossy()});
+    s.execute("keyword.export", &params).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    {
+        let _fault = lightcraft_catalog::safe_file::fail_writes_after(4);
+        assert!(s.execute("keyword.export", &params).is_err(), "keyword.export must report the failed write");
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), previous, "the prior export is kept");
+    s.execute("keyword.export", &params).unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temporary files remain");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -617,6 +678,92 @@ fn remove_location_refuses_a_raw_that_embeds_gps() {
     let id = s.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't remove the location"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_that_embeds_gps() {
+    let dir = temp_dir("export-noloc-psd");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let path = dir.join("Geo.psd");
+    let bytes = synthetic_psd_with_metadata(&gps);
+    assert_eq!(lightcraft_meta::extract(&bytes).gps, gps.gps, "the fixture embeds EXIF GPS");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location") && err.contains("export as JPEG"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_unreadable_xmp() {
+    let dir = temp_dir("export-noloc-psd-xmp");
+    let path = dir.join("Unreadable.psd");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let xmp = "<x:xmpmeta><broken";
+    let embedded = lightcraft_codecs::EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_psd(&image, &embedded).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes), lightcraft_meta::Metadata::default(), "ordinary extraction stays best-effort");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_invalid_utf8_xmp() {
+    let dir = temp_dir("export-noloc-psd-invalid-utf8");
+    let path = dir.join("Invalid.psd");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let xmp = lightcraft_meta::write_xmp(&gps, None);
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let embedded = lightcraft_codecs::EncodeMeta { xmp: Some(&xmp), ..Default::default() };
+    let mut bytes = lightcraft_codecs::encode_psd(&image, &embedded).unwrap();
+    assert_eq!(lightcraft_meta::extract(&bytes).gps, gps.gps);
+    let latitude = bytes.windows(2).position(|bytes| bytes == b"45").unwrap();
+    bytes[latitude] = 0xff;
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none());
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn remove_location_refuses_a_psd_with_unreadable_resources() {
+    let dir = temp_dir("export-noloc-psd-malformed");
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+    let path = dir.join("Geo.psd");
+    let valid_bytes = synthetic_psd_with_metadata(&gps);
+    assert_eq!(lightcraft_meta::extract(&valid_bytes).gps, gps.gps, "the fixture embeds EXIF GPS before corruption");
+    let mut bytes = valid_bytes;
+    let colour_length = usize::try_from(u32::from_be_bytes(bytes[26..30].try_into().unwrap())).unwrap();
+    let resource_length_at = 30 + colour_length;
+    let resource_length = usize::try_from(u32::from_be_bytes(bytes[resource_length_at..resource_length_at + 4].try_into().unwrap())).unwrap();
+    let resource_start = resource_length_at + 4;
+    let resource_end = resource_start + resource_length;
+    bytes.splice(resource_end..resource_end, *b"BAD!");
+    bytes[resource_length_at..resource_length_at + 4].copy_from_slice(&u32::try_from(resource_length + 4).unwrap().to_be_bytes());
+
+    assert!(lightcraft_meta::extract(&bytes).gps.is_none(), "the malformed trailing resource reproduces the metadata gap");
+    std::fs::write(&path, bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -991,7 +1138,8 @@ fn same_folder_as_original_exports_next_to_each_photo() {
     let exists = |p: &str| std::path::Path::new(p).exists();
     let files = crate::export::export_batch(&mut s, &ids, &o, &to, &mut crate::export::write_file, &exists).unwrap();
     let written: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
-    let mut want = vec![a.join("Exports/IMG_1.jpg").to_string_lossy().to_string(), b.join("Exports/IMG_1.jpg").to_string_lossy().to_string()];
+    // `export` joins the subfolder and name with `/` (`join_path`), on Windows too.
+    let mut want = vec![format!("{}/Exports/IMG_1.jpg", a.to_string_lossy()), format!("{}/Exports/IMG_1.jpg", b.to_string_lossy())];
     let mut got: Vec<String> = written.iter().map(|p| p.to_string()).collect();
     want.sort();
     got.sort();
@@ -1024,21 +1172,24 @@ fn same_folder_as_original_refuses_photos_without_a_folder() {
     let mut s = Session::with_demo();
     let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
     let mut written = Vec::new();
-    let mut write = |p: &str, _: &[u8]| -> Result<(), String> {
-        written.push(p.to_string());
-        Ok(())
+    // the writer lives in a block of its own, so its borrow of `written` has ended by the time
+    // the assertion below reads it
+    let files = {
+        let mut write = |p: &str, _: &[u8]| -> Result<(), String> {
+            written.push(p.to_string());
+            Ok(())
+        };
+        let err = crate::export::export_batch(&mut s, &ids, &o, &to, &mut write, &|_| false).unwrap_err();
+        assert!(err.contains("no folder on disk"), "{err}");
+        // without stopping: one error per photo, nothing written
+        let items = crate::export::prepare_batch(&mut s, &ids, &o).unwrap();
+        crate::export::run_batch(items, &o, &to, &mut write, &|_| false, false, &mut |_, _| true).unwrap()
     };
-    let err = crate::export::export_batch(&mut s, &ids, &o, &to, &mut write, &|_| false).unwrap_err();
-    assert!(err.contains("no folder on disk"), "{err}");
-    // without stopping: one error per photo, nothing written
-    let items = crate::export::prepare_batch(&mut s, &ids, &o).unwrap();
-    let files = crate::export::run_batch(items, &o, &to, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
     assert_eq!(files.len(), 2);
     for (f, id) in files.iter().zip(&ids) {
         assert_eq!(f["photo"], id.0, "{f}");
         assert!(f["error"].as_str().unwrap().contains("no folder on disk"), "{f}");
     }
-    drop(write);
     assert!(written.is_empty(), "{written:?}");
 
     // a photo on disk whose folder is gone (moved, an unplugged drive)

@@ -97,6 +97,12 @@ struct Finished {
     color: Option<Arc<egui::ColorImage>>,
 }
 
+/// Immutable identity captured when a request is submitted, not when its result is collected.
+struct Requested {
+    id: u64,
+    source: Option<lightcraft_catalog::Source>,
+}
+
 struct Queued {
     slot: Slot,
     priority: u32,
@@ -183,7 +189,9 @@ const VARIANT_PRIORITY: u32 = 6;
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
-    request_ids: HashMap<Slot, u64>,
+    requests: HashMap<Slot, Requested>,
+    #[cfg(test)]
+    failure_messages: Vec<String>,
     /// Request id of the pixels each interactive view (loupe, before, hover) shows: a draft that
     /// finishes after a newer request was made still replaces older pixels, so a long slider drag
     /// keeps updating the loupe instead of waiting for the drag to pause.
@@ -209,6 +217,8 @@ pub struct Renderer {
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
+    /// Finished jobs thrown away because a newer request for their slot had replaced them.
+    pub discarded: u64,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
@@ -272,7 +282,9 @@ impl Renderer {
         Renderer {
             #[cfg(test)]
             thumb_jobs_built: 0,
-            request_ids: HashMap::new(),
+            requests: HashMap::new(),
+            #[cfg(test)]
+            failure_messages: Vec::new(),
             shown_ids: HashMap::new(),
             epoch: 0,
             preview_generation: None,
@@ -287,6 +299,7 @@ impl Renderer {
             live_hdr_histogram: None,
             last_main_ms: 0.0,
             completed: 0,
+            discarded: 0,
             keep_pixels: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
@@ -318,8 +331,13 @@ impl Renderer {
         if quick && !self.textures.contains_key(&slot) {
             // Stand-in path (`grid::request_thumb`): the embedded preview is still on its way, or
             // the real thumbnail is requested at the background priority whatever the caller's.
-            return self.pending.get(&Slot::ThumbQuick(photo.id)).is_some_and(|p| p.0 == key)
-                || !self.request_needed(slot, key, crate::panels::grid::BACKGROUND_THUMB_PRIORITY);
+            let quick_slot = Slot::ThumbQuick(photo.id);
+            if let Some(&(k, p)) = self.pending.get(&quick_slot)
+                && k == key
+            {
+                return p == priority.saturating_add(1) || !self.is_queued(quick_slot);
+            }
+            return !self.request_needed(slot, key, crate::panels::grid::BACKGROUND_THUMB_PRIORITY);
         }
         !self.request_needed(slot, key, priority)
     }
@@ -334,17 +352,31 @@ impl Renderer {
         old.as_ptr() == Arc::as_ptr(photo) && *size == bucket && !self.request_needed(Slot::ThumbQuick(photo.id), *key, priority)
     }
 
-    /// Whether this photo's embedded-preview thumbnail is being fetched right now: the grid has
-    /// asked, and neither the picture nor a render behind it is owed.
-    pub fn thumb_quick_pending(&self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize) -> bool {
-        let Some((old, size, _, quick)) = self.thumb_inputs.get(&photo.id) else { return false };
-        old.as_ptr() == Arc::as_ptr(photo) && *size == bucket && *quick && self.pending.contains_key(&Slot::ThumbQuick(photo.id))
+    /// Whether this photo's embedded-preview thumbnail is pending at the requested priority, or
+    /// already running. A queued priority change must reach the grid's stand-in request.
+    pub fn thumb_quick_pending(&self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, priority: u32) -> bool {
+        let Some((old, size, key, quick)) = self.thumb_inputs.get(&photo.id) else { return false };
+        let slot = Slot::ThumbQuick(photo.id);
+        old.as_ptr() == Arc::as_ptr(photo)
+            && *size == bucket
+            && *quick
+            && self.pending.contains_key(&slot)
+            && !self.request_needed(slot, *key, priority.saturating_add(1))
     }
 
     /// Remember that the camera's embedded preview is this photo's final thumbnail, so the grid's
     /// per-frame requests stop at it (the quick render's key, which [`Self::thumb_quick_is_final`]
     /// compares against).
     pub fn remember_embedded_thumb(&mut self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, key: u64) {
+        let slot = Slot::Thumb(photo.id);
+        if self.pending.get(&slot).is_some_and(|(pending_key, _)| *pending_key != key) {
+            // An edit can still be rendering when Undo restores this embedded-final thumbnail.
+            // Retire its full-render identity before it can replace the correct stand-in.
+            self.pending.remove(&slot);
+            self.requests.remove(&slot);
+            self.pool.reprioritize(|s, p| if *s == slot { None } else { Some(p) });
+            self.queue.retain(|q| q.slot != slot);
+        }
         self.remember_thumb(photo, bucket, key, true);
         self.embedded_thumbs.insert(photo.id, (Arc::downgrade(photo), bucket, key));
     }
@@ -459,7 +491,7 @@ impl Renderer {
         }
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
-        self.request_ids.insert(slot, job.request_id);
+        self.requests.insert(slot, Requested { id: job.request_id, source: Some(job.origin.clone()) });
         // (an offload keeps its own per-view stage caches; the flag tells it to)
         let job = if slot.is_view() { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
         if self.offload.is_some() {
@@ -486,12 +518,33 @@ impl Renderer {
     /// Request a stand-in for `slot` (once per job key).
     pub fn request_quick(&mut self, slot: Slot, mut job: QuickJob, priority: u32) {
         if self.quick_tried.get(&slot) == Some(&job.key) {
+            if self.pending.get(&slot).is_some_and(|p| p.0 == job.key && p.1 != priority) {
+                // Scrolling changes a stand-in's priority too. Keep the original closure and
+                // request identity; running or completed work must never be started again.
+                let mut queued = false;
+                self.pool.reprioritize(|s, p| {
+                    if *s == slot {
+                        queued = true;
+                        Some(priority)
+                    } else {
+                        Some(p)
+                    }
+                });
+                if queued && let Some(p) = self.pending.get_mut(&slot) {
+                    p.1 = priority;
+                }
+            }
             return;
         }
         self.quick_tried.insert(slot, job.key);
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
-        self.request_ids.insert(slot, job.request_id);
+        let source = job
+            .small
+            .as_ref()
+            .map(|job| job.origin.clone())
+            .or_else(|| job.embedded.as_ref().map(|(path, _, _)| lightcraft_catalog::Source::File { path: path.clone() }));
+        self.requests.insert(slot, Requested { id: job.request_id, source });
         let key = job.key;
         let display = self.display.clone();
         self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| job.run(), &display)));
@@ -510,7 +563,7 @@ impl Renderer {
         }
         self.pending.insert(slot, (key, priority));
         let request_id = lightcraft_preview::next_tick();
-        self.request_ids.insert(slot, request_id);
+        self.requests.insert(slot, Requested { id: request_id, source: None });
         let display = self.display.clone();
         self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)));
     }
@@ -524,7 +577,7 @@ impl Renderer {
         self.prefetched.insert(slot, job.key);
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
-        self.request_ids.insert(slot, job.request_id);
+        self.requests.insert(slot, Requested { id: job.request_id, source: Some(job.origin.clone()) });
         let key = job.key;
         self.pool.submit(
             slot,
@@ -546,7 +599,7 @@ impl Renderer {
         self.queue.retain(|q| !gone(&q.slot));
         // (a render already running finishes unclaimed: its result is dropped)
         self.pending.retain(|s, _| !gone(s));
-        self.request_ids.retain(|s, _| !gone(s));
+        self.requests.retain(|s, _| !gone(s));
         self.failed.retain(|s, _| !gone(s));
         self.slides_live = !keep.is_empty();
     }
@@ -554,7 +607,7 @@ impl Renderer {
     /// Is a request for `slot` queued or running?
     /// Drop every texture and cached stage (another library was opened: photo ids changed meaning).
     pub fn forget_all(&mut self) {
-        self.request_ids.clear();
+        self.requests.clear();
         self.shown_ids.clear();
         self.epoch = lightcraft_preview::next_tick();
         self.preview_generation = None;
@@ -679,14 +732,14 @@ impl Renderer {
         });
         for s in dropped {
             self.pending.remove(&s);
-            self.request_ids.remove(&s);
+            self.requests.remove(&s);
         }
-        let request_ids = &mut self.request_ids;
+        let requests = &mut self.requests;
         let pending = &mut self.pending;
         self.queue.retain(|q| match q.slot {
             Slot::Variant(k) if stale(used.get(&k)) => {
                 pending.remove(&q.slot);
-                request_ids.remove(&q.slot);
+                requests.remove(&q.slot);
                 false
             }
             _ => true,
@@ -787,20 +840,23 @@ impl Renderer {
             // an interactive view still takes a superseded draft that is newer than what it
             // shows, and the source it decoded: a drag supersedes every request before it
             // finishes, and a source thrown away with them is decoded again for every tick.
-            if self.request_ids.get(&slot) != Some(&r.request_id) {
+            let source = if self.requests.get(&slot).map(|request| request.id) != Some(r.request_id) {
                 let newer_draft = slot.is_view()
-                    && self.request_ids.contains_key(&slot)
+                    && self.requests.contains_key(&slot)
                     && r.request_id >= self.epoch
                     && self.shown_ids.get(&slot).is_none_or(|shown| r.request_id > *shown)
                     && r.rendered.is_ok();
                 if !newer_draft {
+                    self.discarded += 1;
                     continue;
                 }
                 session.accept(&r);
+                None // superseded successful drafts have no failure diagnostic
             } else {
-                self.request_ids.remove(&slot);
+                let source = self.requests.remove(&slot).and_then(|request| request.source);
                 session.accept(&r);
-            }
+                source
+            };
             if slot.is_view() {
                 self.shown_ids.insert(slot, r.request_id);
             }
@@ -822,7 +878,10 @@ impl Renderer {
                 }
                 Err(e) => {
                     if !matches!(slot, Slot::Prefetch(_)) {
-                        log::warn!("render {slot:?}: {e}");
+                        let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
+                        #[cfg(test)]
+                        self.failure_messages.push(message.clone());
+                        log::warn!("{message}");
                         self.failed.insert(slot, (r.key, e, self.catalog_rev, r.photo));
                     }
                     continue;
@@ -957,7 +1016,7 @@ impl Renderer {
         self.pool.reprioritize(|s, p| if matches!(s, Slot::Import(_)) { None } else { Some(p) });
         self.queue.retain(|q| !matches!(q.slot, Slot::Import(_)));
         self.pending.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.request_ids.retain(|s, _| !matches!(s, Slot::Import(_)));
+        self.requests.retain(|s, _| !matches!(s, Slot::Import(_)));
         self.textures.retain(|s, _| !matches!(s, Slot::Import(_)));
         self.quick_tried.retain(|s, _| !matches!(s, Slot::Import(_)));
     }
@@ -972,15 +1031,15 @@ impl Renderer {
         });
         for s in dropped {
             self.pending.remove(&s);
-            self.request_ids.remove(&s);
+            self.requests.remove(&s);
             self.quick_tried.remove(&s);
         }
-        let request_ids = &mut self.request_ids;
+        let requests = &mut self.requests;
         let pending = &mut self.pending;
         self.queue.retain(|q| match q.slot {
             Slot::Thumb(id) if !keep.contains(&id) && q.priority <= 10 => {
                 pending.remove(&q.slot);
-                request_ids.remove(&q.slot);
+                requests.remove(&q.slot);
                 false
             }
             _ => true,
@@ -994,10 +1053,42 @@ impl Renderer {
     }
 }
 
+/// Include the source identity in diagnostics for every catalog-backed render slot (#1890).
+/// Debug-format paths so whitespace/control characters cannot forge another log entry.
+fn render_failure_message(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>, error: &str) -> String {
+    match source {
+        Some(lightcraft_catalog::Source::File { path }) => format!("render {slot:?}, {photo:?}, file {path:?}: {error}"),
+        Some(lightcraft_catalog::Source::Demo { scene }) => format!("render {slot:?}, {photo:?}, demo scene {scene}: {error}"),
+        None => format!("render {slot:?}, {photo:?}, source unavailable: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod thumbnail_tests {
     use super::*;
     use lightcraft_catalog::{Catalog, Op, Photo, Source};
+
+    #[test]
+    fn render_failures_identify_the_file_for_thumbnail_and_view_slots() {
+        let source = Source::File { path: "/photos/trip/IMG_0042.nef".into() };
+        for slot in [Slot::Thumb(PhotoId(42)), Slot::Main, Slot::Before, Slot::Compare(1), Slot::Region] {
+            let message = render_failure_message(slot, PhotoId(42), Some(&source), "unsupported compression");
+            assert!(message.contains("/photos/trip/IMG_0042.nef"), "{message}");
+            assert!(message.contains("PhotoId(42)"), "{message}");
+            assert!(message.ends_with(": unsupported compression"), "{message}");
+        }
+    }
+
+    #[test]
+    fn render_failure_paths_are_escaped_and_missing_sources_still_identified() {
+        let source = Source::File { path: "line\nbreak.nef".into() };
+        let message = render_failure_message(Slot::Main, PhotoId(42), Some(&source), "decode failed");
+        assert!(!message.contains('\n'));
+        assert!(message.contains("line\\nbreak.nef"));
+        assert!(render_failure_message(Slot::Main, PhotoId(42), None, "decode failed").contains("PhotoId(42), source unavailable"));
+        let demo = Source::Demo { scene: 7 };
+        assert!(render_failure_message(Slot::Main, PhotoId(42), Some(&demo), "decode failed").contains("demo scene 7"));
+    }
 
     struct Blocked;
     impl RenderOffload for Blocked {
@@ -1066,6 +1157,65 @@ mod thumbnail_tests {
         r.evict_thumbs(&Default::default(), 600);
         assert!(r.thumb_inputs.is_empty());
     }
+    fn queued_quick_thumbnail(id: PhotoId) -> (Arc<Photo>, QuickJob) {
+        let mut session = Session::new();
+        session.media.preview_loader =
+            Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+        let mut raw = (*photo()).clone();
+        raw.id = id;
+        raw.kind = lightcraft_catalog::MediaKind::Raw;
+        raw.develop = Arc::new(raw.camera_defaults());
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+        let p = session.catalog.photo(id).unwrap().clone();
+        let job = session.thumb_job(id, 384).unwrap();
+        (p, session.quick_thumb_job(&job).unwrap())
+    }
+
+    #[test]
+    fn queued_standin_promotes_from_prefetch_to_visible_without_restarting() {
+        let (p, quick) = queued_quick_thumbnail(PhotoId(1));
+        let (_, other) = queued_quick_thumbnail(PhotoId(2));
+        let slot = Slot::ThumbQuick(p.id);
+        // Deterministic queue: no native worker starts.
+        let mut r = Renderer { pool: JobPool::new(0), ..Default::default() };
+        r.remember_thumb(&p, 384, quick.key, true);
+        r.request_quick(slot, quick.clone(), 6); // grid prefetch: 5 + 1
+        r.request_quick(Slot::ThumbQuick(PhotoId(2)), other, 9); // filmstrip: 8 + 1
+        let request_id = r.requests[&slot].id;
+        assert!(r.thumb_current(&p, 384, 5));
+        assert!(!r.thumb_current(&p, 384, 10));
+        r.request_quick(slot, quick.clone(), 11); // visible grid: 10 + 1
+        assert!(r.thumb_current(&p, 384, 10));
+        r.request_quick(slot, quick.clone(), 11);
+        assert_eq!(r.requests[&slot].id, request_id);
+        assert_eq!(r.pool.queued(), 2);
+        r.pool.run_inline(1);
+        let done = r.pool.try_recv().unwrap();
+        assert_eq!(done.slot, slot);
+        assert_eq!(done.result.result.request_id, request_id);
+        assert_eq!(done.result.result.quick, Some(QuickSource::Embedded));
+        // A finished result awaiting collection also must not start another extraction.
+        r.request_quick(slot, quick, 6);
+        assert!(r.thumb_current(&p, 384, 5));
+        assert_eq!(r.pool.queued(), 1);
+    }
+
+    #[test]
+    fn queued_standin_demotes_when_it_leaves_the_visible_grid() {
+        let (p, quick) = queued_quick_thumbnail(PhotoId(1));
+        let (_, other) = queued_quick_thumbnail(PhotoId(2));
+        let slot = Slot::ThumbQuick(p.id);
+        let mut r = Renderer { pool: JobPool::new(0), ..Default::default() };
+        r.remember_thumb(&p, 384, quick.key, true);
+        r.request_quick(slot, quick.clone(), 11);
+        r.request_quick(Slot::ThumbQuick(PhotoId(2)), other, 9);
+        assert!(!r.thumb_current(&p, 384, 5));
+        r.request_quick(slot, quick, 6);
+        assert!(r.thumb_current(&p, 384, 5));
+        r.pool.run_inline(1);
+        assert_eq!(r.pool.try_recv().unwrap().slot, Slot::ThumbQuick(PhotoId(2)));
+    }
+
     #[test]
     fn failures_retry_after_revision_and_quick_only_is_not_final() {
         let p = photo();
@@ -1128,6 +1278,8 @@ mod thumbnail_tests {
             image.data.fill([0.3, 0.2, 0.1]);
             Ok((image, Default::default()))
         }));
+        // (`with_fs` sets the file system's thumbnail loader, which wins over `file_loader`: thumbnails use the stub too)
+        s.media.reduced_loader = None;
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         let mut app = crate::LightcraftApp::new(s, crate::Services::default());
         app.renderer.keep_pixels = true;
@@ -1146,6 +1298,107 @@ mod thumbnail_tests {
     }
     fn request(app: &mut crate::LightcraftApp) {
         crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
+    }
+
+    fn relink_destination() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("lc-render-relinked-{}-{}.nef", std::process::id(), lightcraft_preview::next_tick()));
+        std::fs::write(&path, b"replacement source").unwrap();
+        path
+    }
+
+    #[test]
+    fn completed_failure_keeps_requested_source_after_relink() {
+        let replacement = relink_destination();
+        for slot in [Slot::Thumb(PhotoId(1)), Slot::Main, Slot::Before, Slot::Compare(1), Slot::Region] {
+            let (mut app, work, ctx) = fixture();
+            app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+            let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+            app.renderer.request(slot, job, 100);
+            let (submitted, job) = take_job(&work);
+            assert_eq!(submitted, slot);
+            let result = job.run();
+            assert!(result.rendered.is_err(), "the old request has already failed");
+            app.session.execute("photo.relink", &serde_json::json!({"id": 1, "path": replacement})).unwrap();
+            assert!(
+                matches!(&app.session.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path } if path.ends_with(replacement.file_name().unwrap().to_str().unwrap()))
+            );
+            finish(&mut app, &work, &ctx, slot, result);
+            assert_eq!(app.renderer.failure(slot), Some("simulated decode failure"));
+            assert!(!app.renderer.is_pending(slot));
+            let message = app.renderer.failure_messages.last().expect("the collector emitted a diagnostic");
+            assert!(message.contains("audit.jpg"), "{message}");
+            assert!(!message.contains("lc-render-relinked-"), "the failed request did not read the replacement: {message}");
+            assert!(message.ends_with(": simulated decode failure"), "{message}");
+        }
+        std::fs::remove_file(replacement).unwrap();
+    }
+
+    #[test]
+    fn superseded_failure_does_not_take_the_new_requests_source() {
+        let replacement = relink_destination();
+        let (mut app, work, ctx) = fixture();
+        app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+        let slot = Slot::Main;
+        let old_job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+        app.renderer.request(slot, old_job, 100);
+        let (_, old_job) = take_job(&work);
+        let old_result = old_job.run();
+        app.session.execute("photo.relink", &serde_json::json!({"id": 1, "path": replacement})).unwrap();
+        let new_job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+        app.renderer.request(slot, new_job, 100);
+        let (_, new_job) = take_job(&work);
+        finish(&mut app, &work, &ctx, slot, old_result);
+        assert!(app.renderer.failure_messages.is_empty(), "obsolete failures stay suppressed");
+        assert!(app.renderer.is_pending(slot));
+        finish(&mut app, &work, &ctx, slot, new_job.run());
+        let message = app.renderer.failure_messages.last().expect("new failure is reported");
+        assert!(message.contains("lc-render-relinked-"), "{message}");
+        assert!(!message.contains("audit.jpg"), "{message}");
+        assert!(app.renderer.requests.is_empty(), "completed request identity is released");
+        std::fs::remove_file(replacement).unwrap();
+    }
+
+    #[test]
+    fn grid_queued_standin_changes_priority_without_restarting() {
+        let mut s = Session::new();
+        s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+        let mut raw = (*photo()).clone();
+        raw.kind = lightcraft_catalog::MediaKind::Raw;
+        raw.develop = Arc::new(raw.camera_defaults());
+        let (mut app, work, ctx) = fixture_with(s, raw);
+        app.renderer.pool = JobPool::new(0); // deterministic: no quick job starts until run_inline
+        let id = PhotoId(1);
+        let slot = Slot::ThumbQuick(id);
+
+        crate::panels::grid::request_thumb(&mut app, id, 384, 5);
+        let request_id = app.renderer.requests[&slot].id;
+        assert_eq!(app.renderer.pending[&slot].1, 6);
+        assert_eq!(app.renderer.pool.queued(), 1);
+        crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+        assert_eq!(app.renderer.pending[&slot].1, 11, "the grid must promote its queued stand-in");
+        assert_eq!(app.renderer.requests[&slot].id, request_id);
+        assert_eq!(app.renderer.pool.queued(), 1);
+
+        crate::panels::grid::request_thumb(&mut app, id, 384, 5);
+        assert_eq!(app.renderer.pending[&slot].1, 6, "the grid must demote its queued stand-in");
+        assert_eq!(app.renderer.requests[&slot].id, request_id);
+        assert_eq!(app.renderer.pool.queued(), 1);
+        let built = app.renderer.thumb_jobs_built;
+        app.renderer.pool.run_inline(1);
+        crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+        assert_eq!(app.renderer.pending[&slot].1, 6, "completed work must not be restarted");
+        assert_eq!(app.renderer.requests[&slot].id, request_id);
+        assert_eq!(app.renderer.pool.queued(), 0);
+        app.renderer.poll(&ctx, &mut app.session);
+        assert_eq!(app.renderer.textures[&slot].quick, Some(QuickSource::Embedded));
+
+        crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+        crate::panels::grid::request_thumb(&mut app, id, 384, 5);
+        assert_eq!(app.renderer.thumb_jobs_built, built);
+        assert_eq!(app.renderer.pool.queued(), 0);
+        assert!(!app.renderer.is_pending(Slot::Thumb(id)));
+        assert!(!app.renderer.textures.contains_key(&Slot::Thumb(id)));
+        assert!(work.borrow().jobs.is_empty(), "the final embedded thumbnail needs no real render");
     }
 
     #[test]
@@ -1513,6 +1766,74 @@ mod thumbnail_tests {
             app.renderer.thumb(PhotoId(1)).unwrap().pixels.as_ref().unwrap().pixels.iter().flat_map(|c| c.to_array()).collect::<Vec<_>>(),
             expected.as_bytes()
         );
+    }
+
+    #[test]
+    fn undo_to_embedded_thumb_rejects_late_full_render() {
+        let mut s = Session::new();
+        s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+        let mut raw = (*photo()).clone();
+        raw.kind = lightcraft_catalog::MediaKind::Raw;
+        raw.develop = Arc::new(raw.camera_defaults());
+        let (mut app, work, ctx) = fixture_with(s, raw);
+        app.renderer.pool = JobPool::new(0);
+        let id = PhotoId(1);
+        let quick_slot = Slot::ThumbQuick(id);
+        let full_slot = Slot::Thumb(id);
+        let settings_a = app.session.catalog.photo(id).unwrap().develop.clone();
+
+        crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+        assert_eq!(app.renderer.pool.run_inline(1), 1);
+        app.renderer.poll(&ctx, &mut app.session);
+        let (key_a, pixels_a) = {
+            let shown = app.renderer.thumb(id).unwrap();
+            assert_eq!(shown.quick, Some(QuickSource::Embedded));
+            (shown.key, shown.pixels.as_ref().unwrap().pixels.clone())
+        };
+        assert!(app.renderer.textures.contains_key(&quick_slot));
+        assert!(!app.renderer.textures.contains_key(&full_slot));
+        assert!(work.borrow().jobs.is_empty());
+
+        let mut settings_b = (*settings_a).clone();
+        settings_b.light.exposure += 0.5;
+        app.session.commit("Exposure", Op::SetDevelop { id, settings: Arc::new(settings_b), label: "Exposure".into(), edited: None }).unwrap();
+        assert!(!app.session.embedded_thumb_is_final(app.session.catalog.photo(id).unwrap()));
+        crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+        // Manual owns dispatched jobs: hold B until the real Undo command restores A.
+        let (slot, held_b) = take_job(&work);
+        assert_eq!(slot, full_slot);
+        let key_b = held_b.key;
+        assert_ne!(key_b, key_a);
+        assert!(app.renderer.is_pending(full_slot));
+
+        app.run("edit.undo", serde_json::json!({})).unwrap();
+        assert_eq!(app.session.catalog.photo(id).unwrap().develop.as_ref(), settings_a.as_ref());
+        assert!(app.session.embedded_thumb_is_final(app.session.catalog.photo(id).unwrap()));
+        crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+        {
+            let restored = app.renderer.thumb(id).unwrap();
+            assert_eq!(restored.key, key_a);
+            assert_eq!(restored.pixels.as_ref().unwrap().pixels, pixels_a);
+            assert_eq!(restored.quick, Some(QuickSource::Embedded));
+        }
+        assert!(work.borrow().jobs.is_empty(), "restoring embedded-final A needs no full render");
+        assert_eq!(app.renderer.pool.queued(), 0);
+
+        let result_b = held_b.run();
+        assert_eq!(result_b.key, key_b);
+        let rendered_b = result_b.rendered.as_ref().expect("held edited thumbnail must render before the stale-result oracle");
+        assert_ne!(color_image(&rendered_b.image).pixels, pixels_a, "the held result must be distinguishable from A");
+        finish(&mut app, &work, &ctx, slot, result_b);
+
+        let shown = app.renderer.thumb(id).unwrap();
+        assert_eq!(shown.key, key_a, "late edited Thumb(B) must not replace restored embedded ThumbQuick(A)");
+        assert_eq!(shown.pixels.as_ref().unwrap().pixels, pixels_a);
+        assert_eq!(shown.quick, Some(QuickSource::Embedded));
+        let quick = app.renderer.textures.get(&quick_slot).expect("the correct embedded thumbnail must remain installed");
+        assert_eq!(quick.key, key_a);
+        assert_eq!(quick.quick, Some(QuickSource::Embedded));
+        assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
+        assert!(!app.renderer.is_pending(full_slot));
     }
 }
 

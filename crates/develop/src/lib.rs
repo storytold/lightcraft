@@ -41,7 +41,7 @@ impl DevelopSettings {
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
     /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
-    /// Kelvin settings.
+    /// Kelvin settings. Out-of-range values are brought back into range ([`DevelopSettings::keep_in_range`]).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
         let mut v = self.to_json();
         presets::deep_merge(&mut v, partial);
@@ -52,7 +52,32 @@ impl DevelopSettings {
         {
             out.wb.scale = WbScale::Legacy;
         }
+        out.keep_in_range(self);
         Ok(out)
+    }
+
+    /// What crs XMP import does to the values it reads, for settings that arrive as JSON (presets, `develop.merge`,
+    /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves in 0..1, and a
+    /// crop with no area left as it was in `before`. Unrotated, the crop is clipped to the photo first; a turned crop
+    /// may reach past 0..1 and is left to the crop tools, which know the photo's size.
+    fn keep_in_range(&mut self, before: &DevelopSettings) {
+        for c in controls::CONTROLS {
+            if let Some(v) = controls::get(self, c.id) {
+                controls::set(self, c.id, v);
+            }
+        }
+        let c = &mut self.curve;
+        for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
+            *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
+        }
+        let g = &mut self.crop.geometry;
+        if g.angle == 0.0 {
+            g.rect = g.rect.intersect(&lightcraft_geom::Rect::UNIT);
+        }
+        if g.rect.is_empty() {
+            let old = before.crop.geometry.rect;
+            g.rect = if old.is_empty() { lightcraft_geom::Rect::UNIT } else { old };
+        }
     }
 
     /// Stable 64-bit hash of the settings (FNV-1a over canonical JSON), for preview cache keys.
@@ -253,6 +278,30 @@ mod tests {
         assert_eq!(m.light.contrast, 20.0);
         assert_eq!(m.effects.clarity, 10.0);
         assert_eq!(m.light.exposure, 0.0);
+    }
+
+    #[test]
+    fn merged_settings_are_kept_in_range() {
+        // issue #1946: `develop.merge`, `render --settings` and presets stored whatever the JSON said
+        let mut base = DevelopSettings::default();
+        base.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.2, 0.8, 0.9);
+        let m = base
+            .merged(&json!({"light": {"exposure": 1e308}, "vignette": {"amount": -1e308}, "geometry": {"scale": 0}, "optics": {"distortion": 1e308}}))
+            .unwrap();
+        assert_eq!((m.light.exposure, m.vignette.amount, m.geometry.scale, m.optics.distortion), (5.0, -100.0, 50.0, 100.0));
+        // point curves stay in 0..1, as an imported XMP curve does
+        let m = base.merged(&json!({"curve": {"master": [{"x": -3, "y": 0}, {"x": 1, "y": 1e308}]}})).unwrap();
+        assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)]);
+        // a crop with no area is left out, as XMP import leaves out one whose edges are inverted
+        for rect in
+            [json!({"x0": 0.9, "x1": 0.1, "y0": 0, "y1": 1}), json!({"x0": 1e308, "x1": -1e308, "y0": 0, "y1": 1}), json!({"x0": 0.5, "x1": 0.5})]
+        {
+            let m = base.merged(&json!({"crop": {"geometry": {"rect": rect}}})).unwrap();
+            assert_eq!(m.crop.geometry.rect, base.crop.geometry.rect, "{rect}");
+        }
+        // unrotated, the crop stays inside the photo
+        let m = base.merged(&json!({"crop": {"geometry": {"rect": {"x0": -1e308, "y0": 0.25, "x1": 1e308, "y1": 0.75}}}})).unwrap();
+        assert_eq!(m.crop.geometry.rect, lightcraft_geom::Rect::new(0.0, 0.25, 1.0, 0.75));
     }
 
     #[test]

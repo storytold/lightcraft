@@ -242,6 +242,14 @@ fn dead_export_worker_leaves_no_row() {
 
 /// A folder of `n` stand-in JPEGs and an app whose file probe takes 100 ms each (a slow drive).
 fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
+    gated_import(tag, n, None)
+}
+
+/// Like `slow_import`, and while `gate` is false the probe holds every file after the first batch
+/// (`batch_size()` files, which join the catalog together), so a test can act mid-import without
+/// racing the 100 ms-per-file clock. The hold gives up after 60 s, so a failed test never leaves
+/// the import thread spinning.
+fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> (Headless, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("lc-activity-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -249,8 +257,17 @@ fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
         std::fs::write(dir.join(format!("IMG_{i:03}.jpg")), format!("not really a jpeg {i}")).unwrap();
     }
     let mut s = lightcraft_engine::Session::new();
-    s.media.file_probe = Some(std::sync::Arc::new(|p: &str| {
+    s.media.file_probe = Some(std::sync::Arc::new(move |p: &str| {
         std::thread::sleep(Duration::from_millis(100));
+        let index = p.rsplit_once("IMG_").and_then(|(_, n)| n.strip_suffix(".jpg")).and_then(|n| n.parse::<usize>().ok());
+        if let (Some(gate), Some(index)) = (&gate, index)
+            && index >= lightcraft_engine::import::batch_size()
+        {
+            let t0 = std::time::Instant::now();
+            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         Ok(lightcraft_engine::media::ProbeInfo {
             width: 60,
             height: 40,
@@ -286,14 +303,17 @@ fn import_cancelled_by_command_reports_cancelled() {
 /// selects its first photo only if nobody picked something else meanwhile (issue #1446).
 #[test]
 fn a_photo_chosen_during_an_import_stays_selected() {
-    let (mut h, dir) = slow_import("chosen", 20);
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut h, dir) = gated_import("chosen", 20, Some(gate.clone()));
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.as_ref().is_some_and(|t| t.imported >= 2)));
     // the newest photo so far, never the import's first
     let chosen = h.app.session.catalog.photos().map(|p| p.id).max().expect("photos arrived");
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [chosen.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // held at the gate until now, so the import cannot have ended however slowly the frames ran
     assert!(h.app.import.is_some(), "still importing");
+    gate.store(true, std::sync::atomic::Ordering::Release);
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
     assert_eq!(h.app.session.catalog.len(), 20, "all imported");
     assert_eq!(h.app.session.selection.active, Some(chosen));
@@ -358,6 +378,39 @@ fn final_merge_shows_a_row_and_cancels() {
     assert!(h.app.session.activity.list().is_empty());
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert_eq!(toast, "HDR merge cancelled");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The merge dialog opens with the options of the last merge of its kind (per kind), and "with Last
+/// Settings" uses them; a kind never merged opens with the defaults.
+#[test]
+fn merge_dialog_remembers_the_last_settings_per_kind() {
+    let (mut h, dir) = bracket("merge-last");
+    let opts = crate::merge::MergeDialog {
+        align: false,
+        deghost: "high".into(),
+        auto_settings: false,
+        ..crate::merge::MergeDialog::for_command("merge.hdr")
+    };
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    h.app.ui.dialog = None;
+    crate::merge::start_final(&mut h.app, &opts).unwrap();
+    let row = h.app.session.activity.list()[0].id;
+    h.app.session.activity.cancel(row).unwrap();
+    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
+    assert_eq!(shown, &opts);
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
+    assert_eq!(shown, &crate::merge::MergeDialog::for_command("merge.panorama"));
+    h.app.ui.dialog = None;
+    // older or hand-edited preferences: missing fields take their defaults, junk is ignored
+    h.app.session.last_merge.insert("merge.panorama".into(), json!({"projection": "cylindrical", "command": "merge.hdr"}));
+    h.app.session.last_merge.insert("merge.hdrPanorama".into(), json!("junk"));
+    let pano = crate::merge::last_options(&h.app, "merge.panorama");
+    assert_eq!((pano.command.as_str(), pano.projection.as_str(), pano.auto_crop), ("merge.panorama", "cylindrical", true));
+    assert_eq!(crate::merge::last_options(&h.app, "merge.hdrPanorama"), crate::merge::MergeDialog::for_command("merge.hdrPanorama"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -462,7 +515,7 @@ fn rows_added_later_grow_the_stack() {
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
     assert!(h.app.run("library.clearPreviews", json!({})).is_ok());
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("✓ Clear Preview Cache"));
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("✓ Discard Preview Cache"));
 
     assert_eq!(h.app.run("develop.autoSync", json!({"on": true})).unwrap()["on"], true);
     assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Auto Sync: On"));

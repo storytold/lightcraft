@@ -15,12 +15,15 @@ pub mod control;
 pub mod credits;
 pub mod date_picker;
 pub mod docking;
+mod drop_overlay;
 pub mod export_task;
 mod focus_scan;
+mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod lightroom_destination;
 pub mod lightroom_import;
 pub mod links;
 pub mod menu_level;
@@ -31,8 +34,11 @@ mod model_setup;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
+pub mod progress;
+pub mod rating;
 pub mod recheck;
 pub mod region;
+pub mod reload;
 pub mod render;
 pub mod shortcuts;
 pub mod sidebar;
@@ -64,6 +70,10 @@ mod tests_button;
 #[cfg(test)]
 mod tests_canvas_keys;
 #[cfg(test)]
+mod tests_canvas_pan;
+#[cfg(test)]
+mod tests_capture_time;
+#[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
 mod tests_copy_paste_dialogs;
@@ -80,7 +90,13 @@ mod tests_dialog_fit;
 #[cfg(test)]
 mod tests_dialog_primary;
 #[cfg(test)]
+mod tests_dialog_settings;
+#[cfg(test)]
+mod tests_dialog_tab;
+#[cfg(test)]
 mod tests_dialogs;
+#[cfg(test)]
+mod tests_drop_import;
 #[cfg(test)]
 mod tests_edit_layout;
 #[cfg(test)]
@@ -98,6 +114,10 @@ mod tests_grading;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
+mod tests_guided_guides;
+#[cfg(test)]
+mod tests_histogram_drag;
+#[cfg(test)]
 mod tests_info_dialogs;
 #[cfg(test)]
 mod tests_keymap;
@@ -114,9 +134,13 @@ mod tests_keywording;
 #[cfg(test)]
 mod tests_labels;
 #[cfg(test)]
+mod tests_launch_library;
+#[cfg(test)]
 mod tests_layout_image;
 #[cfg(test)]
 mod tests_library_problem;
+#[cfg(test)]
+mod tests_lightroom_destination;
 #[cfg(test)]
 mod tests_lights_out;
 #[cfg(test)]
@@ -128,11 +152,15 @@ mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
 #[cfg(test)]
+mod tests_merge_preview;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_open_lightroom;
 #[cfg(test)]
 mod tests_panels;
+#[cfg(test)]
+mod tests_preset_favorites;
 #[cfg(test)]
 mod tests_preset_import;
 #[cfg(test)]
@@ -140,13 +168,21 @@ mod tests_preview_limit;
 #[cfg(test)]
 mod tests_print;
 #[cfg(test)]
+mod tests_profile_menu;
+#[cfg(test)]
 mod tests_profiles_layout;
 #[cfg(test)]
+mod tests_progress;
+#[cfg(test)]
 mod tests_quit_unsaved;
+#[cfg(test)]
+mod tests_rating;
 #[cfg(test)]
 mod tests_recheck;
 #[cfg(test)]
 mod tests_rename_person;
+#[cfg(test)]
+mod tests_rules_editor;
 #[cfg(test)]
 mod tests_sam_setup;
 #[cfg(test)]
@@ -264,6 +300,10 @@ pub struct Services {
     pub pick_slideshow_templates: Option<PickFiles>,
     /// Save dialog for an exported slideshow template (`.json`).
     pub save_slideshow_template: Option<SaveFile>,
+    /// Open dialog for print template files (`.lcprint`; File ▸ Print… ▸ Templates ▸ Import…).
+    pub pick_print_templates: Option<PickFiles>,
+    /// Save dialog for an exported print template (`.lcprint`).
+    pub save_print_template: Option<SaveFile>,
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,
@@ -374,6 +414,11 @@ pub struct LightcraftApp {
     shadow: Option<headless::HeadlessView>,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
+    /// Files the control channel (`ui.dropFiles`) holds over the window: every frame reports them
+    /// as hovered, as the OS does while a drag is over the window.
+    drop_hover: Vec<String>,
+    /// Files the control channel dropped: delivered as `dropped_files` on the next frame.
+    drop_pending: Vec<String>,
     /// The text the UI last put on the clipboard (`ui.inspect` → `copied`).
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
@@ -443,6 +488,8 @@ pub struct LightcraftApp {
     pub lightroom_last: Option<Value>,
     /// A completed import result waiting for another modal dialog to close.
     pub(crate) lightroom_result: Option<state::Dialog>,
+    /// The import review of a finished scan, waiting for another dialog to close.
+    pub(crate) review_pending: Option<state::Dialog>,
     /// The library generation the window title and the recent list were last updated for.
     pub shown_library: Option<u64>,
     /// A background export in progress.
@@ -476,6 +523,12 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
+    /// Alt/Option held as the window first appears offers the recent libraries once (issue
+    /// #1290); the desktop host arms it when nothing chose the library already.
+    pub alt_asks_for_library: bool,
+    /// Whether each recent library can be opened, answered by a worker (issue #1290): the launch
+    /// list and File ▸ Open Recent Library never look at a folder on the UI thread.
+    pub recent_checks: panels::library_problem::RecentChecks,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
 }
@@ -505,6 +558,8 @@ impl LightcraftApp {
             screenshot_token: 0,
             shadow: None,
             synthetic: vec![],
+            drop_hover: vec![],
+            drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
             synthetic_mods: egui::Modifiers::NONE,
@@ -540,6 +595,7 @@ impl LightcraftApp {
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
+            review_pending: None,
             shown_library: None,
             export: None,
             tasks: Default::default(),
@@ -555,6 +611,8 @@ impl LightcraftApp {
             screen_profile: None,
             screen_profile_read: None,
             library_problem: None,
+            alt_asks_for_library: false,
+            recent_checks: Default::default(),
             activity_expanded: false,
             model_setup: Default::default(),
         }
@@ -628,6 +686,10 @@ impl LightcraftApp {
                     .map(|d| d.crop.aspect.map_or(serde_json::json!("free"), |(w, h)| serde_json::json!([w as f64 / 100.0, h as f64 / 100.0])))
             };
         }
+        if r.is_ok() && id == "library.toggleFilters" {
+            // the search field shows the text filter: empty while the filters are off, back with them
+            self.ui.search = self.session.filter.text.clone();
+        }
         if r.is_ok() && id == "library.clearFilter" {
             // the search field shows the text filter: cleared from anywhere (the loupe's pill, the
             // menu), it must not keep a search that no longer applies (issue #1648)
@@ -638,12 +700,17 @@ impl LightcraftApp {
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;
         }
+        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select") {
+            // A new or newly picked mask shows its overlay again, as in Lightroom: hidden by a slider
+            // drag above, it stayed hidden while the Overlay menu still named a mode (issue #1800).
+            self.ui.mask_overlay = true;
+        }
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise
             // be invisible once the activity stack is gone. Never show success on error.
             let completed = match id {
                 "library.compact" => Some(format!("✓ {}", i18n::tr("Optimize Library"))),
-                "library.clearPreviews" => Some(format!("✓ {}", i18n::tr("Clear Preview Cache"))),
+                "library.clearPreviews" => Some(format!("✓ {}", i18n::tr("Discard Preview Cache"))),
                 "develop.autoSync" => Some(format!("{}: {}", i18n::tr("Auto Sync"), i18n::tr(if self.session.auto_sync { "On" } else { "Off" }))),
                 _ => None,
             };
@@ -696,7 +763,10 @@ impl LightcraftApp {
         if d.crop != lightcraft_develop::Crop::default() {
             return d.crop.aspect;
         }
-        match self.ui.crop_default_aspect.as_ref()? {
+        // nothing chosen yet: locked to the photo's own shape, as Lightroom starts (#991); one
+        // Lock toggle (remembered as "free") unlocks it for good
+        let remembered = self.ui.crop_default_aspect.clone().unwrap_or_else(|| Value::String("original".into()));
+        match &remembered {
             Value::String(s) if s == "original" => {
                 let p = self.session.catalog.photo(photo)?;
                 let (w, h) = (p.width.max(1).saturating_mul(100), p.height.max(1).saturating_mul(100));
@@ -715,11 +785,13 @@ impl LightcraftApp {
 
     /// Called only after a crop gesture begins, inside its undo transaction.
     pub(crate) fn begin_crop(&mut self) -> Result<(), String> {
+        // nothing chosen yet: the photo's own shape, as `crop_tool_aspect` shows it
+        let aspect = self.ui.crop_default_aspect.clone().unwrap_or_else(|| serde_json::json!("original"));
         if self.session.interaction.is_some()
             && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default())
-            && let Some(aspect) = self.ui.crop_default_aspect.clone()
             && aspect != serde_json::json!("free")
-            && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect}))
+            // the remembered ratio, turned like the new photo's crop (as a named ratio is)
+            && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect, "orientation": "crop"}))
         {
             // A remembered value the command refuses (a hand-edited settings file) would refuse
             // every crop drag on an untouched photo: forget it and let this drag go ahead.
@@ -795,6 +867,18 @@ impl LightcraftApp {
         self.toast_for(ctx, text, TOAST_SECONDS);
     }
 
+    /// Auto straighten (the crop panel's Auto, a double-click with the Straighten tool), saying so
+    /// when it finds nothing to level by instead of leaving the photo as it is without a word.
+    pub fn auto_straighten(&mut self, ctx: &egui::Context) {
+        match self.run("crop.autoStraighten", serde_json::json!({})) {
+            Ok(r) if r.get("changed").and_then(Value::as_bool) == Some(false) => {
+                self.toast(ctx, crate::i18n::tr("No horizon or vertical lines to level by"));
+            }
+            Ok(_) => {}
+            Err(e) => self.toast(ctx, e),
+        }
+    }
+
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
     pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
@@ -823,6 +907,8 @@ impl LightcraftApp {
             ctx.request_repaint();
         }
         if let Some(mask) = polled.refine {
+            // a new selection from a click or a description: show it, as `run` does for new masks
+            self.ui.mask_overlay = true;
             self.ui.detail_due = Some((now + 0.3, mask));
         }
         if let Some(e) = polled.messages.into_iter().last() {
@@ -1058,7 +1144,7 @@ impl LightcraftApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
         let t0 = now_ms();
-        panels::library_problem::logic(self);
+        panels::library_problem::logic(self, ctx);
         self.logic_inner(ctx);
         self.perf.logic_ms = now_ms() - t0;
     }
@@ -1214,29 +1300,58 @@ impl LightcraftApp {
             shortcuts::handle(self, ctx);
         }
         #[cfg(not(target_arch = "wasm32"))]
+        self.handle_dropped_files(ctx);
+    }
+
+    /// Files dropped on the window: face models open their licence dialog, presets import as
+    /// presets, photos and folders go to the import review (or straight in, Settings ▸ Import).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<String> =
+            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().to_string()).filter(|p| !p.is_empty()).collect());
+        if dropped.is_empty() {
+            return;
+        }
+        // a dialog is on screen: the review would replace it, losing what it holds
+        if self.ui.dialog.is_some() {
+            self.toast(ctx, crate::i18n::tr("Close the open dialog, then drop the files again"));
+            return;
+        }
+        let drop = drop_overlay::classify(dropped);
+        if let Some(model) = drop.models.first()
+            && let Err(e) = panels::faces::open_dialog(self, model)
         {
-            let dropped: Vec<String> =
-                ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().to_string()).filter(|p| !p.is_empty()).collect());
-            // preset files import as presets, everything else as photos
-            // a dropped face model opens its licence dialog; presets and photos as before
-            let (models, dropped): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| is_model_file(p));
-            if let Some(model) = models.first()
-                && let Err(e) = panels::faces::open_dialog(self, model)
-            {
-                self.toast(ctx, e);
+            self.toast(ctx, e);
+        }
+        if !drop.presets.is_empty() {
+            // presets live in a library: with none open they would go with the session it replaces
+            if panels::library_problem::holds_drops(self) {
+                self.toast(ctx, crate::i18n::tr("Open a library first, then drop the presets again"));
+            } else {
+                let _ = self.run("file.importPresets", serde_json::json!({"paths": drop.presets}));
             }
-            let (presets, photos) = split_presets(dropped);
-            if !presets.is_empty() {
-                let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
-            }
+        }
+        if drop.photos.is_empty() {
+            return;
+        }
+        // no library open yet (the launch list, a library that failed to open): they wait for one
+        let Some(photos) = panels::library_problem::hold_dropped(self, ctx, drop.photos) else { return };
+        if self.lightroom.is_some() {
+            self.toast(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
+            return;
+        }
+        if import::running(self) {
+            self.toast(ctx, crate::i18n::tr("An import is running"));
+            return;
+        }
+        let started = if self.ui.settings.import_dropped_directly {
             // read and added on a worker thread (dropped folders can be large, or on a slow drive)
-            if !photos.is_empty() {
-                if self.lightroom.is_some() {
-                    self.toast(ctx, "Finish Lightroom catalog import before adding photos");
-                } else if let Err(e) = import::start_paths(self, photos) {
-                    self.toast(ctx, e);
-                }
-            }
+            import::start_paths(self, photos).map(|_| ())
+        } else {
+            import::open(self, photos).map(|_| ())
+        };
+        if let Err(e) = started {
+            self.toast(ctx, e);
         }
     }
 
@@ -1329,6 +1444,16 @@ impl LightcraftApp {
             self.synthetic_mods = egui::Modifiers::NONE;
             raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
         }
+        let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
+        if !self.drop_pending.is_empty() {
+            raw.dropped_files = std::mem::take(&mut self.drop_pending)
+                .into_iter()
+                .map(|p| std::sync::Arc::new(InjectedDrop(p.into())) as egui::DroppedFileHandle)
+                .collect();
+        }
+        if !self.drop_hover.is_empty() {
+            raw.hovered_files = self.drop_hover.iter().map(|p| egui::HoveredFile { path: file(p), ..Default::default() }).collect();
+        }
         if self.synthetic.is_empty() {
             return;
         }
@@ -1383,6 +1508,12 @@ impl LightcraftApp {
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        if self.ui.frame_rate {
+            frame_rate::show(ctx, self);
+        } else {
+            frame_rate::forget(ctx);
+        }
+        panels::edit::wheel_pointer_frame_end(ctx);
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {
@@ -1406,6 +1537,12 @@ impl LightcraftApp {
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
+            // it is open: whatever an earlier check said about it is over
+            self.recent_checks.opened(&path);
+            // when, for the launch window (issue #1290); only the listed libraries keep a time
+            let settings = &mut self.ui.settings;
+            settings.recent_opened.insert(path, (self.session.clock)());
+            settings.recent_opened.retain(|p, _| settings.recent_libraries.contains(p));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
     }
@@ -1415,6 +1552,18 @@ impl LightcraftApp {
         match panels::settings::open_library_name(self) {
             Some(name) => format!("LightCraft — {name}"),
             None => "LightCraft".to_string(),
+        }
+    }
+
+    /// The browser page's title: "<file name>[ •] — LightCraft" for the active photo (• while
+    /// `unsaved`: changes not yet written to storage), else the window title. The web build has no
+    /// window for `ViewportCommand::Title`; a host embedding it reads this title to tell which
+    /// document a drop opened and whether it is saved (issue #2397).
+    pub fn page_title(&self, unsaved: bool) -> String {
+        let dot = if unsaved { " •" } else { "" };
+        match self.session.active().and_then(|id| self.session.catalog.photo(id)) {
+            Some(p) => format!("{}{dot} — LightCraft", p.file_name),
+            None => format!("{}{dot}", self.window_title()),
         }
     }
 
@@ -1446,6 +1595,7 @@ impl LightcraftApp {
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
             panels::toast(self, &ctx);
+            drop_overlay::show(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
             self.end_frame(&ctx, t0);
             return;
@@ -1473,6 +1623,7 @@ impl LightcraftApp {
         panels::left::section_drag_feedback(self, &ctx);
         panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);
+        drop_overlay::show(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);
@@ -1541,6 +1692,26 @@ fn sam_download_ended(download: &lightcraft_engine::segment::DownloadStatus) -> 
         Some(e) => Some((crate::i18n::tr_format!("The SAM 3 download failed: {e}", e = e), true)),
         None if download.finished => Some((crate::i18n::tr("The SAM 3 model is installed: Object and Describe masks are ready.").to_string(), true)),
         None => None,
+    }
+}
+
+/// A file `ui.dropFiles` delivers as dropped, as a real OS drop arrives in `raw.dropped_files`.
+#[derive(Debug)]
+struct InjectedDrop(std::path::PathBuf);
+
+impl egui::DroppedFile for InjectedDrop {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
+        Box::pin(async { Err("the web build has no files to read".to_string()) })
     }
 }
 
@@ -1748,6 +1919,10 @@ impl Caches {
         let t = kept.unwrap_or_else(|| std::sync::Arc::new(cat.folder_tree()));
         self.folder_tree = Some((cat.revision, t.clone()));
         t
+    }
+    /// The folder tree as last built, when it still holds (a read-only check cannot rebuild it).
+    pub(crate) fn folder_tree_if_fresh(&self, cat: &lightcraft_catalog::Catalog) -> Option<std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>> {
+        self.folder_tree.as_ref().filter(|(r, _)| still_right(cat, *r, READS_FILE)).map(|(_, t)| t.clone())
     }
     /// The library's keyword tree.
     pub fn keyword_tree(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>> {

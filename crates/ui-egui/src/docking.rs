@@ -334,6 +334,9 @@ pub(crate) fn exposed(app: &crate::LightcraftApp, panel: Panel) -> bool {
 pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result<(), String> {
     let panel = if id == "panel.presets" && app.ui.presets {
         Some(Panel::Presets)
+    } else if id == "app.showInFolders" {
+        // the sidebar it scrolls, also when it is a tab behind another panel
+        Some(Panel::Library)
     } else if (id.starts_with("panel.") && id != "panel.close" && id != "panel.presets"
         || id.starts_with("section.")
         || id.starts_with("tool.") && id != "tool.none")

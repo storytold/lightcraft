@@ -116,6 +116,7 @@ fn hovering_another_title_switches_the_open_menu() {
 #[test]
 fn clicking_another_title_opens_it_in_one_click() {
     let mut h = app([1280.0, 703.0]);
+    assert!(h.step_until(SETTLE, |h| widget(h, "menu:Edit").is_some()), "Edit menu title was not registered");
     go(&mut h, "ui.clickWidget", "menu:Edit");
     assert_eq!(open_menu(&h).as_deref(), Some("menu:Edit"));
     // move away from the titles first so only the click can be what switches

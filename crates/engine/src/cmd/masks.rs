@@ -8,6 +8,18 @@ use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_p
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
+/// A colour-range mask compares every pixel against every sample, so render and export cost is
+/// pixels x samples. The interactive sampler stops at 5; automation (`mask.add`/`mask.update`)
+/// passed its `samples` array straight through, so a few hundred samples on a large render hung.
+const MAX_COLOR_RANGE_SAMPLES: usize = 64;
+
+/// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
+fn cap_color_range_samples(shape: &mut MaskShape) {
+    if let MaskShape::ColorRange { samples, .. } = shape {
+        samples.truncate(MAX_COLOR_RANGE_SAMPLES);
+    }
+}
+
 fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
     Ok(match kind {
         "brush" => MaskShape::Brush { strokes: vec![] },
@@ -35,7 +47,12 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             let samples: Vec<[f64; 3]> = p
                 .get("samples")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|s| Some([s.get(0)?.as_f64()?, s.get(1)?.as_f64()?, s.get(2)?.as_f64()?])).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| Some([s.get(0)?.as_f64()?, s.get(1)?.as_f64()?, s.get(2)?.as_f64()?]))
+                        .take(MAX_COLOR_RANGE_SAMPLES)
+                        .collect()
+                })
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
@@ -199,8 +216,28 @@ fn connected_strokes(from: Point, last: &BrushStroke, to: BrushStroke) -> Vec<Br
     out
 }
 
-fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
-    p.get("id").and_then(Value::as_u64).map(|v| v as u32).or(active).ok_or_else(|| bad(c, "no mask selected (give `id`)"))
+pub(super) fn parse_mask_id(v: &Value, c: &str) -> Result<u32> {
+    v.as_u64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| bad(c, "`id` must be a non-negative integer that fits in u32"))
+}
+
+/// Omitted or null targets keep the command's default; malformed explicit targets never do.
+fn optional_mask_id(p: &Value, c: &str) -> Result<Option<u32>> {
+    p.get("id").filter(|v| !v.is_null()).map(|v| parse_mask_id(v, c)).transpose()
+}
+
+pub(super) fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
+    optional_mask_id(p, c)?.or(active).ok_or_else(|| bad(c, "no mask selected (give `id`)"))
+}
+
+fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
+    p.get(key)
+        .filter(|v| !v.is_null())
+        .map(|v| {
+            v.as_u64()
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| bad(c, format!("`{key}` must be a non-negative integer that fits in usize")))
+        })
+        .transpose()
 }
 
 fn find(masks: &mut [Mask], id: u32, c: &str) -> Result<usize> {
@@ -307,7 +344,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let connect = bool_or(p, "connect", false);
                 let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
-                let want = p.get("id").and_then(Value::as_u64).map(|v| v as u32).or(s.active_mask);
+                let want = optional_mask_id(p, "mask.brushStroke")?.or(s.active_mask);
                 let adjust = super::mask_effects::new_mask_adjust(s, "brush");
                 let mut out = masks_edit(s, "mask.brushStroke", "Brush", |masks, active| {
                     let i = match want.and_then(|m| masks.iter().position(|x| x.id == m)) {
@@ -361,9 +398,10 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("mask.update", "Update Mask Shape", [], None, "{id?, component?: index (0), shape: MaskShape JSON}", has_active, |s, p| {
-            let shape: MaskShape =
+            let mut shape: MaskShape =
                 serde_json::from_value(p.get("shape").cloned().unwrap_or_default()).map_err(|e| bad("mask.update", e.to_string()))?;
-            let comp = p.get("component").and_then(Value::as_u64).unwrap_or(0) as usize;
+            cap_color_range_samples(&mut shape);
+            let comp = optional_index(p, "component", "mask.update")?.unwrap_or(0);
             let mid = mask_id(p, s.active_mask, "mask.update")?;
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {
                 let i = find(masks, mid, "mask.update")?;
@@ -381,6 +419,8 @@ pub fn specs() -> Vec<CommandSpec> {
             has_active,
             |s, p| {
                 let c = "mask.sampleColor";
+                let mid = mask_id(p, s.active_mask, c)?;
+                let comp = optional_index(p, "component", c)?;
                 let (x, y) = (super::f64_req(p, "x", c)?, super::f64_req(p, "y", c)?);
                 let add = p.get("add").and_then(Value::as_bool).unwrap_or(false);
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
@@ -390,8 +430,6 @@ pub fn specs() -> Vec<CommandSpec> {
                 let req = lightcraft_pipeline::RenderRequest::fit(384, 384);
                 let lab = lightcraft_pipeline::color_range_sample(&src, &info, &d, &req, lightcraft_geom::Point::new(x, y))
                     .ok_or_else(|| bad(c, "the point is outside the photo"))?;
-                let mid = mask_id(p, s.active_mask, c)?;
-                let comp = p.get("component").and_then(Value::as_u64).map(|v| v as usize);
                 let mut out = Vec::new();
                 masks_edit(s, c, "Color Range", |masks, _| {
                     let i = find(masks, mid, c)?;
@@ -482,8 +520,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mid = mask_id(p, s.active_mask, c)?;
                 let d = s.develop_of(id).unwrap_or_default();
                 let m = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
-                let k = match p.get("component").and_then(Value::as_u64) {
-                    Some(k) => k as usize,
+                let k = match optional_index(p, "component", c)? {
+                    Some(k) => k,
                     None => m
                         .components
                         .iter()
@@ -604,7 +642,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("mask.select", "Select Mask", [], None, "{id|null}", has_active, |s, p| {
-            s.active_mask = p.get("id").and_then(Value::as_u64).map(|v| v as u32);
+            s.active_mask = optional_mask_id(p, "mask.select")?;
             ok()
         }),
         cmd!("mask.delete", "Delete Mask", [], None, "{id?}", has_active, |s, p| {
@@ -684,7 +722,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "mask.component";
                 let mid = mask_id(p, s.active_mask, c)?;
-                let k = p.get("component").and_then(Value::as_u64).ok_or_else(|| bad(c, "missing component"))? as usize;
+                let k = optional_index(p, "component", c)?.ok_or_else(|| bad(c, "missing component"))?;
                 let action = str_param(p, "action").ok_or_else(|| bad(c, "missing action"))?.to_string();
                 let op: Option<MaskOp> = match p.get("op") {
                     Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| bad(c, e.to_string()))?),
@@ -879,8 +917,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("spot.select", "Select Spot", [], None, "{index|null}", has_active, |s, p| {
             let n = spots_len(s);
-            s.active_spot = match p.get("index").and_then(Value::as_u64) {
-                Some(i) if (i as usize) < n => Some(i as usize),
+            s.active_spot = match optional_index(p, "index", "spot.select")? {
+                Some(i) if i < n => Some(i),
                 Some(_) => return Err(bad("spot.select", "no such spot")),
                 None => None,
             };
@@ -1040,7 +1078,7 @@ fn spots_len(s: &Session) -> usize {
 
 /// `index` from the params, else the selected spot.
 fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
-    let i = p.get("index").and_then(Value::as_u64).map(|v| v as usize).or(s.active_spot).ok_or_else(|| bad(c, "no spot selected (give `index`)"))?;
+    let i = optional_index(p, "index", c)?.or(s.active_spot).ok_or_else(|| bad(c, "no spot selected (give `index`)"))?;
     if i >= spots_len(s) {
         return Err(bad(c, "no such spot"));
     }
@@ -1102,4 +1140,31 @@ fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>> {
         .map(|q| q.as_f64().filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0) as f32))
         .collect::<Option<Vec<f32>>>()
         .ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))
+}
+
+#[cfg(test)]
+mod tests_color_range {
+    use super::*;
+
+    /// Automation (`mask.add`/`mask.update`) used to take any number of colour-range samples; render
+    /// cost is pixels x samples, so a few hundred hung a large render. The list is now capped.
+    #[test]
+    fn color_range_samples_are_capped() {
+        let samples: Vec<Value> = (0..1000).map(|i| json!([i as f64 / 1000.0, 0.1, 0.2])).collect();
+        let shape = shape_from("colorRange", &json!({ "samples": samples }), "mask.add").unwrap();
+        let MaskShape::ColorRange { samples, .. } = shape else { panic!("expected ColorRange") };
+        assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
+        // A reasonable request is unchanged.
+        let few = shape_from("colorRange", &json!({ "samples": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]] }), "mask.add").unwrap();
+        let MaskShape::ColorRange { samples, .. } = few else { panic!() };
+        assert_eq!(samples.len(), 2);
+        // mask.update deserializes the shape directly; it is capped the same way.
+        let mut shape = shape_from("colorRange", &json!({ "samples": [[0.1, 0.2, 0.3]] }), "mask.add").unwrap();
+        if let MaskShape::ColorRange { samples, .. } = &mut shape {
+            samples.resize(1000, samples[0]);
+        }
+        cap_color_range_samples(&mut shape);
+        let MaskShape::ColorRange { samples, .. } = shape else { panic!() };
+        assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
+    }
 }

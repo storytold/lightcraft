@@ -1,6 +1,6 @@
 //! Issue #891: File ▸ Open Library… given a Lightroom Classic catalog folder doesn't make a
 //! LightCraft library inside it. The library open now stays, and a dialog offers Import Lightroom
-//! Catalog… with the catalog found, which starts the import of that `.lrcat`.
+//! Catalog… with the catalog found, which asks where that `.lrcat` goes (#2672), then imports it.
 
 use std::time::Duration;
 
@@ -84,12 +84,23 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
     assert_eq!(r["lightroomCatalog"], json!(lrcat.to_string_lossy()), "{r}");
     h.step();
     h.step();
-    // Import Lightroom Catalog…: the import of that catalog starts (no file dialog), into the
-    // library open now. (This fake catalog then fails to read: only its path matters here.)
+    // Import Lightroom Catalog…: no file dialog, the window that asks where that catalog goes
+    // (#2672) takes its place, as File ▸ Import Lightroom Catalog… does
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
+    h.step();
+    assert!(
+        matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { catalog, .. }) if *catalog == lrcat.to_string_lossy()),
+        "{:?}",
+        h.app.ui.dialog
+    );
+    // Merge: the import of that catalog starts, into the library open now. (This fake catalog
+    // then fails to read: only its path matters here.)
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "radio:lightroomDestination-open"}), T)["ok"], true);
+    h.step();
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
     h.step();
     // A fast read failure can already have replaced the offer with its lasting result.
-    assert!(!matches!(h.app.ui.dialog, Some(Dialog::LightroomCatalog { .. })));
+    assert!(!matches!(h.app.ui.dialog, Some(Dialog::LightroomCatalog { .. } | Dialog::LightroomDestination { .. })));
     assert!(h.step_until(T, |h| h.app.lightroom.is_none()));
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomResult { summary, first: None, .. }) if summary.contains("failed")));
     let last = h.app.lightroom_last.clone().unwrap_or_default();

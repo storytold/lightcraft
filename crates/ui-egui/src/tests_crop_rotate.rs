@@ -415,3 +415,70 @@ fn rotating_the_crop_dims_nothing_inside_the_box() {
     let lum = |c: egui::Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
     assert!(lum(pixel(&rotated, corner_px)) < lum(pixel(&plain, corner_px)), "the photo's corner, outside the box, is dimmed");
 }
+
+fn crop_rect(h: &Headless) -> lightcraft_geom::Rect {
+    let id = h.app.session.active().expect("a photo");
+    h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.rect
+}
+
+/// Press where the pointer shows the resize cursor for the left edge handle, `dx` px from the
+/// edge, and drag on by `step` px per event: the drag must resize, as the cursor said (issue #1930).
+fn drag_left_handle(dx: f32, step: f32) -> Headless {
+    let mut h = crop_tool();
+    let img = h.app.image_rect.expect("the photo on screen");
+    hover(&mut h, egui::pos2(img.left() + dx, img.center().y));
+    assert_eq!(h.last_cursor, egui::CursorIcon::ResizeHorizontal, "the pointer shows a resize");
+    let x = |px: f32| px / img.width();
+    let events: Vec<_> = std::iter::once(json!({"kind": "down", "x": x(dx), "y": 0.5}))
+        .chain((1..=4).map(|i| json!({"kind": "drag", "x": x(dx + step * i as f32), "y": 0.5})))
+        .collect();
+    let r = h.request("ui.pointer", json!({ "events": events }), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h
+}
+
+/// Just outside the box, inside the handle's reach: the drag resizes, it does not rotate.
+#[test]
+fn a_drag_from_just_outside_a_handle_resizes_not_rotates() {
+    let h = drag_left_handle(-8.0, -3.0);
+    assert_eq!(angle(&h), 0.0, "the resize cursor showed, so nothing rotates");
+    assert!(!has(&h, "cropAngleReadout"), "no rotation under way");
+}
+
+/// Just inside the box, inside the handle's reach: the drag moves the left edge, not the box.
+#[test]
+fn a_drag_from_just_inside_a_handle_resizes_not_moves() {
+    let h = drag_left_handle(8.0, 3.0);
+    let r = crop_rect(&h);
+    assert!(r.x0 > 0.0, "the left edge moved in: {r:?}");
+    assert!((r.x1 - 1.0).abs() < 1e-6, "the right edge stays: {r:?}");
+}
+
+/// Auto on a photo without a horizon or plumb lines says so, instead of leaving the photo as it is
+/// without a word.
+#[test]
+fn auto_straighten_says_when_it_finds_nothing() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-auto-straighten-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 64, height: 48, data: vec![[90, 120, 160, 255]; 64 * 48] };
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let path = dir.join("flat.png");
+    std::fs::write(&path, bytes).unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    for (method, params) in [("ui.set", json!({"view": "detail"})), ("engine.execute", json!({"command": "panel.crop"}))] {
+        let r = h.request(method, params, T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "button:straightenAuto"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "No horizon or vertical lines to level by"), "{:?}", h.app.ui.toast);
+    assert_eq!(angle(&h), 0.0);
+    let _ = std::fs::remove_dir_all(dir);
+}

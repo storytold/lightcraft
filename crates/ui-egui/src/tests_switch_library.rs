@@ -75,6 +75,18 @@ fn switching_libraries_dismisses_the_previous_lightroom_result() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Photo IDs are local to a library: the brief info overlay's last photo is forgotten, so a photo
+/// in the new library with the same ID shows the info again.
+#[test]
+fn switching_libraries_restarts_the_brief_info_overlay() {
+    let dir = temp("switch-brief-info");
+    let mut app = app_in(&dir);
+    app.ui.brief_info = crate::state::BriefInfo { photo: Some(lightcraft_catalog::PhotoId(1)), since: 5.0, shown: true };
+    app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Second"})).unwrap();
+    assert_eq!(app.ui.brief_info, crate::state::BriefInfo::default());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn recent_submenu(app: &LightcraftApp) -> Vec<crate::menubar::MenuNode> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(app);
@@ -163,6 +175,10 @@ fn missing_recent_libraries_are_greyed_out_and_pruned_and_the_list_is_capped() {
     let mut app = app_in(&dir);
     let gone = dir.join("gone").to_string_lossy().into_owned();
     app.ui.settings.recent_libraries = vec![gone.clone()];
+    // the menu takes what a background check found (issue #1290 review): let it answer first
+    let ctx = egui::Context::default();
+    crate::panels::library_problem::logic(&mut app, &ctx);
+    assert!(crate::tasks::wait(&mut app, &ctx, std::time::Duration::from_secs(20)), "the check answered");
     let disabled = recent_submenu(&app)
         .iter()
         .any(|n| matches!(n, crate::menubar::MenuNode::Item { params, enabled: false, .. } if params["path"] == gone.as_str()));
@@ -180,6 +196,40 @@ fn missing_recent_libraries_are_greyed_out_and_pruned_and_the_list_is_capped() {
     assert_eq!(app.ui.settings.recent_libraries[0], "/x/19");
     app.run("app.clearRecentLibraries", json!({})).unwrap();
     assert!(app.ui.settings.recent_libraries.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reference_photo_ids_do_not_cross_library_boundaries() {
+    let dir = temp("reference-switch");
+    let (first, second) = (dir.join("first"), dir.join("second"));
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(&second, true).unwrap();
+    let new_photo = session.visible_cloned()[0];
+    session.close_library().unwrap();
+    session.open_library(&first, true).unwrap();
+    let old_reference = session.visible_cloned()[1];
+    let mut app = LightcraftApp::new(session, Services::default());
+    app.run("library.select", json!({"ids": [old_reference.0]})).unwrap();
+    app.run("photo.setReference", json!({})).unwrap();
+    app.run("view.reference", json!({})).unwrap();
+    let held = lightcraft_catalog::LibraryLock::acquire(&second, "another program").unwrap();
+    assert!(app.run("app.openLibrary", json!({"path": second.to_string_lossy()})).is_err());
+    assert_eq!(app.ui.reference, Some(old_reference.0), "a refused switch keeps the live pin");
+    assert_eq!(app.ui.view, crate::state::ViewMode::Reference);
+    drop(held);
+    app.run("app.openLibrary", json!({"path": second.to_string_lossy()})).unwrap();
+    assert!(app.session.catalog.photo(old_reference).is_some(), "the second library reuses this numeric ID");
+    assert_eq!(app.ui.reference, None, "the first library's pin must not acquire a different photo");
+    assert_eq!(app.ui.view, crate::state::ViewMode::PhotoGrid, "an empty Reference view is not left on screen");
+    app.run("library.select", json!({"ids": [new_photo.0]})).unwrap();
+    let r = app.run("view.reference", json!({})).unwrap();
+    assert_eq!(r["reference"], new_photo.0);
+    app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Empty"})).unwrap();
+    assert_eq!(app.ui.reference, None, "New Library clears the old reference too");
+    assert!(app.run("view.reference", json!({})).is_err(), "an empty library cannot pin a reference");
+    assert_eq!(app.ui.reference, None);
+    app.session.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -219,4 +269,23 @@ fn library_names_must_work_as_folder_names_on_every_system() {
     app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "  Trip 2026  "})).unwrap();
     assert_eq!(app.session.library.as_ref().unwrap().dir, dir.join("Trip 2026"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The web build's page title names the active photo (a host embedding the page reads it to know
+/// which document a drop opened), with • while changes are not yet in storage (issue #2397).
+#[test]
+fn page_title_names_the_active_photo_and_unsaved_changes() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let ids = app.session.visible_cloned();
+    let name = |app: &LightcraftApp, id: lightcraft_catalog::PhotoId| app.session.catalog.photo(id).unwrap().file_name.clone();
+    app.run("library.select", json!({"ids": [ids[0].0]})).unwrap();
+    assert_eq!(app.page_title(false), format!("{} — LightCraft", name(&app, ids[0])));
+    assert_eq!(app.page_title(true), format!("{} • — LightCraft", name(&app, ids[0])));
+    app.run("library.select", json!({"ids": [ids[1].0]})).unwrap();
+    assert_eq!(app.page_title(false), format!("{} — LightCraft", name(&app, ids[1])));
+    // no photo: the window title
+    let empty = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    assert!(empty.session.active().is_none());
+    assert_eq!(empty.page_title(false), "LightCraft");
+    assert_eq!(empty.page_title(true), "LightCraft •");
 }

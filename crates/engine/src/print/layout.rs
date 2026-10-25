@@ -46,6 +46,41 @@ const PAPER: &[(&str, f64, f64)] = &[
     ("5x7", 5.0, 7.0),
     ("8x10", 8.0, 10.0),
     ("13x19", 13.0, 19.0),
+    // Japanese photo printing and postcard sizes, at their exact metric dimensions (the US photo
+    // sizes above are close but not identical: L is 89 x 127 mm, 5x7 in is 127 x 177.8 mm).
+    ("l", 89.0 / 25.4, 127.0 / 25.4),
+    ("2l", 127.0 / 25.4, 178.0 / 25.4),
+    ("kg", 102.0 / 25.4, 152.0 / 25.4),
+    ("postcard", 100.0 / 25.4, 148.0 / 25.4),
+    ("double-postcard", 148.0 / 25.4, 200.0 / 25.4),
+    ("6cut", 203.0 / 25.4, 254.0 / 25.4),
+    ("4cut", 254.0 / 25.4, 305.0 / 25.4),
+    ("business-card", 55.0 / 25.4, 91.0 / 25.4),
+];
+
+/// Japanese customary names (and a few English spellings) for the papers in [`PAPER`], matched
+/// after [`normalize_paper`]: `L判` is `l`, `はがき` is `postcard`, `六切` is `6cut`, and so on.
+const PAPER_ALIASES: &[(&str, &str)] = &[
+    ("L判", "l"),
+    ("Lサイズ", "l"),
+    ("L-size", "l"),
+    ("2L判", "2l"),
+    ("2Lサイズ", "2l"),
+    ("2L-size", "2l"),
+    ("KG判", "kg"),
+    ("KGサイズ", "kg"),
+    ("KG-size", "kg"),
+    ("はがき", "postcard"),
+    ("ハガキ", "postcard"),
+    ("葉書", "postcard"),
+    ("ポストカード", "postcard"),
+    ("往復はがき", "double-postcard"),
+    ("往復ハガキ", "double-postcard"),
+    ("六切", "6cut"),
+    ("6切", "6cut"),
+    ("四切", "4cut"),
+    ("4切", "4cut"),
+    ("名刺", "business-card"),
 ];
 
 /// Names accepted by [`PageSetup::paper`] (besides `custom`).
@@ -53,10 +88,39 @@ pub fn paper_names() -> impl Iterator<Item = &'static str> {
     PAPER.iter().map(|p| p.0)
 }
 
-/// Portrait size in inches of a named paper (case-insensitive), `None` for unknown names and `custom`.
+/// The form [`paper_name`] matches names in: lower case, letters and digits only, and `×`/`*` read
+/// as `x`, so `L判`, `L判。`, `l-size` and `（l）` are one name and `4 × 6` is `4x6`.
+fn normalize_paper(name: &str) -> String {
+    name.chars()
+        .filter_map(|c| match c {
+            '×' | '*' => Some('x'),
+            c if c.is_alphanumeric() => Some(c),
+            _ => None,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// The canonical name of the paper `name` stands for, `None` for unknown names and `custom`.
+/// `L判` is `l`, `はがき` is `postcard`, `六切` is `6cut`, and so on.
+pub fn paper_name(name: &str) -> Option<&'static str> {
+    let n = normalize_paper(name);
+    if n.is_empty() {
+        return None;
+    }
+    PAPER
+        .iter()
+        .find(|p| normalize_paper(p.0) == n)
+        .map(|p| p.0)
+        .or_else(|| PAPER_ALIASES.iter().find(|(alias, _)| normalize_paper(alias) == n).map(|(_, name)| *name))
+}
+
+/// Portrait size in inches of a named paper, `None` for unknown names and `custom`. Case, spaces
+/// and punctuation don't matter, and the Japanese customary names (`L判`, `2L判`, `KG判`, `はがき`,
+/// `往復はがき`, `六切`, `四切`, `名刺`) are aliases of the papers above.
 pub fn paper_size(name: &str) -> Option<(f64, f64)> {
-    let name = name.to_ascii_lowercase();
-    PAPER.iter().find(|p| p.0 == name).map(|p| (p.1, p.2))
+    let canonical = paper_name(name)?;
+    PAPER.iter().find(|p| p.0 == canonical).map(|p| (p.1, p.2))
 }
 
 /// An axis-aligned rectangle in inches.
@@ -933,6 +997,65 @@ mod tests {
         assert_eq!(p.size().unwrap(), (30.0, 20.0));
         p.paper = "poster".into();
         assert!(p.size().is_err());
+    }
+
+    /// Japanese photo and postcard papers: exact metric sizes to 0.1 pt, the customary names as
+    /// aliases, and the ISO/US papers around them unchanged.
+    #[test]
+    fn japanese_photo_and_postcard_papers() {
+        let pt = |name: &str| {
+            let p = PageSetup { paper: name.into(), ..Default::default() };
+            p.size_points().unwrap_or_else(|e| panic!("{name}: {e}"))
+        };
+        for (name, w_mm, h_mm) in [
+            ("L判", 89.0, 127.0),
+            ("2L判", 127.0, 178.0),
+            ("KG判", 102.0, 152.0),
+            ("はがき", 100.0, 148.0),
+            ("往復はがき", 148.0, 200.0),
+            ("六切", 203.0, 254.0),
+            ("四切", 254.0, 305.0),
+            ("名刺", 55.0, 91.0),
+        ] {
+            let (w, h) = pt(name);
+            let want = (w_mm / 25.4 * 72.0, h_mm / 25.4 * 72.0);
+            assert!((w - want.0).abs() < 0.1 && (h - want.1).abs() < 0.1, "{name}: {w} x {h} pt, wanted {want:?}");
+            assert!((w - h).abs() > 1e-6, "{name} is portrait");
+        }
+        // The customary and English spellings resolve to the same paper, including spaces and case.
+        for (a, b) in [
+            ("L判", "l"),
+            ("L判", " L "),
+            ("L判", "L-size"),
+            ("2L判", "2l"),
+            ("KG判", "kg"),
+            ("はがき", "postcard"),
+            ("はがき", "ハガキ"),
+            ("往復はがき", "double-postcard"),
+            ("六切", "6cut"),
+            ("六切", "6切"),
+            ("四切", "4cut"),
+            ("名刺", "business-card"),
+            ("A4", "a 4"),
+            ("4 × 6", "4x6"),
+        ] {
+            assert_eq!(paper_size(a), paper_size(b), "{a} vs {b}");
+        }
+        // Punctuation is ignored, including the periods and Japanese marks a pasted name may carry.
+        for (name, canonical) in [("L判。", "l"), ("L判、", "l"), ("（L判）", "l"), ("l-size.", "l"), ("はがき。", "postcard"), ("6切。", "6cut")]
+        {
+            assert_eq!(paper_name(name), Some(canonical), "{name}");
+        }
+        assert_eq!(paper_name("custom"), None);
+        assert!(paper_size("poster").is_none());
+        // The papers that were already there keep their sizes.
+        assert_eq!(pt("letter"), (612.0, 792.0));
+        assert_eq!(pt("4x6"), (288.0, 432.0));
+        assert_eq!(pt("5x7"), (360.0, 504.0));
+        assert_eq!(pt("8x10"), (576.0, 720.0));
+        assert_eq!(pt("13x19"), (936.0, 1368.0));
+        let (w, h) = pt("A4");
+        assert!((w - 595.28).abs() < 0.01 && (h - 841.89).abs() < 0.01, "A4 {w} x {h}");
     }
 
     #[test]

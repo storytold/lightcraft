@@ -10,9 +10,14 @@
 //! * Synchronize with the defaults imports the new photos and leaves missing ones alone.
 //! * Ticking "Remove missing photos" also moves those to Recently Deleted.
 //! * Cancel leaves the library as it was.
+//! * A folder that has nothing to bring in only says so: the dialog has one Close and no
+//!   choices, and closing it starts nothing.
 //! * Synchronize hands the work to the background at once: the dialog closes, the app keeps
 //!   answering, and the photos arrive over the next frames under a row in the activity stack, as one undo
 //!   step.
+//! * While the folder is listed (minutes, on a network share), the scan's row says how many
+//!   folders and files it has listed, with a bar that moves on its own, not "0 of 64085"; then it
+//!   counts the files and photos checked.
 
 use std::time::Duration;
 
@@ -59,12 +64,19 @@ fn write_png(path: &str, seed: u8) {
 /// The app with `trip/a.png` and `trip/b.png` imported, then `c.png` added and `b.png` deleted
 /// on disk behind its back.
 fn changed_folder(dir: &Scratch) -> Headless {
+    imported_folder(dir, || {
+        write_png(&dir.path("trip/c.png"), 3);
+        std::fs::remove_file(dir.path("trip/b.png")).unwrap();
+    })
+}
+
+/// The app with `trip/a.png` and `trip/b.png` imported, and `then` done on disk after.
+fn imported_folder(dir: &Scratch, then: impl FnOnce()) -> Headless {
     write_png(&dir.path("trip/a.png"), 1);
     write_png(&dir.path("trip/b.png"), 2);
     let mut session = lightcraft_engine::Session::new().with_fs();
     session.execute("library.import", &json!({"paths": [dir.path("trip")]})).unwrap();
-    write_png(&dir.path("trip/c.png"), 3);
-    std::fs::remove_file(dir.path("trip/b.png")).unwrap();
+    then();
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
@@ -84,8 +96,24 @@ fn open_and_scan(h: &mut Headless, folder: &str) {
     // the rows above it hold one folder each and open by themselves
     let row = format!("source:libfolder:{folder}");
     assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "no row {row}");
+    let before = h.app.widgets.iter().find(|(w, _)| *w == row).map(|(_, r)| *r).unwrap_or_else(|| panic!("no row {row}"));
+    let panel = h.app.widgets.iter().find(|(w, _)| w == "panel:left_panel").map(|(_, r)| *r).expect("left panel");
+    // Off-screen rows are registered too. Preserve the default layout when this row is already visible.
+    let before_visible = before.intersect(panel);
+    let before_drawn = h.app.widgets.iter().any(|(w, _)| *w == format!("label:libfolder:{folder}"));
+    if !before_drawn || !before_visible.is_positive() || before_visible.height() < before.height() - 0.5 {
+        crate::tests_panels::scroll_sidebar(h, panel.center().y - before.center().y);
+    }
     let rect = h.app.widgets.iter().find(|(w, _)| *w == row).map(|(_, r)| *r).unwrap_or_else(|| panic!("no row {row}"));
-    let c = rect.center();
+    let panel = h.app.widgets.iter().find(|(w, _)| w == "panel:left_panel").map(|(_, r)| *r).expect("left panel");
+    let visible = rect.intersect(panel);
+    let c = visible.center();
+    let drawn = h.app.widgets.iter().any(|(w, _)| *w == format!("label:libfolder:{folder}"));
+    let clips: Vec<_> = h.view.shapes.iter().filter(|s| s.shape.visual_bounding_rect().intersects(rect)).map(|s| s.clip_rect).collect();
+    assert!(
+        drawn && visible.is_positive() && visible.height() >= rect.height() - 0.5,
+        "folder row must be drawn and vertically in view: before={before:?} row={rect:?} panel={panel:?} visible={visible:?} click={c:?} drawn={drawn} paint_clips={clips:?}"
+    );
     let r = h.request("ui.click", json!({"x": c.x, "y": c.y, "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -179,6 +207,42 @@ fn cancel_leaves_the_library_as_it_was() {
     assert!(h.app.session.folder_changes.is_none(), "the scan is let go");
 }
 
+fn shown(h: &Headless, widget: &str) -> bool {
+    h.app.widgets.iter().any(|(w, _)| w == widget)
+}
+
+#[test]
+fn a_folder_with_nothing_to_bring_in_is_only_reported() {
+    let dir = Scratch::new("uptodate");
+    let mut h = imported_folder(&dir, || {});
+    open_and_scan(&mut h, &dir.path("trip"));
+    h.step();
+    assert!(shown(&h, "button:dialogOk"), "one button, to close it");
+    for gone in ["button:dialogCancel", "syncImportNew", "syncRelinkMoved", "syncRemoveMissing", "syncReadMetadata"] {
+        assert!(!shown(&h, gone), "nothing to choose: {gone}");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(T, |h| h.app.ui.dialog.is_none()), "the button closes it");
+    assert!(h.app.sync_run.is_none() && h.app.session.activity.list().is_empty(), "and starts nothing");
+    assert!(h.app.session.folder_changes.is_none(), "the scan is let go");
+    assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
+}
+
+#[test]
+fn confirming_a_folder_with_nothing_to_bring_in_starts_nothing() {
+    let dir = Scratch::new("uptodate-agent");
+    let mut h = imported_folder(&dir, || {});
+    open_and_scan(&mut h, &dir.path("trip"));
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["upToDate"], true, "{r}");
+    assert!(h.app.ui.dialog.is_none());
+    assert!(h.app.sync_run.is_none() && h.app.session.activity.list().is_empty(), "no job that does nothing");
+    h.step();
+    assert!(h.app.session.folder_changes.is_none(), "the scan is let go");
+}
+
 #[test]
 fn an_agents_scan_is_kept_between_frames() {
     let dir = Scratch::new("agent");
@@ -247,7 +311,7 @@ fn a_synchronize_and_an_import_never_run_at_once() {
         path: dir.path("trip"),
         name: "trip".into(),
         disk: false,
-        counts: Some(Default::default()),
+        counts: Some(crate::state::SyncCounts { new: 1, ..Default::default() }),
         import_new: true,
         relink_moved: true,
         remove_missing: false,
@@ -342,4 +406,20 @@ fn a_local_folder_with_library_photos_offers_synchronize() {
     h.step();
     assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "the dialog opens at once");
     assert!(h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. }))));
+}
+
+#[test]
+fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_its_own() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let p = lightcraft_engine::sync::SyncProgress::default();
+    p.to_check.store(64085, Relaxed);
+    p.folders_listed.store(312, Relaxed);
+    p.files_listed.store(18402, Relaxed);
+    let (done, total, detail) = crate::sync::scan_row(&p, "photos/Various");
+    assert_eq!((done, total), (0, 0), "a bar that moves on its own, not 0 of 64085");
+    assert_eq!(detail, "Listing folders — folders: 312, files: 18402 · photos/Various");
+    // the listing is over: the files and photos checked, of how many
+    p.listed.store(true, Relaxed);
+    p.checked.store(10, Relaxed);
+    assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
 }

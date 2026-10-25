@@ -202,6 +202,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     // the tick box: does the selection have it?
     let state = ticks.tick(&r.path);
+    let inside = ticks.inside(&r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
     let on = !selection.is_empty();
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
@@ -222,14 +223,27 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         }
         Tick::No => {
             ui.painter().rect_stroke(boxr, 2.0, Stroke::new(1.0, edge), StrokeKind::Inside);
+            // the selection has a keyword inside this one: a dot in the empty box, so a folded
+            // keyword shows that it holds something applied (a shape of its own beside the tick
+            // and the dash, which are about the keyword itself)
+            if !inside.is_empty() {
+                let dot = Rect::from_center_size(boxr.center(), vec2(5.0, 5.0));
+                ui.painter().circle_filled(dot.center(), 2.5, t.text);
+                register(ui.ctx(), format!("keywordInside:{}", r.path), dot);
+            }
         }
     }
     // (with nothing selected it does nothing, and says nothing)
     let tb = if on {
-        tb.on_hover_text(crate::i18n::tr(match state {
+        let does = crate::i18n::tr(match state {
             Tick::All => "Remove from Selected Photos",
             _ => "Add to Selected Photos",
-        }))
+        });
+        // what is inside comes first: it is what the box shows
+        match inside_said(inside) {
+            Some(said) => tb.on_hover_text(format!("{said}\n{does}")),
+            None => tb.on_hover_text(does),
+        }
     } else {
         tb
     };
@@ -272,7 +286,18 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if resp.double_clicked() {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
-    resp.context_menu(|ui| menu(app, ui, &r.path, selection));
+    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
+}
+
+/// How many of the keywords inside one are named before the rest are counted.
+const INSIDE_NAMED: usize = 4;
+
+/// "Inside: Rome, Venice": the applied keywords inside a keyword, the first few by name.
+fn inside_said(inside: &[String]) -> Option<String> {
+    let named = inside.iter().take(INSIDE_NAMED).map(String::as_str).collect::<Vec<_>>().join(", ");
+    let more = inside.len().saturating_sub(INSIDE_NAMED);
+    let names = if more > 0 { format!("{named} {}", crate::i18n::tr_format!("+{n} more", n = more)) } else { named };
+    (!inside.is_empty()).then(|| crate::i18n::tr_format!("Inside: {names}", names = names))
 }
 
 /// A row while a keyword or photos are dragged: outlined under the pointer when the drop would
@@ -485,23 +510,51 @@ pub(crate) struct Ticks {
     photos: usize,
     /// Photos with it, by cleaned lower-case keyword.
     counts: std::collections::HashMap<String, usize>,
+    /// The applied keywords inside each keyword (by cleaned lower-case keyword): their own names,
+    /// in order, each once. What a folded keyword's box says of what it holds.
+    inside: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Ticks {
     pub(crate) fn of(catalog: &Catalog, photos: &[PhotoId]) -> Ticks {
         let photos = super::keywording::distinct(catalog, photos);
         let mut counts: std::collections::HashMap<String, usize> = Default::default();
+        // (each keyword as it was first written, to name it by)
+        let mut shown: std::collections::HashMap<String, String> = Default::default();
         let mut seen = std::collections::HashSet::new();
         for p in &photos {
             seen.clear();
             for k in &p.meta.keywords {
-                let key = lightcraft_catalog::keywords::clean(k).to_lowercase();
+                let clean = lightcraft_catalog::keywords::clean(k);
+                let key = clean.to_lowercase();
                 if seen.insert(key.clone()) {
-                    *counts.entry(key).or_default() += 1;
+                    *counts.entry(key.clone()).or_default() += 1;
+                    shown.entry(key).or_insert(clean);
                 }
             }
         }
-        Ticks { photos: photos.len(), counts }
+        // every keyword above an applied one holds it: worked out here, once per selection, from the
+        // keywords the selection has (not per row and frame)
+        let mut inside: std::collections::HashMap<String, Vec<String>> = Default::default();
+        let mut applied: Vec<(&String, &String)> = shown.iter().collect();
+        applied.sort();
+        for (key, as_written) in applied {
+            let name = as_written.rsplit('|').next().unwrap_or(as_written);
+            for (at, _) in key.match_indices('|') {
+                let Some(above) = key.get(..at) else { continue };
+                let names = inside.entry(above.to_string()).or_default();
+                if !names.iter().any(|n| same(n, name)) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        Ticks { photos: photos.len(), counts, inside }
+    }
+
+    /// The applied keywords inside `path` (their own names): what the selection has of the
+    /// keywords below it, at any depth. Empty for a keyword with nothing applied inside.
+    pub(crate) fn inside(&self, path: &str) -> &[String] {
+        self.inside.get(&lightcraft_catalog::keywords::clean(path).to_lowercase()).map_or(&[], Vec::as_slice)
     }
 
     /// The tick box of `path`: a photo counts when it has the keyword itself (any case); one with
@@ -519,6 +572,35 @@ impl Ticks {
 fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
     tree.iter().any(|n| same(&n.path, path) || (lightcraft_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
 }
+
+/// The labels the Keyword List and its dialogs pass to `tr` through variables, out of reach of a
+/// literal search: the translation gaps report (`i18n`) checks them.
+#[cfg(test)]
+pub(crate) const VARIABLE_LABELS: &[&str] = &[
+    "Include on Export",
+    "Export Containing Keywords",
+    "Export Synonyms",
+    "Person",
+    "Merge Keywords",
+    "No keywords yet",
+    "No keywords match",
+    "Add to Selected Photos",
+    "Remove from Selected Photos",
+    "Keywords",
+    "& Containing",
+    "Will Export",
+    "No keywords are exported",
+    "Add to All Selected Photos",
+    "Set name",
+    "Edit Set…",
+    "Edit Keyword Set",
+    "A keyword set needs a name",
+    "Recent Keywords",
+    "Keywords (⌥1–⌥9)",
+    "Save as a new set",
+    "Import Keywords…",
+    "Export Keywords…",
+];
 
 #[cfg(test)]
 mod tests {
@@ -590,44 +672,30 @@ mod tests {
         assert_eq!(Ticks::of(&c, &ids).tick("ärzte"), Tick::Some);
     }
 
-    /// The labels the Keyword List and its dialogs pass to `tr` through variables (out of reach of
-    /// a literal search) are translated in every language.
+    /// Given photos that have keywords inside other keywords, when the list is asked what is
+    /// inside a keyword for the selection, then every keyword above an applied one names it (by
+    /// its own name, once, in order), whichever case it was written in and however deep; a keyword
+    /// with nothing applied inside, a keyword that is itself the applied one, and an empty
+    /// selection name nothing.
     #[test]
-    fn labels_passed_through_variables_are_translated() {
-        use crate::i18n::Locale;
-        let labels = [
-            "Include on Export",
-            "Export Containing Keywords",
-            "Export Synonyms",
-            "Person",
-            "Merge Keywords",
-            "No keywords yet",
-            "No keywords match",
-            "Add to Selected Photos",
-            "Remove from Selected Photos",
-            "Keywords",
-            "& Containing",
-            "Will Export",
-            "No keywords are exported",
-            "Add to All Selected Photos",
-            "Set name",
-            "Edit Set…",
-            "Edit Keyword Set",
-            "A keyword set needs a name",
-            "Recent Keywords",
-            "Keywords (⌥1–⌥9)",
-            "Save as a new set",
-            "Import Keywords…",
-            "Export Keywords…",
-        ];
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
-        for code in ["de", "es", "fr", "pt-br", "ru", "uk", "it", "ka", "ja", "zh-hans", "zh-hant", "pl", "cs"] {
-            let text = std::fs::read_to_string(dir.join(format!("{code}.json"))).unwrap();
-            let catalog: std::collections::HashMap<String, String> = serde_json::from_str(&text).unwrap();
-            for label in labels {
-                assert!(catalog.contains_key(label), "{code}: “{label}”");
-            }
-        }
-        assert_eq!(Locale::ALL.len(), 14, "a language added: list its file above");
+    fn a_keyword_names_the_applied_keywords_inside_it() {
+        let (c, ids) = library(&[&["Travel|Italy|Rome", "beach"], &["travel|italy|venice", "travel|Spain"], &["travel|italy|ROME"]]);
+        let all = Ticks::of(&c, &ids);
+        assert_eq!(all.inside("travel"), ["Italy|Rome", "Italy|venice", "Spain"].map(|k| k.rsplit('|').next().unwrap()));
+        assert_eq!(all.inside("Travel|Italy"), ["Rome", "venice"]);
+        assert_eq!(all.inside("travel|italy|rome"), [] as [&str; 0], "nothing is inside the applied keyword itself");
+        assert_eq!(all.inside("travel|spain"), [] as [&str; 0]);
+        assert_eq!(all.inside("beach"), [] as [&str; 0]);
+        assert_eq!(all.inside("weddings"), [] as [&str; 0], "a keyword no photo has anything of");
+        // the selection decides: the third photo alone has nothing of Spain or Venice
+        assert_eq!(Ticks::of(&c, &ids[2..]).inside("travel"), ["ROME"]);
+        assert_eq!(Ticks::of(&c, &[]).inside("travel"), [] as [&str; 0]);
+        // a keyword applied itself and with one inside: the tick is its own, and what is inside is still named
+        let (c, ids) = library(&[&["travel", "travel|Italy"]]);
+        let t = Ticks::of(&c, &ids);
+        assert_eq!((t.tick("travel"), t.inside("travel")), (Tick::All, &["Italy".to_string()][..]));
+        // a name that only starts like another is not inside it
+        let (c, ids) = library(&[&["travelling|Rome"]]);
+        assert_eq!(Ticks::of(&c, &ids).inside("travel"), [] as [&str; 0]);
     }
 }

@@ -14,6 +14,24 @@ fn fails(s: &mut Session, id: &str, p: Value) -> String {
     s.execute(id, &p).expect_err(&format!("{id} {p} should fail")).to_string()
 }
 
+/// A scratch folder that goes away with the test, however it ends.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("lightcraft-print-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn package(s: &mut Session) {
     run(s, "print.set", json!({"layout": {"style": "customPackage", "page": {"paper": "letter"}}}));
 }
@@ -26,7 +44,13 @@ fn get_set_and_reset() {
     assert_eq!(g["pageWidth"], 8.5);
     assert_eq!(g["printable"]["x"], 0.25);
     assert_eq!(g["settings"]["job"]["ppi"], 240.0);
-    assert!(g["papers"].as_array().unwrap().iter().any(|p| p["name"] == "a4"));
+    let papers = g["papers"].as_array().unwrap();
+    assert!(papers.iter().any(|p| p["name"] == "a4"));
+    // The Japanese photo and postcard papers are listed with their metric sizes in inches.
+    let paper = |name: &str| papers.iter().find(|p| p["name"] == name).cloned().unwrap_or_else(|| panic!("{name}"));
+    let l = paper("l");
+    assert!((l["width"].as_f64().unwrap() - 89.0 / 25.4).abs() < 1e-9 && (l["height"].as_f64().unwrap() - 127.0 / 25.4).abs() < 1e-9);
+    assert!(papers.iter().any(|p| p["name"] == "postcard") && papers.iter().any(|p| p["name"] == "6cut"));
     assert_eq!(g["gridCells"].as_array().unwrap().len(), 1);
 
     let g = run(
@@ -213,6 +237,28 @@ fn export_pdf_prints_the_current_settings() {
     fails(&mut s, "print.exportPdf", json!({"path": path, "ids": ids}));
 }
 
+/// The Japanese photo and postcard papers reach the PDF page at their metric sizes: はがき is
+/// 100 × 148 mm (283.46 × 419.53 pt) and L is 89 × 127 mm (252.28 × 359.99 pt). 254 ppi is exactly
+/// ten pixels per millimetre, so the page pixels are whole millimetres and the MediaBox is exact.
+#[test]
+fn export_pdf_uses_the_japanese_paper_sizes() {
+    let mut s = Session::with_demo();
+    let id = s.catalog.photos().next().map(|p| p.id.0).unwrap();
+    for (paper, w_pt, h_pt) in [("postcard", 283.46, 419.53), ("はがき", 283.46, 419.53), ("l", 252.28, 359.99)] {
+        run(&mut s, "print.set", json!({"layout": {"style": "singleImage", "page": {"paper": paper}}, "job": {"ppi": 254.0}}));
+        let path = temp_pdf(paper);
+        run(&mut s, "print.exportPdf", json!({"path": path, "ids": [id]}));
+        let bytes = std::fs::read(&path).unwrap();
+        let (w, h) = media_box(&bytes);
+        assert!((w - w_pt).abs() < 0.1 && (h - h_pt).abs() < 0.1, "{paper}: {w} x {h} pt, wanted {w_pt} x {h_pt}");
+    }
+    // The customary names are accepted and the page size follows them; an unknown name is refused.
+    let g = run(&mut s, "print.set", json!({"layout": {"page": {"paper": "はがき"}}}));
+    assert!((g["pageWidth"].as_f64().unwrap() - 100.0 / 25.4).abs() < 1e-9);
+    assert!((g["pageHeight"].as_f64().unwrap() - 148.0 / 25.4).abs() < 1e-9);
+    fails(&mut s, "print.set", json!({"layout": {"page": {"paper": "poster"}}}));
+}
+
 #[test]
 fn export_pdf_with_a_printer_profile() {
     let mut s = Session::with_demo();
@@ -296,6 +342,125 @@ fn templates_save_apply_delete_and_persist() {
 }
 
 #[test]
+fn templates_export_to_a_file_and_import_from_one() {
+    let files = MemStore::new();
+    let open = |files: &MemStore| {
+        let mut s = Session::with_demo();
+        let stores = LibraryStores { dir: "print".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+        s.open_library_in(stores, false).unwrap();
+        s
+    };
+    let scratch = Scratch::new("templates");
+    let dir = &scratch.0;
+    let mut s = open(&files);
+    run(&mut s, "print.set", json!({"layout": {"style": "contactSheet", "grid": {"columns": 3, "rows": 4}}, "page": {"background": [5, 6, 7]}}));
+    run(&mut s, "print.template.save", json!({"name": "Proofs"}));
+
+    // the extension is added when the path has none
+    let r = run(&mut s, "print.template.export", json!({"name": "proofs", "path": dir.join("proofs").to_string_lossy()}));
+    assert_eq!(r["name"], "Proofs");
+    let file = dir.join("proofs.lcprint");
+    assert_eq!(r["path"], file.to_string_lossy().as_ref());
+    let doc: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!((doc["format"].as_str(), doc["version"].as_u64(), doc["name"].as_str()), (Some("lightcraft.printTemplate"), Some(1), Some("Proofs")));
+
+    // into the same library: the name is taken, so the copy is renamed
+    let r = run(&mut s, "print.template.import", json!({"path": file.to_string_lossy()}));
+    assert_eq!((r["name"].as_str(), r["renamed"].as_bool()), (Some("Proofs (2)"), Some(true)), "{r}");
+    assert_eq!(r["templates"].as_array().unwrap().len(), 2);
+    assert_eq!(r["templates"][1]["settings"], r["templates"][0]["settings"]);
+
+    // into another library, under its own name, and it is kept there
+    let other = MemStore::new();
+    let mut b = open(&other);
+    let r = run(&mut b, "print.template.import", json!({"path": file.to_string_lossy()}));
+    assert_eq!((r["name"].as_str(), r["renamed"].as_bool()), (Some("Proofs"), Some(false)));
+    let g = run(&mut open(&other), "print.template.apply", json!({"name": "Proofs"}));
+    assert_eq!(g["settings"]["layout"]["grid"]["columns"], 3);
+    assert_eq!(g["settings"]["page"]["background"], json!([5, 6, 7]));
+
+    // refusals leave the templates as they were
+    let bad_file = dir.join("bad.lcprint");
+    std::fs::write(&bad_file, br#"{"format": "lightcraft.printTemplate", "version": 1, "name": "Bad", "settings": {"layout": {"pages": 0}}}"#)
+        .unwrap();
+    let huge = dir.join("huge.lcprint");
+    std::fs::write(&huge, vec![b' '; crate::print::template::MAX_FILE as usize + 1]).unwrap();
+    for (p, why) in [
+        (json!({}), "missing `path`"),
+        (json!({"path": "  "}), "missing `path`"),
+        (json!({"path": dir.join("absent.lcprint").to_string_lossy()}), "absent.lcprint"),
+        (json!({"path": dir.to_string_lossy()}), "not a file"),
+        (json!({"path": huge.to_string_lossy()}), "too large"),
+        (json!({"path": bad_file.to_string_lossy()}), "template `Bad`"),
+    ] {
+        let e = fails(&mut s, "print.template.import", p.clone());
+        assert!(e.contains(why), "{p}: {e}");
+    }
+    assert_eq!(run(&mut s, "print.template.list", json!({}))["templates"].as_array().unwrap().len(), 2);
+    assert!(fails(&mut s, "print.template.export", json!({"name": "Nope", "path": dir.join("x").to_string_lossy()})).contains("no print template"));
+    assert!(fails(&mut s, "print.template.export", json!({"name": "Proofs"})).contains("missing `path`"));
+    assert!(fails(&mut s, "print.template.export", json!({"path": dir.join("x").to_string_lossy()})).contains("missing `name`"));
+    assert!(!dir.join("x.lcprint").exists());
+
+    // a full list takes no more
+    while s.print_templates.len() < crate::print::template::MAX_TEMPLATES {
+        let n = s.print_templates.len();
+        run(&mut s, "print.template.save", json!({"name": format!("T{n}")}));
+    }
+    assert!(fails(&mut s, "print.template.import", json!({"path": file.to_string_lossy()})).contains("at most"));
+}
+
+/// A library whose `prefs.json` can't be read, so saving the preferences fails.
+#[derive(Clone, Default)]
+struct PrefsUnreadable(MemStore);
+
+impl lightcraft_catalog::Store for PrefsUnreadable {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        if name == "prefs.json" {
+            return Err(std::io::Error::other("locked by another process"));
+        }
+        self.0.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.0.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        "prefs unreadable".into()
+    }
+}
+
+#[test]
+fn template_changes_that_cant_be_saved_are_undone() {
+    let mut s = Session::with_demo();
+    let stores =
+        LibraryStores { dir: "print".into(), catalog: Box::new(MemStore::new()), files: Box::new(PrefsUnreadable::default()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    s.print_templates.push(crate::print::template::PrintTemplate::new("Proofs", &s.print).unwrap());
+    let names = |s: &Session| s.print_templates.iter().map(|t| (t.name.clone(), t.settings.clone())).collect::<Vec<_>>();
+    let kept = names(&s);
+    let scratch = Scratch::new("unsaved");
+    let file = scratch.0.join("proofs.lcprint");
+    run(&mut s, "print.template.export", json!({"name": "Proofs", "path": file.to_string_lossy()}));
+
+    run(&mut s, "print.set", json!({"layout": {"style": "contactSheet"}}));
+    for (id, p) in [
+        ("print.template.save", json!({"name": "Other"})),
+        ("print.template.save", json!({"name": "proofs"})),
+        ("print.template.delete", json!({"name": "Proofs"})),
+        ("print.template.import", json!({"path": file.to_string_lossy()})),
+    ] {
+        assert!(fails(&mut s, id, p.clone()).contains("prefs.json"), "{id} {p}");
+        assert_eq!(names(&s), kept, "{id} {p}");
+    }
+}
+
+#[test]
 fn a_hostile_template_in_the_preferences_does_not_break_the_library() {
     let files = MemStore::new();
     let hostile = json!({"printTemplates": [
@@ -336,8 +501,30 @@ fn every_print_command_is_registered_with_a_description() {
         "print.template.save",
         "print.template.apply",
         "print.template.delete",
+        "print.template.export",
+        "print.template.import",
     ] {
         let c = crate::find_command(id).unwrap_or_else(|| panic!("{id} missing"));
         assert!(c.params.len() > 3, "{id}");
     }
+}
+
+#[test]
+fn page_options_are_print_settings_and_template_fields() {
+    let mut s = Session::with_demo();
+    let g = run(&mut s, "print.get", json!({}));
+    assert_eq!(g["settings"]["page"], json!({"background": [255, 255, 255], "pageNumbers": false, "pageInfo": false, "cropMarks": false}));
+    let g = run(&mut s, "print.set", json!({"page": {"pageNumbers": true, "cropMarks": true}}));
+    assert_eq!((g["settings"]["page"]["pageNumbers"].as_bool(), g["settings"]["page"]["pageInfo"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(g["settings"]["page"]["background"], json!([255, 255, 255]), "a patch merges");
+    fails(&mut s, "print.set", json!({"page": {"pageInfo": "yes"}}));
+    fails(&mut s, "print.set", json!({"page": {"pageNumber": true}}));
+    // a template keeps them
+    run(&mut s, "print.template.save", json!({"name": "Marked"}));
+    run(&mut s, "print.reset", json!({}));
+    assert!(!s.print.page.crop_marks);
+    run(&mut s, "print.template.apply", json!({"name": "Marked"}));
+    assert!(s.print.page.page_numbers && s.print.page.crop_marks && !s.print.page.page_info);
+    let set = crate::find_command("print.set").unwrap();
+    assert!(set.params.contains("pageNumbers") && set.params.contains("pageInfo") && set.params.contains("cropMarks"), "{}", set.params);
 }

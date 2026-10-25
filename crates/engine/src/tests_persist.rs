@@ -191,3 +191,28 @@ fn close_fails_when_nothing_can_be_saved() {
     s.close_library().unwrap();
     assert_eq!(s.unsaved(), None);
 }
+
+/// Issue #2266: a presets.json that can't be written isn't only logged: the preset counts as
+/// unsaved (the top bar warns, the web backup refuses) until a later save writes it.
+#[test]
+fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    assert!(s.unsaved().is_none());
+    files.set_failing(true);
+    s.execute("preset.create", &json!({"name": "Mine"})).unwrap();
+    let (n, why) = s.unsaved().expect("the preset is unsaved");
+    assert_eq!(n, 1);
+    assert!(why.contains("presets") && why.contains("disk full"), "{why}");
+    let stored = |f: &Flaky| f.files.files.lock().unwrap().get("presets.json").cloned().unwrap_or_default();
+    assert!(!String::from_utf8_lossy(&stored(&files)).contains("Mine"));
+    // still failing: still unsaved
+    s.persist().unwrap();
+    assert!(s.unsaved().is_some());
+    files.set_failing(false);
+    s.persist().unwrap();
+    assert!(s.unsaved().is_none(), "written once the disk works again");
+    assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
+}

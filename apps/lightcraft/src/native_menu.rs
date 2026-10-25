@@ -16,7 +16,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, channel};
 
 use lightcraft_ui_egui::LightcraftApp;
-use lightcraft_ui_egui::menubar::{MenuNode, menu_bar};
+use lightcraft_ui_egui::menubar::{
+    MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_structure as structure_of,
+};
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::Value;
@@ -39,18 +41,140 @@ enum Handle {
 
 struct Item {
     handle: Handle,
+    /// The submenu the item sits in, to swap the item when its accelerator has to go (macOS).
+    parent: Submenu,
     cmd: String,
     params: Value,
     shortcut: Option<String>,
+    /// The accelerator the item's shortcut maps to.
     accel: Option<Accelerator>,
+    /// The accelerator the native item has now: `accel`, or `None` while it yields.
+    current: Option<Accelerator>,
     label: String,
     enabled: bool,
     checked: Option<bool>,
+    /// Whether the item may be replaced to drop its key. Not in the Help menu: a swap there left
+    /// the old row and added a second one (muda 0.21, macOS 27), so those keys stay.
+    swappable: bool,
+}
+
+impl Item {
+    /// The row's text as installed: `label` is already what the row shows (translated, with a
+    /// borrowed key's hint, `native_item_presentation`).
+    fn native_label(&self) -> String {
+        self.label.replace('&', "&&")
+    }
+
+    /// Puts `want` on the native item. muda's `set_accelerator(None)` does nothing on macOS (the
+    /// old key equivalent stays and the menu still takes the key), so there the item is replaced
+    /// by an identical one without an accelerator, at the same position and with the same id,
+    /// text, enabled and checked state. Only done when the accelerator changes (and again while a
+    /// native call keeps failing), never per frame otherwise.
+    fn set_accelerator(&mut self, want: Option<Accelerator>) {
+        if self.current == want {
+            return;
+        }
+        if cfg!(target_os = "macos") && want.is_none() && self.swappable {
+            // `current` follows the native item: it changes only when the swap went through, so a
+            // failed swap (the old item, key and all, is still there) is tried again
+            let done = self.replace_without_accelerator();
+            self.current = settled(self.current, want, done);
+            return;
+        }
+        let done = match &self.handle {
+            Handle::Plain(h) => h.set_accelerator(want),
+            Handle::Check(h) => h.set_accelerator(want),
+        }
+        .is_ok();
+        self.current = settled(self.current, want, done);
+    }
+
+    /// Replaces the native item by one without an accelerator. `self.handle` changes only when the
+    /// new item is attached; on failure the old item is still the one in the submenu.
+    fn replace_without_accelerator(&mut self) -> bool {
+        let (id, old): (_, &dyn muda::IsMenuItem) = match &self.handle {
+            Handle::Plain(h) => (h.id().clone(), h),
+            Handle::Check(h) => (h.id().clone(), h),
+        };
+        let Some(position) = self.parent.items().iter().position(|k| *k.id() == id) else { return false };
+        let new = match &self.handle {
+            Handle::Plain(_) => Handle::Plain(MenuItem::with_id(id, self.native_label(), self.enabled, None)),
+            Handle::Check(h) => Handle::Check(CheckMenuItem::with_id(id, self.native_label(), self.enabled, h.is_checked(), None)),
+        };
+        let new_ref: &dyn muda::IsMenuItem = match &new {
+            Handle::Plain(h) => h,
+            Handle::Check(h) => h,
+        };
+        if !swap_item(&self.parent, old, new_ref, position) {
+            return false;
+        }
+        self.handle = new;
+        true
+    }
+}
+
+/// The accelerator the native item has after trying to put `want` on it: `want` when the native
+/// call worked, else what it had, so the caller sees the mismatch and tries again.
+fn settled(had: Option<Accelerator>, want: Option<Accelerator>, native_call_worked: bool) -> Option<Accelerator> {
+    if native_call_worked { want } else { had }
+}
+
+/// Whether the per-frame accelerator sync has to run: the focus or recording state changed, or an
+/// earlier sync left an item whose native accelerator is not the wanted one (a failed swap).
+fn sync_needed(focus: bool, capturing: bool, synced_focus: bool, synced_capturing: bool, pending: bool) -> bool {
+    focus != synced_focus || capturing != synced_capturing || pending
+}
+
+/// The three submenu calls a swap needs, so the failure paths can be tested without a main-thread
+/// `muda::Menu`.
+trait SwapTarget {
+    type Row: ?Sized;
+    fn remove(&self, row: &Self::Row) -> bool;
+    fn insert(&self, row: &Self::Row, position: usize) -> bool;
+    fn append(&self, row: &Self::Row) -> bool;
+}
+
+impl SwapTarget for Submenu {
+    type Row = dyn muda::IsMenuItem;
+    fn remove(&self, row: &Self::Row) -> bool {
+        Submenu::remove(self, row).is_ok()
+    }
+    fn insert(&self, row: &Self::Row, position: usize) -> bool {
+        Submenu::insert(self, row, position).is_ok()
+    }
+    fn append(&self, row: &Self::Row) -> bool {
+        Submenu::append(self, row).is_ok()
+    }
+}
+
+/// Puts `new` where `old` is. Returns whether `new` is attached; when it is not, `old` is back in
+/// the menu (at its position, else at the end), so the caller keeps `old` as its handle.
+fn swap_item<T: SwapTarget + ?Sized>(target: &T, old: &T::Row, new: &T::Row, position: usize) -> bool {
+    if !target.remove(old) {
+        return false;
+    }
+    // (an item at the end beats a missing one)
+    if target.insert(new, position) || target.append(new) {
+        return true;
+    }
+    let _ = target.insert(old, position) || target.append(old);
+    false
+}
+
+/// The accelerator a native item has: none while a shortcut is being recorded, and none for the
+/// keys a focused text field needs.
+fn wanted_accelerator(accel: Option<Accelerator>, sc: &str, text_focus: bool, capturing: bool) -> Option<Accelerator> {
+    if capturing || (text_focus && yields_to_text(sc)) { None } else { accel }
 }
 
 pub struct NativeMenu {
     menu: Menu,
     items: HashMap<String, Item>,
+    /// Settings… and Quit in the application submenu: ordinary items, so they give up ⌘, and ⌘Q
+    /// to the shortcut recorder like the rest. (The system's own items there and in File/Window,
+    /// such as Hide ⌘H, Close Window ⌘W and Minimize ⌘M, are muda predefined items whose key
+    /// cannot be changed or swapped.)
+    app_items: Vec<Item>,
     rx: Receiver<String>,
     /// Structure of the installed menu (ids, kinds, submenu names); a change rebuilds it.
     structure: String,
@@ -58,6 +182,8 @@ pub struct NativeMenu {
     /// The keyboard shortcuts editor is recording a key: every accelerator is off so the key
     /// press reaches it.
     capturing: bool,
+    /// An item's native accelerator is not the wanted one (its swap or accelerator call failed): sync again next frame.
+    accelerators_pending: bool,
 }
 
 /// `Cmd+Shift+Z` → a muda accelerator (`None` for keys we leave to egui, e.g. Escape).
@@ -154,13 +280,6 @@ fn yields_to_text(sc: &str) -> bool {
     !sc.contains("Cmd") && !sc.contains("Ctrl") || TEXT_EDIT.contains(&sc)
 }
 
-/// Whether AppKit hands this shortcut to the menu bar: only key presses with ⌘ or ⌃, and function
-/// keys. A plain `C` or `⇧P` never reaches it (the window's view takes the key), so egui has to run
-/// those even though their menu item shows the key.
-fn menu_delivers(sc: &str) -> bool {
-    sc.split('+').any(|part| matches!(part, "Cmd" | "Ctrl") || part.strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok()))
-}
-
 /// The shortcuts the menu bar runs itself, for `LightcraftApp::native_shortcuts`.
 fn owned_by_menu<'a>(installed: impl Iterator<Item = &'a str>, text_focus: bool) -> HashSet<String> {
     installed.filter(|sc| menu_delivers(sc) && !(text_focus && yields_to_text(sc))).map(str::to_string).collect()
@@ -169,34 +288,6 @@ fn owned_by_menu<'a>(installed: impl Iterator<Item = &'a str>, text_focus: bool)
 /// `&` marks a mnemonic in muda labels.
 fn label_text(s: &str) -> String {
     lightcraft_ui_egui::i18n::tr(s).replace('&', "&&")
-}
-
-fn structure_of(bar: &[(String, Vec<MenuNode>)]) -> String {
-    fn walk(n: &[MenuNode], out: &mut String) {
-        for x in n {
-            match x {
-                MenuNode::Item { id, params, checked, shortcut, .. } => {
-                    out.push_str(&MenuNode::key(id, params));
-                    out.push(if checked.is_some() { 'c' } else { 'i' });
-                    out.push_str(shortcut.as_deref().unwrap_or(""));
-                }
-                MenuNode::Separator => out.push('-'),
-                MenuNode::Submenu { label, children } => {
-                    out.push('[');
-                    out.push_str(label);
-                    walk(children, out);
-                    out.push(']');
-                }
-            }
-            out.push(';');
-        }
-    }
-    let mut s = format!("{};", lightcraft_ui_egui::i18n::language().code());
-    for (t, items) in bar {
-        s.push_str(t);
-        walk(items, &mut s);
-    }
-    s
 }
 
 /// Drop a trailing separator (left behind when an item moved to the app menu).
@@ -216,17 +307,28 @@ impl NativeMenu {
             let _ = tx.send(e.id.0);
             repaint.request_repaint();
         }));
-        let mut m = NativeMenu { menu: Menu::new(), items: HashMap::new(), rx, structure: String::new(), text_focus: false, capturing: false };
+        let mut m = NativeMenu {
+            menu: Menu::new(),
+            items: HashMap::new(),
+            app_items: Vec::new(),
+            rx,
+            structure: String::new(),
+            text_focus: false,
+            capturing: false,
+            accelerators_pending: false,
+        };
         m.rebuild(app);
         app.native_menu = true;
         m
     }
 
+    /// Recreate native handles and shortcut ownership from the current shared menu model.
     fn rebuild(&mut self, app: &mut LightcraftApp) {
         let bar = menu_bar(app);
-        self.structure = structure_of(&bar);
+        self.structure = structure_of(&bar, &app.ui.settings.keymap);
         self.menu = Menu::new();
         self.items.clear();
+        self.app_items.clear();
 
         // the application menu
         let app_menu = Submenu::new("LightCraft", true);
@@ -246,6 +348,22 @@ impl NativeMenu {
             &PredefinedMenuItem::separator(),
             &quit,
         ]);
+        for (handle, cmd, shortcut, text) in [(&settings, SETTINGS, SETTINGS_KEY, "Settings…"), (&quit, QUIT, "Cmd+Q", "Quit LightCraft")] {
+            let accel = accelerator(shortcut);
+            self.app_items.push(Item {
+                handle: Handle::Plain(handle.clone()),
+                parent: app_menu.clone(),
+                swappable: true,
+                cmd: cmd.to_string(),
+                params: Value::Null,
+                shortcut: Some(shortcut.to_string()),
+                accel,
+                current: accel,
+                label: lightcraft_ui_egui::menubar::display_item_label(cmd, &Value::Null, text).to_string(),
+                enabled: true,
+                checked: None,
+            });
+        }
         let _ = self.menu.append(&app_menu);
 
         for (title, nodes) in &bar {
@@ -264,7 +382,9 @@ impl NativeMenu {
                 .cloned()
                 .collect();
             let nodes = tidy_separators(nodes);
-            self.append_nodes(&sub, &nodes);
+            // Swapping an item in the Help menu leaves the old row in place and adds a second one
+            // (measured on macOS 27 with muda 0.21): the Help menu is not addressed row for row.
+            self.append_nodes(&sub, &nodes, &app.ui.settings.keymap, title != "Help");
             if title == "File" {
                 // ⌘W, the system's own item
                 let _ = sub.append_items(&[
@@ -287,10 +407,13 @@ impl NativeMenu {
         self.menu.init_for_nsapp();
         self.text_focus = false;
         self.capturing = false;
+        self.accelerators_pending = false;
         self.publish_shortcuts(app);
     }
 
-    fn append_nodes(&mut self, sub: &Submenu, nodes: &[MenuNode]) {
+    /// Install translated rows with their effective accelerators, preserving hint-only keys.
+    /// `swappable`: whether its items may be replaced to drop their key (see `Item::swappable`).
+    fn append_nodes(&mut self, sub: &Submenu, nodes: &[MenuNode], keymap: &lightcraft_ui_egui::shortcuts::Keymap, swappable: bool) {
         for n in nodes {
             match n {
                 MenuNode::Separator => {
@@ -298,7 +421,7 @@ impl NativeMenu {
                 }
                 MenuNode::Submenu { label, children } => {
                     let s = Submenu::new(label_text(label), true);
-                    self.append_nodes(&s, children);
+                    self.append_nodes(&s, children, keymap, swappable);
                     let _ = sub.append(&s);
                 }
                 MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
@@ -306,26 +429,16 @@ impl NativeMenu {
                     if self.items.contains_key(&key) {
                         continue; // muda ids must be unique
                     }
-                    let accel = shortcut.as_deref().filter(|s| !CONTEXTUAL.contains(s)).and_then(accelerator);
+                    let (native_label, native_key) = native_item_presentation(keymap, id, params, label, shortcut.as_deref());
+                    let accel = native_key.filter(|s| !CONTEXTUAL.contains(s)).and_then(accelerator);
                     let handle = match checked {
                         Some(c) => {
-                            let it = CheckMenuItem::with_id(
-                                key.clone(),
-                                lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&"),
-                                *enabled,
-                                *c,
-                                accel,
-                            );
+                            let it = CheckMenuItem::with_id(key.clone(), native_label.replace('&', "&&"), *enabled, *c, accel);
                             let _ = sub.append(&it);
                             Handle::Check(it)
                         }
                         None => {
-                            let it = MenuItem::with_id(
-                                key.clone(),
-                                lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&"),
-                                *enabled,
-                                accel,
-                            );
+                            let it = MenuItem::with_id(key.clone(), native_label.replace('&', "&&"), *enabled, accel);
                             let _ = sub.append(&it);
                             Handle::Plain(it)
                         }
@@ -334,11 +447,14 @@ impl NativeMenu {
                         key,
                         Item {
                             handle,
+                            parent: sub.clone(),
+                            swappable,
                             cmd: id.clone(),
                             params: params.clone(),
                             shortcut: shortcut.clone(),
                             accel,
-                            label: label.clone(),
+                            current: accel,
+                            label: native_label,
                             enabled: *enabled,
                             checked: *checked,
                         },
@@ -378,22 +494,25 @@ impl NativeMenu {
             }
         }
         let bar = menu_bar(app);
-        if structure_of(&bar) != self.structure {
+        if structure_of(&bar, &app.ui.settings.keymap) != self.structure {
+            // (no early return: a rebuild installs every accelerator and resets the state they were synced
+            // to, so the sync below runs in this same frame and no key reaches the menu in between)
             self.rebuild(app);
-            return quit;
         }
-        fn walk(nodes: &[MenuNode], items: &mut HashMap<String, Item>) {
+        /// Synchronize live labels and states; accelerator ownership changes already triggered a rebuild.
+        fn walk(nodes: &[MenuNode], items: &mut HashMap<String, Item>, keymap: &lightcraft_ui_egui::shortcuts::Keymap) {
             for n in nodes {
                 match n {
-                    MenuNode::Submenu { children, .. } => walk(children, items),
-                    MenuNode::Item { id, params, label, enabled, checked, .. } => {
+                    MenuNode::Submenu { children, .. } => walk(children, items, keymap),
+                    MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
                         let Some(it) = items.get_mut(&MenuNode::key(id, params)) else { continue };
-                        if it.label != *label {
+                        let (native_label, _) = native_item_presentation(keymap, id, params, label, shortcut.as_deref());
+                        if it.label != native_label {
                             match &it.handle {
-                                Handle::Plain(h) => h.set_text(lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&")),
-                                Handle::Check(h) => h.set_text(lightcraft_ui_egui::menubar::display_item_label(id, params, label).replace('&', "&&")),
+                                Handle::Plain(h) => h.set_text(native_label.replace('&', "&&")),
+                                Handle::Check(h) => h.set_text(native_label.replace('&', "&&")),
                             }
-                            it.label = label.clone();
+                            it.label = native_label;
                         }
                         if it.enabled != *enabled {
                             match &it.handle {
@@ -414,24 +533,24 @@ impl NativeMenu {
                 }
             }
         }
-        walk(&bar.iter().flat_map(|(_, v)| v.clone()).collect::<Vec<_>>(), &mut self.items);
+        walk(&bar.iter().flat_map(|(_, v)| v.clone()).collect::<Vec<_>>(), &mut self.items, &app.ui.settings.keymap);
 
         let focus = ctx.egui_wants_keyboard_input();
         let capturing = app.recording_shortcut.is_some();
-        if focus != self.text_focus || capturing != self.capturing {
+        if sync_needed(focus, capturing, self.text_focus, self.capturing, self.accelerators_pending) {
             self.text_focus = focus;
             self.capturing = capturing;
-            for it in self.items.values() {
+            let mut pending = false;
+            for it in self.items.values_mut().chain(self.app_items.iter_mut()) {
                 let Some(sc) = it.shortcut.as_deref() else { continue };
                 if it.accel.is_none() {
                     continue;
                 }
-                let accel = if capturing || (focus && yields_to_text(sc)) { None } else { it.accel };
-                let _ = match &it.handle {
-                    Handle::Plain(h) => h.set_accelerator(accel),
-                    Handle::Check(h) => h.set_accelerator(accel),
-                };
+                let want = wanted_accelerator(it.accel, sc, focus, capturing);
+                it.set_accelerator(want);
+                pending |= it.current != want;
             }
+            self.accelerators_pending = pending;
             self.publish_shortcuts(app);
         }
         quit
@@ -454,13 +573,100 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for language in Locale::ALL {
             set_language(*language);
-            assert!(seen.insert(structure_of(&bar)), "{language:?} shares another language's menu structure key");
+            assert!(seen.insert(structure_of(&bar, &app.ui.settings.keymap)), "{language:?} shares another language's menu structure key");
         }
-        set_language(Locale::ZhHant);
-        assert_eq!(label_text("File"), "檔案");
-        assert_eq!(label_text("Settings…"), "設定…");
-        assert_eq!(label_text("Quit LightCraft"), "結束 LightCraft");
         set_language(Locale::En);
+    }
+
+    #[test]
+    fn accelerators_yield_to_text_focus_and_shortcut_recording() {
+        let g = accelerator("G");
+        let cmd_s = accelerator("Cmd+S");
+        assert_eq!(wanted_accelerator(g, "G", false, false), g);
+        assert_eq!(wanted_accelerator(g, "G", true, false), None, "typing a G in a field");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, false), cmd_s, "⌘S still saves while typing");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", false, true), None, "the editor records the key");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, true), None, "recording wins over typing");
+        // the application menu's Settings… and Quit are tracked like the other items
+        for sc in [SETTINGS_KEY, "Cmd+Q"] {
+            let a = accelerator(sc);
+            assert!(a.is_some());
+            assert_eq!(wanted_accelerator(a, sc, true, false), a, "{sc} stays while typing");
+            assert_eq!(wanted_accelerator(a, sc, false, true), None, "{sc} goes while recording");
+        }
+        assert_eq!(wanted_accelerator(None, "Escape", false, false), None, "no accelerator stays none");
+    }
+
+    /// A submenu of numbers whose calls can be made to fail, to run `swap_item`'s failure paths.
+    /// Row 2 is the old item and row 9 its replacement.
+    #[derive(Default)]
+    struct Fake {
+        rows: std::cell::RefCell<Vec<u32>>,
+        fail_remove: bool,
+        /// The new item (9) cannot be inserted / appended.
+        reject_new_insert: bool,
+        reject_new_append: bool,
+        /// The old item (2) cannot be inserted back.
+        reject_old_insert: bool,
+    }
+    impl SwapTarget for Fake {
+        type Row = u32;
+        fn remove(&self, row: &u32) -> bool {
+            if self.fail_remove {
+                return false;
+            }
+            self.rows.borrow_mut().retain(|x| x != row);
+            true
+        }
+        fn insert(&self, row: &u32, position: usize) -> bool {
+            if (self.reject_new_insert && *row == 9) || (self.reject_old_insert && *row == 2) {
+                return false;
+            }
+            self.rows.borrow_mut().insert(position, *row);
+            true
+        }
+        fn append(&self, row: &u32) -> bool {
+            if self.reject_new_append && *row == 9 {
+                return false;
+            }
+            self.rows.borrow_mut().push(*row);
+            true
+        }
+    }
+
+    fn swap(fake: Fake) -> (bool, Vec<u32>) {
+        *fake.rows.borrow_mut() = vec![1, 2, 3];
+        let done = swap_item(&fake, &2, &9, 1);
+        (done, fake.rows.into_inner())
+    }
+
+    #[test]
+    fn a_swap_changes_the_item_only_when_the_new_one_is_attached() {
+        assert_eq!(swap(Fake::default()), (true, vec![1, 9, 3]), "in place");
+        assert_eq!(swap(Fake { fail_remove: true, ..Default::default() }), (false, vec![1, 2, 3]), "remove fails: the old item stays");
+        assert_eq!(swap(Fake { reject_new_insert: true, ..Default::default() }), (true, vec![1, 3, 9]), "insert fails: the new item goes last");
+        assert_eq!(
+            swap(Fake { reject_new_insert: true, reject_new_append: true, ..Default::default() }),
+            (false, vec![1, 2, 3]),
+            "neither works: the old item is back where it was"
+        );
+        assert_eq!(
+            swap(Fake { reject_new_insert: true, reject_new_append: true, reject_old_insert: true, ..Default::default() }),
+            (false, vec![1, 3, 2]),
+            "the old item cannot go back in place either: it is appended"
+        );
+    }
+
+    #[test]
+    fn a_failed_native_call_is_retried_while_the_state_holds() {
+        let g = accelerator("G");
+        assert_eq!(settled(g, None, true), None, "the swap worked");
+        assert_eq!(settled(g, None, false), g, "it failed: the native item still has its key");
+        assert_eq!(settled(None, g, false), None, "restoring a key failed");
+        assert!(!sync_needed(true, false, true, false, false), "nothing changed");
+        assert!(sync_needed(true, false, false, false, false), "focus changed");
+        assert!(sync_needed(false, true, false, false, false), "recording changed");
+        assert!(sync_needed(true, false, true, false, true), "a swap failed last time: try again with the state unchanged");
     }
 
     #[test]

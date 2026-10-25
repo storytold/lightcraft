@@ -1,6 +1,6 @@
 //! Sony's in-file lens-correction records (shading, lateral chromatic aberration, distortion): bounded decoding of
-//! the raw image IFD's fields and their encrypted `SR2SubIFD` copies into [`SonyLensCorrections`], and the one
-//! validated conversion, the ILCE-7RM4A's distortion table, into a DNG warp for the shared optics pipeline.
+//! the raw image IFD's fields and their encrypted `SR2SubIFD` copies into [`SonyLensCorrections`], and validated
+//! ILCE-7RM4A and ILCE-7CR distortion tables into DNG warps for the shared optics pipeline.
 //!
 //! Tag identity/layout: https://exiftool.org/TagNames/EXIF.html (`0x7031` to `0x7037`, signed shorts) and
 //! https://exiftool.org/TagNames/Sony.html#SR2SubIFD (`0x797d`, `0x7980`, `0x7982`). The `SR2SubIFD` setting tags
@@ -34,13 +34,18 @@ const DISTORTION: Tags = Tags { setting: (0x7036, 0x7981), table: (0x7037, 0x798
 /// TIFF field types.
 const SHORT: u16 = 3;
 const SSHORT: u16 = 8;
-/// Camera models whose raw-IFD distortion table was independently validated. Exact names: ILCE-7RM4 and ILCE-7RM4A
-/// are distinct models, not interchangeable aliases.
+/// Models using the validated A7R IVA conversion. The A7CR uses a separate conversion.
+/// ILCE-7RM4 and ILCE-7RM4A are distinct models, not interchangeable aliases.
 const DISTORTION_MODELS: &[&str] = &["ILCE-7RM4A"];
 /// Most directory entries scanned: a classic TIFF directory's largest count, also bounding a BigTIFF one.
 const MAX_ENTRIES: usize = 1 << 16;
 const SAMPLES: usize = 1024;
 const MAX_ERROR: f64 = 0.0005;
+/// Empirical A7CR unit, fixed on four FE 24-50mm files before checking the other files and lenses.
+/// The camera-JPEG measurements and remaining coverage limits are in docs/sony-lens-corrections.md.
+const A7CR_UNIT: f64 = 15559.300457825264;
+const A7CR_FRAME: (usize, usize) = (9504, 6336);
+const A7CR_APPROXIMATION_PX: f64 = 0.25;
 
 #[derive(Clone, Copy)]
 struct Tags {
@@ -307,11 +312,17 @@ pub(super) fn corrections(
     // Only the validated scope reaches the conversion: the raw IFD's table, as the TIFF reader parsed it, of a Bayer
     // image whose image crop and reference are native 3:2 (DefaultCrop can keep native geometry while Sony's tags
     // select an aspect crop).
-    let validated_model = DISTORTION_MODELS.contains(&model);
-    let in_mode = !geometry.linear_ycbcr && geometry.native_3_2 && distortion_table.source == Some(SonySource::RawIfd);
+    let a7cr = model == "ILCE-7CR";
+    let validated_model = DISTORTION_MODELS.contains(&model) || a7cr;
+    let in_mode = !geometry.linear_ycbcr
+        && geometry.native_3_2
+        && distortion_table.source == Some(SonySource::RawIfd)
+        && (!a7cr || ((geometry.reference.width, geometry.reference.height) == A7CR_FRAME && geometry.image_crop == geometry.reference));
+    let a7cr_auto = distortion_setting.value.is_some_and(|s| matches!(s.meaning, SonySettingMeaning::Auto | SonySettingMeaning::ForcedAuto));
     let (w, h) = (geometry.storage_width, geometry.storage_height);
     let warp = match &distortion_table.value {
-        Some(table) if in_mode => distortion(model, table, Rect::new(0, 0, w, h), geometry.reference),
+        Some(table) if in_mode && a7cr && a7cr_auto => a7cr_distortion(table, Rect::new(0, 0, w, h), geometry.reference),
+        Some(table) if in_mode && !a7cr => distortion(model, table, Rect::new(0, 0, w, h), geometry.reference),
         _ => None,
     };
     let distortion_status = match &distortion_table.value {
@@ -319,6 +330,7 @@ pub(super) fn corrections(
         Some(_) if warp.is_some() => SonyLensStatus::Applied,
         Some(_) if !validated_model => SonyLensStatus::NotValidatedModel,
         Some(_) if !in_mode => SonyLensStatus::NotValidatedMode,
+        Some(_) if a7cr && !a7cr_auto => SonyLensStatus::CameraCorrectionDisabled,
         Some(table) if table.iter().all(|v| *v == 0) => SonyLensStatus::Neutral,
         Some(_) => SonyLensStatus::Rejected,
     };
@@ -332,6 +344,94 @@ pub(super) fn corrections(
         geometry,
     };
     (Some(record), warp)
+}
+
+/// A7CR camera-JPEG convention, measured independently of the ILCE-7RM4A conversion below.
+/// For output radius rho, the corrected radius is rho / zoom. The table gives source radius at that
+/// corrected radius. Its knots use the full-frame diagonal, not storage padding. Off/unknown settings
+/// and unvalidated capture modes are excluded by the caller.
+fn a7cr_distortion(table: &[i16; 16], active: Rect, crop: Rect) -> Option<Opcode> {
+    if (crop.width, crop.height) != A7CR_FRAME
+        || crop != crop.clipped(active.width, active.height)
+        || table.iter().all(|v| *v == 0)
+        || table.iter().any(|v| !(-4096..=4096).contains(v))
+    {
+        return None;
+    }
+    let (cw, ch) = (crop.width as f64, crop.height as f64);
+    let spacing = cw.hypot(ch) / 30.0;
+    let source = |r: f64| {
+        let at = r / spacing;
+        let i = (at.floor() as usize).min(14);
+        let (a, b) = (f64::from(table[i]), f64::from(table[i + 1]));
+        r * (1.0 + (a + (b - a) * (at - i as f64)) / A7CR_UNIT)
+    };
+    let border_min = cw.min(ch) / 2.0;
+    let border_max = cw.hypot(ch) / 2.0;
+    let border_ratio = |zoom: f64| {
+        (0..=4096)
+            .map(|j| {
+                let r = border_min + (border_max - border_min) * j as f64 / 4096.0;
+                source(r / zoom) / r
+            })
+            .fold(0.0, f64::max)
+    };
+    let (mut lo, mut hi) = (0.5, 2.0);
+    if border_ratio(lo) <= 1.0 || border_ratio(hi) > 1.0 {
+        return None;
+    }
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if border_ratio(mid) > 1.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let zoom = (lo + hi) / 2.0;
+    let radius = (cw - 1.0).hypot(ch - 1.0) / 2.0;
+    let basis = |r: f64| {
+        let r2 = r * r;
+        [r, r * r2, r * r2 * r2, r * r2 * r2 * r2]
+    };
+    let mut matrix = [[0.0; 4]; 4];
+    let mut rhs = [0.0; 4];
+    let mut previous = -1.0;
+    for j in 0..=SAMPLES {
+        let r = j as f64 / SAMPLES as f64;
+        let mapped = source(r * radius / zoom) / radius;
+        if !mapped.is_finite() || mapped <= previous {
+            return None;
+        }
+        previous = mapped;
+        let terms = basis(r);
+        for (i, &a) in terms.iter().enumerate() {
+            rhs[i] += a * mapped;
+            for (k, &b) in terms.iter().enumerate() {
+                matrix[i][k] += a * b;
+            }
+        }
+    }
+    let mut k = solve4(matrix, rhs)?;
+    // Check every displayed radius, separately from the empirical camera-JPEG validation.
+    for j in 0..=32768 {
+        let r = j as f64 / 32768.0;
+        let fit = basis(r).iter().zip(k).map(|(a, b)| a * b).sum::<f64>();
+        let r2 = r * r;
+        let derivative = k[0] + r2 * (3.0 * k[1] + r2 * (5.0 * k[2] + r2 * 7.0 * k[3]));
+        let error_px = (fit * radius - source(r * radius / zoom)).abs() * 1440.0 / cw;
+        if !error_px.is_finite() || error_px > A7CR_APPROXIMATION_PX || derivative <= 0.0 {
+            return None;
+        }
+    }
+    let (ax, ay) = (active.width as f64 - 1.0, active.height as f64 - 1.0);
+    let (cx, cy) = (crop.x as f64 + (cw - 1.0) / 2.0, crop.y as f64 + (ch - 1.0) / 2.0);
+    let farthest = cx.max(ax - cx).hypot(cy.max(ay - cy));
+    let ratio2 = (farthest / radius).powi(2);
+    for (i, coefficient) in k.iter_mut().enumerate() {
+        *coefficient *= ratio2.powi(i as i32);
+    }
+    Some(Opcode::WarpRectilinear { planes: vec![[k[0], k[1], k[2], k[3], 0.0, 0.0]], center: [cx / ax, cy / ay] })
 }
 
 /// The validated conversion of a raw-IFD distortion table into a `WarpRectilinear`. Only independently validated
@@ -454,6 +554,8 @@ mod tests {
     /// The shading samples of the public ILCE-7CR samples (raw.pixls.us DSC00795/6/8).
     const SHADING_T: [i16; 16] = [0, 64, 128, 224, 320, 480, 672, 896, 1184, 1472, 1824, 2240, 2816, 3552, 4512, 7328];
     const KEY: [u8; 4] = [0x11, 0x22, 0x33, 0x44];
+    /// Public issue #1300, FE 16-25mm F2.8 G at 16 mm, raw-IFD samples.
+    const A7CR_WIDE: [i16; 16] = [0, -14, -59, -130, -226, -341, -472, -615, -767, -924, -1084, -1242, -1397, -1549, -1696, -1839];
 
     /// A CA table with negative and positive samples and two different curves.
     fn ca() -> [i16; 32] {
@@ -630,7 +732,7 @@ mod tests {
         for order in [Little, Big] {
             for bigtiff in [false, true] {
                 for (model, warps, distortion_status) in
-                    [("ILCE-7CR", 0, SonyLensStatus::NotValidatedModel), ("ILCE-7RM4A", 1, SonyLensStatus::Applied)]
+                    [("ILCE-7CR", 0, SonyLensStatus::NotValidatedMode), ("ILCE-7RM4A", 1, SonyLensStatus::Applied)]
                 {
                     let case = format!("{model} {order:?} bigtiff={bigtiff}");
                     let mut arw = Arw::new(model, order);
@@ -1030,7 +1132,7 @@ mod tests {
                 ("ILCE-7RM4A", [i16::MIN; 16], Rejected),
                 ("ILCE-7RM4A", [0, 4096, -4096, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Rejected),
                 ("ILCE-7RM4", TELE, NotValidatedModel),
-                ("ILCE-7CR", [0; 16], NotValidatedModel),
+                ("ILCE-7CR", [0; 16], NotValidatedMode),
                 ("", TELE, NotValidatedModel),
             ] {
                 let mut arw = Arw::new(model, order);
@@ -1070,6 +1172,136 @@ mod tests {
             let img = decode(&arw.build());
             assert_eq!(img.orientation, crate::Orientation::from_exif(orientation));
             assert_eq!((&img.lens_metadata, &img.opcodes), (&reference.lens_metadata, &reference.opcodes), "{orientation}");
+        }
+    }
+
+    fn a7cr_geometry(storage: (usize, usize)) -> SonyLensGeometry {
+        let crop = Rect::new(32, 20, 9504, 6336);
+        SonyLensGeometry {
+            storage_width: storage.0,
+            storage_height: storage.1,
+            sony_crop: Some(crop),
+            default_crop: Some(crop),
+            image_crop: crop,
+            reference: crop,
+            compression: 7,
+            linear_ycbcr: false,
+            native_3_2: true,
+        }
+    }
+
+    #[test]
+    fn a7cr_requires_an_enabled_setting_and_validated_full_frame_mode() {
+        use SonyLensStatus::*;
+        for order in [Little, Big] {
+            for (setting, status) in
+                [(0, CameraCorrectionDisabled), (1, Applied), (17, Applied), (255, CameraCorrectionDisabled), (2, CameraCorrectionDisabled)]
+            {
+                let mut arw = Arw::new("ILCE-7CR", order);
+                arw.plain = plain(&A7CR_WIDE, setting);
+                arw.sr2 = None;
+                let bytes = arw.build();
+                let tiff = Tiff::parse(&bytes).unwrap();
+                let run = |model: &str, geometry: SonyLensGeometry| {
+                    let (record, warp) = corrections(&bytes, order, (&tiff.ifds[0], false), None, model, geometry);
+                    (record.unwrap().distortion.status, warp.is_some())
+                };
+                let geometry = a7cr_geometry((9728, 6656));
+                assert_eq!(run("ILCE-7CR", geometry.clone()), (status, status == Applied));
+                for model in ["ILCE-7CR ", "ILCE-7CR unknown", "ILCE-7C", "ILCE-7CM2", "ILCE-7RM4", "ILCE-7RM6"] {
+                    assert_eq!(run(model, geometry.clone()), (NotValidatedModel, false), "{model}");
+                }
+                let mut linear = geometry.clone();
+                linear.linear_ycbcr = true;
+                let mut apsc = geometry.clone();
+                apsc.reference = Rect::new(32, 20, 6240, 4160);
+                apsc.image_crop = apsc.reference;
+                let mut aspect = geometry.clone();
+                aspect.image_crop.height = 5346;
+                aspect.native_3_2 = false;
+                let mut offset = geometry.clone();
+                offset.image_crop.x = 0;
+                for mode in [linear, apsc, aspect, offset] {
+                    assert_eq!(run("ILCE-7CR", mode), (NotValidatedMode, false));
+                }
+                // Missing or malformed settings cannot enable the correction.
+                for value in [None, Some(Value::SShort(vec![-1])), Some(Value::Long(vec![17]))] {
+                    arw.plain.retain(|(tag, _)| *tag != DISTORTION.setting.0);
+                    if let Some(value) = value {
+                        arw.plain.push((DISTORTION.setting.0, value));
+                    }
+                    let bytes = arw.build();
+                    let tiff = Tiff::parse(&bytes).unwrap();
+                    let (record, warp) = corrections(&bytes, order, (&tiff.ifds[0], false), None, "ILCE-7CR", geometry.clone());
+                    assert_eq!(record.unwrap().distortion.status, CameraCorrectionDisabled);
+                    assert!(warp.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a7cr_storage_padding_does_not_change_the_optical_mapping() {
+        let crop = Rect::new(32, 20, 9504, 6336);
+        let mut maps = Vec::new();
+        for (w, h) in [(9600, 6376), (9728, 6656)] {
+            let Opcode::WarpRectilinear { planes, center } = a7cr_distortion(&A7CR_WIDE, Rect::new(0, 0, w, h), crop).unwrap() else {
+                panic!("warp")
+            };
+            let (cx, cy) = (center[0] * (w - 1) as f64, center[1] * (h - 1) as f64);
+            assert!((cx - 4783.5).abs() < 1e-10 && (cy - 3187.5).abs() < 1e-10);
+            let radius = cx.max((w - 1) as f64 - cx).hypot(cy.max((h - 1) as f64 - cy));
+            let k = planes[0];
+            maps.push(
+                (0..=100)
+                    .map(|j| {
+                        let r = j as f64 / 100.0 * 5700.0;
+                        let r2 = (r / radius).powi(2);
+                        r * (k[0] + r2 * (k[1] + r2 * (k[2] + r2 * k[3])))
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        for (a, b) in maps[0].iter().zip(&maps[1]) {
+            assert!((a - b).abs() < 1e-9);
+        }
+        for bad in [[0; 16], [i16::MIN; 16], [0, 4096, -4096, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]] {
+            assert!(a7cr_distortion(&bad, Rect::new(0, 0, 9728, 6656), crop).is_none());
+        }
+        assert!(a7cr_distortion(&A7CR_WIDE, AREA, crop).is_none(), "crop outside storage");
+        assert!(a7cr_distortion(&A7CR_WIDE, AREA, Rect::new(0, 0, 6240, 4160)).is_none(), "APS-C");
+    }
+
+    #[test]
+    fn a7cr_matches_independently_measured_public_jpeg_geometry() {
+        // Green-channel feature fits, independent of the table, on the public FE 16-25mm (issue #1300)
+        // and FE 50mm files. Check only the supported radii, not extrapolated corners.
+        let prime = [-4, -1, 3, 6, 12, 17, 23, 30, 37, 43, 50, 58, 65, 71, 76, 84];
+        let cases = [
+            (A7CR_WIDE, [1.0606515126386147, -0.24282593993968085, 0.1667903749262344, -0.059882313562606454], 0.93),
+            (prime, [0.9951622479344596, 0.00741813858793482, -0.002474290073462703, -0.000235147000260114], 0.96),
+        ];
+        let crop = Rect::new(32, 20, 9504, 6336);
+        let radius = 9503f64.hypot(6335.0) / 2.0;
+        for (table, reference, supported) in cases {
+            let Opcode::WarpRectilinear { planes, center } = a7cr_distortion(&table, Rect::new(0, 0, 9728, 6656), crop).unwrap() else {
+                panic!("warp")
+            };
+            let (cx, cy) = (center[0] * 9727.0, center[1] * 6655.0);
+            let normalization = cx.max(9727.0 - cx).hypot(cy.max(6655.0 - cy));
+            let k = planes[0];
+            let mut worst = 0.0f64;
+            for j in 0..=1000 {
+                let r = supported * j as f64 / 1000.0;
+                let rho = r * radius;
+                let r2 = (rho / normalization).powi(2);
+                let mapped = rho * (k[0] + r2 * (k[1] + r2 * (k[2] + r2 * k[3])));
+                let expected = rho * (reference[0] + r * r * (reference[1] + r * r * (reference[2] + r * r * reference[3])));
+                worst = worst.max((mapped - expected).abs() * 1440.0 / 9504.0);
+            }
+            // This smooth feature fit has localization noise. The combined budget allows the
+            // 0.75 px camera-table residual plus the separately bounded 0.25 px polynomial error.
+            assert!(worst < 1.0, "camera-JPEG shape residual {worst} px at 1440");
         }
     }
 

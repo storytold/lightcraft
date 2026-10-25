@@ -6,7 +6,7 @@ zooms to it, so checking whether the subject is sharp takes one key while cullin
 
 ## Using it
 
-- **View ▸ Show Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
+- **View ▸ Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
   Detail, Compare and Survey. It follows Rotate, flips and the crop; a point cropped away is not drawn. Off by
   default; the choice is saved with the app's settings.
 - **View ▸ Zoom to Focus Point** (`view.zoomToFocus {on?}`, on by default): Toggle Zoom (Z or Space) zooms in

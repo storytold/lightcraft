@@ -28,12 +28,63 @@ const ROW_HEIGHT: f32 = 29.0;
 /// this frame: set before the sections are drawn, cleared after.
 const SCROLL_TO_ROW: &str = "left-scroll-to-row";
 
+/// Temp-data key of the Folders choice whose rows above were last opened ([`reveal_chosen`]):
+/// removed, they open again.
+const LIBFOLDER_REVEALED: &str = "libfolder-revealed";
+
 /// A row says how wide it needs to be.
 fn note_width(ui: &egui::Ui, w: f32) {
     ui.data_mut(|d| {
         let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::new("left-content-width-next"), || 0.0);
         *m = m.max(w);
     });
+}
+
+/// One level of a sidebar tree when the panel has room: callers pass `indent` in these steps.
+pub(crate) const INDENT_STEP: f32 = 16.0;
+
+/// The narrowest a level is drawn: the chevron still steps visibly right of its parent's.
+pub(crate) const MIN_INDENT_STEP: f32 = 8.0;
+
+/// What a row keeps for its name when the step is chosen: the deepest row's name is not cut to
+/// less than this while a narrower step would still keep it.
+const MIN_NAME_ROOM: f32 = 80.0;
+
+/// Room kept for a count at the end of the deepest row (three digits and their gap).
+const COUNT_ROOM: f32 = 40.0;
+
+/// The step a level is drawn with this frame: [`INDENT_STEP`] while the deepest open row fits the
+/// panel, narrower when it would not, never below [`MIN_INDENT_STEP`]. From the last frame.
+pub(crate) fn indent_step(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::new("left-indent-step"))).unwrap_or(INDENT_STEP)
+}
+
+/// How far right a row at `indent` (in [`INDENT_STEP`]s) is drawn this frame.
+fn indent_x(ctx: &egui::Context, indent: f32) -> f32 {
+    indent / INDENT_STEP * indent_step(ctx)
+}
+
+/// [`indent_x`] for a row being laid out, which also notes how deep the tree goes, for next
+/// frame's step.
+fn drawn_indent(ui: &egui::Ui, indent: f32) -> f32 {
+    ui.data_mut(|d| {
+        let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::new("left-deepest-indent-next"), || 0.0);
+        *m = m.max(indent);
+    });
+    indent_x(ui.ctx(), indent)
+}
+
+/// The widest step (16, 14, 12, 10 or 8 pt) at which a row `deepest` deep (in [`INDENT_STEP`]s)
+/// keeps [`MIN_NAME_ROOM`] for its name and its count in a panel `panel_w` wide. In steps, so a
+/// row does not slide sideways at every point the panel is dragged; when even the narrowest step
+/// does not fit, the sidebar scrolls sideways as before.
+pub(crate) fn step_for(panel_w: f32, deepest: f32) -> f32 {
+    let levels = deepest / INDENT_STEP;
+    if levels < 1.0 {
+        return INDENT_STEP;
+    }
+    let room = panel_w - 42.0 - MIN_NAME_ROOM - 18.0 - COUNT_ROOM;
+    [16.0, 14.0, 12.0, 10.0].into_iter().find(|step| levels * step <= room).unwrap_or(MIN_INDENT_STEP)
 }
 
 fn row(
@@ -82,6 +133,7 @@ fn row_sensed(
 ) -> egui::Response {
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
     let t = Tokens::get(ui.ctx());
+    let indent = drawn_indent(ui, indent);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
     if scroll_asked(ui, id) {
         ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
@@ -153,6 +205,7 @@ fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, c
     }
     ui.allocate_space(r.size());
     register(ui.ctx(), format!("source:{id}"), r);
+    let indent = drawn_indent(ui, indent);
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter();
     let name_w = painter.layout_no_wrap(label.to_string(), t.font(13.5), t.text_label).size().x;
@@ -178,7 +231,7 @@ fn row_need(indent: f32, name_w: f32, mark_w: f32, count_w: Option<f32>) -> f32 
 /// its response: the caller flips the open state on `clicked()`.
 fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open: bool, id: egui::Id, widget: String) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    let c = pos2(row.rect.left() + 10.0 + indent, row.rect.center().y);
+    let c = pos2(row.rect.left() + 10.0 + indent_x(ui.ctx(), indent), row.rect.center().y);
     let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
     let tr = ui.interact(tri, id, Sense::click());
     register(ui.ctx(), widget, tri);
@@ -413,7 +466,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         ui.data_mut(|d| d.insert_temp(egui::Id::new("left-section-drag-from-pinned"), pinned));
         app.ui.dragging_section = Some(section);
     }
-    resp.context_menu(|ui| sections_menu(app, ui, Some(section)));
+    crate::widgets::context_menu(&resp, |ui| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
     // what is visible of the header: its bar and count end at the panel's edge, like a row's
@@ -595,7 +648,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let (hr, title) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
         crate::widgets::announce(&title, crate::i18n::tr("My Photos"));
         register(ui.ctx(), "sidebarTitle", hr);
-        title.context_menu(|ui| sections_menu(app, ui, None));
+        crate::widgets::context_menu(&title, |ui| sections_menu(app, ui, None));
         // the open library's name under the title, so nobody edits in the wrong one (issue #902)
         let library = crate::panels::settings::open_library_name(app);
         let title_y = if library.is_some() { hr.center().y - 7.0 } else { hr.center().y };
@@ -626,6 +679,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.set_max_width(wide);
             ui.data_mut(|d| {
                 d.insert_temp(egui::Id::new("left-content-width-next"), 0.0f32);
+                d.insert_temp(egui::Id::new("left-deepest-indent-next"), 0.0f32);
                 // where the visible part of the content ends (screen x), for what stays at the edge
                 d.insert_temp(egui::Id::new("left-visible-right"), ui.cursor().left() + viewport.max.x);
             });
@@ -670,6 +724,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 // …and the sidebar scrolls to it
                 ui.data_mut(|d| d.insert_temp(egui::Id::new(SCROLL_TO_ROW), format!("keyword:{path}").to_lowercase()));
             }
+            // the folder Show in Folders went to: Folders is shown and opened, and so are the
+            // folders above it, also when it was already the one shown and one was folded by hand…
+            if let Some(path) = app.ui.reveal_folder.take() {
+                app.ui.sidebar.reveal(SidebarSection::Folders);
+                ui.data_mut(|d| d.remove::<Option<String>>(egui::Id::new(LIBFOLDER_REVEALED)));
+                // …and the sidebar scrolls to it
+                ui.data_mut(|d| d.insert_temp(egui::Id::new(SCROLL_TO_ROW), format!("libfolder:{path}").to_lowercase()));
+            }
             // Local keeps track of the folder being browsed whether or not it is drawn
             let local = local_now(app, ui);
             let shown: Vec<SidebarSection> = app.ui.sidebar.shown().collect();
@@ -713,6 +775,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.data_mut(|d| d.insert_temp(egui::Id::new("left-content-width"), next));
                 ui.ctx().request_repaint();
             }
+            // …and the deepest row drawn (or passed over out of sight) sets next frame's step
+            let deepest = ui.data(|d| d.get_temp::<f32>(egui::Id::new("left-deepest-indent-next"))).unwrap_or(0.0);
+            let step = step_for(viewport.width(), deepest);
+            if step != indent_step(ui.ctx()) {
+                ui.data_mut(|d| d.insert_temp(egui::Id::new("left-indent-step"), step));
+                ui.ctx().request_repaint();
+            }
         });
     });
 }
@@ -738,10 +807,10 @@ fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
             for (m, n) in &g.months {
                 let label = crate::i18n::date_group_label(m, true);
-                if date_row(app, ui, m, &label, *n, 16.0) {
+                if date_row(app, ui, m, &label, *n, INDENT_STEP) {
                     for (d, n) in g.days.iter().filter(|(d, _)| d.starts_with(m.as_str())) {
                         let label = crate::i18n::date_group_label(d, true);
-                        date_row(app, ui, d, &label, *n, 32.0);
+                        date_row(app, ui, d, &label, *n, 2.0 * INDENT_STEP);
                     }
                 }
             }
@@ -793,6 +862,8 @@ fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
 struct LocalNow {
     places: LocalPlaces,
     current: Option<String>,
+    /// The places removed from Local, as (name, path), in the order they were hidden.
+    hidden: Vec<(String, String)>,
 }
 
 /// Folders on this computer to browse without adding (Lightroom's Local): Pictures, Desktop,
@@ -817,11 +888,14 @@ fn local_now(app: &mut LightcraftApp, ui: &egui::Ui) -> Option<LocalNow> {
     }
     let browsing = app.session.browse.clone().filter(|_| app.session.source == LibrarySource::Folder);
     let current = browsing.as_ref().map(|b| b.path.clone());
+    // a hidden built-in place keeps its name (Home, not the user's folder name)
+    let name_of = |path: &str| builtin.iter().find(|(_, p)| same_folder(p, path)).map_or_else(|| folder_label(path), |(n, _)| n.clone());
+    let hidden = app.ui.hidden_locations.iter().map(|h| (name_of(h), h.clone())).collect();
     let places = local_places(builtin, &app.ui.local_roots, current.as_deref(), app.ui.local_browse_root.as_deref(), &app.ui.hidden_locations);
     if current.is_some() {
         app.ui.local_browse_root = places.browse_root.clone();
     }
-    Some(LocalNow { places, current })
+    Some(LocalNow { places, current, hidden })
 }
 
 /// Local's rows: each place as a folder tree, Browse Folder…, and the way back for hidden places.
@@ -846,15 +920,40 @@ fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
             }
         }
     }
-    let hidden = app.ui.hidden_locations.len();
+    // the way back for hidden places: one comes back from the row itself; several are listed, so
+    // each comes back on its own, or all at once (issue #2114: the row used to bring every one back)
+    let hidden = now.hidden.len();
     if hidden > 0 {
         let label = crate::i18n::tr_format!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
-        if row(app, ui, "local:restoreHidden", Icon::Folder, &label, None, false, 0.0)
-            .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"))
-            .clicked()
-        {
-            let _ = app.run("local.restoreHidden", json!({}));
+        let resp = row(app, ui, "local:restoreHidden", Icon::Folder, &label, None, false, 0.0)
+            .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"));
+        if let [(_, only)] = now.hidden.as_slice() {
+            if resp.clicked() {
+                let _ = app.run("local.restoreHidden", json!({"path": only}));
+            }
+        } else {
+            egui::Popup::menu(&resp).show(|ui| hidden_menu(app, ui, &now.hidden));
         }
+    }
+}
+
+/// The list behind "Show N hidden locations": each place by name (its path on hover), then
+/// Restore All.
+fn hidden_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, hidden: &[(String, String)]) {
+    for (name, path) in hidden {
+        let r = ui.button(name).on_hover_text(path);
+        register(ui.ctx(), format!("local:restoreHidden:{path}"), r.rect);
+        if r.clicked() {
+            let _ = app.run("local.restoreHidden", json!({"path": path}));
+            ui.close();
+        }
+    }
+    ui.separator();
+    let r = ui.button(crate::i18n::tr("Restore All"));
+    register(ui.ctx(), "local:restoreHidden:all", r.rect);
+    if r.clicked() {
+        let _ = app.run("local.restoreHidden", json!({}));
+        ui.close();
     }
 }
 
@@ -1061,7 +1160,7 @@ fn folder_tree(
     {
         app.toast(ui.ctx(), e);
     }
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
         let library = app.caches.folder_tree(&app.session.catalog);
         let held = library_node_for(&library, path);
@@ -1112,9 +1211,9 @@ fn folder_tree(
             synchronize_item(app, ui, &held.0, &held.1);
         }
     });
-    if open && indent < 16.0 * 8.0 {
+    if open && indent < INDENT_STEP * 8.0 {
         for (n, p) in subfolders(ui, path) {
-            folder_tree(app, ui, place, &n, &p, indent + 16.0, current, reveal, false);
+            folder_tree(app, ui, place, &n, &p, indent + INDENT_STEP, current, reveal, false);
         }
     }
 }
@@ -1151,7 +1250,7 @@ type AlbumKids = std::collections::HashMap<Option<AlbumId>, Vec<Album>>;
 /// `open_to`: folders forced open this frame (the way down to an album that was just made).
 fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, open_to: &[AlbumId]) {
     // 64 folders deep at most (16 points a level): a catalog that loops must not overflow the stack
-    if indent > 64.0 * 16.0 {
+    if indent > 64.0 * INDENT_STEP {
         return;
     }
     let Some(kids) = all.get(&parent) else { return };
@@ -1188,7 +1287,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             folder_menu(app, &resp, a);
             if draw_open {
-                albums_tree(app, ui, all, Some(a.id), indent + 16.0, open_to);
+                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
             }
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
@@ -1440,7 +1539,7 @@ fn album_drag_over(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Resp
         }
         Some(AlbumDrop::Place { parent, before, above }) => {
             let y = if above { resp.rect.top() + 0.5 } else { resp.rect.bottom() - 0.5 };
-            let (x0, x1) = (resp.rect.left() + 18.0 + indent, ui.clip_rect().right() - 8.0);
+            let (x0, x1) = (resp.rect.left() + 18.0 + indent_x(ui.ctx(), indent), ui.clip_rect().right() - 8.0);
             ui.painter().circle_stroke(pos2(x0, y), 3.0, egui::Stroke::new(1.5, t.accent));
             ui.painter().line_segment([pos2(x0 + 3.0, y), pos2(x1.max(x0 + 3.0), y)], egui::Stroke::new(2.0, t.accent));
             if released {
@@ -1540,7 +1639,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 }
 
 fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(resp, |ui| {
         if a.folder {
             // the same commands as File ▸ New…, aimed at this folder
             crate::widgets::menu_button(ui, crate::i18n::tr("New"), |ui| {
@@ -1713,7 +1812,7 @@ fn is_within(app: &LightcraftApp, id: lightcraft_catalog::AlbumId, ancestor: lig
 fn reveal_chosen(app: &LightcraftApp, ui: &egui::Ui, tree: &[FolderNode]) {
     let shown = app.session.library_folder.clone().filter(|_| app.session.source == LibrarySource::LibraryFolder);
     let chosen = shown.filter(|c| !lightcraft_catalog::query::folder_key(c).is_empty());
-    let seen = egui::Id::new("libfolder-revealed");
+    let seen = egui::Id::new(LIBFOLDER_REVEALED);
     let now = chosen.as_deref().map(lightcraft_catalog::query::folder_key);
     if ui.data(|d| d.get_temp::<Option<String>>(seen)) == Some(now.clone()) {
         return;
@@ -1732,6 +1831,16 @@ fn reveal_chosen(app: &LightcraftApp, ui: &egui::Ui, tree: &[FolderNode]) {
     open_above(ui, tree, &chosen);
 }
 
+/// The Folders row that stands for folder `dir`, however it is spelled. `None` when no row is that
+/// folder.
+pub(crate) fn folder_row_of<'a>(tree: &'a [FolderNode], dir: &str) -> Option<&'a FolderNode> {
+    // only the rows that hold `dir` are opened (the startup disk's holds the other disks' paths
+    // too, so more than one may), and the tree is at most `MAX_DEPTH` deep
+    tree.iter()
+        .filter(|n| lightcraft_catalog::query::folder_within(dir, &n.path))
+        .find_map(|n| if same_folder(&n.path, dir) { Some(n) } else { folder_row_of(&n.children, dir) })
+}
+
 fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode], indent: f32) {
     for n in nodes {
         let key = lightcraft_catalog::query::folder_key(&n.path);
@@ -1747,7 +1856,7 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode],
             folder_row(app, ui, n, &id, &name, indent, open_id, &mut open);
         }
         if open && !n.children.is_empty() {
-            folder_rows(app, ui, &n.children, indent + 16.0);
+            folder_rows(app, ui, &n.children, indent + INDENT_STEP);
         }
     }
 }
@@ -1921,7 +2030,7 @@ fn row_menu(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
     if !n.volume {
         folder_menu_for_library(app, resp, n);
     } else if n.path != "/" {
-        resp.context_menu(|ui| {
+        crate::widgets::context_menu(resp, |ui| {
             folder_label_menu(app, ui, n);
             locate_missing_item(app, ui, n);
             synchronize_item(app, ui, n, &n.name);
@@ -2020,7 +2129,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
     let name = std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     // what dialogs call it: the last two names, so same-named folders are told apart
     let label = lightcraft_catalog::folders::folder_label(path);
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(resp, |ui| {
         if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
                 title: crate::i18n::tr_format!("Rename “{name}”", name = label),
@@ -2098,7 +2207,7 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
             keyword_row(app, ui, n, &id, indent, open_id, &mut open);
         }
         if open {
-            keyword_rows(app, ui, &n.children, indent + 16.0);
+            keyword_rows(app, ui, &n.children, indent + INDENT_STEP);
         }
     }
 }
@@ -2116,7 +2225,7 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
         browse_all_photos(app, !sel);
         let _ = app.run("library.filter", json!({"keyword": v}));
     }
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         let has_sel = app.session.active().is_some();
         if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Add to Selected Photos"))).clicked() {
             let _ = app.run("photo.setMeta", json!({"addKeywords": [n.path]}));

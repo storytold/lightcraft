@@ -1,7 +1,7 @@
 //! AI denoise through the engine: installing a model, making a photo's denoised picture in the background and for an
 //! export, the Amount slider mixing it in, and the cache. A tiny stand-in model (it halves every sample) takes the
 //! place of a real one, which is enough to see what the machinery does with its answer; how well real models denoise is
-//! measured separately (`crates/denoise/tests/real_model.rs`).
+//! measured separately (`crates/denoise/tests/it/real_model.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

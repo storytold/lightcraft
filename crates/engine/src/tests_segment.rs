@@ -77,15 +77,22 @@ fn status_and_model_commands_without_the_model() {
 #[test]
 fn a_failing_download_ends_with_an_error_and_never_blocks() {
     use std::io::{BufRead, BufReader, Write};
-    // a local mirror that has nothing
+    // a local mirror that has nothing; its first answer waits until the test has made its second
+    // request, so the download is still running then however the threads are scheduled (a 404 at
+    // once could end it before, and the second request would rightly start a new one)
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}/sam3", l.local_addr().unwrap());
+    let (release, released) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
+        let mut first = Some(released);
         for mut c in l.incoming().flatten() {
             let mut r = BufReader::new(c.try_clone().unwrap());
             let mut line = String::new();
             while r.read_line(&mut line).unwrap_or(0) > 2 {
                 line.clear();
+            }
+            if let Some(released) = first.take() {
+                let _ = released.recv_timeout(Duration::from_secs(10));
             }
             let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<h1>404</h1>\n");
         }
@@ -103,6 +110,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     // a second request while it runs starts nothing
     let again = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert!(again["started"] == false || again["downloading"] == false);
+    let _ = release.send(());
     let t = Instant::now();
     while s.segmenter.download_status().running {
         assert!(t.elapsed() < Duration::from_secs(30), "the download never ended");

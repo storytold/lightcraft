@@ -2,7 +2,7 @@
 name = "lightcraft-ui-egui"
 version.workspace = true
 edition.workspace = true
-rust-version = "1.95"
+rust-version.workspace = true
 license.workspace = true
 description = "LightCraft egui frontend (Lightroom-style UI); swappable — nothing below depends on it (L5)"
 

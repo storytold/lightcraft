@@ -7,6 +7,8 @@
 //! - WebP (RIFF container spec): `EXIF`, `XMP `, `ICCP` chunks.
 //! - TIFF-based files (TIFF, DNG and most raws): the whole file is the Exif block; XMP (700), ICC (34675) and
 //!   IPTC (33723) from IFD0.
+//! - Photoshop PSD/PSB: EXIF (image resource 1058) and XMP (image resource 1060) from the bounded image-resource section.
+//! - Minolta MRW (see [`crate::mrw`]): the `TTW` block is the Exif block.
 //! - Canon CR3 (ISO base media file, see [`crate::cr3`]): `CMT1`/`CMT2`/`CMT4` merged into one Exif block; the
 //!   XMP `uuid` box.
 
@@ -28,6 +30,9 @@ pub struct Embedded {
 
 /// Sniff the container and collect its metadata blocks. Unknown containers yield an empty result.
 pub fn embedded(bytes: &[u8]) -> Embedded {
+    if bytes.starts_with(b"8BPS") {
+        return crate::psd::embedded(bytes);
+    }
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         // Fujifilm RAF: metadata lives in the embedded JPEG whose (offset, length) are big-endian u32s at byte 84
         let be = |i: usize| bytes.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
@@ -35,6 +40,14 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
             (Some(o), Some(l)) if o > 0 => bytes.get(o..o.saturating_add(l).min(bytes.len())).map(jpeg_segments).unwrap_or_default(),
             _ => Embedded::default(),
         };
+    }
+    if let Some(m) = crate::mrw::parse(bytes) {
+        // Minolta MRW: the `TTW` block is a complete TIFF with the Exif data
+        return m
+            .block(b"TTW")
+            .filter(|t| Tiff::parse(t).is_ok())
+            .map(|t| Embedded { exif: Some(t.to_vec()), ..Default::default() })
+            .unwrap_or_default();
     }
     if let Some(c) = crate::cr3::parse_cr3(bytes) {
         return Embedded { exif: crate::cr3::merged_exif(&c), xmp: c.xmp.map(|b| String::from_utf8_lossy(b).into_owned()), ..Default::default() };
@@ -60,6 +73,12 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     } else {
         Embedded::default()
     }
+}
+
+/// Locate metadata blocks while preserving PSD/PSB resource-structure errors for callers that
+/// must establish whether embedded GPS is absent. Other containers keep their best-effort walk.
+pub(crate) fn try_embedded(bytes: &[u8]) -> Result<Embedded, crate::ExtractError> {
+    if bytes.starts_with(b"8BPS") { crate::psd::parse(bytes).ok_or(crate::ExtractError::MalformedPsd) } else { Ok(embedded(bytes)) }
 }
 
 const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";

@@ -432,12 +432,79 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+thread_local! {
+    /// While [`AlbumPass`] is alive on this thread: the photos of each smart album that was counted whole, with
+    /// the longest chain of smart albums (itself included) its rules lead through.
+    static PASS: std::cell::RefCell<Option<std::collections::HashMap<crate::AlbumId, (usize, crate::tally::Members)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// One pass over one catalog state that counts every smart album whole. Each album put in with `remember`
+/// answers [`smart_album_holds`] from its photos, not from its rules, until the pass is dropped (it can't outlive
+/// the state it was made of: it exists only inside the counting function).
+///
+/// Only an album whose rules lead to no loop may be remembered, and only with the height of its chain: its answer
+/// then doesn't depend on which albums are being evaluated around it, as long as the chain still fits under
+/// [`MAX_ALBUM_DEPTH`] from where it is asked (checked on every use; otherwise the rules are evaluated as before).
+pub(crate) struct AlbumPass {
+    outer: Option<std::collections::HashMap<crate::AlbumId, (usize, crate::tally::Members)>>,
+}
+
+impl AlbumPass {
+    pub(crate) fn begin() -> AlbumPass {
+        AlbumPass { outer: PASS.with_borrow_mut(|p| p.replace(std::collections::HashMap::new())) }
+    }
+
+    /// `id` holds exactly `members`, and its rules lead through a chain of `height` smart albums (itself included),
+    /// none of them in a loop.
+    pub(crate) fn remember(&self, id: crate::AlbumId, height: usize, members: crate::tally::Members) {
+        PASS.with_borrow_mut(|p| {
+            if let Some(p) = p {
+                p.insert(id, (height, members));
+            }
+        });
+    }
+
+    /// Ends the pass, giving back what was remembered.
+    pub(crate) fn finish(self) -> std::collections::HashMap<crate::AlbumId, crate::tally::Members> {
+        PASS.with_borrow_mut(Option::take).unwrap_or_default().into_iter().map(|(id, (_, members))| (id, members)).collect()
+    }
+}
+
+impl Drop for AlbumPass {
+    fn drop(&mut self) {
+        let outer = self.outer.take();
+        PASS.with_borrow_mut(|p| *p = outer);
+    }
+}
+
+/// What a counting pass knows of smart album `id` for `photo`, when asking now can't give another answer than
+/// evaluating its rules would: the chain below it fits under [`MAX_ALBUM_DEPTH`] from the albums being evaluated.
+fn pass_answer(id: crate::AlbumId, photo: crate::PhotoId) -> Option<bool> {
+    PASS.with_borrow(|p| {
+        let (height, members) = p.as_ref()?.get(&id)?;
+        let depth = EVALUATING.with_borrow(Vec::len);
+        (depth + height <= MAX_ALBUM_DEPTH).then(|| members.holds(photo))
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times a smart album's rules were worked out on this thread (tests count them).
+    pub(crate) static EVALUATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether `photo` is in smart album `id`, by `matches` (its rules), remembered for the rest of the
 /// outermost question and guarded by [`evaluating`] (a loop or a chain too deep holds nothing).
 pub(crate) fn smart_album_holds(id: crate::AlbumId, photo: crate::PhotoId, matches: impl FnOnce() -> bool) -> bool {
+    if let Some(known) = pass_answer(id, photo) {
+        return known;
+    }
     if let Some(known) = ANSWERS.with_borrow(|a| a.get(&(id, photo)).copied()) {
         return known;
     }
+    #[cfg(test)]
+    EVALUATED.with(|n| n.set(n.get() + 1));
     // the outermost question forgets the answers when it ends, however it ends
     struct Forget(bool);
     impl Drop for Forget {
@@ -456,7 +523,7 @@ pub(crate) fn smart_album_holds(id: crate::AlbumId, photo: crate::PhotoId, match
 }
 
 /// How deep smart albums may test smart albums before the innermost counts as holding nothing.
-const MAX_ALBUM_DEPTH: usize = 32;
+pub(crate) const MAX_ALBUM_DEPTH: usize = 32;
 
 /// Run `f` as the evaluation of smart album `id`'s rules: `None` (so it holds nothing) when `id`
 /// is already being evaluated (a loop the check would refuse, saved anyway) or the chain is
@@ -670,6 +737,11 @@ fn number(v: &Value) -> Option<f64> {
     }
 }
 
+/// Widens an `f32` to the `f64` nearest its shortest decimal form (1.4f32 -> 1.4), so it compares equal to the value a user types.
+fn f32_as_decimal(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(v as f64)
+}
+
 fn num_op(op: &str, have: Option<f64>, value: &Value) -> bool {
     if op == "between" {
         let (a, b) = match value {
@@ -794,12 +866,90 @@ fn date_op(op: &str, have: Option<&str>, value: &Value) -> bool {
     }
 }
 
+/// One byte as the `filePath` rules compare it: `/` and `\` both separate, case doesn't matter.
+fn fold_path_byte(b: u8) -> u8 {
+    if b == b'\\' { b'/' } else { b.to_ascii_lowercase() }
+}
+
+/// Whether `a` and `b` are equal under [`fold_path_byte`].
+fn path_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| fold_path_byte(*x) == fold_path_byte(*y))
+}
+
+/// `needle` inside `hay`, under [`fold_path_byte`]; allocates nothing.
+fn path_bytes_contains(hay: &[u8], needle: &[u8]) -> bool {
+    let Some((&first, rest)) = needle.split_first() else { return true };
+    // the spellings of the needle's first byte that fold to it: a plain two-way compare per byte
+    let (a, b) = match fold_path_byte(first) {
+        b'/' => (b'/', b'\\'),
+        c if c.is_ascii_lowercase() => (c, c.to_ascii_uppercase()),
+        c => (c, c),
+    };
+    let Some(starts) = hay.len().checked_sub(needle.len()).and_then(|last| hay.get(..=last)) else { return false };
+    let at = |i: usize, c: u8| (c == a || c == b) && hay.get(i + 1..i + needle.len()).is_some_and(|tail| path_bytes_eq(tail, rest));
+    // eight bytes at a time: does any of them spell the first byte (a zero byte after xor)?
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    let has_zero = |v: u64| v.wrapping_sub(ONES) & !v & (ONES << 7) != 0;
+    let (chunks, tail) = starts.as_chunks::<8>();
+    let tail_from = starts.len() - tail.len();
+    for (k, chunk) in chunks.iter().enumerate() {
+        let w = u64::from_le_bytes(*chunk);
+        if (has_zero(w ^ (ONES * u64::from(a))) || has_zero(w ^ (ONES * u64::from(b)))) && chunk.iter().enumerate().any(|(j, &c)| at(k * 8 + j, c)) {
+            return true;
+        }
+    }
+    tail.iter().enumerate().any(|(j, &c)| at(tail_from + j, c))
+}
+
+/// A `filePath` rule. The common case (an ASCII path and an ASCII text) is compared in place, folding
+/// case and `\` as it goes, with nothing allocated per photo; any other text takes
+/// [`file_path_matches_slow`], so Unicode lower-casing (ß, İ, final sigma…) behaves as it always did.
+fn file_path_matches(op: &str, source: &Source, value: &Value) -> bool {
+    let path = match source {
+        Source::File { path } => path.as_str(),
+        Source::Demo { .. } => "",
+    };
+    let Value::String(want) = value else { return file_path_matches_slow(op, path, value) };
+    if !path.is_ascii() || !want.is_ascii() {
+        return file_path_matches_slow(op, path, value);
+    }
+    let (path, want) = (path.trim().as_bytes(), want.trim().as_bytes());
+    match op {
+        // the whole string, spaces included (not word by word like the other text fields)
+        "contains" => !want.is_empty() && path_bytes_contains(path, want),
+        "notContains" => want.is_empty() || !path_bytes_contains(path, want),
+        "is" => path_bytes_eq(path, want),
+        "isNot" => !path_bytes_eq(path, want),
+        "startsWith" => path.get(..want.len()).is_some_and(|head| path_bytes_eq(head, want)),
+        "endsWith" => path.len().checked_sub(want.len()).and_then(|from| path.get(from..)).is_some_and(|tail| path_bytes_eq(tail, want)),
+        "isEmpty" => path.is_empty(),
+        "isNotEmpty" => !path.is_empty(),
+        _ => false,
+    }
+}
+
+/// [`file_path_matches`] for any text: the path and the text are normalised into new strings.
+fn file_path_matches_slow(op: &str, path: &str, value: &Value) -> bool {
+    // `/` and `\` both separate, whatever platform the catalog came from; demo photos have no path
+    let path = path.replace('\\', "/");
+    let want = lower(value).replace('\\', "/");
+    match op {
+        // the whole string, spaces included (not word by word like the other text fields)
+        "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
+        "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
+        _ => text_op(op, &path, &want),
+    }
+}
+
 impl Rule {
     pub fn matches(&self, p: &Photo, cat: &Catalog) -> bool {
         let (field, op, value) = match self {
             Rule::Group { group } => return group.matches(p, cat),
             Rule::Field { field, op, value } => (field.as_str(), op.as_str(), value),
         };
+        if field == "filePath" {
+            return file_path_matches(op, &p.source, value);
+        }
         let m = &p.meta;
         let want = lower(value);
         let text = |have: &str| text_op(op, have, &want);
@@ -854,20 +1004,6 @@ impl Rule {
             "fileName" => text(&p.file_name),
             "extension" => text_op(op, p.extension(), want.trim_start_matches('.')),
             "duration" => num_op(op, p.duration.filter(|d| d.is_finite()), value),
-            "filePath" => {
-                // `/` and `\` both separate, whatever platform the catalog came from; demo photos have no path
-                let path = match &p.source {
-                    Source::File { path } => path.replace('\\', "/"),
-                    Source::Demo { .. } => String::new(),
-                };
-                let want = want.replace('\\', "/");
-                match op {
-                    // the whole string, spaces included (not word by word like the other text fields)
-                    "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
-                    "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
-                    _ => text_op(op, &path, &want),
-                }
-            }
             "format" => text(&p.format),
             "title" => text(&m.title),
             "caption" => text(&m.caption),
@@ -889,8 +1025,8 @@ impl Rule {
             "editDate" => date_op(op, p.edited.as_deref(), value),
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),
             "iso" => num_op(op, m.iso.map(|v| v as f64), value),
-            "aperture" => num_op(op, m.aperture.map(|v| v as f64), value),
-            "focalLength" => num_op(op, m.focal_mm.map(|v| v as f64), value),
+            "aperture" => num_op(op, m.aperture.map(f32_as_decimal), value),
+            "focalLength" => num_op(op, m.focal_mm.map(f32_as_decimal), value),
             "longEdge" | "shortEdge" => {
                 let (w, h) = p.shown_size();
                 num_op(op, Some(if field == "longEdge" { w.max(h) } else { w.min(h) }.round()), value)
@@ -1063,6 +1199,25 @@ mod tests {
 
     fn rs(v: serde_json::Value) -> RuleSet {
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn f32_boundary_values_match_gte_lte() {
+        let cat = Catalog::new();
+        let matches =
+            |p: &Photo, field: &str, op: &str, value: f64| rs(json!({"rules": [{"field": field, "op": op, "value": value}]})).matches(p, &cat);
+        for v in [1.4f32, 1.8, 2.8, 5.6, 0.95] {
+            let mut p = photo(1);
+            p.meta.aperture = Some(v);
+            p.meta.focal_mm = Some(v);
+            let w = v.to_string().parse::<f64>().unwrap();
+            for field in ["aperture", "focalLength"] {
+                assert!(matches(&p, field, "gte", w), "{field} gte {w}");
+                assert!(matches(&p, field, "lte", w), "{field} lte {w}");
+                assert!(!matches(&p, field, "gt", w), "{field} gt {w}");
+                assert!(!matches(&p, field, "lt", w), "{field} lt {w}");
+            }
+        }
     }
 
     #[test]
@@ -1692,5 +1847,121 @@ mod tests {
         assert_eq!(field_group("nope"), None);
         assert_eq!(field_label("filePath"), Some("File Path"));
         assert_eq!(field_label("nope"), None);
+    }
+
+    /// The `filePath` rule exactly as it was before the in-place ASCII path: new strings per photo.
+    fn file_path_old(op: &str, source: &Source, value: &serde_json::Value) -> bool {
+        let want = lower(value);
+        let path = match source {
+            Source::File { path } => path.replace('\\', "/"),
+            Source::Demo { .. } => String::new(),
+        };
+        let want = want.replace('\\', "/");
+        match op {
+            "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
+            "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
+            _ => text_op(op, &path, &want),
+        }
+    }
+
+    #[test]
+    fn file_path_rules_match_the_old_strings_for_any_path() {
+        let paths = [
+            "",
+            " ",
+            "  /a/b.jpg \t",
+            "/Volumes/share/photos/Trip/IMG_0001.jpg",
+            "/Volumes/share/PHOTOS/trip/img_0001.JPG",
+            r"D:\Photos\Lake Como\IMG_0001.JPG",
+            r"d:/photos/lake como/img_0001.jpg",
+            r"\\nas\share\x.jpg",
+            "/photos/Straße/a.jpg",
+            "/photos/STRASSE/a.jpg",
+            "/photos/İstanbul/a.jpg",
+            "/photos/i̇stanbul/a.jpg",
+            "/photos/ΟΔΟΣ/a.jpg",
+            "/photos/οδος/a.jpg",
+            "/photos/ΟΔΌΣ/a.jpg",
+            "/photos/日本/東京.jpg",
+            "/p/\u{0B}x\u{0B}",
+            "/p/\u{85}x\u{85}",
+            "a",
+        ];
+        let wants = [
+            "",
+            " ",
+            "a",
+            "A",
+            "/",
+            r"\",
+            r"\photos\",
+            "/photos/",
+            "photos",
+            "PHOTOS",
+            "Lake Como",
+            " lake como ",
+            "lake  como",
+            r"d:\photos\lake",
+            "IMG_0001.JPG",
+            ".jpg",
+            "straße",
+            "STRASSE",
+            "strasse",
+            "İstanbul",
+            "i̇stanbul",
+            "istanbul",
+            "ΟΔΟΣ",
+            "οδος",
+            "οδοσ",
+            "ΟΔΌΣ",
+            "東京",
+            "日本",
+            "x",
+            "\u{0B}x",
+            "/a/b.jpg",
+            "/a/b.jpg \t",
+            "\u{85}x",
+        ];
+        let ops = ["contains", "notContains", "is", "isNot", "startsWith", "endsWith", "isEmpty", "isNotEmpty", "bogus"];
+        let mut values: Vec<serde_json::Value> = wants.iter().map(|w| json!(w)).collect();
+        values.extend([json!(null), json!(5), json!(true), json!(["a", "b"])]);
+        let mut sources: Vec<Source> = paths.iter().map(|p| Source::File { path: (*p).into() }).collect();
+        sources.push(Source::Demo { scene: 0 });
+        for source in &sources {
+            for op in ops {
+                for value in &values {
+                    assert_eq!(file_path_matches(op, source, value), file_path_old(op, source, value), "{source:?} {op} {value}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_path_rule_through_a_rule_set_ignores_case_and_slash_direction() {
+        let mut p = photo(1);
+        p.source = Source::File { path: r"D:\Photos\Lake Como\IMG_0001.JPG".into() };
+        let r = rs(json!({"rules": [{"field": "filePath", "op": "contains", "value": "/LAKE como/"}]}));
+        assert!(r.matches(&p, &Catalog::default()));
+    }
+
+    /// Every piece of a long path, in both cases and both slash directions, wherever it starts
+    /// (the search skips eight bytes at a time, so starts and ends at every offset matter).
+    #[test]
+    fn file_path_contains_finds_every_piece_of_a_long_path() {
+        let path = r"D:\Photos\Lake Como\Wedding-Day_2026\IMG_0001 (copy).JPG";
+        let source = Source::File { path: path.into() };
+        let shout = |s: &str| s.to_uppercase();
+        let swap = |s: &str| s.replace('\\', "/");
+        for from in 0..path.len() {
+            for to in from + 1..=path.len() {
+                let piece = &path[from..to];
+                for want in [piece.to_string(), shout(piece), swap(piece), piece.replace('/', r"\"), format!("{piece}x"), format!("x{piece}")] {
+                    let value = json!(want);
+                    for op in ["contains", "notContains"] {
+                        assert_eq!(file_path_matches(op, &source, &value), file_path_old(op, &source, &value), "{op} {want:?}");
+                    }
+                }
+            }
+        }
     }
 }

@@ -1,10 +1,27 @@
 //! A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
 //! matching a smart album's rules, Picks or the filter bar leaves it where it is, and the others where they are.
 
-use lightcraft_catalog::PhotoId;
+use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::{LibrarySource, Session};
+
+fn relative_clock_session(captures: &[&str]) -> (Session, std::sync::Arc<std::sync::Mutex<String>>, Vec<PhotoId>) {
+    let mut s = Session::new();
+    let now = std::sync::Arc::new(std::sync::Mutex::new("2026-10-24T12:00:00".to_string()));
+    let clock = now.clone();
+    s.clock = Box::new(move || clock.lock().unwrap().clone());
+    let mut ids = Vec::new();
+    for (index, captured) in captures.iter().enumerate() {
+        let id = PhotoId(index as u64 + 1);
+        let name = format!("synthetic-{index}.jpg");
+        let mut photo = Photo::new(id, Source::Demo { scene: 0 }, &name, "JPEG", 2, 2, "2026-10-01T00:00:00");
+        photo.captured = Some((*captured).to_string());
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    (s, now, ids)
+}
 
 /// The demo library with no photo keyworded, showing a smart album of the photos without keywords, at random.
 fn unkeyworded() -> Session {
@@ -197,4 +214,30 @@ fn asking_for_the_state_it_has_changes_nothing_and_a_word_is_not_a_bool() {
     assert!(s.visible_cloned().contains(&before[2]), "on, asked for again: the held photos stay");
     assert!(s.execute("library.holdView", &json!({"on": "false"})).is_err());
     assert!(s.hold_view, "a refused call changes nothing");
+}
+
+#[test]
+fn relative_clock_held_view_keeps_expired_photos_admits_new_matches_and_refreshes() {
+    let (mut s, now, ids) = relative_clock_session(&["2026-10-23T12:00:30", "2026-10-22T12:00:30"]);
+    let rules = json!({
+        "ruleSet": {
+            "match": "any",
+            "rules": [
+                {"field": "captureDate", "op": "inLast", "value": 1},
+                {"field": "captureDate", "op": "notInLast", "value": 2}
+            ]
+        }
+    });
+    s.execute("library.filter", &rules).unwrap();
+    s.execute("library.holdView", &json!({"on": true})).unwrap();
+    assert_eq!(s.visible_cloned(), vec![ids[0]], "only the soon-to-expire photo matches initially");
+
+    *now.lock().unwrap() = "2026-10-24T12:01:00".to_string();
+    let held = s.visible_cloned();
+    assert_eq!(held.len(), 2, "the expired photo stays held while the newly matching photo enters: {held:?}");
+    assert!(held.contains(&ids[0]), "the expired photo remains held");
+    assert!(held.contains(&ids[1]), "the photo crossing the second relative boundary enters");
+
+    s.execute("library.refresh", &json!({})).unwrap();
+    assert_eq!(s.visible_cloned(), vec![ids[1]], "explicit refresh releases the expired photo");
 }

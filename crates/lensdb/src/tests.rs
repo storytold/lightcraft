@@ -243,3 +243,47 @@ fn tokens_split_names_like_exif_writes_them() {
     assert_eq!(tokens("FE 24-105mm F4.0 G OSS"), ["fe", "24", "105", "mm", "f", "4", "g", "oss"]);
     assert_eq!(tokens("f/2.8"), ["f", "2.8"]);
 }
+
+#[test]
+fn spec_names_read_like_lens_names() {
+    assert_eq!(spec_name([24.0, 70.0, 2.8, 2.8]), "24-70mm f/2.8");
+    assert_eq!(spec_name([18.0, 55.0, 3.5, 5.6]), "18-55mm f/3.5-5.6");
+    assert_eq!(spec_name([85.0, 85.0, 1.8, 1.8]), "85mm f/1.8");
+    assert_eq!(spec_name([10.5, 10.5, 2.8, 2.8]), "10.5mm f/2.8");
+}
+
+#[test]
+fn spec_names_need_an_exact_profile_name() {
+    let db = db();
+    let lens = db.find_lens(None, "24-70mm f/2.8", None).expect("a partial match");
+    // the profile's names carry more words than the specification, so the maker-less name is not confirmed
+    assert!(!lens.names_exactly("24-70mm f/2.8"));
+    assert!(lens.names_exactly("testcam 24-70MM F/2.8 zoom"), "case and punctuation don't matter");
+    assert!(!lens.names_exactly("24-70mm f/2.8 Zoom"), "the maker's words count: another maker's lens isn't this one");
+    let mut aliased = lens.clone();
+    aliased.models.push("24-70mm f/2.8".into());
+    assert!(aliased.names_exactly(&spec_name([24.0, 70.0, 2.8, 2.8])));
+    assert!(!aliased.names_exactly("24-105mm f/4"));
+}
+
+/// Another maker's lens with the same specification scores as high as the aliased one; coming first in the
+/// database it must not hide the profile named for the specification.
+#[test]
+fn a_named_profile_is_found_behind_a_tie() {
+    let lens = |maker: &str, models: &str| {
+        format!(
+            r#"<lens><maker>{maker}</maker>{models}<mount>Test Mount</mount><cropfactor>1</cropfactor>
+              <calibration><distortion model="poly3" focal="18" k1="-0.01" /></calibration></lens>"#
+        )
+    };
+    let xml = format!(
+        r#"<lensdatabase version="2">{}{}</lensdatabase>"#,
+        lens("Otherco", "<model>Otherco 18-55mm f/3.5-5.6</model>"),
+        lens("Testcam", "<model>Testcam 18-55mm f/3.5-5.6 VR</model><model>18-55mm f/3.5-5.6</model>"),
+    );
+    let db = LensDb::parse(&xml).unwrap();
+    let name = spec_name([18.0, 55.0, 3.5, 5.6]);
+    assert_eq!(db.find_lens(None, &name, None).unwrap().maker, "Otherco", "a plain lookup keeps the first of a tie");
+    assert_eq!(db.find_lens_named(None, &name, None).unwrap().maker, "Testcam");
+    assert!(db.find_lens_named(None, "70-200mm f/4", None).is_none());
+}

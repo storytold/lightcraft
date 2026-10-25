@@ -375,6 +375,12 @@ fn focal_from_vps(v: [f64; 3], h: [f64; 3]) -> Option<f64> {
 
 /// Pure rotation (degrees, clockwise +) that levels the dominant lines.
 fn level_angle(vert: &[Segment], horiz: &[Segment]) -> Option<f64> {
+    level_angle_within(vert, horiz, 90.0, 1)
+}
+
+/// [`level_angle`] that only answers for at most `max` degrees, backed by at least `min_lines`
+/// agreeing segments.
+fn level_angle_within(vert: &[Segment], horiz: &[Segment], max: f64, min_lines: usize) -> Option<f64> {
     let dev = |s: &Segment, vertical: bool| {
         let (dx, dy) = (s.b.x - s.a.x, s.b.y - s.a.y);
         // signed deviation in degrees of the segment from the axis
@@ -406,8 +412,9 @@ fn level_angle(vert: &[Segment], horiz: &[Segment]) -> Option<f64> {
     })?;
     // consensus: most of the line length must agree with the median within 2°, otherwise the "lines" are scene
     // texture (tree flanks, ridges) rather than a horizon or plumb lines
-    let agree: f64 = v.iter().filter(|(d, _)| (d - median.0).abs() <= 2.0).map(|x| x.1).sum();
-    (agree >= 0.5 * total).then_some(-median.0)
+    let agreeing: Vec<_> = v.iter().filter(|(d, _)| (d - median.0).abs() <= 2.0).collect();
+    let agree: f64 = agreeing.iter().map(|x| x.1).sum();
+    (agree >= 0.5 * total && agreeing.len() >= min_lines && median.0.abs() <= max).then_some(-median.0)
 }
 
 fn rot_z_h(deg: f64) -> Homography {
@@ -569,11 +576,27 @@ pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> A
     a
 }
 
+/// The most Auto straighten turns a photo (degrees). Measured on 68 photos straightened by hand
+/// in Lightroom Classic and 300 left as shot: none was turned by more than 6°, while a larger
+/// "level" came from texture (wooden planks, a branch, a bird's wing) and turned photos that were
+/// straight.
+pub const STRAIGHTEN_MAX_DEGREES: f64 = 10.0;
+
+/// The fewest agreeing lines Auto straighten acts on: one line (the frame's edge, a branch) said
+/// nothing about the horizon in that measurement.
+pub const STRAIGHTEN_MIN_LINES: usize = 3;
+
 /// The rotation (degrees, clockwise +) that levels `src`'s dominant horizon/plumb lines, if they agree
-/// (the consensus rule of Upright Level). Used by the crop panel's Auto straighten.
+/// (the consensus rule of Upright Level), within [`STRAIGHTEN_MAX_DEGREES`] and backed by at least
+/// [`STRAIGHTEN_MIN_LINES`] lines. Used by the crop panel's Auto straighten.
 pub fn level_degrees(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Option<f64> {
     let a = analyze_source(src, info, s);
-    level_angle(&a.vertical, &a.horizontal)
+    straighten_angle(&a)
+}
+
+/// [`level_degrees`] of an analysis.
+pub fn straighten_angle(a: &Analysis) -> Option<f64> {
+    level_angle_within(&a.vertical, &a.horizontal, STRAIGHTEN_MAX_DEGREES, STRAIGHTEN_MIN_LINES)
 }
 
 /// The automatic Upright correction for `mode` on `src` (identity for Off and Guided).

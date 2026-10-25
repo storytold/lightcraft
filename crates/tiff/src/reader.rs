@@ -12,6 +12,15 @@ pub struct ParseOptions {
     pub max_depth: usize,
     /// Maximum number of entries read from one IFD.
     pub max_entries: usize,
+    /// Maximum total number of entries read across all IFDs (chain + children).
+    ///
+    /// Hostile files can reuse the same bytes for up to `max_ifds` tables of `max_entries`
+    /// entries each (overlapping IFD tables via SubIFD pointers shifted by one entry), which can
+    /// allocate millions of `Entry`s from a small input (~100 KB → ~400 MB). This hard cap bounds
+    /// that amplification regardless of entry size. 65 536 is generous for real files — a 50 MB
+    /// scanned TIFF with thousands of entries across chain + children stays well under it — yet
+    /// stops a small file from allocating hundreds of megabytes of `Entry`s.
+    pub max_entries_total: usize,
     /// Maximum total bytes of decoded values; `None` = `8 × input length + 1 MiB`.
     pub value_budget: Option<u64>,
     /// Follow `SubIFDs` / Exif / GPS / Interop pointers.
@@ -22,7 +31,15 @@ pub struct ParseOptions {
 
 impl Default for ParseOptions {
     fn default() -> Self {
-        Self { max_ifds: 1024, max_depth: 10, max_entries: 8192, value_budget: None, follow_children: true, accept_raw_magic: true }
+        Self {
+            max_ifds: 1024,
+            max_depth: 10,
+            max_entries: 8192,
+            max_entries_total: 65536,
+            value_budget: None,
+            follow_children: true,
+            accept_raw_magic: true,
+        }
     }
 }
 
@@ -195,12 +212,13 @@ struct Ctx<'a> {
     opts: &'a ParseOptions,
     visited: HashSet<u64>,
     budget: u64,
+    entries_total: usize,
 }
 
 impl<'a> Ctx<'a> {
     fn new(data: &'a [u8], order: ByteOrder, big: bool, opts: &'a ParseOptions) -> Self {
         let budget = opts.budget_for(data.len());
-        Self { data, order, big, opts, visited: HashSet::new(), budget }
+        Self { data, order, big, opts, visited: HashSet::new(), budget, entries_total: 0 }
     }
 
     fn read_off(&self, pos: usize) -> Option<u64> {
@@ -219,6 +237,12 @@ impl<'a> Ctx<'a> {
             return Err(TiffError::Invalid(format!("IFD loop at {offset}")));
         }
         let dir = directory_entries(self.data, offset, self.order, self.big, self.opts.max_entries)?;
+        // Bound total entries across the whole parse so overlapping IFD tables (SubIFD pointers
+        // shifted by one entry) cannot allocate millions of `Entry`s from a small input.
+        self.entries_total = self.entries_total.saturating_add(dir.read);
+        if self.entries_total > self.opts.max_entries_total {
+            return Err(TiffError::Limit("entry count"));
+        }
         let mut entries = Vec::with_capacity(dir.read);
         for p in dir.positions() {
             if let Some(e) = self.entry(p, base) {
@@ -404,5 +428,90 @@ mod tests {
         let tiff = Tiff::parse(&data).unwrap();
         assert_eq!(tiff.ifds.len(), 1);
         assert_eq!(tiff.ifds[0].u64(0x0100), Some(8));
+    }
+    #[test]
+    fn overlapping_ifd_tables_hit_entry_cap_instead_of_amplifying() {
+        // classic TIFF; IFDs at 8, 20, 32, ... each declaring 8192 entries whose tables overlap
+        // (next table starts one entry after the previous table's start). Without the cap, a single
+        // `Tiff::parse` would run `Vec::with_capacity(8192)` per IFD inside one `Ctx`, amplifying a
+        // small file into millions of `Entry`s; the per-`Ctx` `max_entries_total` cap rejects the
+        // 9th IFD before any allocation.
+        let mut data = vec![0u8; 200_000];
+        data[0..2].copy_from_slice(b"II");
+        data[2..4].copy_from_slice(&42u16.to_le_bytes());
+        data[4..8].copy_from_slice(&8u32.to_le_bytes()); // first IFD at 8
+
+        for k in 0..9u64 {
+            let ifd_off = (8 + 12 * k) as usize;
+            data[ifd_off..ifd_off + 2].copy_from_slice(&8192u16.to_le_bytes()); // count
+            let table = ifd_off + 2;
+            let ptr = table + 8192 * 12; // next-IFD pointer lives right after the entries
+            let next = if k + 1 < 9 { (8 + 12 * (k + 1)) as u32 } else { 0 };
+            data[ptr..ptr + 4].copy_from_slice(&next.to_le_bytes());
+        }
+
+        let tiff = Tiff::parse(&data).unwrap();
+        assert_eq!(tiff.ifds.len(), 8, "8 IFDs parsed, 9th rejected by max_entries_total before allocation");
+    }
+
+    #[test]
+    fn a_legitimate_multi_ifd_file_still_parses_under_the_entry_cap() {
+        // classic TIFF: IFD0 @8 (3 entries: value + Exif + GPS child pointers) -> IFD1 @58 chain,
+        // plus Exif child @60 and GPS child @90. Total entries = 6, far under max_entries_total.
+        let mut data = vec![0u8; 128];
+        data[0..2].copy_from_slice(b"II");
+        data[2..4].copy_from_slice(&42u16.to_le_bytes());
+        data[4..8].copy_from_slice(&8u32.to_le_bytes()); // first IFD at 8
+
+        // IFD0 @8: count 3, table @10, next-IFD @46 -> IFD1 @58
+        data[8..10].copy_from_slice(&3u16.to_le_bytes());
+        // entry0 @10: tag 0x0100, SHORT, count 1, value 8 (inline @18..22)
+        data[10..12].copy_from_slice(&0x0100u16.to_le_bytes());
+        data[12..14].copy_from_slice(&3u16.to_le_bytes());
+        data[14..18].copy_from_slice(&1u32.to_le_bytes());
+        data[18..22].copy_from_slice(&8u32.to_le_bytes());
+        // entry1 @22: tag 0x8769 ExifIFD, LONG, count 1, value 60 (inline @30..34)
+        data[22..24].copy_from_slice(&0x8769u16.to_le_bytes());
+        data[24..26].copy_from_slice(&4u16.to_le_bytes());
+        data[26..30].copy_from_slice(&1u32.to_le_bytes());
+        data[30..34].copy_from_slice(&60u32.to_le_bytes());
+        // entry2 @34: tag 0x8825 GPSIFD, LONG, count 1, value 90 (inline @42..46)
+        data[34..36].copy_from_slice(&0x8825u16.to_le_bytes());
+        data[36..38].copy_from_slice(&4u16.to_le_bytes());
+        data[38..42].copy_from_slice(&1u32.to_le_bytes());
+        data[42..46].copy_from_slice(&90u32.to_le_bytes());
+        data[46..50].copy_from_slice(&58u32.to_le_bytes()); // next IFD
+
+        // IFD1 @58: count 1, table @60, next 0
+        data[58..60].copy_from_slice(&1u16.to_le_bytes());
+        data[60..62].copy_from_slice(&0x0100u16.to_le_bytes());
+        data[62..64].copy_from_slice(&3u16.to_le_bytes());
+        data[64..68].copy_from_slice(&1u32.to_le_bytes());
+        data[68..72].copy_from_slice(&8u32.to_le_bytes());
+        data[72..76].copy_from_slice(&0u32.to_le_bytes());
+
+        // Exif child IFD @60: count 1, entry tag 0x9000 value 1, next 0
+        data[60..62].copy_from_slice(&1u16.to_le_bytes());
+        data[62..64].copy_from_slice(&0x9000u16.to_le_bytes());
+        data[64..66].copy_from_slice(&3u16.to_le_bytes());
+        data[66..70].copy_from_slice(&1u32.to_le_bytes());
+        data[70..74].copy_from_slice(&1u32.to_le_bytes());
+        data[74..78].copy_from_slice(&0u32.to_le_bytes());
+
+        // GPS child IFD @90: count 1, entry tag 0 value 1, next 0
+        data[90..92].copy_from_slice(&1u16.to_le_bytes());
+        data[92..94].copy_from_slice(&0u16.to_le_bytes());
+        data[94..96].copy_from_slice(&3u16.to_le_bytes());
+        data[96..100].copy_from_slice(&1u32.to_le_bytes());
+        data[100..104].copy_from_slice(&1u32.to_le_bytes());
+        data[104..108].copy_from_slice(&0u32.to_le_bytes());
+
+        let tiff = Tiff::parse(&data).unwrap();
+        assert_eq!(tiff.ifds.len(), 2, "chain IFDs parse fully");
+        assert_eq!(tiff.ifds[0].u64(0x0100), Some(8));
+        let exif = tiff.ifds[0].exif.as_ref().expect("Exif child present");
+        assert_eq!(exif.u64(0x9000), Some(1));
+        let gps = tiff.ifds[0].gps.as_ref().expect("GPS child present");
+        assert_eq!(gps.u64(0x0000), Some(1));
     }
 }

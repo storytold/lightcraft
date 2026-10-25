@@ -6,6 +6,7 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{ControlSpec, DevelopSettings, Section, Track, WbMode, controls};
 use lightcraft_geom::Point;
+use lightcraft_pipeline::{PARAM_AMOUNTS, ParametricCurve};
 use lightcraft_raster::Histogram;
 use serde_json::{Value, json};
 
@@ -169,7 +170,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             // content, and the sliders below would run past its edge
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
             let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d));
+            let below = r.rect.bottom();
+            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(
                     ui,
@@ -429,8 +431,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 }
 
 /// The profile dropdown: Favorites, Recent, one submenu per group, then favourite toggle and
-/// Browse….
-fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+/// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
+/// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
+/// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
+fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
+    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
+}
+
+fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
     use lightcraft_engine::presets::{PROFILES, profile_groups};
     let t = Tokens::get(ui.ctx());
     ui.set_min_width(200.0);
@@ -463,12 +471,17 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     }
     for g in profile_groups() {
         let r = crate::widgets::menu_button(ui, crate::i18n::tr(g), |ui| {
-            ui.set_min_width(170.0);
-            for p in PROFILES.iter().filter(|p| p.group == g) {
-                item(ui, "group", p.id, p.name, &mut pick);
-            }
+            crate::menu_level::level(ui, 2, Some(below), |ui| {
+                ui.set_min_width(170.0);
+                for p in PROFILES.iter().filter(|p| p.group == g) {
+                    item(ui, "group", p.id, p.name, &mut pick);
+                }
+            });
         });
         register(ui.ctx(), format!("profileMenu:groupMenu:{g}"), r.response.rect);
+        if r.inner.is_some() {
+            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
+        }
     }
     // imported LUT profile groups
     let mut lut_groups: Vec<String> = app.session.lut_profiles.iter().map(|p| p.group.clone()).collect();
@@ -477,12 +490,17 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     for g in &lut_groups {
         // a folder's name as it is, and its own widget id even when it matches a built-in group
         let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
-            ui.set_min_width(170.0);
-            for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
-                item(ui, "group", &p.id, &p.name, &mut pick);
-            }
+            crate::menu_level::level(ui, 2, Some(below), |ui| {
+                ui.set_min_width(170.0);
+                for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
+                    item(ui, "group", &p.id, &p.name, &mut pick);
+                }
+            });
         });
         register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
+        if r.inner.is_some() {
+            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
+        }
     }
     ui.separator();
     if let Some((name, _)) = app.session.profile_info(cur) {
@@ -544,7 +562,7 @@ fn section(
             app.toast(ui.ctx(), e);
         }
     }
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         let mut solo = app.ui.single_panel;
         let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
         register(ui.ctx(), "sectionMenu:solo", item.rect);
@@ -613,12 +631,19 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // row under the plot
     let hdr = hist.as_ref().and_then(|h| h.hdr);
     let legend = if hdr.is_some() { 26.0 } else { 0.0 };
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui.ctx(), "histogram", r);
     let p = ui.painter();
     p.rect_filled(r, 0.0, t.button);
     let plot = Rect::from_min_max(r.min + vec2(0.0, 6.0), pos2(r.right(), r.bottom() - 26.0 - legend));
+    // Lightroom Classic's tonal zones (Blacks / Shadows / Exposure / Highlights / Whites across the
+    // plot): a drag over one moves its control (the band and the readout show which and how far), a
+    // double-click puts it back to its default, and Shift drags a tenth as far
+    let zone = super::histogram::interact(app, ui, &resp, plot, id);
+    if let Some(a) = &zone {
+        super::histogram::paint_zone(p, plot, a, &t);
+    }
     if let Some(b) = hdr {
         // white for SDR, then one band per stop above SDR white: white too, or (Visualize HDR
         // range on) in its colours
@@ -706,13 +731,11 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let mut clicked = resp.clicked();
     // the panel's floating scroll bar widens over the right edge when hovered: both buttons keep
     // clear of it, the left one too so they stay symmetric (#1640)
-    let scroll = ui.spacing().scroll;
-    let inset = 20.0 + scroll.bar_width + scroll.bar_outer_margin;
-    for (name, x, label, clipped) in [
-        ("shadows", plot.left() + inset, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),
-        ("highlights", plot.right() - inset, "Highlight clipping", clipping.map(|(_, hi)| hi > 0.003)),
+    let [shadow_rect, highlight_rect] = super::histogram::clipping_rects(ui, plot);
+    for (name, rect, label, clipped) in [
+        ("shadows", shadow_rect, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),
+        ("highlights", highlight_rect, "Highlight clipping", clipping.map(|(_, hi)| hi > 0.003)),
     ] {
-        let rect = Rect::from_center_size(pos2(x, plot.top() + 14.0), vec2(24.0, 22.0));
         let response = ui.interact(rect, ui.id().with(("histogram-clipping", name)), Sense::click());
         register(ui.ctx(), format!("histogram:{name}"), rect);
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), app.ui.show_clipping, crate::i18n::tr(label)));
@@ -759,8 +782,11 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if clicked {
         let _ = app.run("view.clipping", json!({}));
     }
-    // EXIF strip
-    if let Some(ph) = app.session.catalog.photo(id) {
+    // the tonal zone the pointer is on replaces the EXIF strip while it is there
+    if let Some(text) = zone.as_ref().and_then(|a| a.readout()) {
+        register(ui.ctx(), "histogramReadout", r);
+        p.text(pos2(r.left() + r.width() / 2.0, r.bottom() - 13.0), Align2::CENTER_CENTER, text, t.font(12.5), t.text_label);
+    } else if let Some(ph) = app.session.catalog.photo(id) {
         let m = &ph.meta;
         let parts: Vec<String> = [
             m.iso.map(|i| format!("ISO {i}")),
@@ -912,6 +938,115 @@ fn draw_curve_histogram(p: &egui::Painter, r: Rect, h: &lightcraft_raster::Histo
     p.add(mesh);
 }
 
+/// Segments the graph's curve line is drawn with.
+pub(crate) const CURVE_SAMPLES: i32 = 96;
+
+/// Close a graph drag's `develop` interaction, as one undo step.
+///
+/// It is closed when the drag ends *or* the pointer comes up without egui reporting `drag_stopped`
+/// for this widget (released outside the window, over a popup, or on a frame the widget does not
+/// run). A dangling interaction would make every later edit a silent preview — Undo would then
+/// appear to do nothing at all. Returns whether the drag is over, so the caller clears its state.
+fn commit_interaction(app: &mut LightcraftApp, ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
+    let released = ui.input(|i| i.pointer.any_released()) || !ui.input(|i| i.pointer.primary_down());
+    if !dragging || !(stopped || released) {
+        return false;
+    }
+    let _ = app.run("develop.endInteraction", json!({}));
+    true
+}
+
+/// How close (screen points) to the curve a press counts as grabbing it.
+const PARAM_GRAB: f32 = 14.0;
+
+/// The parametric curve's own drag: the graph shows the curve and nothing else, and dragging the
+/// line bends the region the pointer is over, with that region's slider following on the same frame.
+///
+/// The whole gesture runs inside one `develop` interaction, so it is one undo step (Ctrl+Z takes the
+/// gesture back, not the last frame of it), and every write goes through `develop.set`, so the
+/// slider, the curve and what is drawn are the same state rather than three things kept in step.
+fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::Response, d: &DevelopSettings) {
+    if r.width() <= 1.0 || r.height() <= 1.0 {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let model = ParametricCurve::new(&d.curve);
+    let to_screen = |x: f64, y: f64| pos2(r.left() + x as f32 * r.width(), r.bottom() - y as f32 * r.height());
+    let from_screen_x = |q: Pos2| ((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64;
+    // the graph x of a point, and how far it is from the drawn curve (in screen points)
+    let near_curve = |q: Pos2| {
+        let x = from_screen_x(q);
+        to_screen(x, model.at(x)).distance(q)
+    };
+    let drag_id = egui::Id::new("curve-param-drag");
+    let cursor_id = egui::Id::new("curve-param-cursor");
+    // (region, x, initial_amount, start_y): the region being dragged, the graph x the drag is anchored
+    // at, the region's starting amount, and the starting screen Y position.
+    let mut dragged: Option<(usize, f64, f64, f32)> = ui.data(|dd| dd.get_temp::<Option<(usize, f64, f64, f32)>>(drag_id)).flatten();
+    let hovered = dragged.is_none() && resp.hover_pos().is_some_and(|q| near_curve(q) <= PARAM_GRAB);
+    let mut set: Option<(&'static str, f64)> = None;
+    // the press, not where the pointer is once the drag threshold has passed: a press slightly off
+    // the line is still a grab, and the pointer has usually left that spot by the time it starts
+    let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+    if resp.drag_started()
+        && let Some(q) = press
+        && near_curve(q) <= PARAM_GRAB
+    {
+        let x = from_screen_x(q);
+        let _ = app.run("develop.beginInteraction", json!({"label": "Parametric Curve"}));
+        let region = model.region_at(x);
+        let initial_amount = model.amounts.get(region).copied().unwrap_or(0.0);
+        let start_pos = to_screen(x, model.at(x));
+        dragged = Some((region, x, initial_amount, start_pos.y));
+        ui.data_mut(|dd| dd.insert_temp(cursor_id, start_pos));
+    }
+    if let Some((region, x, initial_amount, start_y)) = dragged
+        && resp.dragged()
+    {
+        // Follow the pointer's motion from where the curve was grabbed, so the press itself moves
+        // nothing and the line tracks the hand. ⌥ = a tenth of the motion, as the point curve does.
+        let alt = ui.input(|i| i.modifiers.alt);
+        let dd = ui.input(|i| i.pointer.delta());
+        let step = if alt { vec2(dd.x * 0.1, dd.y * 0.1) } else { vec2(dd.x, dd.y) };
+        let cursor = ui.data(|d| d.get_temp::<Pos2>(cursor_id)).unwrap_or(pos2(0.0, start_y)) + step;
+        ui.data_mut(|d| d.insert_temp(cursor_id, cursor));
+        let delta_y = start_y - cursor.y;
+        let delta_level = (delta_y / r.height()) as f64;
+        let per_unit = model.level_per_unit(region, x);
+        let new_amount =
+            if per_unit.abs() > f64::EPSILON { (initial_amount + delta_level / per_unit).clamp(-100.0, 100.0).round() } else { initial_amount };
+        if let Some(&id) = PARAM_AMOUNTS.get(region) {
+            set = Some((id, new_amount));
+        }
+    }
+    if let Some((id, v)) = set {
+        let _ = app.run("develop.set", json!({"control": id, "value": v}));
+    }
+    let dropped = resp.drag_stopped();
+    if commit_interaction(app, ui, dragged.is_some(), dropped) {
+        dragged = None;
+        ui.data_mut(|d| {
+            d.remove::<Pos2>(cursor_id);
+            d.remove::<Option<(usize, f64, f64, f32)>>(drag_id);
+        });
+    }
+    ui.data_mut(|dd| dd.insert_temp(drag_id, dragged));
+    if dragged.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    // the region under the pointer (or the one in hand), named as its slider below reads it
+    let shown = dragged.map(|(region, ..)| region).or_else(|| hovered.then(|| resp.hover_pos()).flatten().map(|q| model.region_at(from_screen_x(q))));
+    if let Some(region) = shown
+        && let Some(&id) = PARAM_AMOUNTS.get(region)
+        && let Some(v) = set.and_then(|(s_id, v)| (s_id == id).then_some(v)).or_else(|| controls::get(d, id))
+    {
+        let name = controls::find(id).map_or("", |s| s.label);
+        ui.painter().text(r.left_top() + vec2(6.0, 4.0), Align2::LEFT_TOP, format!("{name} {v:.0}"), t.font(11.0), t.text_dim);
+    }
+}
+
 fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     // channel selector
@@ -967,7 +1102,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     let resp = ui.interact(r, egui::Id::new(("curve", &ch)), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Tone Curve"));
     register(ui.ctx(), "curve", r);
-    resp.context_menu(|ui| curve_reset_menu(app, ui, &ch));
+    crate::widgets::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
     let p = ui.painter();
     p.rect_filled(r, 2.0, t.canvas);
     if let Some(hist) = preview_histogram(app, id) {
@@ -988,29 +1123,17 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     let to_screen = |x: f64, y: f64| pos2(r.left() + x as f32 * r.width(), r.bottom() - y as f32 * r.height());
     let from_screen = |q: Pos2| (((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64, ((r.bottom() - q.y) / r.height()).clamp(0.0, 1.0) as f64);
     if ch == "parametric" {
-        // draw the effective parametric curve by sampling the pipeline's region curve approximation
+        // The Effective curve: the model the renderer builds from the four region sliders, sampled
+        // here and rebuilt every frame. The graph holds no state of its own, so a slider moved by
+        // hand, a Reset or an Undo redraws it from the settings in the same frame it changes.
         let c = &d.curve;
-        let regions = [
-            (0.0, c.split_shadows / 100.0, c.shadows),
-            (c.split_shadows / 100.0, c.split_mid / 100.0, c.darks),
-            (c.split_mid / 100.0, c.split_highlights / 100.0, c.lights),
-            (c.split_highlights / 100.0, 1.0, c.highlights),
-        ];
-        let pts: Vec<Pos2> = (0..=64)
-            .map(|i| {
-                let x = i as f64 / 64.0;
-                let mut dd = 0.0;
-                for (a, b, amt) in regions {
-                    let (ctr, half) = ((a + b) / 2.0, (b - a) * 0.75 + 0.05);
-                    let tt = ((x - ctr) / half).clamp(-1.0, 1.0);
-                    dd += amt / 100.0 * 0.22 * (0.5 + 0.5 * (tt * std::f64::consts::PI).cos());
-                }
-                to_screen(x, (x + dd * 4.0 * x * (1.0 - x)).clamp(0.0, 1.0))
-            })
-            .collect();
+        let model = ParametricCurve::new(c);
+        let pts: Vec<Pos2> =
+            (0..=CURVE_SAMPLES).map(|i| to_screen(i as f64 / CURVE_SAMPLES as f64, model.at(i as f64 / CURVE_SAMPLES as f64))).collect();
         p.add(egui::Shape::line(pts, Stroke::new(2.0, Color32::from_gray(220))));
+        param_drag(app, ui, r, &resp, d);
         curve_footer(app, ui, d);
-        for c in ["curve.highlights", "curve.lights", "curve.darks", "curve.shadows"] {
+        for &c in PARAM_AMOUNTS.iter().rev() {
             control(app, ui, d, c, true);
         }
         control(app, ui, d, "curve.refineSaturation", true);
@@ -1142,9 +1265,11 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
         let _ = app.run("develop.curve", json!({"channel": ch, "points": arr}));
     }
-    if resp.drag_stopped() {
+    // the drag is over when egui says so, or when the pointer comes up without it saying so (a
+    // release outside the window would otherwise leave the interaction open, and every later edit a
+    // silent preview that Undo cannot take back)
+    if commit_interaction(app, ui, dragging.is_some(), resp.drag_stopped()) {
         dragging = None;
-        let _ = app.run("develop.endInteraction", json!({}));
     }
     ui.data_mut(|dd| dd.insert_temp(drag_id, dragging));
     curve_footer(app, ui, d);
@@ -1179,7 +1304,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                         ui.close();
                     }
                     if !p.builtin {
-                        r.context_menu(|ui| {
+                        crate::widgets::context_menu(&r, |ui| {
                             if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
                                 let _ = app.run("curve.deletePreset", json!({"name": p.name}));
                                 ui.close();
@@ -1535,7 +1660,8 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     // puck as it is at that moment.
     let grab_id = egui::Id::new(("wheelGrab", key));
     let mods = ui.input(|i| WheelMods::from_modifiers(i.modifiers));
-    let grab = match resp.interact_pointer_pos() {
+    let pointer = wheel_pointer(ui, &resp);
+    let grab = match pointer {
         Some(q) if resp.dragged() || resp.clicked() => {
             let held = ui.data(|m| m.get_temp::<WheelGrab>(grab_id)).filter(|g| g.mods == mods && !resp.drag_started());
             Some(held.unwrap_or_else(|| {
@@ -1574,13 +1700,20 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
         let _ = app.run("develop.beginInteraction", json!({"label": crate::i18n::tr_format!("{label} Grading", label = label)}));
     }
     if (resp.dragged() || resp.clicked())
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = pointer
     {
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
     }
     if resp.drag_stopped() || resp.clicked() {
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+    // released, or Esc (egui ends a drag on it)
+    if resp.drag_stopped()
+        && let Some(held) = ui.ctx().data_mut(|m| m.remove_temp::<WheelCapture>(egui::Id::new(WHEEL_CAPTURE)))
+        && !held.dropped
+    {
+        give_pointer_back(ui.ctx(), held.origin);
     }
     if resp.double_clicked() {
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
@@ -1682,6 +1815,99 @@ impl WheelGrab {
             v
         };
         wheel_pick(v, rad, self.lock())
+    }
+}
+
+/// A wheel drag holds the pointer, as in Lightroom (issue #1899): it is hidden for the drag, the
+/// puck follows the mouse's own travel, and on release the pointer is back where the button went
+/// down, so a long (Alt) drag doesn't leave it far from the wheels. On macOS the pointer is locked
+/// in place for the drag; elsewhere it moves unseen and is put back. The browser can't move it
+/// (eframe's web host ignores the command), so there it only shows again where the drag ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct WheelCapture {
+    /// Where the button went down: the pointer goes back there.
+    origin: Pos2,
+    /// Where the pointer would be had it been free: where the drag began plus the travel since.
+    pos: Pos2,
+    /// Let go early (the window lost focus): the rest of this drag leaves the wheel alone.
+    dropped: bool,
+    /// The pass that last drew the dragged wheel.
+    pass: u64,
+}
+
+/// One wheel is dragged at a time, so one capture for them all.
+const WHEEL_CAPTURE: &str = "wheelCapture";
+
+/// The mouse's travel this frame: the pointer's, or, while the pointer stands still (locked, or
+/// against a screen edge), the raw motion the host reports.
+fn wheel_travel(delta: egui::Vec2, motion: Option<egui::Vec2>) -> egui::Vec2 {
+    if delta != egui::Vec2::ZERO {
+        return delta;
+    }
+    motion.filter(|m| m.x.is_finite() && m.y.is_finite()).unwrap_or(egui::Vec2::ZERO)
+}
+
+/// Where the wheel `resp` reads the pointer this frame: where it clicked, or for a drag the held
+/// pointer ([`WheelCapture`]), `None` once a lost focus let go of it (Esc ends the drag itself:
+/// egui stops a drag on Esc).
+fn wheel_pointer(ui: &egui::Ui, resp: &egui::Response) -> Option<Pos2> {
+    let q = resp.interact_pointer_pos()?;
+    if !resp.dragged() {
+        return Some(q);
+    }
+    let ctx = ui.ctx();
+    let id = egui::Id::new(WHEEL_CAPTURE);
+    let held = ctx.data(|m| m.get_temp::<WheelCapture>(id)).filter(|_| !resp.drag_started());
+    let mut cap = held.unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::Locked));
+        }
+        WheelCapture { origin: ui.input(|i| i.pointer.press_origin()).unwrap_or(q), pos: q, ..Default::default() }
+    });
+    cap.pass = ctx.cumulative_pass_nr();
+    if !cap.dropped {
+        let (travel, unfocused) = ui.input(|i| {
+            // the event, not `focused`: a click that activates the window may land before its focus
+            let unfocused = i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)));
+            (wheel_travel(i.pointer.delta(), i.pointer.motion()), unfocused)
+        });
+        if !resp.drag_started() {
+            cap.pos += travel;
+        }
+        if unfocused {
+            give_pointer_back(ctx, cap.origin);
+            cap.dropped = true;
+        } else {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
+    }
+    ctx.data_mut(|m| m.insert_temp(id, cap));
+    (!cap.dropped).then_some(cap.pos)
+}
+
+/// Unlock and show the pointer a wheel drag held, back at `origin`.
+fn give_pointer_back(ctx: &egui::Context, origin: Pos2) {
+    if cfg!(target_os = "macos") {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+    }
+    if cfg!(not(target_arch = "wasm32")) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(origin));
+    }
+}
+
+/// Once a frame, after the panels: a held pointer stays hidden over whatever set its own cursor,
+/// and is given back if no wheel drew this pass (the flyout closed or the view changed under the
+/// drag), so it is never left locked or hidden.
+pub(crate) fn wheel_pointer_frame_end(ctx: &egui::Context) {
+    let id = egui::Id::new(WHEEL_CAPTURE);
+    let Some(cap) = ctx.data(|m| m.get_temp::<WheelCapture>(id)) else { return };
+    if cap.pass != ctx.cumulative_pass_nr() {
+        ctx.data_mut(|m| m.remove::<WheelCapture>(id));
+        if !cap.dropped {
+            give_pointer_back(ctx, cap.origin);
+        }
+    } else if !cap.dropped {
+        ctx.set_cursor_icon(egui::CursorIcon::None);
     }
 }
 
@@ -1799,13 +2025,16 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
 }
 
 /// The preview-only notice's Reload from Disk: re-read the photo's file (a raw a newer version can
-/// decode, whose drive was offline when the library opened), and say what came of it.
+/// decode, whose drive was offline when the library opened) in the background; a toast says what
+/// came of it once it's done (`crate::reload`).
 pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
-    let r = app.run("photo.reload", json!({"ids": [id.0]}));
-    let decoded = app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none());
-    match r {
+    match app.run("photo.reload", json!({"ids": [id.0]})) {
         Err(e) => app.toast_error(ctx, e),
-        Ok(_) if decoded => app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data")),
+        Ok(r) if r["background"] == true => {}
+        // nothing to read in the background (a photo without a file): answered in place
+        Ok(_) if app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none()) => {
+            app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data"))
+        }
         Ok(_) => app.toast(ctx, crate::i18n::tr("This raw variant still can't be decoded")),
     }
 }

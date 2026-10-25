@@ -123,6 +123,48 @@ fn filter_search_sort() {
     assert_eq!(c.keywords(), vec![("ocean".to_string(), 1), ("summer".to_string(), 1)]);
 }
 
+/// A search word with a colon whose left part is not a known field ("10:30", "Re:") is plain
+/// text, not a fielded token that matches nothing.
+#[test]
+fn free_text_with_a_colon_searches_the_text_fields() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "meeting.jpg", "2026-05-01T10:00:00");
+    let _b = photo(&mut c, "other.jpg", "2026-04-01T10:00:00");
+    let mut m = c.photo(a).unwrap().meta.clone();
+    m.caption = "Meeting at 10:30 with Re: notes".into();
+    m.iso = Some(1600);
+    c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
+    let q = |text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q("meeting"), vec![a]);
+    assert_eq!(q("10:30"), vec![a], "a free-text token with a colon");
+    assert_eq!(q("re:"), vec![a]);
+    assert_eq!(q("RE: notes"), vec![a], "case-insensitive, one token per word");
+    assert_eq!(q("iso:>800"), vec![a], "known fields stay fielded");
+    assert_eq!(q("iso:>2000"), Vec::<PhotoId>::new());
+    assert_eq!(q("11:45"), Vec::<PhotoId>::new(), "an unknown field matching no text finds nothing");
+}
+
+/// `f:`/`aperture:` and `focal:` are stored as `f32`; a typed value that isn't exact in binary
+/// (2.8, 5.6) must still match, and `<`/`>` must not count the photo's own value.
+#[test]
+fn search_tokens_match_f32_aperture_and_focal() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let mut m = c.photo(a).unwrap().meta.clone();
+    m.aperture = Some(2.8);
+    m.focal_mm = Some(5.6);
+    c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
+    let q = |t: &str| c.query(&Filter { text: t.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q("f:2.8"), vec![a], "f:2.8");
+    assert_eq!(q("aperture:=2.8"), vec![a], "aperture:=2.8");
+    assert_eq!(q("focal:5.6"), vec![a], "focal:5.6");
+    assert!(q("f:2.9").is_empty(), "f:2.9");
+    assert!(q("f:<2.8").is_empty(), "f:<2.8");
+    assert!(q("f:>2.8").is_empty(), "f:>2.8");
+    assert!(q("focal:<5.6").is_empty(), "focal:<5.6");
+    assert_eq!(q("f:>2.7"), vec![a], "f:>2.7");
+}
+
 /// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
 /// `AddPhoto` op verbatim, and a JSON snapshot is valid UTF-8 whatever it holds) must not be
 /// sliced on a byte index in `date_groups`: grouping counts the well-formed dates and ignores
@@ -794,6 +836,71 @@ fn cmp_name_ignores_case_without_allocating() {
     assert_eq!(cmp_name("a", "ab"), Less);
 }
 
+/// Search Photos finds named people in free text, and a quoted value keeps a name of several words
+/// together: `person:"Jane Doe"` (issue #1449). Malformed quotes narrow the result or change nothing.
+#[test]
+fn search_text_finds_people_and_quoted_values() {
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let region = |name: &str, kind: RegionKind| Region {
+        rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
+        kind,
+        name: Some(name.to_string()),
+        description: None,
+    };
+    let mut c = Catalog::new();
+    let mut add = |name: &str, regions: Vec<Region>, keywords: &[&str]| {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        p.meta.keywords = keywords.iter().map(|k| k.to_string()).collect();
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let jane = add("a.jpg", vec![region("Jane Doe", RegionKind::Face), region("Rex", RegionKind::Pet)], &[]);
+    let both = add("b.jpg", vec![region("Jane Roe", RegionKind::Face), region("John Doe", RegionKind::Face)], &[]);
+    let zoe = add("c.jpg", vec![region("Zoë Ångström", RegionKind::Face)], &["New York"]);
+    let none = add("lunch 10:30 am.jpg", vec![], &["york minster"]);
+    let q = |text: &str| {
+        let mut ids = c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+
+    // free text: a person's name, any case, any part of it; pets are not people
+    assert_eq!(q("jane"), vec![jane, both]);
+    assert_eq!(q("DOE"), vec![jane, both]);
+    assert_eq!(q("ångström"), vec![zoe]);
+    assert!(q("rex").is_empty(), "a pet is not a person");
+    // words are still ANDed: b.jpg has a Jane and a Doe, a quoted phrase asks for them together
+    assert_eq!(q("jane doe"), vec![jane, both]);
+    assert_eq!(q("\"jane doe\""), vec![jane]);
+
+    // fielded: the exact name, of several words when quoted
+    assert_eq!(q("person:\"Jane Doe\""), vec![jane]);
+    assert_eq!(q("who:\"jane roe\""), vec![both]);
+    assert_eq!(q("person:\"Zoë Ångström\""), vec![zoe]);
+    assert!(q("person:jane").is_empty(), "person: is the whole name, as before");
+    assert!(q("person:Jane Doe").is_empty(), "unquoted, the second word is its own token, as before");
+    assert_eq!(q("keyword:\"new york\""), vec![zoe], "other fields take quoted values too");
+    assert_eq!(q("person:\"Jane Doe\" a.jpg"), vec![jane], "tokens after a quoted one still count");
+
+    // malformed input never widens the match and never panics
+    assert_eq!(q("person:\"Jane Doe"), vec![jane], "an unclosed quote runs to the end");
+    assert!(q("person:\"Jane Doe a.jpg").is_empty(), "…and takes the rest of the text with it");
+    assert!(q("person:\"\"").is_empty());
+    assert!(q("person:").is_empty());
+    assert_eq!(q("\""), vec![jane, both, zoe, none], "a lone quote is an empty phrase, like an empty search");
+    assert_eq!(q("\"\" jane"), vec![jane, both]);
+    assert!(q("\"jane:doe\"").is_empty(), "a quoted phrase is free text even with a colon");
+    // an unknown field is plain text, its quoted value unquoted (#2099): `10:"30 am"` is the text `10:30 am`
+    assert_eq!(q("10:\"30 am\""), vec![none]);
+    assert!(q("10:\"30 pm\"").is_empty());
+    assert!(q("jane\\\"").is_empty(), "a backslash is an ordinary character");
+    let long = format!("person:\"{}", "é ".repeat(50_000));
+    assert!(q(&long).is_empty());
+    assert_eq!(q("   \t jane \u{3000} "), vec![jane, both], "any whitespace separates tokens");
+}
+
 /// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be
 /// said photo by photo.
 #[test]
@@ -845,12 +952,13 @@ fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() 
     c.apply(Op::SetRating { id: a, rating: 1 }).unwrap();
     assert_eq!(c.touched_since(loaded), Some(vec![a]));
     assert_eq!(c.touched_since(old), None);
-    // an op that fails changes nothing, and what is remembered never says less than what happened
+    // an op that fails changes nothing and is not remembered
     let before = c.revision;
     assert!(c.apply(Op::SetRating { id: PhotoId(9_999), rating: 1 }).is_err());
     assert_eq!(c.revision, before);
+    assert_eq!(c.touched_since(before), Some(vec![]));
     c.apply(Op::SetFlag { id: a, flag: Flag::Pick }).unwrap();
-    assert!(c.touched_since(before).is_some_and(|ids| ids.contains(&a)));
+    assert_eq!(c.touched_since(before), Some(vec![a]));
     assert!(c.aspects_since(before).is_some_and(|x| x.any_of(Aspects::FLAG)));
     // a batch that fails midway is undone as a whole; a batch in a batch is remembered photo by photo; a batch
     // with an op that changes more than photos is not
@@ -858,8 +966,8 @@ fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() 
     assert!(c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 5 }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] }).is_err());
     assert_eq!((c.revision, c.photo(a).map(|p| p.rating)), (before, Some(1)));
     c.apply(Op::Batch { ops: vec![Op::Batch { ops: vec![Op::SetRating { id: a, rating: 2 }] }] }).unwrap();
-    // (the photo the failed batch asked for and never found may be named too: more is said, never less)
-    assert!(c.touched_since(before).is_some_and(|ids| ids.contains(&a)));
+    // (the failed batch is not remembered: only the batch that worked)
+    assert_eq!(c.touched_since(before), Some(vec![a]));
     let before = c.revision;
     c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 3 }, Op::RenameAlbum { id: album, name: "Journey".into() }] }).unwrap();
     assert_eq!(c.touched_since(before), None);
@@ -870,4 +978,71 @@ fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() 
     }
     assert_eq!(c.touched_since(long_ago), None);
     assert_eq!(c.touched_since(c.revision - 10), Some(vec![a]));
+}
+
+/// An op that fails leaves nothing behind in what the catalog remembers of its ops: no photo it never changed (one
+/// that does not even exist), and, for a batch rolled back, none of what its first ops had touched.
+#[test]
+fn an_op_that_fails_leaves_no_touched_photos_behind() {
+    let mut c = Catalog::default();
+    let add = |c: &mut Catalog, name: &str| {
+        let id = c.alloc_photo_id();
+        c.apply(Op::AddPhoto {
+            photo: Box::new(Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00")),
+        })
+        .unwrap();
+        id
+    };
+    let (a, b) = (add(&mut c, "a.jpg"), add(&mut c, "b.jpg"));
+    let missing = PhotoId(9_999);
+    let start = c.revision;
+    // every op that names a photo, on one that does not exist
+    for op in [Op::SetRating { id: missing, rating: 1 }, Op::SetFlag { id: missing, flag: Flag::Pick }, Op::RemovePhoto { id: missing }] {
+        assert!(c.apply(op).is_err());
+        assert_eq!(c.revision, start, "a failed op makes no revision");
+        assert_eq!(c.touched_since(start), Some(vec![]));
+        assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    }
+    // an op that changes more than photos and fails does not make earlier revisions unknown
+    assert!(c.apply(Op::RenameAlbum { id: AlbumId(77), name: "x".into() }).is_err());
+    assert_eq!(c.touched_since(start), Some(vec![]));
+    // a batch that fails on its second op names nothing of its first, nor of the rollback
+    assert!(c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 5 }, Op::SetRating { id: missing, rating: 1 }] }).is_err());
+    assert_eq!(c.revision, start);
+    assert_eq!(c.touched_since(start), Some(vec![]));
+    assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
+    assert_eq!(c.photo(a).map(|p| p.rating), Some(0));
+    // a batch that ends in a failed removal of a photo that exists
+    assert!(c.apply(Op::Batch { ops: vec![Op::RemovePhoto { id: b }, Op::RemovePhoto { id: b }] }).is_err());
+    assert!(c.photo(b).is_some());
+    assert_eq!(c.touched_since(start), Some(vec![]));
+    // what succeeded after the failures is remembered, and only that
+    c.apply(Op::SetRating { id: a, rating: 2 }).unwrap();
+    assert_eq!(c.touched_since(start), Some(vec![a]));
+    assert_eq!(c.aspects_since(start), Some(Aspects::RATING));
+}
+
+/// A batch the rollback of which fails halfway leaves the catalog changed (here a stack is lost), so what the
+/// catalog remembers must not say that nothing changed: anything may have.
+#[test]
+fn a_batch_that_cannot_be_rolled_back_whole_makes_earlier_changes_unknown() {
+    let mut c = Catalog::default();
+    let mut ids = Vec::new();
+    for name in ["a.jpg", "b.jpg"] {
+        let id = c.alloc_photo_id();
+        let photo = Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00");
+        c.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let stack = c.alloc_stack_id();
+    c.apply(Op::AddStack { stack: Stack { id: stack, photos: ids.clone(), collapsed: false } }).unwrap();
+    let start = c.revision;
+    // the photo goes, then its stack, then an op fails: putting the stack back needs the photo, which comes later
+    let failing =
+        Op::Batch { ops: vec![Op::RemovePhoto { id: ids[0] }, Op::RemoveStack { id: stack }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] };
+    assert!(c.apply(failing).is_err());
+    assert_eq!(c.revision, start + 1, "the catalog changed, so what is kept for the revision before is out of date");
+    assert!(c.photo(ids[0]).is_some() && c.stack(stack).is_none(), "the rollback went only part of the way");
+    assert_eq!(c.touched_since(start), None, "so nothing is said of what changed");
+    assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
 }

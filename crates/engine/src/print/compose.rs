@@ -1,5 +1,6 @@
 //! Composes print pages: places each cell's photo (fit or Zoom to Fill, optionally Rotate to Fit),
-//! draws Photo Border and Inner Stroke, fills the page background and returns [`PageRaster`]s.
+//! draws Photo Border and Inner Stroke, fills the page background, adds the Page Options (crop
+//! marks, page number, page info) and returns [`PageRaster`]s.
 //!
 //! Work is split like an export: [`prepare`] reads the session (which photos go in which cell, one
 //! render job per cell) and [`Prepared::run`] does the heavy part without it, so it can run on a
@@ -28,6 +29,13 @@ pub const MAX_BORDER_IN: f64 = 2.0;
 pub const MAX_STROKE_PT: f64 = 36.0;
 /// Renders kept for cells that print the same photo at the same size.
 const RENDER_CACHE: usize = 4;
+/// A crop mark's length and its gap from the photo's corner, inches.
+pub const CROP_MARK_IN: f64 = 0.25;
+pub const CROP_MARK_GAP_IN: f64 = 0.0625;
+/// A crop mark's weight, points.
+pub const CROP_MARK_PT: f64 = 0.5;
+/// Size of the page number and page info text, points.
+pub const PAGE_TEXT_PT: f64 = 9.0;
 
 /// Lightroom's Image Settings panel.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -85,11 +93,18 @@ impl ImageSettings {
 pub struct PageStyle {
     /// Page background colour, sRGB.
     pub background: [u8; 3],
+    /// Page Options (Single Image and Contact Sheet, as in Lightroom; the packages ignore them):
+    /// the page number at the bottom right of each page.
+    pub page_numbers: bool,
+    /// The print settings (sharpening, profile, resolution) at the bottom left of each page.
+    pub page_info: bool,
+    /// Marks at the corners of each photo to cut along.
+    pub crop_marks: bool,
 }
 
 impl Default for PageStyle {
     fn default() -> Self {
-        Self { background: [255; 3] }
+        Self { background: [255; 3], page_numbers: false, page_info: false, crop_marks: false }
     }
 }
 
@@ -98,6 +113,41 @@ pub fn rec2020_from_srgb8(c: [u8; 3]) -> [u16; 3] {
     let lin = SRGB.to_space(&REC2020).apply_f32(c.map(|v| srgb_to_linear(f32::from(v) / 255.0)));
     let trc = OutputSpace::Rec2020.trc();
     lin.map(|v| (trc.encode(v) * 65535.0 + 0.5) as u16)
+}
+
+/// Whether a layout style prints the Page Options (page numbers, page info, crop marks):
+/// Lightroom offers them for Single Image and Contact Sheet; its packages have Cut Guides instead.
+pub fn has_page_options(style: Style) -> bool {
+    !style.is_package()
+}
+
+/// The colour of crop marks and page text on `background`: black, or white on a dark page.
+pub fn mark_ink(background: [u8; 3]) -> [u8; 3] {
+    let [r, g, b] = background.map(f64::from);
+    if 0.2126 * r + 0.7152 * g + 0.0722 * b < 128.0 { [255; 3] } else { [0; 3] }
+}
+
+/// The Page Info line: print sharpening, profile and resolution (Lightroom names the printer
+/// where the resolution is; this print goes to a PDF).
+pub fn page_info_text(settings: &PrintSettings) -> String {
+    use crate::print_color::{ManagedSpace, PrintMedia, PrintProfile, PrintSharpen};
+    let c = &settings.job.color;
+    let media = match c.media {
+        PrintMedia::Matte => "Matte",
+        PrintMedia::Glossy => "Glossy",
+    };
+    let sharpen = match c.sharpen {
+        PrintSharpen::Off => "Off".to_string(),
+        PrintSharpen::Low => format!("Low ({media})"),
+        PrintSharpen::Standard => format!("Standard ({media})"),
+        PrintSharpen::High => format!("High ({media})"),
+    };
+    let profile = match &c.profile {
+        PrintProfile::Managed { space: ManagedSpace::Srgb } => "Managed by Printer (sRGB)".to_string(),
+        PrintProfile::Managed { space: ManagedSpace::AdobeRgb } => "Managed by Printer (Adobe RGB)".to_string(),
+        PrintProfile::Icc { path } => path.file_stem().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned()),
+    };
+    format!("Print Sharpening: {sharpen} · Profile: {profile} · {:.0} ppi", settings.job.effective_ppi())
 }
 
 // ---- placement ------------------------------------------------------------------------------
@@ -355,8 +405,8 @@ impl CellStyle {
 }
 
 /// Draws `photo` into `cell` of `page`: border frame, the photo fitted or filled (and turned when
-/// asked), then the inner stroke on top of it.
-pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &CellStyle) -> Result<(), String> {
+/// asked), then the inner stroke on top of it. Returns where the photo landed.
+pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &CellStyle) -> Result<PxRect, String> {
     // The border may not eat the cell: at least one pixel of photo area stays.
     let border = style.border_px.min(cell.w.min(cell.h).saturating_sub(1) / 2);
     let (ax, ay) = (cell.x + border, cell.y + border);
@@ -382,7 +432,105 @@ pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &Cell
         page.fill_rect(dx, dy + s, s, h - 2 * s, style.stroke);
         page.fill_rect(dx + w - s, dy + s, s, h - 2 * s, style.stroke);
     }
-    Ok(())
+    Ok(PxRect { x: dx, y: dy, w, h })
+}
+
+/// What the Page Options draw on every page, in page pixels.
+struct Marks {
+    /// Crop mark length, gap from the corner and weight.
+    crop: Option<(usize, usize, usize)>,
+    numbers: bool,
+    info: Option<String>,
+    ink: [u16; 3],
+    text_px: f32,
+    /// The printable area: the text sits in the margin below it, aligned with its sides.
+    area: Option<PxRect>,
+}
+
+impl Marks {
+    fn of(settings: &PrintSettings, ppi: f64, pw: usize, ph: usize) -> Self {
+        let on = has_page_options(settings.layout.style);
+        let page = &settings.page;
+        let px = |inches: f64| (inches * ppi).round() as usize;
+        Marks {
+            crop: (on && page.crop_marks).then(|| (px(CROP_MARK_IN), px(CROP_MARK_GAP_IN), px(CROP_MARK_PT / 72.0).max(1))),
+            numbers: on && page.page_numbers,
+            info: (on && page.page_info).then(|| page_info_text(settings)),
+            ink: rec2020_from_srgb8(mark_ink(page.background)),
+            text_px: (PAGE_TEXT_PT / 72.0 * ppi) as f32,
+            area: settings.layout.printable().ok().and_then(|a| px_rect(&a, ppi, pw, ph)),
+        }
+    }
+
+    /// Draws the marks of page `number` (one-based) around `photos`, the photos on it.
+    fn draw(&self, page: &mut Image16, photos: &[PxRect], number: usize) {
+        if let Some((len, gap, weight)) = self.crop {
+            for r in photos {
+                crop_marks(page, r, len, gap, weight, photos, self.ink);
+            }
+        }
+        let area = self.area.unwrap_or(PxRect { x: 0, y: 0, w: page.w, h: page.h });
+        let (area_bottom, page_h) = ((area.y + area.h) as f32, page.h as f32);
+        // centred in the bottom margin, and on the paper when the margin is thinner than the text
+        let top = |h: f32| (area_bottom + (page_h - area_bottom - h) / 2.0).clamp(0.0, (page_h - h).max(0.0));
+        if self.numbers
+            && let Some(t) = crate::text::TextLayout::new(&number.to_string(), self.text_px, false, crate::fonts::CRAFT_FONTS)
+        {
+            let x = ((area.x + area.w) as f32 - t.width).max(0.0);
+            draw_text(page, &t, x, top(t.height), self.ink);
+        }
+        if let Some(info) = &self.info
+            && let Some(t) = crate::text::TextLayout::new(info, self.text_px, false, crate::fonts::CRAFT_FONTS)
+        {
+            draw_text(page, &t, area.x as f32, top(t.height), self.ink);
+        }
+    }
+}
+
+/// Crop marks for the photo at `r`: at each corner, a line along each of its edges that starts
+/// `gap` past the corner and runs `len` outward, `weight` thick. Marks never cover a photo.
+fn crop_marks(page: &mut Image16, r: &PxRect, len: usize, gap: usize, weight: usize, photos: &[PxRect], ink: [u16; 3]) {
+    let (x0, y0, x1, y1) = (r.x as i64, r.y as i64, (r.x + r.w) as i64, (r.y + r.h) as i64);
+    let (l, g, t) = (len as i64, gap as i64, weight.min(r.w).min(r.h) as i64);
+    let segments = [
+        (x0 - g - l, y0, l, t),
+        (x1 + g, y0, l, t),
+        (x0 - g - l, y1 - t, l, t),
+        (x1 + g, y1 - t, l, t),
+        (x0, y0 - g - l, t, l),
+        (x0, y1 + g, t, l),
+        (x1 - t, y0 - g - l, t, l),
+        (x1 - t, y1 + g, t, l),
+    ];
+    let on_photo = |x: usize, y: usize| photos.iter().any(|p| x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h);
+    for (sx, sy, sw, sh) in segments {
+        for y in sy.max(0)..(sy + sh).min(page.h as i64) {
+            for x in sx.max(0)..(sx + sw).min(page.w as i64) {
+                let (x, y) = (x as usize, y as usize);
+                if !on_photo(x, y) {
+                    page.fill_rect(x, y, 1, 1, ink);
+                }
+            }
+        }
+    }
+}
+
+/// Blends text in `ink` into `page` with its top-left corner at (`x`, `y`).
+fn draw_text(page: &mut Image16, text: &crate::text::TextLayout, x: f32, y: f32, ink: [u16; 3]) {
+    let (w, h) = (page.w, page.h);
+    text.draw_in(x, y, w as f32, h as f32, |gx, gy, cov| {
+        let (Ok(gx), Ok(gy)) = (usize::try_from(gx), usize::try_from(gy)) else { return };
+        if gx >= w || gy >= h {
+            return;
+        }
+        let i = (gy * w + gx) * 3;
+        if let Some(px) = page.rgb.get_mut(i..i + 3) {
+            let k = cov.clamp(0.0, 1.0);
+            for (p, c) in px.iter_mut().zip(ink) {
+                *p = (f32::from(*p) + (f32::from(c) - f32::from(*p)) * k).round().clamp(0.0, 65535.0) as u16;
+            }
+        }
+    });
 }
 
 // ---- the job ---------------------------------------------------------------------------------
@@ -402,6 +550,7 @@ pub struct Prepared {
     ppi: f32,
     background: [u16; 3],
     style: CellStyle,
+    marks: Marks,
     /// Print sharpening, applied to each photo once it's rendered at its print size.
     color: crate::print_color::PrintColorSettings,
 }
@@ -430,6 +579,7 @@ impl Prepared {
         let mut out = Vec::with_capacity(self.pages.len());
         for (index, &(w, h)) in self.pages.iter().enumerate() {
             let mut page = Image16::filled(w, h, self.background)?;
+            let mut placed = Vec::new();
             while let Some(item) = items.next_if(|i| i.page == index) {
                 if !progress(done, &item.name) {
                     return Err("Print cancelled".into());
@@ -448,8 +598,9 @@ impl Prepared {
                     }
                 };
                 let photo = &cache.get(at).ok_or("render cache lost an entry")?.1;
-                draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?;
+                placed.push(draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?);
             }
+            self.marks.draw(&mut page, &placed, index + 1);
             out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb });
         }
         if !progress(done, "") {
@@ -508,6 +659,7 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
         ppi: ppi as f32,
         background: rec2020_from_srgb8(settings.page.background),
         style,
+        marks: Marks::of(&settings, ppi, pw, ph),
         color: settings.job.color.clone(),
     })
 }
@@ -823,6 +975,94 @@ mod tests {
         assert_ne!(at(mid.0, mid.1), green.to_vec(), "the photo, not the border, is in the middle");
         let green_px = (y0..y0 + 100).flat_map(|y| (x0..x0 + 150).map(move |x| (x, y))).filter(|&(x, y)| at(x, y) == green.to_vec()).count();
         assert!(green_px > 1000, "the border frames the photo inside its cell: {green_px} border pixels");
+    }
+
+    /// Pages for two photos, one per 4x6 page at 100 ppi, each filling its 0.5 in margins (so the
+    /// margins are bare background unless something draws there).
+    fn page_options_pages(s: &mut Session, style: Style, page: PageStyle) -> Vec<PageRaster> {
+        let ids = first_ids(s, 2);
+        let mut set = settings(style);
+        if style.is_package() {
+            set.layout.add_cell(3.0, 5.0).unwrap();
+            set.layout.new_page().unwrap();
+            let id = set.layout.add_cell(3.0, 5.0).unwrap();
+            set.layout.set_cell_page(id, 1).unwrap();
+        }
+        set.image.zoom_to_fill = true;
+        set.page = page;
+        prepare(s, &set, &ids).unwrap().run(&mut |_, _| true).unwrap()
+    }
+
+    fn rgb(p: &PageRaster, x: usize, y: usize) -> [u16; 3] {
+        let i = (y * p.width as usize + x) * 3;
+        [p.rgb[i], p.rgb[i + 1], p.rgb[i + 2]]
+    }
+
+    /// The pixels of `x0..x1` x `y0..y1` that are not the white background.
+    fn inked(p: &PageRaster, x0: usize, x1: usize, y0: usize, y1: usize) -> usize {
+        (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| rgb(p, x, y) != WHITE).count()
+    }
+
+    #[test]
+    fn crop_marks_sit_outside_each_photo_corner() {
+        let mut s = Session::with_demo();
+        let plain = page_options_pages(&mut s, Style::SingleImage, PageStyle::default());
+        assert_eq!(inked(&plain[0], 0, 400, 0, 50), 0, "no marks unless asked");
+        let pages = page_options_pages(&mut s, Style::SingleImage, PageStyle { crop_marks: true, ..Default::default() });
+        // The photo fills 50..350 x 50..550; a mark is a line 0.25 in long, 1/16 in from the corner,
+        // along each edge of the photo.
+        for p in &pages {
+            for (x, y) in [(30, 50), (50, 30), (370, 50), (349, 30), (30, 549), (50, 570), (370, 549), (349, 570)] {
+                assert_eq!(rgb(p, x, y), [0; 3], "a mark at ({x}, {y})");
+            }
+            for (x, y) in [(47, 50), (50, 47), (30, 60), (60, 30), (10, 50), (50, 10)] {
+                assert_eq!(rgb(p, x, y), WHITE, "the gap, or past the mark, at ({x}, {y})");
+            }
+        }
+        // a dark page gets white marks
+        let dark = page_options_pages(&mut s, Style::SingleImage, PageStyle { background: [20; 3], crop_marks: true, ..Default::default() });
+        assert_eq!(rgb(&dark[0], 30, 50), WHITE);
+    }
+
+    #[test]
+    fn page_numbers_and_info_print_in_the_bottom_margin() {
+        let mut s = Session::with_demo();
+        let numbered = page_options_pages(&mut s, Style::SingleImage, PageStyle { page_numbers: true, ..Default::default() });
+        // bottom right: the number, different on each page; nothing at the bottom left
+        let (right, left) = ((200, 400), (0, 200));
+        for p in &numbered {
+            assert!(inked(p, right.0, right.1, 550, 600) > 10, "a page number");
+            assert_eq!(inked(p, left.0, left.1, 550, 600), 0);
+            assert_eq!(inked(p, 0, 400, 0, 50), 0, "nothing at the top");
+        }
+        let region = |p: &PageRaster| (550..600).flat_map(|y| (right.0..right.1).map(move |x| (x, y))).map(|(x, y)| rgb(p, x, y)).collect::<Vec<_>>();
+        assert_ne!(region(&numbered[0]), region(&numbered[1]), "page 1 and page 2 are numbered differently");
+        let info = page_options_pages(&mut s, Style::SingleImage, PageStyle { page_info: true, ..Default::default() });
+        for p in &info {
+            assert!(inked(p, left.0, left.1, 550, 600) > 10, "the print settings line");
+        }
+        // the packages have no Page Options in Lightroom: nothing is drawn
+        let all = PageStyle { page_numbers: true, page_info: true, crop_marks: true, ..Default::default() };
+        let package = page_options_pages(&mut s, Style::PicturePackage, all);
+        assert_eq!(package.len(), 2);
+        for p in &package {
+            assert_eq!(inked(p, 0, 400, 550, 600) + inked(p, 0, 400, 0, 50), 0);
+        }
+    }
+
+    #[test]
+    fn page_info_names_the_sharpening_profile_and_resolution() {
+        use crate::print_color::{ManagedSpace, PrintMedia, PrintProfile, PrintSharpen};
+        let mut set = PrintSettings::default();
+        let line = page_info_text(&set);
+        assert_eq!(line, "Print Sharpening: Standard (Glossy) · Profile: Managed by Printer (sRGB) · 240 ppi");
+        set.job.color.sharpen = PrintSharpen::Off;
+        set.job.color.media = PrintMedia::Matte;
+        set.job.color.profile = PrintProfile::Icc { path: "/profiles/Lustre Paper.icc".into() };
+        set.job.ppi = 300.0;
+        assert_eq!(page_info_text(&set), "Print Sharpening: Off · Profile: Lustre Paper · 300 ppi");
+        set.job.color.profile = PrintProfile::Managed { space: ManagedSpace::AdobeRgb };
+        assert!(page_info_text(&set).contains("Managed by Printer (Adobe RGB)"));
     }
 
     #[test]

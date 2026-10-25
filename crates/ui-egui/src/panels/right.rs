@@ -20,6 +20,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let Some(id) = app.session.active() else {
             // the Keyword List is the library's, not a photo's: it is there without a selection
             if app.ui.right == RightPanel::Keywords {
+                // (without a selection there is no Add keyword box for Add Keywords to put the cursor in)
+                app.ui.focus_keywords = None;
                 egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     if fold_header(app, ui, "keywording", "Keywords") {
@@ -317,7 +319,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 app.ui.tool = if on { String::new() } else { "straighten".into() };
             }
             if text_button(ui, "straightenAuto", crate::i18n::tr("Auto"), false).clicked() {
-                let _ = app.run("crop.autoStraighten", json!({}));
+                app.auto_straighten(ui.ctx());
             }
         });
     });
@@ -642,8 +644,10 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("Virtual copy “{name}” of {of}", name = name, of = of)).color(t.text_label));
         }
         ui.add_space(8.0);
-        if let Some(r) = ui.horizontal(|ui| crate::widgets::stars(ui, "info", p.rating, 20.0)).inner {
-            let _ = app.run("photo.rate", json!({"rating": r}));
+        if let Some(r) = ui.horizontal(|ui| crate::rating::Rating::new("info", p.rating).show(ui)).inner {
+            let mut params = json!({"rating": r});
+            crate::panels::compare::target_active(app, &mut params);
+            let _ = app.run("photo.rate", params);
         }
         ui.add_space(6.0);
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
@@ -660,7 +664,10 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
                 if resp.clicked() {
-                    let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
+                    // in Compare / Survey only the active photo, as the rating keys and the bottom pill do
+                    let mut params = json!({"label": if on { "none".to_string() } else { key }});
+                    crate::panels::compare::target_active(app, &mut params);
+                    let _ = app.run("photo.label", params);
                 }
             }
             if let Some(l) = p.label {
@@ -669,8 +676,19 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     });
     divider(ui);
-    let m = p.meta.clone();
+    // with several photos selected: Target Photo shows this photo's values, Selected Photos what
+    // the selection shares (a field where they differ is empty and says Mixed)
+    let selected = app.session.selected();
+    let several = selected.len() > 1;
+    let for_selected = several && app.ui.settings.info_selected_photos;
+    let m = shown_meta(&app.session.catalog, &p, &selected, for_selected);
+    let mixed = if for_selected { mixed_meta(&app.session.catalog, &selected, &m) } else { Vec::new() };
+    // the photos an edit goes to: Target Photo edits the photo it shows
+    let targets = if several && !for_selected { vec![id] } else { selected.clone() };
     padded(ui, |ui| {
+        if several {
+            metadata_for(app, ui);
+        }
         for (label, key, value, lines) in [
             ("Title", "title", &m.title, 1),
             ("Caption", "caption", &m.caption, 2),
@@ -678,15 +696,15 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("Extended Description", "extendedDescription", &m.extended_description, 3),
             ("Copyright", "copyright", &m.copyright, 1),
         ] {
-            meta_field(app, ui, label, key, value, lines);
+            meta_field(app, ui, label, key, value, lines, mixed.contains(&key), &targets);
         }
-        copyright_status(app, ui, m.copyright_status);
+        copyright_status(app, ui, m.copyright_status, mixed.contains(&"copyrightStatus"), &targets);
         for (label, key, value, lines) in [
             ("Rights Usage Terms", "usageTerms", &m.usage_terms, 2),
             ("Copyright Info URL", "copyrightUrl", &m.copyright_url, 1),
             ("Creator", "creator", &m.creator, 1),
         ] {
-            meta_field(app, ui, label, key, value, lines);
+            meta_field(app, ui, label, key, value, lines, mixed.contains(&key), &targets);
         }
         // file: name (rename), path (reveal), capture time (edit)
         let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
@@ -735,28 +753,32 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("State / Province", "state", &m.state),
             ("Country", "country", &m.country),
         ] {
-            meta_field(app, ui, label, key, value, 1);
+            meta_field(app, ui, label, key, value, 1, mixed.contains(&key), &targets);
         }
         // GPS: typed as "lat, lon" (or degrees / minutes / seconds); empty clears it
-        let gps = m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default();
+        let gps_mixed = mixed.contains(&"gps");
+        let gps = if gps_mixed { String::new() } else { m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default() };
         let gid = egui::Id::new("info-gps");
         ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
-        let mut text: String = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| gps.clone());
-        let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(crate::i18n::tr("latitude, longitude")).desired_width(f32::INFINITY));
-        crate::widgets::screen_reader_name(ui.ctx(), r.id, "GPS");
-        register(ui.ctx(), "field:gps", r.rect);
-        if r.has_focus() {
-            ui.data_mut(|d| d.insert_temp(gid, text.clone()));
+        let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
+        let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
+        let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
+        edit.typed |= edit.text != edit.start;
+        if r.editing {
+            ui.data_mut(|d| d.insert_temp(gid, edit.clone()));
         } else {
-            ui.data_mut(|d| d.remove::<String>(gid));
+            ui.data_mut(|d| d.remove::<FieldEdit>(gid));
         }
-        if r.lost_focus()
-            && text.trim() != gps
-            && let Err(e) = app.run("photo.setMeta", json!({"gps": text.trim()}))
+        // Return or leaving saves; Esc gives the edit up
+        let text = edit.text.trim();
+        if r.committed()
+            && (text != edit.start || edit.clears())
+            && let Err(e) = app.run("photo.setMeta", json!({"ids": edit.ids, "gps": text}))
         {
             app.toast(ui.ctx(), e);
         }
-        if let Some((la, lo)) = m.gps {
+        // (one photo's place: not shown while the selected photos' places differ)
+        if let Some((la, lo)) = m.gps.filter(|_| !gps_mixed) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
@@ -771,7 +793,11 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
             if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"))
+                .on_hover_text(format!(
+                    "{}\n{}",
+                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+                ))
                 .clicked()
                 && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
             {
@@ -857,7 +883,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 }
             });
         }
-        // where the camera focused, and how (View ▸ Show Focus Point draws it): only when known; the
+        // where the camera focused, and how (View ▸ Focus Point draws it): only when known; the
         // whole card's width, so "AF-C · Expanded Flexible Spot · Face tracking" fits
         if let Some(text) = focus_text(m.focus.as_ref()) {
             ui.add_space(3.0);
@@ -887,16 +913,140 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// A labelled metadata text field: the typed text lives in egui memory while focused and is
-/// saved (photo.setMeta `key`) when the field loses focus.
-/// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`).
-fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus) {
+/// What a metadata field shows while the selected photos' values differ (Selected Photos).
+const MIXED: &str = "Mixed";
+
+/// An Info panel field's edit under way, kept in egui memory between frames. A field saves when
+/// its text is not the text the edit started from, so a field left as it was saves nothing, even
+/// when what the panel shows changed during the edit. It saves to the photos it edited when the
+/// edit started (the selected photos, or Target Photo's photo alone), also when the selection
+/// changed since.
+#[derive(Clone)]
+struct FieldEdit {
+    text: String,
+    start: String,
+    /// The photos the field edited when the edit started (`photo.setMeta` `ids`).
+    ids: Vec<u64>,
+    /// The field said Mixed when the edit started.
+    mixed: bool,
+    /// Something was typed or deleted since.
+    typed: bool,
+}
+
+impl FieldEdit {
+    fn new(value: &str, mixed: bool, targets: &[PhotoId]) -> Self {
+        let ids = targets.iter().map(|id| id.0).collect();
+        FieldEdit { text: value.to_string(), start: value.to_string(), ids, mixed, typed: false }
+    }
+
+    /// A Mixed field that was typed in and left empty: it clears the field on every selected photo.
+    fn clears(&self) -> bool {
+        self.mixed && self.typed
+    }
+}
+
+/// The Info panel's text fields, by their `photo.setMeta` key.
+const META_TEXT_KEYS: [&str; 12] = [
+    "title",
+    "caption",
+    "altText",
+    "extendedDescription",
+    "copyright",
+    "usageTerms",
+    "copyrightUrl",
+    "creator",
+    "location",
+    "city",
+    "state",
+    "country",
+];
+
+/// The value of one of [`META_TEXT_KEYS`].
+fn meta_text<'a>(m: &'a lightcraft_catalog::Meta, key: &str) -> Option<&'a str> {
+    Some(match key {
+        "title" => &m.title,
+        "caption" => &m.caption,
+        "altText" => &m.alt_text,
+        "extendedDescription" => &m.extended_description,
+        "copyright" => &m.copyright,
+        "usageTerms" => &m.usage_terms,
+        "copyrightUrl" => &m.copyright_url,
+        "creator" => &m.creator,
+        "location" => &m.location,
+        "city" => &m.city,
+        "state" => &m.state,
+        "country" => &m.country,
+        _ => return None,
+    })
+}
+
+/// The metadata the Info panel's fields show: the active photo `p`'s, or with `for_selected`
+/// (Selected Photos) the active photo's when it is one of the `selected` photos, else the first
+/// selected photo's.
+pub(crate) fn shown_meta(
+    catalog: &lightcraft_catalog::Catalog,
+    p: &lightcraft_catalog::Photo,
+    selected: &[PhotoId],
+    for_selected: bool,
+) -> lightcraft_catalog::Meta {
+    if !for_selected || selected.contains(&p.id) {
+        return p.meta.clone();
+    }
+    selected.iter().find_map(|&id| catalog.photo(id)).map_or_else(|| p.meta.clone(), |q| q.meta.clone())
+}
+
+/// The Info panel fields (`photo.setMeta` keys, plus `copyrightStatus` and `gps`) where one of
+/// the photos `ids` has a value other than `shown`'s, the metadata the panel draws.
+pub(crate) fn mixed_meta(catalog: &lightcraft_catalog::Catalog, ids: &[PhotoId], shown: &lightcraft_catalog::Meta) -> Vec<&'static str> {
+    let mut mixed = Vec::new();
+    for m in ids.iter().filter_map(|&id| catalog.photo(id)).map(|p| &p.meta) {
+        for key in META_TEXT_KEYS {
+            if !mixed.contains(&key) && meta_text(m, key) != meta_text(shown, key) {
+                mixed.push(key);
+            }
+        }
+        if !mixed.contains(&"copyrightStatus") && m.copyright_status != shown.copyright_status {
+            mixed.push("copyrightStatus");
+        }
+        if !mixed.contains(&"gps") && m.gps != shown.gps {
+            mixed.push("gps");
+        }
+        if mixed.len() == META_TEXT_KEYS.len() + 2 {
+            break;
+        }
+    }
+    mixed
+}
+
+/// Target Photo / Selected Photos: whose metadata the fields below show while several photos
+/// are selected (`view.infoSelectedPhotos`).
+fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(crate::i18n::tr("Show Metadata For")).size(11.5).color(t.text_dim));
+    ui.horizontal_wrapped(|ui| {
+        let on = app.ui.settings.info_selected_photos;
+        for (id, label, selected) in [("infoFor-target", "Target Photo", false), ("infoFor-selected", "Selected Photos", true)] {
+            if text_button(ui, id, label, on == selected).clicked() && on != selected {
+                let _ = app.run("view.infoSelectedPhotos", json!({"on": selected}));
+            }
+        }
+    });
+    ui.add_space(6.0);
+}
+
+/// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`). `mixed`: the
+/// selected photos' statuses differ, and any status picked is given to all of them. A status
+/// picked goes to the photos `targets`.
+fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool, targets: &[PhotoId]) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(crate::i18n::tr(current.label())).show_ui(ui, |ui| {
+    let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
+    let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
         for st in lightcraft_catalog::CopyrightStatus::ALL {
-            if ui.selectable_label(st == current, crate::i18n::tr(st.label())).clicked() && st != current {
-                let _ = app.run("photo.setMeta", json!({"copyrightStatus": st.id()}));
+            let on = !mixed && st == current;
+            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
+                let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
+                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
             }
         }
     });
@@ -904,27 +1054,35 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     ui.add_space(6.0);
 }
 
-fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {
+/// A labeled metadata text field: the typed text lives in egui memory while focused and is
+/// saved (photo.setMeta `key`) when the field loses focus. `mixed`: the selected photos' values
+/// differ, so the field starts empty and says so, and is saved only when it was typed in (left
+/// empty, it clears the field on every selected photo). The edit is saved to the photos `targets`.
+#[allow(clippy::too_many_arguments)]
+fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize, mixed: bool, targets: &[PhotoId]) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
     let id = egui::Id::new(("info-field", key));
-    let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| value.to_string());
+    let value = if mixed { "" } else { value };
+    let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
     let widget = format!("field:{key}");
     let field = if lines > 1 {
-        crate::text_field::TextField::multiline(&widget, &mut text).rows(lines)
+        crate::text_field::TextField::multiline(&widget, &mut edit.text).rows(lines)
     } else {
-        crate::text_field::TextField::singleline(&widget, &mut text)
+        crate::text_field::TextField::singleline(&widget, &mut edit.text)
     };
+    let field = if mixed { field.hint(crate::i18n::tr(MIXED)) } else { field };
     let r = field.label(crate::i18n::tr(label)).width(f32::INFINITY).show(ui);
+    edit.typed |= edit.text != edit.start;
     // the typed text outlives frames while it is edited (the photo's value is drawn otherwise)
     if r.editing {
-        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+        ui.data_mut(|d| d.insert_temp(id, edit.clone()));
     } else {
-        ui.data_mut(|d| d.remove::<String>(id));
+        ui.data_mut(|d| d.remove::<FieldEdit>(id));
     }
     // Return (one line) or leaving saves; Esc gives the edit up
-    if r.committed() && text != value {
-        let _ = app.run("photo.setMeta", json!({key: text}));
+    if r.committed() && (edit.text != edit.start || edit.clears()) {
+        let _ = app.run("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));
     }
     ui.add_space(6.0);
 }
@@ -1005,11 +1163,16 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // switched away, doesn't claim the cursor whenever it is next drawn)
         let bid = egui::Id::new("kw-begin");
         let begin = ui.data_mut(|d| d.remove_temp::<u64>(bid)).is_some_and(|asked| asked.checked_add(1) == Some(pass));
+        // Add Keywords (⌘K) asks for the cursor too, and for the box to be scrolled into sight
+        let asked = app.ui.focus_keywords.take().is_some_and(|at| pass <= at.saturating_add(crate::state::FOCUS_KEYWORDS_PASSES));
         let r = crate::text_field::TextField::singleline("field:keyword", &mut text)
             .hint(crate::i18n::tr("Add keyword"))
             .width(f32::INFINITY)
-            .begin_edit(begin)
+            .begin_edit(begin || asked)
             .show(ui);
+        if asked {
+            r.response.scroll_to_me(None);
+        }
         let in_sight = ui.clip_rect().contains(r.response.rect.center());
         let mut drawn = Rect::NOTHING;
         // (what isn't drawn can't be taken: Return on the frame the box scrolls out gives nothing)
@@ -1319,25 +1482,29 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             } else if resp.clicked() && !current {
                 let _ = app.run("version.restore", json!({"index": i}));
             }
-            resp.on_hover_text(crate::i18n::tr(if current { "The photo has these settings" } else { "Click to restore · double-click to rename" }))
-                .context_menu(|ui| {
-                    if ui.button(crate::i18n::tr("Restore")).clicked() {
-                        let _ = app.run("version.restore", json!({"index": i}));
-                    }
-                    if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
-                        let _ = app.run("version.update", json!({"index": i}));
-                    }
-                    if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                        crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
-                    }
-                    if ui.button(crate::i18n::tr("Set as Before")).clicked() {
-                        let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
-                    }
-                    ui.separator();
-                    if ui.button(crate::i18n::tr("Delete")).clicked() {
-                        let _ = app.run("version.delete", json!({"index": i}));
-                    }
-                });
+            let resp = resp.on_hover_text(crate::i18n::tr(if current {
+                "The photo has these settings"
+            } else {
+                "Click to restore · double-click to rename"
+            }));
+            crate::widgets::context_menu(&resp, |ui| {
+                if ui.button(crate::i18n::tr("Restore")).clicked() {
+                    let _ = app.run("version.restore", json!({"index": i}));
+                }
+                if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
+                    let _ = app.run("version.update", json!({"index": i}));
+                }
+                if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                    crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
+                }
+                if ui.button(crate::i18n::tr("Set as Before")).clicked() {
+                    let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
+                }
+                ui.separator();
+                if ui.button(crate::i18n::tr("Delete")).clicked() {
+                    let _ = app.run("version.delete", json!({"index": i}));
+                }
+            });
         }
     });
 }
@@ -1409,7 +1576,7 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.clicked() {
                 let _ = app.run("history.restore", json!({"index": i}));
             }
-            resp.context_menu(|ui| {
+            crate::widgets::context_menu(&resp, |ui| {
                 if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
                     let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
                 }

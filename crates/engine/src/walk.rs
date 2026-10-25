@@ -58,8 +58,9 @@ pub enum EntryKind {
 
 /// What [`files_in_noting`] hands over for each folder it lists: the folder, the name and kind
 /// of every entry in it (hidden ones too), and whether that is all of them (not when the walk
-/// stopped inside the folder, or an entry could not be read).
-pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool);
+/// stopped inside the folder, or an entry could not be read). It answers whether to go on: `false`
+/// ends the walk there (a scan cancelled; [`Walked::truncated`] is left alone: who stopped it knows).
+pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool) -> bool;
 
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
@@ -154,8 +155,10 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             };
             children.push((p, dir));
         }
-        if let (Some(note), Some(listed)) = (note.as_mut(), listed) {
-            note(&path, listed, complete);
+        if let (Some(note), Some(listed)) = (note.as_mut(), listed)
+            && !note(&path, listed, complete)
+        {
+            break;
         }
         children.sort();
         let below = depth.saturating_add(1);
@@ -193,6 +196,7 @@ mod tests {
             let mut entries: Vec<(String, EntryKind)> = entries.into_iter().map(|(n, k)| (n.to_string_lossy().to_string(), k)).collect();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             noted.push((dir.to_path_buf(), entries, complete));
+            true
         });
         assert_eq!(walked, files_in(&root, None, Limits::default(), |_| true), "the same walk, noted or not");
         let named = |n: &str, k: EntryKind| (n.to_string(), k);
@@ -205,7 +209,8 @@ mod tests {
         // stopped inside the first folder: its listing is not all of it
         let mut cut = Vec::new();
         let walked = files_in_noting(&root, None, Limits { max_depth: 8, max_entries: 2 }, |_| true, &mut |dir, entries, complete| {
-            cut.push((dir.to_path_buf(), entries.len(), complete))
+            cut.push((dir.to_path_buf(), entries.len(), complete));
+            true
         });
         assert!(walked.truncated);
         assert_eq!(cut.first().map(|(dir, n, complete)| (dir.clone(), *n, *complete)), Some((root.clone(), 2, false)));

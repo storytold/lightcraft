@@ -10,9 +10,18 @@ use crate::theme::Tokens;
 
 /// Standard dropdown chevrons, including settings, import/export and rule editors.
 pub fn combo_box(id: impl egui::AsIdSalt) -> egui::ComboBox {
-    egui::ComboBox::from_id_salt(id).icon(|ui, rect, visuals, _| {
-        paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
-    })
+    egui::ComboBox::from_id_salt(id)
+        .icon(|ui, rect, visuals, _| {
+            paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
+        })
+        .popup_style(list_style.into())
+}
+
+/// A dropdown's list and its submenus: items without the resting border of a button, as egui's
+/// own menus draw them. An unhovered item gives up its border's width of padding, so with one it
+/// grew 2 points when hovered, and the longest name of a list sized to it wrapped (#2354).
+fn list_style(style: &mut egui::Style) {
+    style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
 }
 
 /// A native button with a vector arrow beside its text; egui reserves the icon's space.
@@ -42,6 +51,21 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
     let center = pos2(response.rect.right() - ui.spacing().button_padding.x - 8.0, response.rect.center().y);
     paint(ui.painter(), Rect::from_center_size(center, vec2(16.0, 16.0)), Icon::ChevronRight, ui.style().interact(&response).fg_stroke.color);
     egui::InnerResponse::new(inner.map(|r| r.inner), response)
+}
+
+/// A context menu on `response`, as `Response::context_menu` gives, that a right-click moves
+/// (#1877). egui closes a menu on any click once it was open on the previous frame, and judges
+/// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
+/// reopened the menu at the pointer and closed it again on the same frame, a one-frame flash.
+/// The click that opens (or moves) the menu is not the one that closes it.
+pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
+    egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(add_contents)
+}
+
+/// How a context menu on `response` closes this frame: `default`, except on the frame of the
+/// right-click that opens or moves it, which must not close it (see [`context_menu`]).
+pub fn context_menu_close(response: &Response, default: egui::PopupCloseBehavior) -> egui::PopupCloseBehavior {
+    if response.secondary_clicked() { egui::PopupCloseBehavior::IgnoreClicks } else { default }
 }
 
 // ------------------------------------------------------------------ automation registry
@@ -240,15 +264,44 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
     let id = ui.id().with(spec.id);
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
-    // A click selects the slider for arrow/wheel adjustments. Keep scroll-to-adjust
-    // opt-in so hovering an unfocused slider still scrolls the containing panel.
-    // Tab reaching the slider selects it as a click does: the arrow keys then adjust it
+    // Keyboard focus survives leaving the row; vertical wheel edits need a fresh click or drag
+    // in it (at most one slider is armed: `wheel_slider_key`).
+    let wheel_id = id.with("wheel-rem");
+    let mut wheel_armed = ui.data(|d| d.get_temp::<egui::Id>(wheel_slider_key())) == Some(id);
+    let pointer_in_row = ui.rect_contains_pointer(row);
+    // Every move this frame counts, not only where the pointer ended up: a slow frame (a slider
+    // drag, soft proofing) can merge leaving the row and coming back into one.
+    let left_row = wheel_armed
+        && ui.input(|i| {
+            i.events.iter().any(|e| match e {
+                egui::Event::PointerMoved(p) => !row.contains(*p),
+                egui::Event::PointerGone => true,
+                _ => false,
+            })
+        });
+    // Tab reaching the slider selects it for arrow keys, not vertical wheel edits.
     if enabled && resp.gained_focus() {
         ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
     }
-    if enabled && (resp.clicked() || resp.drag_started()) {
+    let selected = enabled && (resp.clicked() || resp.drag_started());
+    if selected {
         resp.request_focus();
         ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
+    }
+    // A drag that leaves the row disarms too (it keeps dragging: that needs no wheel selection),
+    // and one that only starts once the pointer is outside doesn't arm it again.
+    if selected && pointer_in_row && !left_row {
+        ui.data_mut(|d| {
+            d.insert_temp(wheel_slider_key(), id);
+            d.remove::<f32>(wheel_id);
+        });
+        wheel_armed = true;
+    } else if wheel_armed && (!enabled || !resp.has_focus() || !pointer_in_row || left_row) {
+        ui.data_mut(|d| {
+            d.remove::<egui::Id>(wheel_slider_key());
+            d.remove::<f32>(wheel_id);
+        });
+        wheel_armed = false;
     }
     // screen readers: a slider named after its control, with its value
     let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
@@ -313,8 +366,11 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         typing = Some((shown_value(spec, value).trim_start_matches('+').to_string(), 0, value_pressed));
     }
     let value_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-    // The opening press must complete the readout's original click before the edit continues.
-    if value_released && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
+    // A release over the value keeps the field the press opened, however long the button was held
+    // (a press held past egui's click time ends without a click). A release elsewhere cancels the
+    // gesture, and a press that scrubs already dropped the field above.
+    let released_over_value = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| value_rect.contains(p));
+    if value_released && !released_over_value && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
         typing = None;
         ui.data_mut(|m| m.remove::<(String, u8, bool)>(typing_id));
         ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(&format!("sliderField:{}", spec.id))));
@@ -446,7 +502,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
             })
         });
         // Arrow keys work with either a hovered or a focused slider.
-        if enabled && out.value.is_none() && typing.is_none() && (ui.rect_contains_pointer(row) || resp.has_focus() || inc || dec) {
+        if enabled && out.value.is_none() && typing.is_none() && (pointer_in_row || resp.has_focus() || inc || dec) {
             let (up, down, shift) = ui.input_mut(|i| {
                 let shift = i.modifiers.shift;
                 let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
@@ -469,7 +525,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         // leaves the sliders it passes alone. Right raises the value, as dragging the thumb right does.
         let side_id = id.with("side-rem");
         let (dx, dy) = ui.input(|i| (i.smooth_scroll_delta.x, i.smooth_scroll_delta.y));
-        if !enabled || typing.is_some() || out.value.is_some() || !ui.rect_contains_pointer(row) || dx.abs() <= dy.abs() {
+        if !enabled || typing.is_some() || out.value.is_some() || !pointer_in_row || dx.abs() <= dy.abs() {
             ui.data_mut(|m| m.remove::<f32>(side_id));
         } else {
             // the vertical part would scroll the panel and move the slider out from under the pointer
@@ -487,10 +543,8 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         }
         // Wheel nudges require an explicitly selected slider, unlike regular panel scrolling.
         // Consume only the vertical component so a trackpad's horizontal scroll still works.
-        let wheel_id = id.with("wheel-rem");
-        if !resp.has_focus() {
-            ui.data_mut(|m| m.remove::<f32>(wheel_id));
-        } else if enabled && typing.is_none() && out.value.is_none() && ui.rect_contains_pointer(row) {
+        // (`wheel_armed` is cleared above with its remainder whenever focus or the pointer leaves.)
+        if wheel_armed && enabled && typing.is_none() && out.value.is_none() && pointer_in_row {
             let delta = ui.input_mut(|i| {
                 let dy = i.smooth_scroll_delta.y;
                 if dy != 0.0 {
@@ -722,41 +776,6 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     if !tooltip.is_empty() { resp.on_hover_text(tooltip) } else { resp }
 }
 
-/// Star rating row (5 stars); returns a new rating when clicked (clicking the current rating clears).
-pub fn stars(ui: &mut Ui, id: &str, rating: u8, size: f32) -> Option<u8> {
-    let t = Tokens::get(ui.ctx());
-    let mut out = None;
-    let mut hover_n = None;
-    let mut rects = [Rect::NOTHING; 5];
-    for (i, slot) in (0..5u8).zip(rects.iter_mut()) {
-        let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-        crate::widgets::announce_selected(&resp, format!("{} ★", i + 1), i < rating);
-        register(ui.ctx(), format!("star:{id}:{}", i + 1), r);
-        if resp.hovered() {
-            hover_n = Some(i + 1);
-        }
-        if resp.clicked() {
-            out = Some(if rating == i + 1 { 0 } else { i + 1 });
-        }
-        *slot = r;
-    }
-    // Hover previews the rating a click would set: stars 1..=hovered light up. The hovered star also gets the
-    // icon_button hover square, so hovering the current rating (where the preview looks the same) still shows feedback.
-    for (i, r) in (0..5u8).zip(rects) {
-        if hover_n == Some(i + 1) {
-            ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
-        }
-        let filled = star_lit(i, rating, hover_n);
-        paint(ui.painter(), r.shrink(size * 0.12), if filled { Icon::StarFilled } else { Icon::Star }, if filled { t.star } else { t.icon });
-    }
-    out
-}
-
-/// Whether the star at zero-based index `i` is drawn filled: the hovered star's rating previews over the current one.
-fn star_lit(i: u8, rating: u8, hover: Option<u8>) -> bool {
-    i < hover.unwrap_or(rating)
-}
-
 /// A borderless dropdown button: `text` followed by a painted chevron (no font glyph needed).
 pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32) -> Response {
     dropdown_within(ui, id, text, font, color, f32::INFINITY)
@@ -793,16 +812,6 @@ mod tests {
         assert!(explanation.contains("DNG"), "{explanation}");
         assert!(!explanation.contains("yet"), "{explanation}");
         assert!(preview_only_explanation("unsupported CR3").contains("unsupported CR3"));
-    }
-
-    /// Issue #647: hovering a star previews the rating a click would set.
-    #[test]
-    fn hovered_star_previews_its_rating() {
-        let lit = |rating, hover| (0..5u8).filter(|&i| star_lit(i, rating, hover)).count();
-        assert_eq!(lit(2, None), 2, "no hover shows the rating");
-        assert_eq!(lit(2, Some(4)), 4);
-        assert_eq!(lit(5, Some(1)), 1);
-        assert_eq!(lit(0, Some(3)), 3);
     }
 
     #[test]
@@ -1013,8 +1022,13 @@ fn focused_slider_key() -> egui::Id {
     egui::Id::new("lightcraft-focused-slider")
 }
 
-/// Whether the widget with keyboard focus is a develop slider a click selected. It owns only the
-/// arrow keys (and the wheel): every other shortcut still works, as in Lightroom after a drag.
+/// The slider a click or drag armed for vertical wheel edits, if any.
+fn wheel_slider_key() -> egui::Id {
+    egui::Id::new("lightcraft-wheel-slider")
+}
+
+/// Whether the widget with keyboard focus is a develop slider selected by a click, drag or Tab.
+/// It owns only the arrow keys: every other shortcut still works. Wheel selection is separate.
 pub fn slider_has_focus(ctx: &egui::Context) -> bool {
     let focused = ctx.memory(|m| m.focused());
     focused.is_some() && focused == ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key()))

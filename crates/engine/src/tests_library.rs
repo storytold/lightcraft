@@ -314,6 +314,29 @@ fn smart_album_rule_sets() {
     assert!(a.to_string().contains("rating is ≥ 4"), "{a}");
 }
 
+/// `label` and `labels` set together (only through `library.filter`, or a filter saved with the
+/// single label) AND, and the chip says what they let through, not their union.
+#[test]
+fn filter_label_and_labels_together_chip() {
+    use lightcraft_catalog::ColorLabel;
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    for (id, l) in ids.iter().zip(["red", "yellow", "green"]) {
+        s.execute("photo.label", &json!({"ids": [id], "label": l})).unwrap();
+    }
+    let reds = s.catalog.photos().filter(|p| p.in_library() && p.label == Some(ColorLabel::Red)).count();
+    let chip = |s: &Session| crate::filter_chips(&s.filter, &s.catalog).into_iter().find(|c| c.label.starts_with("Label")).expect("a label chip");
+    s.execute("library.filter", &json!({"label": "red", "labels": ["yellow", "red"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), reds);
+    assert_eq!(chip(&s).label, "Label: Red");
+    // nothing passes both: the chip names both constraints
+    s.execute("library.filter", &json!({"label": "red", "labels": ["yellow", "green"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), 0);
+    assert_eq!(chip(&s).label, "Label: Red and (Yellow or Green)");
+    s.execute("library.filter", &chip(&s).clear).unwrap();
+    assert_eq!((s.filter.label, s.filter.labels.len()), (None, 0));
+}
+
 /// The filter bar's label multi-select: any of the chosen labels.
 #[test]
 fn filter_any_of_several_labels() {
@@ -512,6 +535,61 @@ fn capture_time_shift_is_bounded() {
     let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [id.0], "hours": 24}));
     assert!(r.as_ref().is_err_and(|e| e.to_string().contains("9999")), "{r:?}");
     assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("9999-12-31T12:00:00"), "unchanged");
+}
+
+/// A capture time that doesn't fully read (a Lightroom catalog's `captureTime` is copied
+/// verbatim) is left as it is and counted, not shifted into a clean-looking wrong time, and it
+/// isn't mistaken for one that would leave years 0000–9999.
+#[test]
+fn capture_time_shift_counts_photos_whose_time_does_not_read() {
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let (good, bad) = (ids[0], ids[1]);
+    for (id, t) in [(good, "2026-01-01T10:00:00"), (bad, "2026-01-01T10:00:00 and more")] {
+        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()) }).unwrap();
+    }
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [good.0, bad.0], "hours": 1})).unwrap();
+    assert_eq!(r["unreadable"], 1, "the unreadable photo is counted: {r}");
+    assert_eq!(r["changed"], 1, "{r}");
+    let captured = |s: &crate::Session, id| s.catalog.photo(id).unwrap().captured.clone();
+    assert_eq!(captured(&s, good).as_deref(), Some("2026-01-01T11:00:00"));
+    assert_eq!(captured(&s, bad).as_deref(), Some("2026-01-01T10:00:00 and more"), "left as it was");
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!(captured(&s, good).as_deref(), Some("2026-01-01T10:00:00"), "one undo step");
+    // a shift past year 9999 for the readable photo is still the out-of-range refusal, and the
+    // unreadable one alone isn't
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [bad.0], "hours": 24 * 365 * 9000})).unwrap();
+    assert_eq!((r["changed"].as_u64(), r["unreadable"].as_u64()), (Some(0), Some(1)), "{r}");
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [good.0, bad.0], "hours": 24 * 365 * 9000}));
+    assert!(r.as_ref().is_err_and(|e| e.to_string().contains("1 photo(s) outside")), "{r:?}");
+}
+
+/// Setting the active photo's time moves the others by its change, so an active photo whose own
+/// time doesn't read can't anchor it: refused, nothing changes. Alone, or setting every photo's
+/// time, it gets the time, which repairs it.
+#[test]
+fn capture_time_set_refuses_an_active_photo_whose_time_does_not_read() {
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let (bad, other) = (ids[0], ids[1]);
+    let broken = "2026-01-01T10:00:00 and more";
+    for (id, t) in [(bad, broken), (other, "2026-01-01T12:00:00")] {
+        s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: Some(t.into()) }).unwrap();
+    }
+    s.execute("library.select", &serde_json::json!({"ids": [bad.0, other.0], "active": bad.0})).unwrap();
+    assert_eq!(s.active(), Some(bad));
+    let captured = |s: &crate::Session, id| s.catalog.photo(id).unwrap().captured.clone();
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [bad.0, other.0], "time": "2026-01-01T11:00:00"}));
+    assert!(r.as_ref().is_err_and(|e| e.to_string().contains("can't be read")), "{r:?}");
+    assert_eq!(captured(&s, bad).as_deref(), Some(broken), "refused: unchanged");
+    assert_eq!(captured(&s, other).as_deref(), Some("2026-01-01T12:00:00"), "refused: the others don't move");
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [bad.0], "time": "2026-01-01T11:00:00"})).unwrap();
+    assert_eq!((r["changed"].as_u64(), r["unreadable"].as_u64()), (Some(1), Some(0)), "{r}");
+    assert_eq!(captured(&s, bad).as_deref(), Some("2026-01-01T11:00:00"), "alone, it gets the time");
+    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id: bad, captured: Some(broken.into()) }).unwrap();
+    let r = s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [bad.0, other.0], "time": "2026-01-01T11:00:00", "each": true})).unwrap();
+    assert_eq!((r["changed"].as_u64(), r["unreadable"].as_u64()), (Some(2), Some(0)), "{r}");
+    assert_eq!(captured(&s, bad).as_deref(), Some("2026-01-01T11:00:00"), "each repairs it");
 }
 
 /// Values are checked too: an agent's rule set with a date that isn't one, or a rating of 9, is

@@ -192,6 +192,37 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     h.settle(SETTLE);
 }
 
+/// A slider hides the overlay (above); a new mask, an added part, a duplicate or picking a mask in
+/// the list shows it again, so the Overlay menu's mode is what the photo shows (issue #1800).
+#[test]
+fn a_new_or_picked_mask_shows_the_overlay_hidden_by_a_slider() {
+    use lightcraft_pipeline::Overlay;
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    let first = h.app.session.active_mask.unwrap();
+    let hide = |h: &mut Headless| {
+        exec(h, "mask.adjust", json!({"values": {"exposure": 0.5}}));
+        assert!(!h.app.ui.mask_overlay);
+    };
+    let shown = |h: &Headless| matches!(crate::panels::detail::view_overlay(&h.app, &develop(h)), Overlay::Mask { .. });
+    hide(&mut h);
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}));
+    assert!(shown(&h), "a new mask shows its overlay");
+    hide(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": format!("mask:{first}")}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.active_mask, Some(first));
+    assert!(shown(&h), "picking a mask in the list shows its overlay");
+    for (cmd, params) in
+        [("mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.6, 0.5], "rx": 0.1, "ry": 0.1})), ("mask.duplicate", json!({}))]
+    {
+        hide(&mut h);
+        exec(&mut h, cmd, params);
+        assert!(shown(&h), "{cmd} shows the overlay");
+    }
+    h.settle(SETTLE);
+}
+
 #[test]
 fn radial_body_drag_moves_rotated_components_and_undoes_once() {
     let mut h = detail("panel.masking");
@@ -265,6 +296,21 @@ fn radial_body_drag_keeps_resize_and_rotation_handles() {
 }
 
 #[test]
+fn mask_overlay_color_refuses_anything_but_six_hex_digits() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "view.maskOverlayColor", json!({"color": "#2870f0"}));
+    for bad in ["#+f+f+f", "+12345", "#-0-0-0", "##ffffff"] {
+        let r = h.request("engine.execute", json!({"command": "view.maskOverlayColor", "params": {"color": bad}}), T);
+        assert_eq!(r["ok"], false, "{bad:?} is not a colour: {r}");
+        assert_eq!(h.app.ui.mask_overlay_color, [0x28, 0x70, 0xf0], "{bad:?} leaves the overlay colour alone");
+    }
+    exec(&mut h, "view.maskOverlayColor", json!({"color": "e63228"}));
+    assert_eq!(h.app.ui.mask_overlay_color, [0xe6, 0x32, 0x28]);
+    exec(&mut h, "view.maskOverlayColor", json!({"color": [10, 20, 30]}));
+    assert_eq!(h.app.ui.mask_overlay_color, [10, 20, 30]);
+}
+
+#[test]
 fn mask_overlay_keys_and_pins() {
     use lightcraft_pipeline::{MaskView, Overlay};
     let mut h = detail("panel.masking");
@@ -315,6 +361,63 @@ fn mask_overlay_keys_and_pins() {
     pointer(&mut h, json!([{"kind": "down", "x": 0.5, "y": 0.6}, {"kind": "up", "x": 0.5, "y": 0.6}]));
     assert_eq!(h.app.session.active_mask, Some(2));
     h.settle(SETTLE);
+}
+
+/// #2210: Ctrl+Shift+O (the all-masks overlay) draws the white outline of every visible
+/// Radial/Linear mask, not just the selected one — but only the selected mask registers
+/// `maskHandle:` elements, so nothing else becomes draggable.
+#[test]
+fn all_masks_overlay_outlines_every_visible_mask_but_only_the_selected_one_is_draggable() {
+    let mut h = detail("panel.masking");
+    // Two visible radial masks; mask 2 ends up selected (mask.add selects the new one).
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.5], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.5], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    assert!(h.app.ui.mask_overlay_all);
+    assert_eq!(h.app.session.active_mask, Some(2));
+    // Pins add their own <maskPin:…> elements; keep them out of the handle count.
+    exec(&mut h, "view.maskPins", json!({"show": false}));
+    h.settle(SETTLE);
+
+    let handles_of = |h: &Headless, id: usize| h.app.widgets.iter().filter(|(w, _)| w.starts_with(&format!("maskHandle:{id}:"))).count();
+    // The selected mask keeps its 4 edge handles and its rotation grip.
+    assert_eq!(handles_of(&h, 2), 5, "the selected mask keeps its handles");
+    // The other visible mask draws its outline but registers no handle: it is not draggable.
+    assert_eq!(handles_of(&h, 1), 0, "an unselected mask must not become draggable");
+    // …while a mask with no components has nothing to outline and nothing to grab either.
+    exec(&mut h, "mask.add", json!({"kind": "luminanceRange"}));
+    exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.5, 0.8], "rx": 0.08, "ry": 0.08}));
+    assert_eq!(h.app.session.active_mask, Some(3));
+    assert_eq!(handles_of(&h, 1), 0);
+    h.settle(SETTLE);
+}
+
+/// #2210: the outlines of *unselected* masks are painted, not registered as widgets, so the way to
+/// observe them is the rendered pixels. With the all-masks overlay on, the unselected mask's
+/// ellipse edge must carry white stroke pixels the photo alone does not have.
+#[test]
+fn all_masks_overlay_paints_the_outline_of_an_unselected_mask() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.5], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.5], "rx": 0.12, "ry": 0.12}));
+    assert_eq!(h.app.session.active_mask, Some(2));
+    exec(&mut h, "view.maskPins", json!({"show": false}));
+
+    // Sample the whole canvas: the outline is white (alpha 170) over the photo, so the overlay adds
+    // near-white pixels along the unselected mask's ellipse edge.
+    let white_pixels = |h: &mut Headless, on: bool| -> usize {
+        let overlay = h.app.ui.mask_overlay_all;
+        if overlay != on {
+            exec(h, "view.maskOverlayAll", json!({}));
+        }
+        assert_eq!(h.app.ui.mask_overlay_all, on);
+        h.settle(SETTLE);
+        let px = h.view.paint(&Default::default());
+        px.pixels.iter().filter(|p| p.r() > 200 && p.g() > 200 && p.b() > 200).count()
+    };
+    let off = white_pixels(&mut h, false);
+    let on = white_pixels(&mut h, true);
+    assert!(on > off, "the unselected mask's outline must add white pixels: off {off}, on {on}");
 }
 
 /// #518: holding the brush still, however long, paints the same feathered spot as a quick press.
@@ -537,6 +640,55 @@ fn crop_drag_activates_the_remembered_ratio_and_undo_restores_the_photo() {
     assert_eq!(h.app.session.undo.len(), undo + 1);
     exec(&mut h, "edit.undo", json!({}));
     assert_eq!(develop(&h), before);
+}
+
+/// Issue #991: with no aspect ever chosen, a crop starts locked to the photo's own shape (Lightroom's
+/// default), so a handle drag keeps the proportions; after the Lock is switched off once, the next
+/// photo's crop starts free again.
+#[test]
+fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
+    let mut h = detail("panel.crop");
+    h.app.ui.crop_default_aspect = None;
+    h.settle(SETTLE);
+    let before = develop(&h);
+    assert!(before.crop.aspect.is_none());
+    let p = h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().clone();
+    let own = (p.width * 100, p.height * 100);
+    assert_eq!(h.app.crop_tool_aspect(), Some(own), "the Lock shows engaged on an untouched photo");
+    let drag = json!({"events": [
+        {"kind": "down", "x": 0.995, "y": 0.995},
+        {"kind": "drag", "x": 0.85, "y": 0.85},
+        {"kind": "drag", "x": 0.75, "y": 0.75},
+        {"kind": "up", "x": 0.75, "y": 0.75}
+    ]});
+    let r = h.request("ui.pointer", drag.clone(), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(develop(&h).crop.aspect, Some(own), "the drag kept the photo's proportions");
+    assert_eq!(h.app.ui.crop_default_aspect, None, "nothing was chosen explicitly");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h), before);
+    // Lock off once: remembered as free, and from then on the same drag crops without a ratio
+    let mut h = detail("panel.crop");
+    h.app.ui.crop_default_aspect = None;
+    h.settle(SETTLE);
+    h.app.run("crop.aspect", json!({"aspect": "toggle"})).unwrap();
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.crop_default_aspect, Some(json!("free")));
+    assert_eq!(h.app.crop_tool_aspect(), None);
+    let before = develop(&h);
+    // a rotating drag outside the box (any crop drag starts cropping); the release on its own
+    for events in [
+        json!([{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}]),
+        json!([{"kind": "up", "x": -0.05, "y": 0.3}]),
+    ] {
+        let r = h.request("ui.pointer", json!({ "events": events }), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
+    assert_ne!(develop(&h).crop, before.crop, "the drag cropped");
+    assert_eq!(develop(&h).crop.aspect, None, "and left the ratio free");
+    let _ = drag;
 }
 
 /// A remembered ratio the crop command refuses (a hand-edited settings file) is forgotten, and the
@@ -1040,6 +1192,29 @@ fn edit_in_external_editor_opens_the_copy() {
     h.settle(SETTLE);
 }
 
+/// An editor that won't open the copy: the copy is in the library already, so the command succeeds
+/// with `failed` set and a toast saying why, instead of an error a script would retry (and make
+/// another copy each time).
+#[test]
+fn edit_in_reports_an_editor_that_wont_open_without_failing() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-ext-fail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let services = Services { png: None, open_with: Some(Box::new(|_: &str, _: &str| Err("the editor quit".into()))), ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.settings.external_editor = "PhotoCraft".into();
+    let n = h.app.session.catalog.len();
+    let r = h.request("engine.execute", json!({"command": "photo.editInExternal", "params": {"dir": dir.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["failed"], "the editor quit", "{r}");
+    assert_eq!(h.app.session.catalog.len(), n + 1, "the copy stays in the library");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("the editor quit"), "{toast}");
+    let _ = std::fs::remove_dir_all(&dir);
+    h.settle(SETTLE);
+}
+
 /// Edit in PhotoCraft: a PSD copy (what PhotoCraft saves back to), handed to "PhotoCraft" for
 /// the host to find; when the host can't find it, no copy is made.
 #[test]
@@ -1072,6 +1247,12 @@ fn edit_in_photocraft_opens_a_psd_copy() {
     let r = h.request("engine.execute", params.clone(), T);
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!((h.app.session.catalog.len(), opened.lock().unwrap().len()), (n, 0), "no copy without PhotoCraft");
+    // and it says so, however it was asked for (menu, shortcut, context menu)
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(!toast.is_empty(), "the missing editor is reported");
+    h.app.ui.toast = None;
+    let r = h.app.run("photo.editInPhotoCraft", json!({}));
+    assert!(r.is_err() && h.app.ui.toast.is_some(), "{r:?} {:?}", h.app.ui.toast);
     installed.store(true, std::sync::atomic::Ordering::SeqCst);
     let r = h.request("engine.execute", params, T);
     assert_eq!(r["ok"], true, "{r}");
@@ -1173,6 +1354,70 @@ fn open_original_in_external_editor_hands_over_the_raw_itself() {
         assert!(r.to_string().contains(why), "{r}");
     }
     assert_eq!(opened.lock().unwrap().len(), calls);
+    let _ = std::fs::remove_dir_all(&dir);
+    h.settle(SETTLE);
+}
+
+/// Issue #2135: a library record whose original is a program (an imported `.lrcat` names the
+/// paths) is never handed to the opener — the launcher is asked for nothing — and the user is
+/// told why. The path LightCraft does hand over is absolute, whatever the record's spelling.
+#[test]
+fn open_original_refuses_anything_that_is_not_a_photo_file() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = std::env::temp_dir().join(format!("lc-ui-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let opened: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+    let batches: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>> = Default::default();
+    let (o, bt) = (opened.clone(), batches.clone());
+    let services = Services {
+        png: None,
+        open_with: Some(Box::new(move |path: &str, app: &str| {
+            o.lock().unwrap().push((path.to_string(), app.to_string()));
+            Ok(())
+        })),
+        open_all_with: Some(Box::new(move |paths: &[String], _: &str| {
+            bt.lock().unwrap().push(paths.to_vec());
+            Ok(())
+        })),
+        check_editor: Some(Box::new(|_: &str| Ok(()))),
+        ..Default::default()
+    };
+    let mut session = lightcraft_engine::Session::with_demo().with_fs();
+    let mut record = |name: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, b"MZ").unwrap();
+        let id = session.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::File { path: path.to_string_lossy().into_owned() }, name, "ARW", 60, 40, "2026-01-01T10:00:00");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    // what a crafted catalog can name as a photo's original
+    let programs = ["payload.exe", "start.lnk", "run.bat", "page.hta", "go.command", "noext"];
+    let bad: Vec<_> = programs.iter().map(|n| record(n)).collect();
+    let good = record("DSC_0001.NEF");
+    let app = LightcraftApp::new(session, services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.settings.external_editor = "DxO PhotoLab".into();
+
+    for (id, name) in bad.iter().zip(programs) {
+        let r = h.request("engine.execute", json!({"command": "photo.openOriginalInExternal", "params": {"ids": [id.0]}}), T);
+        assert_eq!(r["ok"], false, "{name} was opened: {r}");
+        assert!(r.to_string().contains("file types LightCraft reads"), "{name}: {r}");
+        // the menu item is greyed out for such a record, so it is never offered either
+        exec(&mut h, "library.select", json!({"ids": [id.0]}));
+        assert!(!crate::menus::ui_enabled(&h.app, "photo.openOriginalInExternal"), "{name} is offered in the menu");
+    }
+    assert!(opened.lock().unwrap().is_empty() && batches.lock().unwrap().is_empty(), "the launcher was asked to open a program");
+
+    // a program selected together with a photo: only the photo is handed over, by absolute path
+    let r = exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [bad[0].0, good.0]}));
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(1), "{r}");
+    assert!(r["skipped"].to_string().contains("payload.exe"), "{r}");
+    let handed = batches.lock().unwrap().clone();
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].len(), 1, "{handed:?}");
+    assert!(std::path::Path::new(&handed[0][0]).is_absolute() && handed[0][0].ends_with("DSC_0001.NEF"), "{handed:?}");
     let _ = std::fs::remove_dir_all(&dir);
     h.settle(SETTLE);
 }
@@ -1518,6 +1763,36 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
     }
     let after = lightcraft_develop::controls::get(&develop(&h), "light.exposure").expect("exposure");
     assert!(after > before, "selected exposure did not increase: {before} -> {after}");
+    for _ in 0..40 {
+        h.step();
+    }
+    let before_leaving = develop(&h).light.exposure;
+    // Leaving the row disarms wheel edits, but must not take keyboard arrows away.
+    h.request("ui.move", json!({"x": panel.left() - 10.0, "y": track.center().y}), T);
+    h.request("ui.hoverWidget", json!({"id": name}), T);
+    // More than a full notch: disarming dropped the wheel remainder, so this alone would edit it.
+    h.request("ui.scroll", json!({"dy": -240.0}), T);
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(develop(&h).light.exposure, before_leaving, "returning to a slider while scrolling must not edit it (issue #1355)");
+    h.request("ui.move", json!({"x": panel.left() - 10.0, "y": track.center().y}), T);
+    h.request("ui.key", json!({"key": "ArrowUp"}), T);
+    assert!(develop(&h).light.exposure > before_leaving, "keyboard adjustment survives leaving the slider");
+
+    // Scroll back to the top, then explicitly select it again to re-enable wheel nudges.
+    h.request("ui.move", json!({"x": panel.right() - 8.0, "y": panel.center().y}), T);
+    h.request("ui.scroll", json!({"dy": 600.0}), T);
+    for _ in 0..40 {
+        h.step();
+    }
+    click(&mut h, name);
+    let before_reselecting = develop(&h).light.exposure;
+    h.request("ui.scroll", json!({"dy": 120.0}), T);
+    for _ in 0..40 {
+        h.step();
+    }
+    assert!(develop(&h).light.exposure > before_reselecting, "a new click re-enables wheel adjustment");
 }
 
 /// Scrolling sideways over a slider adjusts it without selecting it first: a trackpad swipe

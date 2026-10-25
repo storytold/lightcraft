@@ -272,9 +272,9 @@ impl<'a> TextField<'a> {
         }
         let menu_was_open = memo.menu_open;
         // a click on a greyed-out item does nothing, as in a native menu: only a choice or a click
-        // outside closes it
+        // outside closes it (not the right-click that moves the menu within the field, #1877)
         memo.menu_open = egui::Popup::context_menu(&response)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
             .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
             .is_some();
 
@@ -553,6 +553,21 @@ mod tests {
         rig.menu("selectAll");
         rig.type_text("Kyoto");
         assert_eq!(rig.text, "Kyoto");
+    }
+
+    /// #1877: a right-click elsewhere in the field while its menu is open moves the menu there
+    /// (it flashed at the new spot and closed).
+    #[test]
+    fn right_clicking_again_moves_the_menu() {
+        let mut rig = Rig::new("Lisbon");
+        rig.click(FIELD, PointerButton::Secondary);
+        let before = rig.rect(&format!("{FIELD}:cut")).expect("the menu");
+        let rect = rig.rect(FIELD).unwrap();
+        let at = egui::pos2(rect.left() + 10.0, rect.center().y);
+        rig.click_at(at, PointerButton::Secondary);
+        let after = rig.rect(&format!("{FIELD}:cut")).unwrap_or_else(|| panic!("the menu is still open: {:?}", rig.widgets));
+        assert!(after.left() < before.left(), "the menu moved to the pointer: {after:?} (was {before:?})");
+        assert!(rig.endings.is_empty(), "the edit goes on");
     }
 
     #[test]

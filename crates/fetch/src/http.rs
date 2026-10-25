@@ -10,7 +10,7 @@
 //! the downloading thread. No proxies (see docs/ai-masks.md).
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -58,6 +58,43 @@ pub struct Url {
     pub path: String,
 }
 
+/// Remove `.` and `..` segments from the path part of `path` (RFC 3986 section 5.2.4); the query is kept as is.
+fn remove_dot_segments(path: &str) -> String {
+    let (p, query) = match path.find('?') {
+        Some(i) => (path.get(..i).unwrap_or_default(), path.get(i..).unwrap_or_default()),
+        None => (path, ""),
+    };
+    let mut out: Vec<&str> = Vec::new();
+    let mut segments = p.split('/').skip(1).peekable();
+    let mut trailing_slash = false;
+    while let Some(seg) = segments.next() {
+        let last = segments.peek().is_none();
+        match seg {
+            "." => trailing_slash = last,
+            ".." => {
+                out.pop();
+                trailing_slash = last;
+            }
+            _ => {
+                out.push(seg);
+                trailing_slash = false;
+            }
+        }
+    }
+    let mut result = format!("/{}", out.join("/"));
+    if trailing_slash && !result.ends_with('/') {
+        result.push('/');
+    }
+    result.push_str(query);
+    result
+}
+
+/// `s` without the leading `prefix`, matched ASCII case-insensitively (RFC 3986 §3.1).
+fn strip_scheme<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then(|| s.get(prefix.len()..).unwrap_or_default())
+}
+
 impl Url {
     pub fn parse(s: &str) -> Result<Url, HttpError> {
         let bad = |why: &str| HttpError::BadUrl(why.to_string());
@@ -68,9 +105,9 @@ impl Url {
         if s.chars().any(|c| c.is_control() || c == ' ') {
             return Err(bad("contains spaces or control characters"));
         }
-        let (tls, rest) = if let Some(r) = s.strip_prefix("https://") {
+        let (tls, rest) = if let Some(r) = strip_scheme(s, "https://") {
             (true, r)
-        } else if let Some(r) = s.strip_prefix("http://") {
+        } else if let Some(r) = strip_scheme(s, "http://") {
             (false, r)
         } else {
             return Err(bad("only http:// and https:// are supported"));
@@ -81,6 +118,7 @@ impl Url {
             None => (rest, ""),
         };
         let path = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
+        let path = remove_dot_segments(&path);
         if authority.contains('@') {
             return Err(bad("user names and passwords in URLs are not supported"));
         }
@@ -88,6 +126,9 @@ impl Url {
             let end = v6.find(']').ok_or_else(|| bad("unterminated IPv6 address"))?;
             let host = v6.get(..end).unwrap_or_default();
             let after = v6.get(end + 1..).unwrap_or_default();
+            if !after.is_empty() && !after.starts_with(':') {
+                return Err(bad("unexpected text after IPv6 address"));
+            }
             (host.to_string(), after.strip_prefix(':'))
         } else {
             match authority.rsplit_once(':') {
@@ -109,7 +150,7 @@ impl Url {
     /// `Location` of a redirect, resolved against this URL.
     pub fn join(&self, location: &str) -> Result<Url, HttpError> {
         let l = location.trim();
-        if l.starts_with("http://") || l.starts_with("https://") {
+        if strip_scheme(l, "http://").is_some() || strip_scheme(l, "https://").is_some() {
             let url = Url::parse(l)?;
             if self.tls && !url.tls {
                 return Err(HttpError::BadUrl("redirect from https to http refused".into()));
@@ -132,8 +173,16 @@ impl Url {
         if l.starts_with('/') {
             return Url::parse(&format!("{base}{l}"));
         }
+        // empty or fragment-only: the same document
+        if l.is_empty() || l.starts_with('#') {
+            return Ok(self.clone());
+        }
         // relative to the current directory
         let dir = self.path.split('?').next().unwrap_or("/");
+        // a query-only reference keeps the whole path, file name included (RFC 3986 §5.2.2)
+        if l.starts_with('?') {
+            return Url::parse(&format!("{base}{dir}{l}"));
+        }
         let dir = dir.rsplit_once('/').map_or("", |(d, _)| d);
         Url::parse(&format!("{base}{dir}/{l}"))
     }
@@ -182,27 +231,68 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, HttpError> {
     Ok(Arc::new(config))
 }
 
+/// Resolve a host name within `deadline`, checking the cancel flag while it runs. The system resolver blocks with no
+/// timeout of its own, so it runs on a helper thread (which ends when the resolver returns); a lookup that takes too
+/// long is given up on, and Cancel works during it (issue #1532).
+fn lookup(
+    host: &str,
+    resolve: impl FnOnce() -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+    deadline: Instant,
+    limits: &Limits,
+) -> Result<Vec<SocketAddr>, HttpError> {
+    if limits.cancel.load(Ordering::Relaxed) {
+        return Err(HttpError::Cancelled);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("lc-fetch-lookup".into())
+        .spawn(move || {
+            let _ = tx.send(resolve());
+        })
+        .map_err(|e| HttpError::Connect(format!("{host}: {e}")))?;
+    loop {
+        if limits.cancel.load(Ordering::Relaxed) {
+            return Err(HttpError::Cancelled);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(HttpError::Connect(format!("{host}: the name lookup timed out")));
+        }
+        match rx.recv_timeout(left.min(TICK)) {
+            Ok(r) => return r.map_err(|e| HttpError::Connect(format!("{host}: {e}"))),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(HttpError::Connect(format!("{host}: the name lookup failed"))),
+        }
+    }
+}
+
+/// Connect to the first of `addrs` that answers, all of them together within `deadline` (each used to get the whole
+/// connect timeout of its own, issue #1532).
+fn connect_any(host: &str, addrs: &[SocketAddr], deadline: Instant, limits: &Limits) -> Result<TcpStream, HttpError> {
+    let mut last = format!("{host}: no address");
+    for a in addrs {
+        if limits.cancel.load(Ordering::Relaxed) {
+            return Err(HttpError::Cancelled);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(HttpError::Connect(format!("{host}: connecting timed out")));
+        }
+        match TcpStream::connect_timeout(a, left) {
+            Ok(s) => return Ok(s),
+            Err(e) => last = format!("{host}: {e}"),
+        }
+    }
+    Err(HttpError::Connect(last))
+}
+
 impl Stream {
     fn connect(url: &Url, limits: &Limits) -> Result<Stream, HttpError> {
-        let addrs: Vec<_> = (url.host.as_str(), url.port).to_socket_addrs().map_err(|e| HttpError::Connect(format!("{}: {e}", url.host)))?.collect();
-        if addrs.is_empty() {
-            return Err(HttpError::Connect(format!("{}: no address", url.host)));
-        }
-        let mut last = String::new();
-        let mut sock = None;
-        for a in addrs {
-            if limits.cancel.load(Ordering::Relaxed) {
-                return Err(HttpError::Cancelled);
-            }
-            match TcpStream::connect_timeout(&a, limits.connect) {
-                Ok(s) => {
-                    sock = Some(s);
-                    break;
-                }
-                Err(e) => last = format!("{}: {e}", url.host),
-            }
-        }
-        let sock = sock.ok_or(HttpError::Connect(last))?;
+        // the lookup and the connection attempts share one connect timeout
+        let deadline = Instant::now() + limits.connect;
+        let (host, port) = (url.host.clone(), url.port);
+        let addrs = lookup(&url.host, move || (host.as_str(), port).to_socket_addrs().map(Iterator::collect), deadline, limits)?;
+        let sock = connect_any(&url.host, &addrs, deadline, limits)?;
         sock.set_read_timeout(Some(TICK)).map_err(|e| HttpError::Io(e.to_string()))?;
         sock.set_write_timeout(Some(TICK)).map_err(|e| HttpError::Io(e.to_string()))?;
         let _ = sock.set_nodelay(true);
@@ -513,13 +603,99 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
 }
 
 #[cfg(test)]
+mod tests_connect {
+    use super::*;
+
+    fn limits(cancel: &AtomicBool) -> Limits<'_> {
+        Limits { connect: Duration::from_millis(300), stall: Duration::from_secs(1), cancel }
+    }
+
+    /// A name lookup that hangs is given up on at the connect timeout, and Cancel stops it at once (issue #1532).
+    #[test]
+    fn a_hung_name_lookup_times_out_and_can_be_cancelled() {
+        let cancel = AtomicBool::new(false);
+        let slow = || {
+            std::thread::sleep(Duration::from_secs(10));
+            Ok(Vec::new())
+        };
+        let t = Instant::now();
+        let r = lookup("slow.example", slow, Instant::now() + Duration::from_millis(300), &limits(&cancel));
+        assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
+        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+        // Cancel while the lookup is waiting on the resolver, not before it starts
+        let t = Instant::now();
+        let r = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel))
+        });
+        assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
+        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        // and a lookup asked for after Cancel doesn't start
+        assert!(matches!(lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel)), Err(HttpError::Cancelled)));
+        // a lookup that answers is used
+        let cancel = AtomicBool::new(false);
+        let local: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        assert_eq!(lookup("local", move || Ok(vec![local]), Instant::now() + Duration::from_secs(5), &limits(&cancel)).unwrap(), [local]);
+    }
+
+    /// Several addresses that don't answer share one deadline instead of each getting the full timeout.
+    #[test]
+    fn addresses_share_one_connect_deadline() {
+        let cancel = AtomicBool::new(false);
+        // non-routable addresses: each either hangs until the deadline or fails at once, never longer
+        let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
+        let t = Instant::now();
+        let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
+        assert!(r.is_err());
+        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fragment_only_or_empty_location_keeps_file_name_and_query() {
+        let base = Url::parse("https://a.example/x/y/file?q").unwrap();
+        for l in ["#top", "", "  "] {
+            let u = base.join(l).unwrap();
+            assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/x/y/file?q"), "{l:?}");
+        }
+    }
 
     #[test]
     fn rejects_oversized_and_control_character_urls() {
         assert!(Url::parse(&format!("https://example.com/{}", "x".repeat(16 * 1024))).is_err());
         assert!(Url::parse("https://example.com/x?secret=abc\r\nInjected: 1").is_err());
+    }
+
+    #[test]
+    fn join_query_only_keeps_file_name() {
+        let u = Url::parse("https://a.example/x/y/file?q=1").unwrap();
+        assert_eq!(u.join("?page=2").unwrap().path, "/x/y/file?page=2");
+    }
+
+    #[test]
+    fn join_removes_dot_segments() {
+        let base = Url::parse("https://a.example/x/y/file").unwrap();
+        for (loc, want) in
+            [("../z", "/x/z"), ("./z", "/x/y/z"), ("../../../z", "/z"), ("/a/./b/../c", "/a/c"), ("../z?q=1", "/x/z?q=1"), ("..", "/x/")]
+        {
+            assert_eq!(base.join(loc).unwrap().path, want, "{loc}");
+        }
+    }
+
+    #[test]
+    fn url_scheme_is_matched_case_insensitively() {
+        let u = Url::parse("HTTPS://A.example/z").unwrap();
+        assert_eq!((u.tls, u.host.as_str(), u.port, u.path.as_str()), (true, "a.example", 443, "/z"));
+        assert!(Url::parse("Http://a.example/").is_ok());
+        let j = Url::parse("https://a.example/start").unwrap().join("HTTPS://cdn.example/file").unwrap();
+        assert_eq!((j.tls, j.host.as_str(), j.path.as_str()), (true, "cdn.example", "/file"));
     }
 
     #[test]
@@ -535,6 +711,17 @@ mod tests {
         {
             assert!(Url::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn rejects_text_after_a_bracketed_ipv6_host() {
+        for bad in ["http://[::1]junk/x", "https://[::1]junk/x", "http://[::1]8080/x", "http://[::1]8080"] {
+            assert!(matches!(Url::parse(bad), Err(HttpError::BadUrl(_))), "{bad}");
+        }
+        let u = Url::parse("http://[::1]:8080/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 8080));
+        let u = Url::parse("http://[::1]/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 80));
     }
 
     #[test]

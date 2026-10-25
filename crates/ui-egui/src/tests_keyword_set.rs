@@ -160,3 +160,20 @@ fn save_as_a_new_set_keeps_the_original() {
     assert_eq!(names, ["Recent Keywords", "Weddings", "Ceremonies"]);
     assert_eq!(s["current"], "Ceremonies");
 }
+
+/// ⌥0 / ⌥⇧0 (Alt+0 / Alt+Shift+0) go to the next and the previous keyword set, as in Lightroom
+/// Classic's Library, and ⌥1 then applies the new set's first keyword.
+#[test]
+fn alt_0_and_alt_shift_0_cycle_the_keyword_sets() {
+    let mut h = keywords_panel();
+    h.app.session.execute("keyword.saveSet", &json!({"name": "Weddings", "keywords": ["ceremony"]})).unwrap();
+    h.app.session.execute("keyword.useSet", &json!({"name": "Recent Keywords"})).unwrap();
+    h.settle(SETTLE);
+    ask(&mut h, "ui.key", json!({"key": "0", "alt": true}));
+    assert_eq!(sets(&mut h)["current"], "Weddings", "⌥0: the next set");
+    ask(&mut h, "ui.key", json!({"key": "1", "alt": true}));
+    let id = h.app.session.selected()[0];
+    assert!(h.app.session.catalog.photo(id).unwrap().meta.keywords.iter().any(|k| k == "ceremony"), "⌥1 applied the set's keyword");
+    ask(&mut h, "ui.key", json!({"key": "0", "alt": true, "shift": true}));
+    assert_eq!(sets(&mut h)["current"], "Recent Keywords", "⌥⇧0: the previous set");
+}

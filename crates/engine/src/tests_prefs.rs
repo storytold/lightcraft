@@ -143,6 +143,25 @@ fn preferences_persist_with_the_library() {
 }
 
 #[test]
+fn last_merge_settings_persist_with_the_library() {
+    let lib = temp_dir("merge");
+    let opts = json!({"align": false, "deghost": "high"});
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.last_merge.insert("merge.hdr".into(), opts.clone());
+        s.save_prefs().unwrap();
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.last_merge.get("merge.hdr"), Some(&opts));
+    assert!(!s.last_merge.contains_key("merge.panorama"));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
 fn default_copyright_and_creator_fill_gaps_on_import() {
     let dir = temp_dir("copyright");
     let lib = dir.join("lib");
@@ -384,7 +403,7 @@ fn slideshow_playback_settings_persist_with_the_library() {
         let r = s
             .execute(
                 "slideshow.playback",
-                &json!({"slideDuration": 6, "fadeDuration": 2.5, "fadeColor": "#000000", "randomOrder": true, "repeat": false}),
+                &json!({"slideDuration": 6, "fadeDuration": 2.5, "fadeColor": "#000000", "randomOrder": true, "repeat": false, "manual": true}),
             )
             .unwrap();
         assert_eq!(r["fadeColor"], "#000000");
@@ -398,7 +417,7 @@ fn slideshow_playback_settings_persist_with_the_library() {
     let r = s.execute("slideshow.playback", &json!({})).unwrap();
     assert_eq!(
         r,
-        json!({"slideDuration": 6.0, "fadeDuration": 2.5, "fadeColor": "#000000", "randomOrder": true, "repeat": false, "preparePreviews": true})
+        json!({"slideDuration": 6.0, "fadeDuration": 2.5, "fadeColor": "#000000", "randomOrder": true, "repeat": false, "preparePreviews": true, "manual": true})
     );
     drop(s);
     // out-of-range values written by hand are clamped when the library opens
