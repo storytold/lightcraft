@@ -454,10 +454,20 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                     fire.push(id.to_string());
                 }
             }
-            // Shift+← / Shift+→: the previous / next photo of the view joins the selection
-            for (key, step) in [(Key::ArrowLeft, -1i64), (Key::ArrowRight, 1)] {
-                if matches(i, Modifiers::SHIFT, key) && !taken.contains(&(Modifiers::SHIFT, key)) {
-                    fire.push(format!("grid:extend:{step}"));
+            // Shift+arrows and Ctrl+Shift+arrows (as in the Windows file manager, where Ctrl keeps a
+            // scattered selection; here Shift already adds to the selection, so both do the same):
+            // ← / → add the previous / next photo of the view, ↑ / ↓ every photo up to the cell above /
+            // below the active one
+            for mods in [Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::SHIFT] {
+                for (key, id) in [
+                    (Key::ArrowLeft, "grid:extend:-1"),
+                    (Key::ArrowRight, "grid:extend:1"),
+                    (Key::ArrowUp, "grid:extend:up"),
+                    (Key::ArrowDown, "grid:extend:down"),
+                ] {
+                    if matches(i, mods, key) && !taken.contains(&(mods, key)) {
+                        fire.push(id.to_string());
+                    }
                 }
             }
         }
@@ -529,6 +539,32 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             let edge = if f == "grid:first" { vis.first() } else { vis.last() };
             if let Some(id) = edge {
                 let _ = app.run("library.select", json!({"ids": [id.0], "active": id.0}));
+            }
+        } else if f == "grid:extend:up" || f == "grid:extend:down" {
+            // Shift+↑ / Shift+↓ in a grid: every photo from the active one to the cell above / below it
+            // (the layout's nearest cell, as plain ↑ / ↓ move to) joins the selection; the cell reached
+            // becomes the active photo. In the top / bottom row, or while the grid isn't laid out for the
+            // photos in view, the key does nothing.
+            let down = f == "grid:extend:down";
+            let reach = crate::panels::grid::row_distance(app, down).and_then(|d| usize::try_from(d).ok()).unwrap_or(0);
+            let vis = app.session.visible_cloned();
+            let run: Vec<u64> = app
+                .session
+                .active()
+                .and_then(|active| vis.iter().position(|p| *p == active))
+                .and_then(|pos| {
+                    if down {
+                        let end = pos.checked_add(reach)?;
+                        Some(vis.get(pos.checked_add(1)?..=end)?.iter().map(|p| p.0).collect())
+                    } else {
+                        // nearest the active photo first, so the cell reached is the last one added
+                        Some(vis.get(pos.checked_sub(reach)?..pos)?.iter().rev().map(|p| p.0).collect())
+                    }
+                })
+                .filter(|_| reach > 0)
+                .unwrap_or_default();
+            if !run.is_empty() {
+                let _ = app.run("library.select", json!({"ids": run, "mode": "add"}));
             }
         } else if let Some(step) = f.strip_prefix("grid:extend:") {
             // Shift+← / Shift+→ in a grid: the neighbour of the active photo joins the selection and
