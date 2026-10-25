@@ -551,6 +551,11 @@ pub(crate) fn extended_xmp_reference(data: &XmpData) -> Result<Option<String>, S
 
 fn merge_xmp_value(preferred: &XmpValue, fallback: &XmpValue) -> XmpValue {
     match (preferred, fallback) {
+        (XmpValue::Array(preferred), XmpValue::Array(fallback)) => {
+            let mut merged = preferred.clone();
+            merged.extend(fallback.iter().cloned());
+            XmpValue::Array(merged)
+        }
         (XmpValue::Struct(preferred), XmpValue::Struct(fallback)) => {
             let mut merged = fallback.clone();
             for (key, value) in preferred {
