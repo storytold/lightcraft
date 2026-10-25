@@ -140,6 +140,26 @@ fn writing_a_new_file_never_replaces_one_that_exists() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The log's file is written by the store's own thread ([`crate::log_writer`]), which keeps it open: `remove` ends the
+/// thread with the file (after writing what was handed over), so that what is appended next lands in a file again, and
+/// not in the one that was removed.
+#[test]
+fn removing_the_log_ends_its_thread_and_the_next_append_starts_the_file_again() {
+    let dir = std::env::temp_dir().join(format!("lc-segments-remove-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut store = FsStore::open(&dir).unwrap();
+    store.append("catalog.log", b"a\n").unwrap();
+    store.flush().unwrap();
+    store.remove("catalog.log").unwrap();
+    assert!(!dir.join("catalog.log").exists());
+    assert_eq!(store.read("catalog.log").unwrap(), None);
+    store.append("catalog.log", b"b\n").unwrap();
+    store.flush().unwrap();
+    assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"b\n");
+    assert_eq!(store.read("catalog.log").unwrap(), Some(b"b\n".to_vec()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The memory store holds to the same contract, and a store that doesn't override the method
 /// refuses rather than replace.
 #[test]
