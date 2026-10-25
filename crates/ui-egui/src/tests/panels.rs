@@ -2154,6 +2154,8 @@ fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
         &[
             "folderSynchronize",
             "folderLocateMissing",
+            "folderExport",
+            "folderExportPresetMenu",
             "folderNewFolder",
             "folderRename",
             "folderMoveTo",
@@ -2167,7 +2169,65 @@ fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
     h.step();
     h.step();
     right_click(&mut h, "source:libfolder:/Volumes/nas");
-    in_order(&h, &["folderSynchronize", "folderLocateMissing", "folderLabelMenu", "folderRemove"]);
+    in_order(&h, &["folderSynchronize", "folderLocateMissing", "folderExport", "folderExportPresetMenu", "folderLabelMenu", "folderRemove"]);
+}
+
+/// Export Folder… on a Folders row shows the folder as the row does, selects its photos and those
+/// of the folders inside it (not a neighbour's), and opens the Export dialog.
+#[test]
+fn export_folder_shows_the_folder_selects_its_photos_and_opens_the_dialog() {
+    let mut h = folders_app_with_services(
+        &["/pics/trip/a.jpg", "/pics/trip/day2/b.jpg", "/pics/home/c.jpg", "/Volumes/nas/d.jpg"],
+        [1400.0, 900.0],
+        reveal_and_pick_services(Ok(())),
+    );
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    click(&mut h, "folderExport");
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder);
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip"));
+    let photos_in = |h: &Headless, dir: &str| -> std::collections::BTreeSet<u64> {
+        h.app
+            .session
+            .catalog
+            .photos()
+            .filter(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.starts_with(dir)))
+            .map(|p| p.id.0)
+            .collect()
+    };
+    let selected: std::collections::BTreeSet<u64> = h.app.session.selection.ids.iter().map(|i| i.0).collect();
+    assert_eq!(selected.len(), 2, "the folder's photo and the one in the folder inside it");
+    assert_eq!(selected, photos_in(&h, "/pics/trip"));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Export { .. })), "the Export dialog is open");
+    assert!(!popup_open(&h), "choosing closes the menu");
+}
+
+/// A folder row that holds other disks, or one that holds no photo, grays Export Folder out with
+/// the reason: a click shows no folder and opens no dialog.
+#[test]
+fn export_folder_is_grayed_out_for_a_row_that_cant_be_shown_or_holds_nothing() {
+    let mut h = folders_app_with_services(&["/Volumes/1.jpg", "/Volumes/tokyo/x.jpg"], [1400.0, 900.0], reveal_and_pick_services(Ok(())));
+    right_click(&mut h, "source:libfolder:/Volumes");
+    assert!(has(&h, "folderExport") && has(&h, "folderExportPresetMenu"), "the rows are listed");
+    h.app.ui.toast = None;
+    click(&mut h, "folderExport");
+    assert_eq!(h.app.session.library_folder, None, "a grayed-out row shows nothing");
+    assert!(h.app.ui.dialog.is_none());
+    // an enabled row would try, and the engine's refusal would show as a toast
+    assert!(h.app.ui.toast.is_none(), "a grayed-out row does nothing: {:?}", h.app.ui.toast);
+    let node = |selectable, count| lightcraft_catalog::FolderNode {
+        name: "x".into(),
+        path: "/x".into(),
+        count,
+        own: count,
+        volume: false,
+        selectable,
+        label: None,
+        children: vec![],
+    };
+    assert!(crate::panels::left::folder_export_blocker(&node(false, 3)).is_some());
+    assert!(crate::panels::left::folder_export_blocker(&node(true, 0)).is_some());
+    assert!(crate::panels::left::folder_export_blocker(&node(true, 3)).is_none());
 }
 
 /// Show in Finder on a folder says why when the file manager can't show it, instead of nothing.

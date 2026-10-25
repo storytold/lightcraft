@@ -493,3 +493,44 @@ fn move_selected_photos_here_is_grayed_out_until_photos_are_selected() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Export Folder with Preset ▸ a preset runs that preset's export, in the background, on exactly
+/// the folder's photos and those of the folders inside it: the files written are theirs, and a
+/// neighbour folder's photo stays out.
+#[test]
+fn export_folder_with_a_preset_writes_exactly_the_folders_photos() {
+    let (root, trip, home) = folders("menu-export");
+    std::fs::create_dir_all(trip.join("dunes")).unwrap();
+    std::fs::copy(trip.join("beach.png"), trip.join("dunes").join("sand.png")).unwrap();
+    let out = root.join("out");
+    let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes").join("sand.png"), false), (home.join("garden.png"), false)]);
+    h.app.services.write_shared = Some(std::sync::Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+    h.app.run("export.savePreset", json!({"name": "Tiny PNG", "params": {"format": "png", "longEdge": 4}})).unwrap();
+    // a preset names no folder: the last export's is used
+    h.app.session.last_export = Some(json!({"dir": out}));
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let at = folder_row(&h, &trip).unwrap().center();
+    let r = h.request("ui.click", json!({"x": at.x, "y": at.y, "button": "right"}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    for id in ["folderExportPresetMenu", "folderExportPreset:Tiny PNG"] {
+        let r = h.request("ui.clickWidget", json!({"id": id}), std::time::Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.step();
+        h.step();
+    }
+    assert!(h.app.ui.dialog.is_none(), "a preset starts without asking: {}", toast(&h));
+    let t0 = std::time::Instant::now();
+    while (h.app.export.is_some() || h.app.last_export_result.is_none()) && t0.elapsed() < std::time::Duration::from_secs(60) {
+        h.step();
+    }
+    let last = h.app.last_export_result.clone().expect("the export reports");
+    assert_eq!(last["files"].as_array().map(Vec::len).or(last["files"].as_u64().map(|n| n as usize)), Some(2), "{last}");
+    let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    names.sort();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.iter().any(|n| n.contains("beach")) && names.iter().any(|n| n.contains("sand")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("garden")), "{names:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

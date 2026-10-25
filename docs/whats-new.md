@@ -319,6 +319,14 @@
 - Show in Finder on a folder, and Keep in Local, now say why when they fail.
 - Rename Folder… in Local starts from the folder's own name on disk, as in Folders.
 
+### A folder can be exported from its menu
+- Right-click a folder in Folders, or a disk's row, and choose Export Folder… or Export Folder with Preset ▸ a preset.
+  Like an album's, they show the folder as its row does (its photos and those of the folders inside it), select them
+  all, then open the Export dialog or start the preset's export in the background. They sit with Synchronize Folder…
+  and Locate Missing Files…, the items that act on the library's photos.
+- Both are grayed out, with the reason in the tooltip, for a row that covers more than one disk (open it and export a
+  folder inside it).
+
 
 ## 2026-10-25
 
