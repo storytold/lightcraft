@@ -263,6 +263,18 @@ fn following_a_folder_reads_both_spellings_the_same_way() {
 }
 
 #[test]
+fn a_folder_filter_put_aside_follows_the_folder_when_it_moves() {
+    // Enable Filters put a standalone `folder` criterion aside; moving the folder meanwhile must
+    // not leave the filter pointing at the old path when it comes back
+    let mut s = Session::new();
+    s.execute("library.filter", &json!({"folder": "/a/b/sub"})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    crate::cmd::browse::follow_folder(&mut s, "/a/b", "/a/c");
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    same_folder(s.filter.folder.as_deref(), "/a/c/sub", "the folder criterion put aside follows its folder");
+}
+
+#[test]
 fn following_a_folder_keeps_the_case_of_the_subfolder_names() {
     // Windows compares folders in lower case; the name the user sees must not change with it
     let mut s = Session::new();
