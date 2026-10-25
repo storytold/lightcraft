@@ -181,6 +181,21 @@ per-request `_meta` receive `resultType: complete` and list/read cache hints; re
 | `render_photo {id?, size?, format?, path?}` | Render with current settings → **image content** (PNG, or JPEG with `format: "jpeg"`), long edge `size` (default 1024) |
 | `export {path \| dir, id? \| ids?, format?, longEdge? \| shortEdge? \| width?/height? \| megapixels? \| percent?, dontEnlarge?, ppi?, quality?, colorSpace?, bitDepth?, …}` | Full-quality render to `.png` / `.jpg` / `.tif` / `.webp` / `.avif` / `.jxl` (`jxlLossless`, `jxlEffort`, `jxlProgressive`); `format: "original"` copies the file + an XMP sidecar with the edits, `format: "dng"` writes raw photos as DNG with the edits embedded. No size param = 3000 px long edge; `longEdge: 0` = full size (cropped, native resolution); `width` + `height` fit either orientation (Lightroom's Dimensions); with `fit: "widthHeight"` they limit the width and the height as the photo stands (Width & Height); `dontEnlarge` defaults to true |
 
+Export's `conflict` policy applies to both an explicit `path` and a batch `dir`, including
+XMP sidecars. The default `unique` preserves existing files and tries `name-2.ext`, `name-3.ext`,
+and so on in the requested directory. `skip` returns a `{skipped: path}` entry without writing
+when the main file or a sidecar exists; only explicit `overwrite` replaces ordinary files.
+Catalogued originals and their sidecars remain protected: an explicit `path` that names one,
+or names a folder (an existing one, or any path ending in a separator), is an error under every
+policy, rather than silently renaming or skipping it. When only the export's sidecar would land
+on an original's sidecar, that is a collision like any other: `unique` renames past it, `skip`
+skips, and `overwrite` is refused. Inspect `files[].path` for the actual destination; a unique
+export of an ordinary file need not use the exact filename requested. A preset's saved
+`conflict` applies to `{preset, path}` too, and a script that re-runs an export to the same
+`path` and expects it replaced passes `conflict: "overwrite"` (otherwise it gets `a-2.jpg`,
+`a-3.jpg`, …). The policy is export's only: `render_photo {path}`, `ui.render` and
+`lightcraft-cli render -o` write scratch output and still replace an ordinary file there.
+
 `get_develop {id}` and `render_photo {id}` use that photo without changing the selection.
 `set_develop`, `crop` and `export` with a supplied photo `id` end the current edit interaction,
 replace the selection with that one photo and make it active. Without `id`,
