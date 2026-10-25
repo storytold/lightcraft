@@ -512,3 +512,14 @@ fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_
     p.checked.store(10, Relaxed);
     assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
 }
+
+#[test]
+fn counts_too_large_to_add_are_still_changes_to_make() {
+    use crate::state::SyncCounts;
+    let huge = SyncCounts { new: usize::MAX, copies: 1, ..Default::default() };
+    assert!(!huge.up_to_date(), "usize::MAX new files plus one copy is not zero");
+    assert!(!huge.nothing_to_do(true, true));
+    let huge_sum = SyncCounts { moved: usize::MAX, missing: 1, ..Default::default() };
+    assert!(!huge_sum.nothing_to_do(false, false));
+    assert!(SyncCounts::default().up_to_date() && SyncCounts::default().nothing_to_do(true, true));
+}

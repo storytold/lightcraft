@@ -211,7 +211,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     }
     // (the copies of library photos come in with the new ones when the box under is unticked; a copy
     // of a photo in Recently Deleted never does: that photo is restored from there)
-    let incoming = c.new + if *import_duplicates { c.copies } else { 0 };
+    let incoming = c.new.saturating_add(if *import_duplicates { c.copies } else { 0 });
     choice(ui, import_new, incoming, count("Import new photos", incoming), "syncImportNew");
     if c.copies > 0 {
         ui.indent("syncSkipDuplicatesIndent", |ui| {
@@ -228,7 +228,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     choice(ui, remove_missing, c.missing, count("Remove missing photos from the library", c.missing), "syncRemoveMissing");
     choice(ui, read_metadata, c.metadata, count("Read metadata updates from XMP sidecars", c.metadata), "syncReadMetadata");
     ui.add_space(6.0);
-    if incoming + c.moved + c.missing + c.metadata == 0 {
+    if c.nothing_to_do(true, *import_duplicates) {
         dim(ui, crate::i18n::tr("The library is up to date with this folder."));
     }
     if c.missing > 0 {

@@ -381,14 +381,14 @@ impl SyncCounts {
     /// ([`SyncCounts::copies`]) can be brought in by unticking "Don't import files already in the
     /// library", so the dialog keeps that choice for them.
     pub fn up_to_date(&self) -> bool {
-        !self.offline && self.new + self.copies + self.moved + self.missing + self.metadata == 0
+        !self.offline && self.new == 0 && self.copies == 0 && self.moved == 0 && self.missing == 0 && self.metadata == 0
     }
     /// Whether Synchronize, with Import new photos as `import_new` says and the box under it as
     /// `import_duplicates` says, would bring in, relink, remove or read nothing: [`SyncCounts::up_to_date`],
     /// but new files count only when Import new photos is ticked, and files the library has elsewhere
     /// only when it is and that box brings them in.
     pub fn nothing_to_do(&self, import_new: bool, import_duplicates: bool) -> bool {
-        let incoming = if import_new { self.new + if import_duplicates { self.copies } else { 0 } } else { 0 };
-        !self.offline && incoming + self.moved + self.missing + self.metadata == 0
+        let has_incoming = import_new && (self.new != 0 || (import_duplicates && self.copies != 0));
+        !self.offline && !has_incoming && self.moved == 0 && self.missing == 0 && self.metadata == 0
     }
 }
