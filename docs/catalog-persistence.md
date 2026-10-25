@@ -20,8 +20,9 @@ so the library says what its missing values read as:
   library never heard of does too (they take that build's default), and so does one that lacks settings the library
   knows (it would not read them whatever it read them over).
 - A build whose defaults differ reads every record over the library's own, then rewrites the library with its own
-  before anything is added to it (`LoadReport::other_defaults`). If that can't be written, the library is refused (its
-  files still state the library's own defaults, so the next open reads it the same way).
+  before anything is added to it (`LoadReport::other_defaults`). If that can't be written, the library is refused,
+  and the next open reads it the same way: its files still state the library's own defaults, or the new snapshot was
+  written but the log was not emptied, and the log's records are then skipped as stale.
 - Snapshots written before this state none; they are read over the defaults of the build that reads them, as before.
 
 What a missing value reads as in the current build is also pinned by a test (`crates/catalog/src/develop_defaults.json`),
