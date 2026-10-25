@@ -108,32 +108,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
     ui.painter().text(pos2(hr.left() + 24.0, hr.bottom() - 10.0), Align2::LEFT_CENTER, crate::i18n::tr("Edit"), t.semibold(15.0), t.text);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
-                let _ = app.run("develop.auto", json!({}));
-                app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
-            }
-            let bw = crate::is_bw(&d);
-            if text_button(ui, "bw", crate::i18n::tr("B&W"), bw).clicked() {
-                let _ = app.run("develop.treatment", json!({}));
-            }
-            // HDR editing, next to B&W as Lightroom has it
-            if text_button(ui, "hdr", crate::i18n::tr("HDR"), d.hdr.enabled)
-                .on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"))
-                .clicked()
-            {
-                let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
-                    .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
-                    .clicked()
-                {
-                    reset_clicked = true;
-                }
-            });
-        });
+        let tip = reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac);
+        let clicks = header_buttons(ui, crate::is_bw(&d), d.hdr.enabled, &tip);
+        if clicks.auto {
+            let _ = app.run("develop.auto", json!({}));
+            app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
+        }
+        if clicks.bw {
+            let _ = app.run("develop.treatment", json!({}));
+        }
+        if clicks.hdr {
+            let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
+        }
+        reset_clicked = clicks.reset;
     });
     if let Some(why) = &preview_only {
         let reload = egui::Frame::NONE
@@ -237,9 +224,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "color", "Color", |app, ui, d| {
         // White balance row
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
+            // a wider row widens the whole panel's content, so label and mode are cut short before the eyedropper, like
+            // the profile row. The label gives way first (down to `LABEL_MIN`), so the mode, which says what is set,
+            // stays whole where it can; both show their full text on hover. The row never wraps: a layout that changed
+            // with the mode would move the menu under the pointer.
+            const LABEL_MIN: f32 = 40.0;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
-                let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
+                let gap = ui.spacing().item_spacing.x;
+                let title = crate::i18n::tr("White Balance");
+                let mode = crate::i18n::tr(d.wb.mode.label());
+                let mode_w = ui.painter().layout_no_wrap(mode.to_string(), t.font(14.0), t.text_label).size().x + 20.0;
+                let label_max = (ui.available_width() - 28.0 - 2.0 * gap - mode_w).max(LABEL_MIN);
+                ui.label(crate::widgets::one_line(ui.painter(), title, t.font(13.0), t.text_dim, label_max));
+                let max = ui.available_width() - 28.0 - gap;
+                let r = crate::widgets::dropdown_within(ui, "wbMode", mode, t.font(14.0), t.text_label, max);
                 egui::Popup::menu(&r).show(|ui| {
                     for m in WbMode::ALL {
                         if m == WbMode::Custom {
@@ -1404,8 +1402,11 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     let bands = lightcraft_develop::MIXER_BANDS;
     let sel = bands.iter().position(|b| *b == app.ui.mixer_mode).unwrap_or(0);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
+        // the gaps narrow before the swatches would run into the margin (the narrowest panel)
+        let n = bands.len() as f32;
+        let gap = ((ui.available_width() - 22.0 * n) / (n - 1.0).max(1.0)).clamp(0.0, 5.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.spacing_mut().item_spacing.x = gap;
             for (i, b) in bands.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(b));
@@ -1421,25 +1422,55 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
             }
         });
     });
-    // targeted adjustment: pick the attribute, then drag on the photo
+    // targeted adjustment: pick the attribute, then drag on the photo. A wider row would widen the whole panel's
+    // content, so the gaps narrow first (English keeps one row in the default panel), then a button that still doesn't
+    // fit starts the next row, aligned after the target icon, as in the Edit header.
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-            paint(ui.painter(), r, Icon::Target, t.icon);
-            let items: &[(&str, &str)] =
-                if crate::is_bw(d) { &[("lum", "B&W Mix")] } else { &[("hue", "Hue"), ("sat", "Saturation"), ("lum", "Luminance")] };
-            for (k, label) in items {
-                let tool = format!("tat:{k}");
-                let active = app.ui.tool == tool;
-                if text_button(ui, &format!("tatMixer-{k}"), crate::i18n::tr(label), active)
-                    .on_hover_text(crate::i18n::tr("Targeted adjustment: drag up/down on the photo to adjust the colours there"))
-                    .clicked()
-                {
-                    set_tat(app, ui.ctx(), &tool, active);
-                }
+        const GAP: f32 = 6.0;
+        const MIN_GAP: f32 = 2.0;
+        const ICON: f32 = 20.0;
+        let items: &[(&str, &str)] =
+            if crate::is_bw(d) { &[("lum", "B&W Mix")] } else { &[("hue", "Hue"), ("sat", "Saturation"), ("lum", "Luminance")] };
+        let widths: Vec<f32> = items.iter().map(|(_, label)| crate::widgets::text_button_size(ui, label)).collect();
+        let full = ui.available_width();
+        let buttons: f32 = widths.iter().sum();
+        let gaps = items.len() as f32;
+        let gap = ((full - ICON - buttons) / gaps).clamp(MIN_GAP, GAP);
+        // (half a point of slack: the gap that exactly fills the row must not wrap on rounding)
+        let gap = if ICON + buttons + gaps * gap <= full + 0.5 { gap } else { GAP };
+        let avail = full - ICON - gap;
+        let mut rows: Vec<Vec<(&str, &str)>> = Vec::new();
+        let mut row = Vec::new();
+        let mut used = 0.0;
+        for (&(k, label), &w) in items.iter().zip(&widths) {
+            if !row.is_empty() && used + gap + w > avail + 0.5 {
+                rows.push(std::mem::take(&mut row));
             }
-        });
+            used = if row.is_empty() { w } else { used + gap + w };
+            row.push((k, label));
+        }
+        rows.push(row);
+        for (r, row) in rows.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                if r == 0 {
+                    let (icon, _) = ui.allocate_exact_size(vec2(ICON, ICON), Sense::hover());
+                    paint(ui.painter(), icon, Icon::Target, t.icon);
+                } else {
+                    ui.add_space(ICON + gap);
+                }
+                for &(k, label) in row {
+                    let tool = format!("tat:{k}");
+                    let active = app.ui.tool == tool;
+                    if text_button(ui, &format!("tatMixer-{k}"), crate::i18n::tr(label), active)
+                        .on_hover_text(crate::i18n::tr("Targeted adjustment: drag up/down on the photo to adjust the colours there"))
+                        .clicked()
+                    {
+                        set_tat(app, ui.ctx(), &tool, active);
+                    }
+                }
+            });
+        }
     });
     let b = bands[sel];
     if crate::is_bw(d) {
@@ -2041,6 +2072,75 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
 }
 
 /// The Reset button's tooltip with the reset shortcut as this platform writes it (issue #1751).
+/// Which of the Edit header's buttons were clicked.
+#[derive(Default)]
+struct HeaderClicks {
+    auto: bool,
+    bw: bool,
+    hdr: bool,
+    reset: bool,
+}
+
+/// The Edit header's buttons: Auto, B&W and HDR on the left, Reset on the right. A button that doesn't fit on the
+/// row starts the next one (long translations in a narrow panel, such as German *Zurücksetzen* beside HDR), so none
+/// covers another; Reset stays right-aligned on whichever row it lands.
+fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: &str) -> HeaderClicks {
+    const GAP: f32 = 8.0;
+    let mut clicks = HeaderClicks::default();
+    let avail = ui.available_width();
+    let left = [("auto", "Auto", false), ("bw", "B&W", bw), ("hdr", "HDR", hdr)];
+    // rows of `left` indices, filled greedily; `used` is the width taken on the current (last) row
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    let mut row: Vec<usize> = Vec::new();
+    let mut used = 0.0;
+    for (i, (_, label, _)) in left.iter().enumerate() {
+        let w = crate::widgets::text_button_size(ui, label);
+        if row.is_empty() {
+            used = w;
+        } else if used + GAP + w > avail {
+            rows.push(std::mem::take(&mut row));
+            used = w;
+        } else {
+            used += GAP + w;
+        }
+        row.push(i);
+    }
+    rows.push(row);
+    let reset_on_last = used + GAP + crate::widgets::text_button_size(ui, "Reset") <= avail;
+    let reset = |ui: &mut egui::Ui, clicks: &mut HeaderClicks| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            clicks.reset = text_button(ui, "reset", crate::i18n::tr("Reset"), false).on_hover_text(reset_tip).clicked();
+        });
+    };
+    let last = rows.len() - 1;
+    for (r, row) in rows.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            for &i in row {
+                let (id, label, active) = left[i];
+                let mut resp = text_button(ui, id, crate::i18n::tr(label), active);
+                if id == "hdr" {
+                    // HDR editing, next to B&W as Lightroom has it
+                    resp = resp.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"));
+                }
+                let clicked = resp.clicked();
+                match id {
+                    "auto" => clicks.auto = clicked,
+                    "bw" => clicks.bw = clicked,
+                    _ => clicks.hdr = clicked,
+                }
+            }
+            if r == last && reset_on_last {
+                reset(ui, &mut clicks);
+            }
+        });
+    }
+    if !reset_on_last {
+        ui.horizontal(|ui| reset(ui, &mut clicks));
+    }
+    clicks
+}
+
 fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
     let base = crate::i18n::tr("Reset all edits");
     match crate::shortcuts::shortcut_of(keymap, "develop.reset") {
@@ -2077,6 +2177,52 @@ mod curve_histogram_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Edit header's buttons never cover each other or run past the panel, in any language: a button that doesn't
+    /// fit starts the next row, and Reset stays right-aligned. Before, Reset covered HDR in 11 of the 18 languages at
+    /// the default 222 pt (German *Zurücksetzen* among them) and in all but the two Chinese ones at some width. 200 pt
+    /// is about the narrowest panel (`RIGHT_WIDTH.min` less the margins).
+    #[test]
+    fn edit_header_buttons_do_not_overlap_in_any_language() {
+        use crate::i18n::Locale;
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let mut wrapped = Vec::new();
+        for &locale in Locale::ALL {
+            crate::i18n::set_language(locale);
+            for width in [200.0, 222.0, 260.0, 400.0] {
+                let mut rects = Vec::new();
+                for frame in 0..2 {
+                    let raw = crate::headless::HeadlessView::raw_input(vec2(width, 200.0), 1.0, frame as f64 / 60.0, vec![]);
+                    let mut out = ctx.run_ui(raw, |ui| {
+                        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                            header_buttons(ui, false, false, "");
+                        });
+                    });
+                    out.textures_delta.clear();
+                    rects = crate::widgets::take_registry(&ctx);
+                }
+                let get = |id: &str| rects.iter().find(|(i, _)| i == id).map(|(_, r)| *r).unwrap();
+                let buttons = ["button:auto", "button:bw", "button:hdr", "button:reset"].map(get);
+                for (i, a) in buttons.iter().enumerate() {
+                    assert!(a.right() <= width + 0.5, "{locale:?} {width}: button {i} past the edge: {a:?}");
+                    for b in &buttons[i + 1..] {
+                        assert!(!a.intersects(b.shrink(0.5)), "{locale:?} {width}: {a:?} overlaps {b:?}");
+                    }
+                }
+                let [_, _, hdr, reset] = buttons;
+                assert!((reset.right() - width).abs() < 0.5, "{locale:?} {width}: Reset stays right-aligned: {reset:?}");
+                if reset.top() > hdr.top() {
+                    wrapped.push((locale, width));
+                }
+            }
+        }
+        crate::i18n::set_language(Locale::En);
+        assert!(wrapped.contains(&(Locale::De, 222.0)), "German wraps in the default panel: {wrapped:?}");
+        // English keeps its single row from the default width up
+        assert!(!wrapped.iter().any(|&(l, w)| l == Locale::En && w >= 222.0), "{wrapped:?}");
+    }
 
     #[test]
     fn an_hdr_edit_keeps_its_hdr_histogram_through_8_bit_renders() {
