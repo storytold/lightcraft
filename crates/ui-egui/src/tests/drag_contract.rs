@@ -261,6 +261,19 @@ fn a_right_button_release_over_a_refusing_row_says_nothing() {
     }
 }
 
+/// A release that a hidden pass took leaves the drag set with no button down: Esc on the next frame
+/// still only gives it up, before Back can run.
+#[test]
+fn esc_with_a_drag_left_over_and_no_button_down_only_gives_up_the_drag() {
+    let mut h = app();
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    h.app.ui.lights_out = crate::state::LightsOut::Dim;
+    h.app.ui.dragging_photos = Some(outside);
+    esc(&mut h);
+    assert_eq!(h.app.ui.dragging_photos, None, "given up");
+    assert_eq!(h.app.ui.lights_out, crate::state::LightsOut::Dim, "Esc only gave up the drag");
+}
+
 #[test]
 fn esc_during_a_drag_leaves_a_dialog_open() {
     let mut h = app();
