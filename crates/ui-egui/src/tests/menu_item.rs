@@ -290,3 +290,18 @@ fn an_inert_current_choice_ignores_clicks_without_the_disabled_look() {
     assert_eq!(r.clicked, vec![false]);
     assert!(r.nodes.iter().any(|(role, n, t)| role == "RadioButton" && n == "Display P3" && *t == Some(true)), "{:?}", r.nodes);
 }
+
+#[test]
+fn the_info_line_list_is_made_of_menu_rows() {
+    use crate::state::LoupeInfoField as F;
+    let r = run(None, Vec::new(), |ui| {
+        let mut line = F::FileName;
+        crate::panels::settings::info_line_rows(ui, "viewOptionsInfo1Line1", &mut line);
+        Vec::new()
+    });
+    // a `MenuItem::selected` row announces itself as a radio button; a `selectable_label` doesn't
+    let radios: Vec<_> = r.nodes.iter().filter(|(role, ..)| role == "RadioButton").collect();
+    assert_eq!(radios.len(), F::ALL.len(), "{:?}", r.nodes);
+    let current = crate::i18n::tr(F::FileName.label());
+    assert!(radios.iter().any(|(_, n, t)| n == current && *t == Some(true)), "{:?}", r.nodes);
+}
