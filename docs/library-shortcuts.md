@@ -52,9 +52,12 @@ in the grids, and `\` given to another command runs that command.
 Flag cycling and raise/lower use each photo's own flag, so a mixed selection steps together without being made uniform. Adobe's shortcut list names the backtick "Cycle flag settings" but does not state the order; unflagged → pick → reject is LightCraft's choice. The key is the logical grave key, so it follows the keyboard layout (on layouts where it is a dead accent key, assign another key in Help → Keyboard Shortcuts to `photo.cycleFlag`).
 
 `Home` and `End` make the first or last photo of the view the active, selected one. `Shift` + `←` /
-`→` add the previous or next photo of the view to the selection and make the added photo active; the
-key never removes a photo from the selection, and at either end of the view it does nothing. These
-four keys work in Photo Grid and Square Grid only. They wait in Detail, Compare and Survey, in the
+`→` add the previous or next photo of the view to the selection and make the added photo active;
+`Shift` + `↑` / `↓` add every photo from the active one up to the cell above or below it (the cell
+plain `↑` / `↓` move to) and make that cell active. `Ctrl` + `Shift` with an arrow does the same, as
+the Windows file manager's Ctrl+Shift+arrows keep a scattered selection (`⌘` + `Shift` on macOS). The
+keys never remove a photo from the selection, and at either end of the view (the top or bottom row
+for `↑` / `↓`) they do nothing. These keys work in Photo Grid and Square Grid only. They wait in Detail, Compare and Survey, in the
 full-screen preview (which covers the grid), while a text field or a dialog has the keyboard, and
 when you gave the same key to a command in Help → Keyboard Shortcuts, where they are listed under
 Fixed keys.

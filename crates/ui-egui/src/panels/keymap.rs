@@ -164,6 +164,9 @@ fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, nee
         ("End", "Grid: last photo of the view"),
         ("Shift+Left", "Grid: add the previous photo to the selection"),
         ("Shift+Right", "Grid: add the next photo to the selection"),
+        ("Shift+Up", "Grid: add the photos up to the row above to the selection"),
+        ("Shift+Down", "Grid: add the photos down to the row below to the selection"),
+        ("Ctrl+Shift+Left", "Grid: Ctrl+Shift+arrows extend the selection like Shift+arrows"),
     ] {
         fixed.push((sc.to_string(), label));
     }
