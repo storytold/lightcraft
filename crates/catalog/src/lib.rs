@@ -83,6 +83,7 @@ pub const HISTORY_LIMIT: usize = 200;
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Op {
     AddPhoto {
+        #[serde(serialize_with = "stored::photo")]
         photo: Box<Photo>,
     },
     RemovePhoto {
@@ -102,13 +103,14 @@ pub enum Op {
     },
     SetDevelop {
         id: PhotoId,
-        #[serde(deserialize_with = "stored::read_settings")]
+        #[serde(serialize_with = "stored::settings", deserialize_with = "stored::read_settings")]
         settings: Arc<DevelopSettings>,
         label: String,
         edited: Option<String>,
     },
     SetMeta {
         id: PhotoId,
+        #[serde(serialize_with = "stored::meta")]
         meta: Box<Meta>,
     },
     SetDeleted {
@@ -122,16 +124,19 @@ pub enum Op {
     },
     SetVersions {
         id: PhotoId,
+        #[serde(serialize_with = "stored::versions")]
         versions: Vec<Version>,
     },
     SetHistory {
         id: PhotoId,
+        #[serde(serialize_with = "stored::history")]
         history: Vec<HistoryStep>,
     },
     /// Append one History entry (dropping the oldest beyond [`HISTORY_LIMIT`]). Logged instead of
     /// a full `SetHistory` so each edit costs one step in the op log.
     PushHistory {
         id: PhotoId,
+        #[serde(serialize_with = "stored::step")]
         step: HistoryStep,
     },
     /// Move the History cursor (see [`Photo::history_cursor`]) without changing the steps.
@@ -271,6 +276,7 @@ pub enum Op {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Catalog {
+    #[serde(serialize_with = "stored::photos")]
     photos: BTreeMap<PhotoId, Arc<Photo>>,
     albums: BTreeMap<AlbumId, Album>,
     next_photo: u64,

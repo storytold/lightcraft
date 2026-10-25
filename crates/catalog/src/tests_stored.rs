@@ -1,5 +1,5 @@
-//! What a library's missing develop settings read as ([`crate::stored`]): a saved library states
-//! them, and a build whose own differ reads the library over them.
+//! The stored form of catalog records ([`crate::stored`]): what is saved is only what was set,
+//! and a saved library reads back exactly as it was.
 
 use std::sync::Arc;
 
@@ -7,11 +7,16 @@ use lightcraft_develop::DevelopSettings;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::journal::{LOG, SNAPSHOT, VERSION};
+use crate::journal::{LOG, SNAPSHOT, VERSION, encode_record};
+use crate::tests_format_version::Refusing;
 use crate::*;
 
+// ---- fixtures (also used, as they are, to write `fixtures/v6.*` with the format 6 build)
+
 /// Settings with nothing stated, as every saved library reads them: every value its default,
-/// on the first rendering process (a missing process never means "the default one").
+/// on the first rendering process (new photos get the latest one, see
+/// `the_rendering_process_survives`). The fixtures start from these, so they stay what the
+/// format 6 build wrote when a new process becomes the default.
 pub(crate) fn base() -> DevelopSettings {
     serde_json::from_str("{}").unwrap()
 }
@@ -29,8 +34,6 @@ fn plain(id: u64) -> Photo {
     p.develop = Arc::new(base());
     p
 }
-
-// ---- fixtures (also used, as they are, to write `fixtures/v<N>-catalog.*` with the build of format N)
 
 pub(crate) fn edited(d: impl FnOnce(&mut DevelopSettings)) -> Arc<DevelopSettings> {
     let mut s = base();
@@ -138,7 +141,7 @@ fn full() -> Photo {
             name: Some("Ana".into()),
             description: None,
         }],
-        // (no format with a fixture had these)
+        // (no format with a fixture had these; see `fields_since_the_fixtures_survive_the_stored_form`)
         make: String::new(),
         lens_make: String::new(),
         flash: None,
@@ -224,8 +227,390 @@ fn record(c: &Catalog) -> Value {
     v["photos"].as_object().unwrap().values().next().unwrap().clone()
 }
 
-/// A record may leave a setting out, so a library depends on what a missing value reads as: if
-/// that changed, every photo relying on it would silently change.
+/// The catalog saved and read again (counting changes like the one it was read from). Every
+/// photo must also read back with the same public JSON, which tells apart what `==` doesn't
+/// (-0.0 and 0.0) and is what a photo's fingerprint and its preview-cache key are made from.
+fn reopened(c: &Catalog) -> Catalog {
+    let mut r = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+    r.revision = c.revision;
+    // and it reads the same over the defaults a library states (the path a library written with
+    // other defaults takes) as it does plainly: every setting is a value in a struct
+    {
+        let _over = stored::reading_over(Some(Arc::new(stored::base().1.clone())));
+        let mut filled = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+        filled.revision = c.revision;
+        assert_eq!(filled, r, "read over the library's defaults");
+    }
+    for (a, b) in c.photos().zip(r.photos()) {
+        assert_eq!(serde_json::to_string(a.as_ref()).unwrap(), serde_json::to_string(b.as_ref()).unwrap());
+        assert_eq!((a.fingerprint(), a.develop.hash64()), (b.fingerprint(), b.develop.hash64()));
+    }
+    r
+}
+
+/// Given a photo nobody edited or described, when the library is saved, then its record holds
+/// what identifies the file and nothing else.
+#[test]
+fn an_untouched_photo_is_stored_without_defaults() {
+    let c = catalog_of([plain(1)]);
+    let r = record(&c);
+    let keys: Vec<&str> = r.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["develop", "file_name", "format", "height", "id", "imported", "source", "width"]);
+    assert_eq!(r["develop"], serde_json::json!({}));
+    assert_eq!(reopened(&c), c);
+}
+
+/// The stored form leaves out a photo's fields that are unset, so libraries depend on what
+/// "unset" reads as. If this fails because the record of an untouched photo changed, or one of
+/// these defaults did: that is a new catalog format ([`journal::VERSION`]) whose loader gives
+/// the photos of older libraries the old value.
+#[test]
+fn the_record_of_an_untouched_photo_is_pinned() {
+    let c = catalog_of([plain(1)]);
+    assert_eq!(
+        stored_text(&c),
+        r#"{"id":1,"source":{"type":"file","path":"/pictures/2019/trip/IMG_0001.jpg"},"file_name":"IMG_0001.jpg","format":"JPEG","width":4032,"height":3024,"imported":"2026-10-10T12:00:00","develop":{}}"#
+    );
+    let unset = plain(1);
+    assert_eq!(
+        (unset.kind, unset.flag, unset.rating, unset.file_size, unset.deleted, unset.local),
+        (MediaKind::Image, Flag::None, 0, 0, false, false)
+    );
+    assert_eq!((MediaKind::default(), Flag::default(), CopyrightStatus::default()), (MediaKind::Image, Flag::None, CopyrightStatus::Unknown));
+    assert_eq!(Meta::default().copyright_status, CopyrightStatus::Unknown);
+}
+
+/// The stored record of the catalog's only photo (id 1), as it is written.
+fn stored_text(c: &Catalog) -> String {
+    let snapshot = c.to_snapshot();
+    let start = snapshot.find(r#""1":{"#).unwrap() + 4;
+    let end = snapshot.find(r#"},"albums""#).unwrap();
+    snapshot[start..end].to_string()
+}
+
+/// Given a photo with a title only, then the stored metadata is the title only.
+#[test]
+fn metadata_is_stored_field_by_field() {
+    let mut p = plain(1);
+    p.meta.title = "Harbour".into();
+    let c = catalog_of([p]);
+    assert_eq!(record(&c)["meta"], serde_json::json!({"title": "Harbour"}));
+    assert_eq!(reopened(&c), c);
+}
+
+/// Given an edited photo, then its settings, history steps, versions and import look are stored
+/// as what differs from the defaults.
+#[test]
+fn develop_settings_are_stored_as_their_difference_from_the_defaults() {
+    let mut p = plain(1);
+    p.develop = edited(|s| s.light.exposure = 0.3);
+    p.history = vec![HistoryStep { label: "Exposure".into(), settings: p.develop.clone() }];
+    p.versions = vec![Version { name: "V".into(), created: "2026-10-10".into(), settings: p.develop.clone(), auto: false }];
+    p.import_look = Some(edited(|s| s.light.contrast = 20.0));
+    let c = catalog_of([p]);
+    let r = record(&c);
+    let exposure = serde_json::json!({"light": {"exposure": 0.3}});
+    assert_eq!(r["develop"], exposure);
+    assert_eq!(r["history"][0]["settings"], exposure);
+    assert_eq!(r["versions"][0]["settings"], exposure);
+    assert_eq!(r["import_look"], serde_json::json!({"light": {"contrast": 20.0}}));
+    assert_eq!(reopened(&c), c);
+}
+
+/// The fixture sets every field of the photo's and the metadata's public form (and the listed
+/// ones that form leaves out when unset): a field added to [`Photo`] or [`Meta`] that is always
+/// written must be set in it before this passes. (A new field that is left out when unset is
+/// still stated by the stored form at compile time: `StoredPhoto` and `StoredMeta` list every
+/// field.)
+#[test]
+fn the_full_fixture_sets_every_field() {
+    let (f, b) = (serde_json::to_value(full()).unwrap(), serde_json::to_value(plain(1)).unwrap());
+    for (k, v) in f.as_object().unwrap() {
+        if !["format", "width", "height", "imported"].contains(&k.as_str()) {
+            assert_ne!(Some(v), b.get(k), "the fixture leaves `{k}` at its default");
+        }
+    }
+    let empty = serde_json::to_value(Meta::default()).unwrap();
+    for (k, v) in f["meta"].as_object().unwrap() {
+        assert_ne!(Some(v), empty.get(k), "the fixture leaves `meta.{k}` at its default");
+    }
+    // fields left out of the public form when unset are set too
+    for k in ["local", "content_hash", "embedded_lens", "copy_of", "copy_name", "import_look", "analysis", "preview_only", "local_baseline"] {
+        assert!(f.get(k).is_some(), "`{k}`");
+    }
+    for k in ["copyright_status", "usage_terms", "copyright_url", "regions"] {
+        assert!(f["meta"].get(k).is_some(), "`meta.{k}`");
+    }
+}
+
+/// Given a photo with the fields no fixture's format has (a focus point, the camera's and lens's makers, whether the
+/// flash fired, the exposure bias, the serial number, the build that checked a preview-only raw), when the library is
+/// saved and reopened, then the stored form keeps each of them.
+#[test]
+fn fields_since_the_fixtures_survive_the_stored_form() {
+    let mut p = plain(1);
+    p.meta.focus = Some(lightcraft_meta::FocusPoint {
+        rect: lightcraft_meta::Rect { x0: 0.4, y0: 0.4, x1: 0.5, y1: 0.5 },
+        mode: Some("AF-C".into()),
+        area: Some("Wide".into()),
+        tracking: None,
+    });
+    p.meta.make = "Camera Maker".into();
+    p.meta.lens_make = "Lens Maker".into();
+    p.meta.flash = Some(true);
+    p.meta.exposure_bias = Some(-0.5);
+    p.meta.serial_number = "1234567".into();
+    p.preview_checked = "0.8.0".into();
+    let c = catalog_of([p]);
+    let r = record(&c);
+    assert_eq!(r["meta"]["focus"]["mode"], "AF-C");
+    assert_eq!(r["meta"]["make"], "Camera Maker");
+    assert_eq!(r["meta"]["lens_make"], "Lens Maker");
+    assert_eq!(r["meta"]["flash"], true);
+    assert_eq!(r["meta"]["exposure_bias"], -0.5);
+    assert_eq!(r["meta"]["serial_number"], "1234567");
+    assert_eq!(r["preview_checked"], "0.8.0");
+    assert_eq!(reopened(&c), c);
+}
+
+/// Given a photo with everything set, when the library is saved and reopened, nothing is lost.
+#[test]
+fn a_photo_with_everything_set_reads_back_exactly() {
+    let c = catalog_of([full(), plain(8)]);
+    assert_eq!(reopened(&c), c);
+}
+
+/// Every change that carries a photo, settings or metadata reads back from the log as it was.
+#[test]
+fn log_records_read_back_exactly_and_are_stored_compactly() {
+    let p = full();
+    let ops = [
+        Op::AddPhoto { photo: Box::new(p.clone()) },
+        Op::AddPhoto { photo: Box::new(plain(9)) },
+        Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Exposure".into(), edited: None },
+        Op::SetDevelop { id: p.id, settings: Arc::new(DevelopSettings::default()), label: "Reset".into(), edited: None },
+        Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
+        Op::SetMeta { id: p.id, meta: Box::default() },
+        Op::SetVersions { id: p.id, versions: p.versions.clone() },
+        Op::SetHistory { id: p.id, history: p.history.clone() },
+        Op::PushHistory { id: p.id, step: p.history[0].clone() },
+        Op::Batch { ops: vec![Op::AddPhoto { photo: Box::new(plain(10)) }] },
+    ];
+    for (i, op) in ops.iter().enumerate() {
+        let line = encode_record(i as u64 + 1, op);
+        assert_eq!(journal::decode_record(&line), Some((i as u64 + 1, op.clone())), "{line}");
+    }
+    let reset = encode_record(1, &ops[3]);
+    assert!(reset.len() < 200, "a reset stores no settings: {reset}");
+    let added = encode_record(1, &ops[1]);
+    assert!(added.len() < 320, "{added}");
+    let cleared = encode_record(1, &ops[5]);
+    assert!(cleared.len() < 80, "{cleared}");
+}
+
+/// Settings made before process versions existed leave the process out and read back as the
+/// first process; settings on any other process state it. Neither may be confused with the other.
+#[test]
+fn the_rendering_process_survives() {
+    let on = |process: &str| -> Arc<DevelopSettings> { Arc::new(serde_json::from_str(process).unwrap()) };
+    for json in ["{}", r#"{"process":1}"#, r#"{"process":7}"#, r#"{"process":7,"light":{"exposure":1.0}}"#] {
+        let mut p = plain(1);
+        p.develop = on(json);
+        let c = catalog_of([p]);
+        assert_eq!(reopened(&c), c, "{json}");
+    }
+    // a new photo: the default settings on the default process, stating only what that needs
+    let mut p = plain(1);
+    p.develop = Arc::new(DevelopSettings::default());
+    let c = catalog_of([p]);
+    assert!(record(&c)["develop"].as_object().unwrap().keys().all(|k| k == "process"), "{}", record(&c)["develop"]);
+    assert_eq!(reopened(&c), c);
+}
+
+/// Settings with lists, choices and optional values (masks, curve points, guides, the Upright
+/// transform, a locked crop aspect, spots, red eye) read back exactly, in a photo and in the log.
+#[test]
+fn rich_develop_settings_survive() {
+    let rich = Arc::new(rich());
+    let v = serde_json::to_value(rich.as_ref()).unwrap();
+    for list in ["masks", "spots", "red_eye", "point_colors", "disabled_sections"] {
+        assert!(v[list].as_array().is_some_and(|a| !a.is_empty()), "`{list}`");
+    }
+    assert!(!v["geometry"]["upright_transform"].is_null() && !v["crop"]["aspect"].is_null());
+    let mut p = plain(1);
+    p.develop = rich.clone();
+    p.history = vec![HistoryStep { label: "Masks".into(), settings: rich.clone() }];
+    let c = catalog_of([p]);
+    assert_eq!(reopened(&c), c);
+    let op = Op::SetDevelop { id: PhotoId(1), settings: rich, label: "Masks".into(), edited: None };
+    assert_eq!(journal::decode_record(&encode_record(1, &op)), Some((1, op)));
+}
+
+/// A negative zero is a different number in the saved JSON (a camera's as-shot tint of -0.3
+/// rounds to it), and a photo's fingerprint and preview-cache key are made from that JSON: it is
+/// stored, also where everything else is the default. Otherwise an untouched Local record would
+/// count as changed once the library was reopened.
+#[test]
+fn a_negative_zero_survives() {
+    // on its own, where the default is 0.0
+    let mut p = plain(1);
+    p.develop = edited(|s| s.wb.tint = -0.0);
+    assert_ne!(p.develop.hash64(), base().hash64());
+    let c = catalog_of([p]);
+    assert_eq!(record(&c)["develop"].to_string(), r#"{"wb":{"tint":-0.0}}"#);
+    assert_eq!(reopened(&c), c);
+
+    // a browsed raw whose as-shot tint rounded to -0.0: still untouched after reopening
+    let mut p = plain(2);
+    p.kind = MediaKind::Raw;
+    p.format = "DNG".into();
+    p.as_shot_wb = Some((5200.0, (-0.3f64).round()));
+    p.develop = edited(|s| {
+        s.wb.temp = 5200.0;
+        s.wb.tint = (-0.3f64).round();
+        s.detail.sharpen_amount = 40.0;
+    });
+    p.local = true;
+    p.set_local_baseline();
+    assert!(p.untouched_local());
+    let c = catalog_of([p.clone()]);
+    let r = reopened(&c);
+    assert!(r.photos().next().unwrap().untouched_local());
+
+    // settings equal to the ones just stored, but for the sign of a zero, are not taken for them
+    let mut q = plain(3);
+    q.develop = edited(|s| {
+        s.wb.temp = 5200.0;
+        s.wb.tint = 0.0;
+        s.detail.sharpen_amount = 40.0;
+    });
+    let c = catalog_of([q, p.clone(), plain(4)]);
+    assert_eq!(reopened(&c), c);
+
+    // and in the log
+    let op = Op::SetDevelop { id: PhotoId(2), settings: p.develop.clone(), label: "x".into(), edited: None };
+    let (_, back) = journal::decode_record(&encode_record(1, &op)).unwrap();
+    let Op::SetDevelop { settings, .. } = back else { panic!() };
+    assert_eq!(settings.hash64(), p.develop.hash64());
+}
+
+/// What other parts of the program read (the photo as JSON, and the Local browse fingerprint
+/// made from it) is not the stored form: it still states every field.
+#[test]
+fn the_public_form_of_a_photo_still_states_every_field() {
+    let v = serde_json::to_value(plain(1)).unwrap();
+    for k in
+        ["kind", "file_size", "captured", "meta", "rating", "flag", "label", "edited", "versions", "history", "deleted", "duration", "as_shot_wb"]
+    {
+        assert!(v.get(k).is_some(), "`{k}`");
+    }
+    assert_eq!(v["develop"], serde_json::to_value(base()).unwrap());
+    assert_eq!(v["meta"], serde_json::to_value(Meta::default()).unwrap());
+}
+
+/// A Local record browsed by an earlier version still counts as untouched: its fingerprint is
+/// made from the public form, which did not change. (The number is what the format 6 build
+/// computes for this record.)
+#[test]
+fn local_fingerprints_are_unchanged() {
+    let mut p = plain(1);
+    p.local = true;
+    assert_eq!(p.fingerprint(), FINGERPRINT_OF_PLAIN_LOCAL_1);
+}
+const FINGERPRINT_OF_PLAIN_LOCAL_1: u64 = 18_354_247_549_712_272_181;
+
+/// The library the fixture of format `version` holds (`fixtures/v<N>-catalog.*`): three photos
+/// in the snapshot, with a log of later changes.
+pub(crate) fn fixture_library(version: u32) -> Catalog {
+    let mut library = fixture_snapshot();
+    for op in fixture_ops(version) {
+        library.apply(op).unwrap();
+    }
+    // (the fixtures were written before a mask could stay on the photo, `Mask.on_photo` of main's format 10: their masks
+    // read as drawn on the corrected image, which is not how the masks built here are)
+    let mut library = Catalog::from_snapshot(&library.to_snapshot().replace("\"on_photo\":true", "\"on_photo\":false")).unwrap();
+    // (photo nine's baseline is the fingerprint of its settings as the builds that wrote the fixtures worked it out: this
+    // build gets another number for the same settings, since main's develop code changed after them)
+    if let Some(p) = library.photos.get_mut(&PhotoId(9)) {
+        Arc::make_mut(p).local_baseline = Some(5_167_973_575_965_256_545);
+    }
+    library
+}
+
+/// What the fixtures' snapshot holds: a photo with every field set, an untouched one, and a
+/// Local record with rich develop settings.
+fn fixture_snapshot() -> Catalog {
+    let mut rich_photo = plain(9);
+    rich_photo.develop = Arc::new(rich());
+    rich_photo.local = true;
+    rich_photo.set_local_baseline();
+    catalog_of([full(), plain(8), rich_photo])
+}
+
+/// Writes this build's fixture, `fixtures/v<VERSION>-catalog.*`: the fixture library as this
+/// build saves it, snapshot and log. Run it once, when a format is new: put two empty files there
+/// (the tests include them), then
+/// `cargo test -p lightcraft-catalog write_this_formats_fixture -- --ignored`. The files are then
+/// what that build wrote, and are never written again.
+#[test]
+#[ignore = "writes fixtures/v<VERSION>-catalog.*"]
+fn write_this_formats_fixture() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures");
+    let (snap, log) = (dir.join(format!("v{VERSION}-catalog.snap.json")), dir.join(format!("v{VERSION}-catalog.log.jsonl")));
+    let written = |f: &std::path::Path| std::fs::metadata(f).is_ok_and(|m| m.len() > 0);
+    assert!(!written(&snap) && !written(&log), "format {VERSION} has its fixture: a fixture is what that build wrote");
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    // the snapshot first, then the later changes as the log beside it
+    let mut library = fixture_snapshot();
+    let photos: Vec<Op> = library.photos().map(|p| Op::AddPhoto { photo: Box::new((**p).clone()) }).collect();
+    j.append(&photos).unwrap();
+    j.snapshot(&library).unwrap();
+    for op in fixture_ops(VERSION) {
+        library.apply(op.clone()).unwrap();
+        j.append(&[op]).unwrap();
+    }
+    drop(j);
+    std::fs::write(snap, m.get(SNAPSHOT).unwrap()).unwrap();
+    std::fs::write(log, m.get(LOG).unwrap()).unwrap();
+}
+
+/// Given a library saved by the format 6 build (every field of every record written out; the
+/// files in `fixtures/` were written by that build from the fixtures above, with a log of later
+/// changes), when it is opened, then it reads as it was and is rewritten in the compact form.
+#[test]
+fn a_v6_library_loads_and_is_upgraded() {
+    let old = include_str!("fixtures/v6-catalog.snap.json");
+    let log = include_str!("fixtures/v6-catalog.log.jsonl");
+    assert!(old.starts_with(r#"{"format":"lightcraft-catalog","version":6,"#) && log.lines().count() == later_ops().len());
+    let expected = fixture_library(6);
+
+    let m = MemStore::new();
+    m.set(SNAPSHOT, old.as_bytes().to_vec());
+    m.set(LOG, log.as_bytes().to_vec());
+    let (_, mut loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed, r.upgraded_from), (later_ops().len(), 0, Some(6)));
+    loaded.revision = expected.revision;
+    assert_eq!(loaded, expected);
+    let public = |c: &Catalog| c.photos().map(|p| serde_json::to_string(p.as_ref()).unwrap()).collect::<Vec<_>>();
+    assert_eq!(public(&loaded), public(&expected));
+    // the Local record browsed with format 6 is still untouched (rating it since made it touched
+    // in both: compare the fingerprint of its state)
+    assert_eq!(loaded.photo(PhotoId(9)).unwrap().fingerprint(), expected.photo(PhotoId(9)).unwrap().fingerprint());
+
+    // rewritten in this format, compactly, and it reads the same again
+    let new = m.get(SNAPSHOT).unwrap();
+    let head: Value = serde_json::from_slice(&new).unwrap();
+    assert_eq!(head["version"].as_u64(), Some(u64::from(VERSION)));
+    assert!(m.get(LOG).unwrap().is_empty());
+    assert!(new.len() * 2 < old.len() + log.len(), "{} + {} -> {}", old.len(), log.len(), new.len());
+    let (_, mut again, r) = Journal::open(Box::new(m)).unwrap();
+    again.revision = expected.revision;
+    assert_eq!((again, r.upgraded_from), (expected, None));
+}
+
+/// The stored form leaves out values equal to the defaults, so a library depends on what a
+/// missing value reads as: if that changed, every photo relying on it would silently change.
 /// `develop_defaults.json` is what settings with nothing stated (`{}`) read as.
 ///
 /// If this fails because a setting was **added**, add it to the file (the test prints what it
@@ -283,6 +668,26 @@ fn stored_record(id: u64, develop: Value) -> Value {
     r
 }
 
+/// Given a format 9 library that states this build's defaults (what #2948 writes) and whose
+/// upgrade can't be written, when it is opened, then it is refused and left as it was: a compact
+/// record appended under its format 9 header would be read by builds of that format as their own
+/// defaults. It opens, upgraded, once the disk takes the write.
+#[test]
+fn a_format_9_library_that_states_defaults_is_refused_when_it_cannot_be_upgraded() {
+    let snap = String::from_utf8(snapshot_stating(&stored::base().1, serde_json::json!({}))).unwrap();
+    let snap = snap.replace(&format!("\"version\":{VERSION}"), "\"version\":9").into_bytes();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap.clone());
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT };
+    let e = Journal::open(Box::new(store)).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be upgraded")), "{e}");
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), None));
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [SNAPSHOT], "nothing half kept");
+
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+}
+
 /// Given a saved library, then its snapshot states what a record's missing develop settings read
 /// as: the settings of a record with nothing stated.
 #[test]
@@ -301,7 +706,7 @@ fn a_library_states_what_missing_settings_read_as() {
 /// when this build opens it, then its photos are as that build left them: a photo that states
 /// nothing has that Exposure and hue (not this build's 0), in its settings and in the history
 /// step its log added; a photo that states an Exposure of 0 has 0. And the library is rewritten
-/// with this build's defaults, so it opens the same again.
+/// with this build's defaults, stating what the photos now differ in, so it opens the same again.
 #[test]
 fn a_library_written_with_other_defaults_reads_as_it_was_written() {
     let m = MemStore::new();
@@ -326,9 +731,12 @@ fn a_library_written_with_other_defaults_reads_as_it_was_written() {
     expected.mixer.red.hue = 5.0;
     assert_eq!(*one.develop, expected);
 
-    // rewritten: this build's defaults, no log
+    // rewritten: this build's defaults, the photos' differences from them stated, no log
     assert_eq!(stated_defaults(&m), stored::base().1);
     assert!(m.get(LOG).unwrap().is_empty());
+    let saved: Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
+    assert_eq!(saved["catalog"]["photos"]["1"]["develop"].to_string(), r#"{"light":{"exposure":1.0},"mixer":{"red":{"hue":5.0}}}"#);
+    assert_eq!(saved["catalog"]["photos"]["2"]["develop"].to_string(), r#"{"mixer":{"red":{"hue":5.0}}}"#);
     let (_, mut again, r) = Journal::open(Box::new(m)).unwrap();
     again.revision = c.revision;
     assert!(!r.other_defaults);
@@ -336,20 +744,93 @@ fn a_library_written_with_other_defaults_reads_as_it_was_written() {
 }
 
 /// Given a library written before a setting existed (its defaults don't state it), when this
-/// build opens it, then it is read as it is, the setting taking this build's default, and it is
-/// not rewritten for that.
+/// build opens it, then the setting reads as this build's default, the library is rewritten
+/// stating it before anything is appended, and a compact record appended after that is read back
+/// by a reader that takes its defaults from the header: the setting is this build's default, not
+/// whatever the build that reads it next has (this fails where the header is left as it was: it
+/// would state no default for what the compact record leaves out).
 #[test]
-fn a_library_that_only_lacks_newer_settings_is_read_as_it_is() {
+fn a_library_that_lacks_newer_settings_is_restated_before_a_compact_record_is_appended() {
     let mut older = stored::base().1.clone();
     older.as_object_mut().unwrap().remove("lens_blur").unwrap();
     older["light"].as_object_mut().unwrap().remove("blacks").unwrap();
     let m = MemStore::new();
     let snap = snapshot_stating(&older, serde_json::json!({"1": stored_record(1, serde_json::json!({}))}));
     m.set(SNAPSHOT, snap.clone());
-    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert!(!r.other_defaults, "{r:?}");
+    let (mut j, mut c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert!(r.defaults_added && !r.other_defaults, "{r:?}");
     assert_eq!(*c.photo(PhotoId(1)).unwrap().develop, base());
-    assert_eq!(m.get(SNAPSHOT), Some(snap), "not rewritten");
+    assert_ne!(m.get(SNAPSHOT), Some(snap), "rewritten");
+    assert_eq!(stated_defaults(&m), stored::base().1, "now states every setting");
+
+    // a compact append: the setting at its default is left out of the record, because the header
+    // now states it
+    let mut edited = (*c.photo(PhotoId(1)).unwrap().develop).clone();
+    edited.light.exposure = 0.5;
+    let op = Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edited), label: "Exposure".into(), edited: None };
+    c.apply(op.clone()).unwrap();
+    j.append(&[op]).unwrap();
+    drop(j);
+    let log = String::from_utf8(m.get(LOG).unwrap()).unwrap();
+    assert!(!log.contains("lens_blur"), "left out of the record: {log}");
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert!(!r.defaults_added, "{r:?}");
+    assert_eq!(again.photo(PhotoId(1)).unwrap().develop.light.exposure, 0.5);
+    assert_eq!(again.photo(PhotoId(1)).unwrap().develop.lens_blur, base().lens_blur);
+    // and read over the header's defaults, as a build with other defaults would read it
+    let head = stated_defaults(&m);
+    let _over = stored::reading_over(Some(Arc::new(head)));
+    let (_, over, _) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(over.photo(PhotoId(1)).unwrap().develop.lens_blur, base().lens_blur);
+}
+
+/// Given such a library whose rewrite can't be written (the disk is full), when it is opened,
+/// then it opens as it was, every record states its develop settings whole (a compact record
+/// would leave out a setting the header gives no default for), and once a snapshot can be written
+/// the header states every setting and the records are compact.
+#[test]
+fn a_library_whose_defaults_cannot_be_restated_writes_whole_records_until_it_can() {
+    static DISK_FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let mut older = stored::base().1.clone();
+    older.as_object_mut().unwrap().remove("lens_blur").unwrap();
+    let m = MemStore::new();
+    let snap = snapshot_stating(&older, serde_json::json!({"1": stored_record(1, serde_json::json!({}))}));
+    m.set(SNAPSHOT, snap.clone());
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT && DISK_FULL.load(std::sync::atomic::Ordering::SeqCst) };
+    let (mut j, mut c, r) = Journal::open(Box::new(store)).unwrap();
+    assert!(r.defaults_added, "{r:?}");
+    assert_eq!(m.get(SNAPSHOT), Some(snap), "as it was");
+
+    let edit = |c: &Catalog, exposure: f64| {
+        let mut edited = (*c.photo(PhotoId(1)).unwrap().develop).clone();
+        edited.light.exposure = exposure;
+        Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edited), label: "Exposure".into(), edited: None }
+    };
+    let op = edit(&c, 0.5);
+    c.apply(op.clone()).unwrap();
+    j.append(&[op]).unwrap();
+    let log = String::from_utf8(m.get(LOG).unwrap()).unwrap();
+    assert!(log.contains("lens_blur"), "whole while the header can't give its default: {log}");
+    assert!(j.snapshot(&c).is_err(), "still full");
+    let op = edit(&c, 0.6);
+    c.apply(op.clone()).unwrap();
+    j.append(&[op]).unwrap();
+    assert!(String::from_utf8(m.get(LOG).unwrap()).unwrap().lines().last().unwrap().contains("lens_blur"));
+
+    DISK_FULL.store(false, std::sync::atomic::Ordering::SeqCst);
+    j.snapshot(&c).unwrap();
+    assert_eq!(stated_defaults(&m), stored::base().1, "now states every setting");
+    let op = edit(&c, 0.7);
+    c.apply(op.clone()).unwrap();
+    j.append(&[op]).unwrap();
+    let log = String::from_utf8(m.get(LOG).unwrap()).unwrap();
+    assert!(!log.contains("lens_blur"), "compact once it does: {log}");
+    drop(j);
+    let (_, again, r) = Journal::open(Box::new(m)).unwrap();
+    assert!(!r.defaults_added, "{r:?}");
+    let develop = &again.photo(PhotoId(1)).unwrap().develop;
+    assert_eq!(develop.light.exposure, 0.7);
+    assert_eq!(develop.lens_blur, base().lens_blur);
 }
 
 /// Given a library written with other defaults that can't be rewritten (the disk is full), when
@@ -604,58 +1085,3 @@ impl serde::ser::SerializeStruct for &mut Skipped {
     }
 }
 
-/// The library the fixture of format `version` holds (`fixtures/v<N>-catalog.*`): three photos
-/// in the snapshot, with a log of later changes.
-pub(crate) fn fixture_library(version: u32) -> Catalog {
-    let mut library = fixture_snapshot();
-    for op in fixture_ops(version) {
-        library.apply(op).unwrap();
-    }
-    // (the fixtures were written before a mask could stay on the photo, `Mask.on_photo` of main's format 10: their masks
-    // read as drawn on the corrected image, which is not how the masks built here are)
-    let mut library = Catalog::from_snapshot(&library.to_snapshot().replace("\"on_photo\":true", "\"on_photo\":false")).unwrap();
-    // (photo nine's baseline is the fingerprint of its settings as the builds that wrote the fixtures worked it out: this
-    // build gets another number for the same settings, since main's develop code changed after them)
-    if let Some(p) = library.photos.get_mut(&PhotoId(9)) {
-        Arc::make_mut(p).local_baseline = Some(5_167_973_575_965_256_545);
-    }
-    library
-}
-
-/// What the fixtures' snapshot holds: a photo with every field set, an untouched one, and a
-/// Local record with rich develop settings.
-fn fixture_snapshot() -> Catalog {
-    let mut rich_photo = plain(9);
-    rich_photo.develop = Arc::new(rich());
-    rich_photo.local = true;
-    rich_photo.set_local_baseline();
-    catalog_of([full(), plain(8), rich_photo])
-}
-
-/// Writes this build's fixture, `fixtures/v<VERSION>-catalog.*`: the fixture library as this
-/// build saves it, snapshot and log. Run it once, when a format is new: put two empty files there
-/// (the tests include them), then
-/// `cargo test -p lightcraft-catalog write_this_formats_fixture -- --ignored`. The files are then
-/// what that build wrote, and are never written again.
-#[test]
-#[ignore = "writes fixtures/v<VERSION>-catalog.*"]
-fn write_this_formats_fixture() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures");
-    let (snap, log) = (dir.join(format!("v{VERSION}-catalog.snap.json")), dir.join(format!("v{VERSION}-catalog.log.jsonl")));
-    let written = |f: &std::path::Path| std::fs::metadata(f).is_ok_and(|m| m.len() > 0);
-    assert!(!written(&snap) && !written(&log), "format {VERSION} has its fixture: a fixture is what that build wrote");
-    let m = MemStore::new();
-    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
-    // the snapshot first, then the later changes as the log beside it
-    let mut library = fixture_snapshot();
-    let photos: Vec<Op> = library.photos().map(|p| Op::AddPhoto { photo: Box::new((**p).clone()) }).collect();
-    j.append(&photos).unwrap();
-    j.snapshot(&library).unwrap();
-    for op in fixture_ops(VERSION) {
-        library.apply(op.clone()).unwrap();
-        j.append(&[op]).unwrap();
-    }
-    drop(j);
-    std::fs::write(snap, m.get(SNAPSHOT).unwrap()).unwrap();
-    std::fs::write(log, m.get(LOG).unwrap()).unwrap();
-}

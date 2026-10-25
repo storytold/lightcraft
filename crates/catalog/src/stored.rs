@@ -1,13 +1,18 @@
-//! The stored form of develop settings, and what a library's missing develop settings read as.
+//! The stored form of catalog records: what `catalog.snap` and `catalog.log` hold.
 //!
-//! A develop setting a record leaves out reads as its default (the types' `Deserialize`: a missing
-//! field takes its default), so libraries whose records state every setting load as they are.
-//! This module is the writing half of leaving them out: the settings of a photo, and those of its
-//! history steps, versions and import look, stored as their **difference from
-//! [`DevelopSettings::default`]** (`{}` for an unedited photo). Nothing writes it yet: catalog
-//! format 10, in the next change, switches the records over (the `serialize_with` functions
-//! [`settings`], [`step`], [`history`] and [`versions`] are what its ops name, and its photos are
-//! stored with them), and until then records state settings as formats up to 9 do.
+//! A [`Photo`] has a **public form** (its `Serialize`: every field stated; what `catalog.query`
+//! returns and what the Local browse fingerprint, [`Photo::fingerprint`], is made from) and this
+//! **stored form**, which states only what was set:
+//!
+//! - fields of a photo and of its [`Meta`] that are empty, zero or unset are left out;
+//! - develop settings (the photo's, and those of its history steps, versions and import look) are
+//!   stored as their difference from [`DevelopSettings::default`]: `{}` for an unedited photo.
+//!
+//! Most photos of a library are never edited or described, and their records were mostly
+//! defaults: about 3.2 kB each for a photo with no metadata, nearly all of it the default develop
+//! settings. Reading needs
+//! nothing of its own: both forms are read by the types' `Deserialize`, where a missing field
+//! takes its default, so libraries with full records (catalog formats up to 9) load as they are.
 //!
 //! **Settings are never stored in a form that reads back differently.** A value is left out only
 //! where leaving it out of the defaults reads back as the defaults. That is not so for `process`,
@@ -16,16 +21,16 @@
 //! at all. And each difference is read back and compared before it is written; settings that
 //! would not survive are stored in full.
 //!
-//! **A library says what its missing values read as.** A value that is not in the file reads as
-//! the default, so a default that changed in the code would change every photo relying on it. So
+//! **A library says what its missing values read as.** A value equal to the default is not in
+//! the file, so a default that changed in the code would change every photo relying on it. So
 //! `catalog.snap` states them itself (`"defaults"`: [`base`], the settings a record with nothing
 //! stated reads as in the build that wrote it), and they cover the log beside it. A build whose
 //! own differ ([`reads_the_same`]) reads the library's settings over the library's defaults, not
-//! over its own ([`reading_over`]), and then rewrites the library with its own. A build that only
-//! has more settings than the library states reads it as it is: a setting the library never
-//! heard of takes this build's default, until the library's next snapshot states it. Once records
-//! leave settings out (the next change), such a library is rewritten to state them first
-//! ([`states_every_setting`]), and until that is written its records state develop settings
+//! over its own ([`reading_over`]), and then rewrites the library with its own. A build that has
+//! more settings than the library states reads a setting the library never heard of as its own
+//! default, and rewrites the library to state it ([`states_every_setting`]) before a record
+//! that leaves it out is appended; until that rewrite is written (a full disk, a volume that
+//! can't be written to) the library opens all the same and its records state develop settings
 //! whole ([`writing_full`]).
 //!
 //! That works where a setting is a value in a struct, which the settings are, and because the
@@ -43,7 +48,7 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::{HistoryStep, Version};
+use crate::{ColorLabel, CopyrightStatus, Flag, HistoryStep, MediaKind, Meta, Photo, PhotoId, Source, Version};
 
 // ---- develop settings
 
@@ -184,7 +189,6 @@ pub(crate) fn reads_the_same(theirs: &Value) -> bool {
 /// Whether a library that states `theirs` as its defaults states every setting this build has
 /// (a build that adds a setting is the one this is for): a record written from now on leaves out
 /// what equals this build's default of that setting, so the library must state it first.
-#[allow(dead_code, reason = "called by the journal in the change that brings catalog format 10")]
 pub(crate) fn states_every_setting(theirs: &Value) -> bool {
     fn has(theirs: &Value, ours: &Value) -> bool {
         match (theirs, ours) {
@@ -680,7 +684,7 @@ thread_local! {
 }
 
 /// While it lives, develop settings written on this thread are stored whole, as formats before
-/// 10 did, so a record reads back the same over whatever defaults its library states (a value the
+/// 14 did, so a record reads back the same over whatever defaults its library states (a value the
 /// settings' own JSON leaves out at its default is as in those formats): for a
 /// library whose header doesn't state every setting this build has yet, where a difference from
 /// this build's defaults would leave out what the header gives no default for.
@@ -693,7 +697,6 @@ impl Drop for WritingFull {
     }
 }
 
-#[allow(dead_code, reason = "called by the journal in the change that brings catalog format 10")]
 pub(crate) fn writing_full() -> WritingFull {
     WritingFull(WRITING_FULL.try_with(|w| w.replace(true)).unwrap_or(false))
 }
@@ -751,7 +754,6 @@ impl Serialize for StoredSettings<'_> {
 }
 
 /// `serialize_with` for settings in an [`crate::Op`].
-#[allow(dead_code, reason = "named by the ops and photos in the change that brings catalog format 10")]
 pub(crate) fn settings<S: Serializer>(v: &Arc<DevelopSettings>, s: S) -> Result<S::Ok, S::Error> {
     StoredSettings(v).serialize(s)
 }
@@ -798,19 +800,315 @@ impl<T, R: Serialize> Serialize for StoredList<'_, T, R> {
 }
 
 /// `serialize_with` for a history step in an [`crate::Op`].
-#[allow(dead_code, reason = "named by the ops and photos in the change that brings catalog format 10")]
 pub(crate) fn step<S: Serializer>(v: &HistoryStep, s: S) -> Result<S::Ok, S::Error> {
     StoredStep::of(v).serialize(s)
 }
 
 /// `serialize_with` for a history in an [`crate::Op`].
-#[allow(dead_code, reason = "named by the ops and photos in the change that brings catalog format 10")]
 pub(crate) fn history<S: Serializer>(v: &[HistoryStep], s: S) -> Result<S::Ok, S::Error> {
     StoredList(v, StoredStep::of).serialize(s)
 }
 
 /// `serialize_with` for versions in an [`crate::Op`].
-#[allow(dead_code, reason = "named by the ops and photos in the change that brings catalog format 10")]
 pub(crate) fn versions<S: Serializer>(v: &[Version], s: S) -> Result<S::Ok, S::Error> {
     StoredList(v, StoredVersion::of).serialize(s)
+}
+
+// ---- metadata
+
+fn no<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// [`Meta`] in its stored form: the fields that say something.
+struct StoredMeta<'a>(&'a Meta);
+
+impl StoredMeta<'_> {
+    fn is_empty(&self) -> bool {
+        *self.0 == Meta::default()
+    }
+}
+
+impl Serialize for StoredMeta<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Fields<'a> {
+            #[serde(skip_serializing_if = "str::is_empty")]
+            camera: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            make: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            lens: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            lens_make: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            focal_mm: Option<f32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            aperture: Option<f32>,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            shutter: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            iso: Option<u32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            flash: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            exposure_bias: Option<f32>,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            serial_number: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            location: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            city: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            state: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            country: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            gps: Option<(f64, f64)>,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            title: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            caption: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            alt_text: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            extended_description: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            copyright: &'a str,
+            #[serde(skip_serializing_if = "CopyrightStatus::is_unknown")]
+            copyright_status: CopyrightStatus,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            usage_terms: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            copyright_url: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            creator: &'a str,
+            #[serde(skip_serializing_if = "<[String]>::is_empty")]
+            keywords: &'a [String],
+            #[serde(skip_serializing_if = "<[lightcraft_meta::Region]>::is_empty")]
+            regions: &'a [lightcraft_meta::Region],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            focus: &'a Option<lightcraft_meta::FocusPoint>,
+        }
+        // every field by name: a new one doesn't compile until it has a stored form
+        let Meta {
+            camera,
+            make,
+            lens,
+            lens_make,
+            focal_mm,
+            aperture,
+            shutter,
+            iso,
+            flash,
+            exposure_bias,
+            serial_number,
+            location,
+            city,
+            state,
+            country,
+            gps,
+            title,
+            caption,
+            alt_text,
+            extended_description,
+            copyright,
+            copyright_status,
+            usage_terms,
+            copyright_url,
+            creator,
+            keywords,
+            regions,
+            focus,
+        } = self.0;
+        Fields {
+            camera,
+            make,
+            lens,
+            lens_make,
+            focal_mm: *focal_mm,
+            aperture: *aperture,
+            shutter,
+            iso: *iso,
+            flash: *flash,
+            exposure_bias: *exposure_bias,
+            serial_number,
+            location,
+            city,
+            state,
+            country,
+            gps: *gps,
+            title,
+            caption,
+            alt_text,
+            extended_description,
+            copyright,
+            copyright_status: *copyright_status,
+            usage_terms,
+            copyright_url,
+            creator,
+            keywords,
+            regions,
+            focus,
+        }
+        .serialize(s)
+    }
+}
+
+/// `serialize_with` for metadata in an [`crate::Op`].
+pub(crate) fn meta<S: Serializer>(v: &Meta, s: S) -> Result<S::Ok, S::Error> {
+    StoredMeta(v).serialize(s)
+}
+
+// ---- photos
+
+/// A [`Photo`] in its stored form.
+struct StoredPhoto<'a>(&'a Photo);
+
+impl Serialize for StoredPhoto<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Fields<'a, H: Serialize, V: Serialize> {
+            id: PhotoId,
+            source: &'a Source,
+            file_name: &'a str,
+            #[serde(skip_serializing_if = "no")]
+            kind: MediaKind,
+            format: &'a str,
+            width: u32,
+            height: u32,
+            #[serde(skip_serializing_if = "no")]
+            file_size: u64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            captured: Option<&'a str>,
+            imported: &'a str,
+            #[serde(skip_serializing_if = "StoredMeta::is_empty")]
+            meta: StoredMeta<'a>,
+            #[serde(skip_serializing_if = "no")]
+            rating: u8,
+            #[serde(skip_serializing_if = "no")]
+            flag: Flag,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            label: Option<ColorLabel>,
+            develop: StoredSettings<'a>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            edited: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            versions: Option<V>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            history: Option<H>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            history_cursor: Option<usize>,
+            #[serde(skip_serializing_if = "no")]
+            deleted: bool,
+            #[serde(skip_serializing_if = "no")]
+            local: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            duration: Option<f64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            as_shot_wb: Option<(f64, f64)>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            content_hash: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            embedded_lens: &'a Option<lightcraft_develop::EmbeddedLens>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            copy_of: Option<PhotoId>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            copy_name: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            import_look: Option<StoredSettings<'a>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            analysis: &'a Option<crate::Analysis>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            preview_only: Option<&'a str>,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            preview_checked: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            local_baseline: Option<u64>,
+        }
+        // every field by name: a new one doesn't compile until it has a stored form
+        let Photo {
+            id,
+            source,
+            file_name,
+            kind,
+            format,
+            width,
+            height,
+            file_size,
+            captured,
+            imported,
+            meta,
+            rating,
+            flag,
+            label,
+            develop,
+            edited,
+            versions,
+            history,
+            history_cursor,
+            deleted,
+            local,
+            duration,
+            as_shot_wb,
+            content_hash,
+            embedded_lens,
+            copy_of,
+            copy_name,
+            import_look,
+            analysis,
+            preview_only,
+            preview_checked,
+            local_baseline,
+        } = self.0;
+        Fields {
+            id: *id,
+            source,
+            file_name,
+            kind: *kind,
+            format,
+            width: *width,
+            height: *height,
+            file_size: *file_size,
+            captured: captured.as_deref(),
+            imported,
+            meta: StoredMeta(meta),
+            rating: *rating,
+            flag: *flag,
+            label: *label,
+            develop: StoredSettings(develop),
+            edited: edited.as_deref(),
+            versions: (!versions.is_empty()).then_some(StoredList(versions.as_slice(), StoredVersion::of)),
+            history: (!history.is_empty()).then_some(StoredList(history.as_slice(), StoredStep::of)),
+            history_cursor: *history_cursor,
+            deleted: *deleted,
+            local: *local,
+            duration: *duration,
+            as_shot_wb: *as_shot_wb,
+            content_hash: content_hash.as_deref(),
+            embedded_lens,
+            copy_of: *copy_of,
+            copy_name: copy_name.as_deref(),
+            import_look: import_look.as_deref().map(StoredSettings),
+            analysis,
+            preview_only: preview_only.as_deref(),
+            preview_checked,
+            local_baseline: *local_baseline,
+        }
+        .serialize(s)
+    }
+}
+
+/// `serialize_with` for the photo of an [`crate::Op`].
+pub(crate) fn photo<S: Serializer>(v: &Photo, s: S) -> Result<S::Ok, S::Error> {
+    StoredPhoto(v).serialize(s)
+}
+
+/// `serialize_with` for the catalog's photos.
+pub(crate) fn photos<S: Serializer>(v: &BTreeMap<PhotoId, Arc<Photo>>, s: S) -> Result<S::Ok, S::Error> {
+    let mut map = s.serialize_map(Some(v.len()))?;
+    for (id, p) in v {
+        map.serialize_entry(id, &StoredPhoto(p))?;
+    }
+    map.end()
 }

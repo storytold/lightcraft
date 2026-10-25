@@ -47,9 +47,8 @@
 //! # Format versions
 //!
 //! The snapshot's `version` is the catalog format, and it covers the log beside it: the log has
-//! no header of its own, and is appended to under a snapshot of this build's format. (Except
-//! for a library left in an older format because its files could not be kept or its upgrade
-//! written: it goes on as it is, and its log gets this build's ops until a snapshot upgrades it.)
+//! no header of its own, and is only ever appended to under a snapshot that states the defaults
+//! its records leave out (this build's format, or one from 14 on with this build's defaults).
 //!
 //! Every format, what it adds and which build wrote it first is one row of [`FORMATS`]: the
 //! newest row is [`VERSION`], what this build writes.
@@ -75,11 +74,6 @@
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
 //!   (Except where the upgrade can't be written or its files can't be kept: see the next rule.)
 //!   [`LoadReport::upgraded_from`] says when the upgrade happened at open.
-//! - **A snapshot states what its records' missing develop settings read as** (`"defaults"`, see
-//!   [`crate::stored`]): the defaults of the build that wrote it, which cover the log beside it.
-//!   Written from this build on; an older snapshot states none, and is read over this build's. A
-//!   build whose defaults differ reads the library over the library's own, and rewrites it with
-//!   its own before anything is appended ([`LoadReport::other_defaults`]).
 //! - **An upgrade keeps what it replaces**: older builds can't read the upgraded library, so the
 //!   files it was are first kept beside it as `catalog.snap.v<format>-<seq>` and
 //!   `catalog.log.v<format>-<seq>` (`seq`: the last change they hold), byte for byte
@@ -94,11 +88,16 @@
 //!   library on disk is known to be in its old format still: an upgrade at open that did not
 //!   happen leaves none of the copies it wrote (one that was there before stays), and one that was written keeps its copy whatever fails after it.
 //!   Nothing removes them afterwards: they are the user's to delete. (Not where the store says
-//!   there is no going back, [`Store::keeps_replaced_formats`].) A library left in its old format
-//!   at open (its files couldn't be kept, or the upgrade couldn't be written) is upgraded by a
-//!   later snapshot (compaction, or closing), which first keeps the files as they were at open
-//!   (the snapshot, and the log up to where it ended then) and is not written when it can't. Those
-//!   files stay even if that snapshot then fails and the library is still in its old format.
+//!   there is no going back, [`Store::keeps_replaced_formats`].)
+//! - **A library that can't be upgraded is not opened**, where appending to it as it is would
+//!   not be safe: one in a format before 14, or one that states other defaults than this build's
+//!   ([`crate::stored`]). A record written by this build leaves out what equals this build's
+//!   defaults, which a build of a format before 14 reads as its own. It is left as it was, and the
+//!   error says why. (A library in format 14 or later, which writes records so and states its
+//!   defaults, may go on as it is when it can't be upgraded now: a later snapshot, compaction or
+//!   closing, upgrades it, first keeps the files as they were at open (the snapshot, and the log
+//!   up to where it ended then) and is not written when it can't; those files stay even if that
+//!   snapshot then fails and the library is still in its old format. The next open tries again.)
 //! - **A newer format is refused, untouched**: a snapshot whose `version` is above [`VERSION`],
 //!   or a log record whose CRC matches (so it is exactly what was written) but whose op doesn't
 //!   parse, fails [`Journal::open`] with [`CatalogError::Newer`] before any file is modified — it
@@ -136,6 +135,12 @@ const fn format(version: u32, written_by: &'static str, adds_op: bool, adds: &'s
     Format { version, written_by, adds, adds_op, here: true }
 }
 
+/// A row of [`FORMATS`] for a number spoken for by a change that is not in this build yet
+/// ([`Format::here`] false): nothing else takes the number meanwhile.
+const fn spoken_for(version: u32, written_by: &'static str, adds_op: bool, adds: &'static str) -> Format {
+    Format { version, written_by, adds, adds_op, here: false }
+}
+
 /// The newest format in `formats` that this build has and that adds an op, by each row's flag.
 pub fn newest_op_format(formats: &[Format]) -> Option<&Format> {
     formats.iter().rev().find(|f| f.here && f.adds_op)
@@ -155,11 +160,16 @@ pub const FORMATS: &[Format] = &[
     format(10, "masks stay on the photo under lens corrections, Upright and Transform", FIELDS, "`Mask.on_photo` (develop settings)"),
     format(11, "lens database profiles named in the Optics panel", FIELDS, "`EmbeddedLens.source`"),
     format(12, "history steps and versions share segmentation grids (#2154)", FIELDS, "`Catalog.grids`, `SegMask.grid`"),
+    spoken_for(13, "folders made in LightCraft keep their row (#3166)", FIELDS, "`FolderRecord.made`"),
+    format(14, "compact records", FIELDS, "the stored form (`crate::stored`): unset fields and default develop settings are left out"),
 ];
 
 /// The catalog format this build writes (and the newest it reads): the newest of [`FORMATS`]
 /// that is [`Format::here`].
 pub const VERSION: u32 = newest(FORMATS);
+
+/// The first format whose records leave out what equals this build's defaults ([`crate::stored`]).
+const COMPACT_RECORDS: u32 = 14;
 
 const fn newest(formats: &[Format]) -> u32 {
     match formats.split_last() {
@@ -187,8 +197,10 @@ impl Default for SnapshotPolicy {
 enum Upgrade {
     /// The library may go on as it is if it can't be upgraded now.
     May,
-    /// The library can't be used as it is: its damaged log would be appended to after the damage,
-    /// so the snapshot must also have replaced that log.
+    /// The library can't be used as it is.
+    Must,
+    /// As [`Upgrade::Must`], for a library whose log was damaged: the snapshot must also have
+    /// replaced that log.
     Repair,
 }
 
@@ -241,6 +253,10 @@ pub struct LoadReport {
     /// by a build with other ones): its records were read over its own defaults, and it was
     /// rewritten with this build's.
     pub other_defaults: bool,
+    /// The library's stated defaults lack a setting this build has (it was written by a build
+    /// that didn't know it): they are restated at open, before any compact record is appended;
+    /// where that can't be written, records state develop settings whole until a snapshot is.
+    pub defaults_added: bool,
 }
 
 /// Where persistence time goes (reported by `library.info` → `persistence`; printed to stderr
@@ -337,6 +353,12 @@ pub struct Journal {
     /// handed over before, which it holds and retries): the next chance writes a snapshot, a fresh
     /// file holding everything, in case only the log's file is broken.
     snapshot_due: bool,
+    /// The snapshot's header doesn't state every setting this build has (it was written by a
+    /// build that didn't know one, and restating it failed at open): develop settings are
+    /// written whole in every record ([`crate::stored::writing_full`]) until a snapshot, which
+    /// states them all, is written. Never set where compact records would be unsafe for another
+    /// reason (other defaults, an older format that can't be upgraded refuse the library).
+    header_incomplete: bool,
 }
 
 /// A background snapshot in flight.
@@ -549,7 +571,7 @@ fn snapshot_head(seq: u64) -> String {
 struct SnapHeader {
     format: String,
     version: u32,
-    /// What a record's missing develop settings read as.
+    /// What a record's missing develop settings read as (from format 14 on).
     #[serde(default)]
     defaults: Option<serde_json::Value>,
 }
@@ -564,10 +586,12 @@ struct SnapFile {
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
     /// tail. Fails if the snapshot is unreadable or a newer LightCraft's (then nothing is
-    /// modified), or if the library is in an older format and its damaged log can't be replaced,
-    /// its snapshot can't be kept, or it can't be told whether its upgrade was written, or if the
-    /// library states other develop defaults than this build's and its rewrite with this build's
-    /// can't be written, or its log can't then be emptied (see the module docs → *Format versions*).
+    /// modified), or if the library is in an older format and can't be brought to this build's
+    /// where it must be (its damaged log can't be replaced, its snapshot can't be kept, or it can't
+    /// be told whether its upgrade was written: see the module docs → *Format versions*), or if
+    /// the library states other develop defaults than this build's and its rewrite with this
+    /// build's can't be written, or its log can't then be emptied, or if a new library's first
+    /// snapshot can't be written.
     pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;
@@ -577,6 +601,8 @@ impl Journal {
         // (dropped once the snapshot and the log are read: their records are read over the
         // library's own defaults where those are not this build's)
         let mut reading = None;
+        // (the snapshot says what its records' missing develop settings read as: from format 14)
+        let mut states_defaults = false;
         let (mut catalog, snapshot_seq, snapshot_version) = match &snap {
             Some(bytes) => {
                 // the header first: a newer snapshot may not parse as this version's catalog
@@ -586,6 +612,10 @@ impl Journal {
                 }
                 if h.version > VERSION {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
+                }
+                states_defaults = h.defaults.is_some();
+                if h.defaults.as_ref().is_some_and(|theirs| !crate::stored::states_every_setting(theirs)) {
+                    report.defaults_added = true;
                 }
                 if let Some(theirs) = h.defaults.filter(|theirs| !crate::stored::reads_the_same(theirs)) {
                     log::info!("catalog: the library was written with other develop defaults; reading it over its own");
@@ -615,6 +645,7 @@ impl Journal {
             behind_at: (0, 0),
             kept_pending: None,
             kept_written: Vec::new(),
+            header_incomplete: false,
             log_records: 0,
             log_bytes: 0,
             policy: SnapshotPolicy::default(),
@@ -731,16 +762,24 @@ impl Journal {
         if report.created {
             // tiny: written directly, not counted as a compaction
             let empty = format!("{}{}}}\n", snapshot_head(0), catalog.to_snapshot());
-            if let Err(e) = j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
-                log::warn!("catalog: can't write the new library's snapshot: {e}");
-            }
+            // (A new library that can't be written is not one to work in: what would be added to
+            // its log leaves out defaults that nothing states.)
+            j.store
+                .write_atomic(SNAPSHOT, empty.as_bytes())
+                .map_err(|e| CatalogError::Io(format!("can't write the new library's {SNAPSHOT}: {e}")))?;
         } else if let (Some(from), false) = (older, rewritten) {
-            // The library may go on as it is when it can't be upgraded now (the next open tries
-            // again). Appends are not refused meanwhile: refusing them would leave a library
-            // whose files can't be copied (little room left) unable to save anything. What is
-            // appended is this build's ops; the files kept when a later snapshot upgrades it are
-            // the library as it is here (`behind_at`), which an older build reads.
-            if let Some(kept) = j.upgrade(&catalog, from, snap.as_deref(), &log, Upgrade::May)? {
+            // A library in a format that writes compact records and states its defaults may go on
+            // as it is when it can't be upgraded now (the next open tries again): what is appended
+            // to it reads the same in every build that reads it. One before that (a build of those
+            // formats reads a missing value as its own default, and a library of format 9 that
+            // states defaults is still read so by builds that don't know the statement), or one
+            // that states other defaults, must not be appended to as it is: a record written from
+            // here on leaves out what equals this build's defaults. (One that only lacks a setting
+            // this build has may: its records are written whole until it is restated,
+            // `header_incomplete`.) What is appended is this build's ops; the files kept when a
+            // later snapshot upgrades it are the library as it is here (`behind_at`).
+            let how = if report.other_defaults || !states_defaults || from < COMPACT_RECORDS { Upgrade::Must } else { Upgrade::May };
+            if let Some(kept) = j.upgrade(&catalog, from, snap.as_deref(), &log, how)? {
                 rewritten = true;
                 report.upgraded_from = Some(from);
                 report.kept = kept;
@@ -751,10 +790,30 @@ impl Journal {
         }
         if report.other_defaults && !rewritten {
             // The same format, other defaults: the library must state this build's before
-            // anything is appended. Nothing is kept for that: any build reads a library over
-            // the defaults it states.
+            // anything is appended, since a compact record leaves out what equals the default the
+            // header states for it. Nothing is kept for that: any build reads a library over the
+            // defaults it states. If it can't be rewritten the library is refused.
             j.snapshot(&catalog)?;
+        } else if report.defaults_added && !rewritten {
+            // A setting this build has that the header doesn't state: restate it before a
+            // compact record is appended. If that can't be done now (a full disk, a read-only
+            // volume; or the upgrade just above failed, which keeps no copies behind, so the
+            // snapshot is not tried again at once), the library still opens, and every record is
+            // written whole until a snapshot succeeds (`header_incomplete`). A crash at any point
+            // finds the old files whole, or a header that states every setting before any compact
+            // record was written.
+            j.header_incomplete = true;
+            if j.behind.is_none() {
+                match j.snapshot(&catalog) {
+                    Ok(()) => {}
+                    Err(e) if j.header_incomplete => {
+                        log::warn!("catalog: can't restate the library's defaults ({e}); writing whole records until it can")
+                    }
+                    Err(e) => log::warn!("catalog: the library's defaults were restated, but its log could not be reset: {e}"),
+                }
+            }
         }
+
         catalog.revision = 0;
         Ok((j, catalog, report))
     }
@@ -938,6 +997,7 @@ impl Journal {
         let t0 = web_time::Instant::now();
         let mut buf = String::new();
         let mut seq = self.seq;
+        let _whole = self.header_incomplete.then(crate::stored::writing_full);
         for op in ops {
             seq = seq.checked_add(1).ok_or_else(|| CatalogError::Corrupt(format!("{LOG}: op counter overflow")))?;
             buf.push_str(&encode_record(seq, op));
@@ -1011,6 +1071,7 @@ impl Journal {
         self.seq = seq;
         self.snapshot_seq = seq;
         self.upgraded_later();
+        self.header_incomplete = false;
         let t2 = web_time::Instant::now();
         // A crash here leaves old records in the log; they are skipped by seq on load.
         self.store.write_atomic(LOG, b"").map_err(io)?;
@@ -1104,6 +1165,7 @@ impl Journal {
         let t1 = web_time::Instant::now();
         self.snapshot_seq = p.seq;
         self.upgraded_later();
+        self.header_incomplete = false;
         if let Err(e) = self.store.write_atomic(LOG, &p.tail) {
             // the log stays whole (stale records are skipped on load); compact again later
             self.retry_at_records = self.log_records + self.policy.max_records;

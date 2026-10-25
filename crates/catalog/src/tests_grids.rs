@@ -328,6 +328,9 @@ fn stray_grid_from_a_document_is_not_written_as_a_reference() {
     assert_eq!(report.repaired, Vec::<String>::new(), "{:?}", report.repaired);
     let MaskShape::Object { seg: Some(seg), .. } = &loaded.photo(two).unwrap().develop.masks[0].components[0].shape else { panic!("an Object mask") };
     assert_eq!((seg.data.as_str(), seg.grid), ("", None), "the stray reference is not resolved to photo one's grid");
+    // (both in the full form: photo two's settings in `live` carry the stray `grid`, which a difference from the defaults
+    // can't read back, so they are written in full there, where the loaded ones, without it, are written as a difference)
+    let _full = crate::stored::writing_full();
     assert_eq!(loaded.to_snapshot(), live.to_snapshot());
 }
 

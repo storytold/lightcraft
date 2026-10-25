@@ -4,29 +4,56 @@ The catalog is two files in the library folder (`crates/catalog/src/journal.rs`)
 the whole catalog, and `catalog.log`, one JSON line per change made since. Every change is handed to the log before
 its command returns; natively the log's own thread writes and fsyncs it right after, so a command never waits for the drive (a
 write that fails is held and retried, and switching the library or quitting waits for it). Now and then the log is
-compacted into a new snapshot. This page covers what happens to a library's files when a newer version opens it.
+compacted into a new snapshot. This page covers what a record in those files states (catalog format 14) and what
+happens to a library's files when a newer version opens it.
 
-## What a missing value reads as
+## The stored form
 
-A record may leave a develop setting out (the photo's, and those of its history steps, versions and import look); a
-missing field reads as its default. A default that changed in the code would then change every photo relying on it,
-so the library says what its missing values read as:
+A photo's record states only what was set (`crates/catalog/src/stored.rs`):
 
-- `catalog.snap` states them (`"defaults"`: the settings of a record with nothing stated, about 2.8 kB once per
-  library), and that covers the log beside it. Every setting is stated, also the few whose own JSON is left out at
-  their default (the white balance scale, the HDR section, the camera's local tone, Denoise on or off); only the
-  rendering process is not, since a record without one is on the first process in every build.
-- A build with the same defaults reads the records as they are, at no cost. A build that only has settings the
-  library never heard of does too (they take that build's default), and so does one that lacks settings the library
-  knows (it would not read them whatever it read them over).
-- A build whose defaults differ reads every record over the library's own, then rewrites the library with its own
-  before anything is added to it (`LoadReport::other_defaults`). If that can't be written, the library is refused,
-  and the next open reads it the same way: its files still state the library's own defaults, or the new snapshot was
-  written but the log was not emptied, and the log's records are then skipped as stale.
-- Snapshots written before this state none; they are read over the defaults of the build that reads them, as before.
+- fields of the photo and of its metadata that are empty, zero or unset are left out;
+- develop settings (the photo's, and those of its history steps, versions and import look) are stored as their
+  difference from the defaults: `{}` for a photo nobody edited.
 
-What a missing value reads as in the current build is also pinned by a test (`crates/catalog/src/develop_defaults.json`),
-so a changed default is seen when it is made. A setting that is removed or renamed needs a loader of its own.
+Reading did not change: a missing field reads as its default, so libraries of formats 1 to 12 load as they are and are
+rewritten in format 14 when first opened. Builds before format 14 refuse a format 14 library. A new library whose
+`catalog.snap` can't be written (a full disk, a read-only volume) is not opened either, since what was added to its log
+would leave out defaults that nothing states.
+
+The files an upgrade replaces are kept: see "Going back to an older version" below.
+
+`catalog.query` and the other commands still return every field. That public form of a photo is also what a Local
+record's fingerprint and the preview-cache key are made from, so neither changed.
+
+Three rules keep what is left out safe:
+
+- **A value is left out only where that reads back the same.** Which values that holds for is worked out from the
+  types themselves on first use, not from a list: not the rendering process (a missing process means the
+  first one), and not single fields of a value that is read all or nothing (the crop rectangle).
+- **Every difference is read back and compared before it is written.** Settings that would not survive are stored in
+  full, as before.
+- **The library says what a missing value reads as.** `catalog.snap` states it (`"defaults"`: the settings of a
+  record with nothing stated, about 2.8 kB once per library), and that covers the log beside it. Every setting is
+  stated, also the few whose own JSON is left out at their default (the white balance scale, the HDR section, the
+  camera's local tone, Denoise on or off, Remove Hot Pixels); only the rendering process is not, since a record
+  without one is on the first process in every build. So what a photo's record means does not depend on the
+  defaults of the LightCraft that reads it:
+  - a build with the same defaults reads the records as they are, at no cost;
+  - a build that lacks settings the library knows reads it as it is (it would not read them whatever it read them
+    over), and one that has settings the library never heard of reads them as its own default, then rewrites the
+    library to state them before a record that leaves them out is added (`LoadReport::defaults_added`). If that rewrite
+    can't be written (a full disk, a read-only volume) the library still opens, and its records state develop settings
+    whole, as formats before 14 did, until a snapshot (a compaction, or closing) succeeds; then compact records start.
+    A crash at any point leaves the old files whole, or a header that states every setting before any compact record;
+  - a build whose defaults differ reads every record over the library's own, then rewrites the library with its own
+    before anything is added to it (`LoadReport::other_defaults`). If that rewrite can't be written, the library is
+    refused: its files still state the library's own defaults, or the new snapshot was written and only the log was not
+    emptied (its records are then skipped as stale), so the next open reads it the same way. No compact record follows a
+    header that doesn't state what it relies on.
+
+  What a missing value reads as in the current build is also pinned by a test
+  (`crates/catalog/src/develop_defaults.json`), so a changed default is seen when it is made. A setting that is
+  removed or renamed needs a loader of its own.
 
 ## Going back to an older version
 
@@ -44,20 +71,22 @@ one-way step, the upgrade first keeps the files the library was, byte for byte, 
   did not happen (then the files that open wrote are removed again; a copy kept earlier stays): once the upgrade is written, nothing that fails
   after it takes them away. The files a later snapshot keeps (below) stay too, even if that snapshot then fails and
   the library is still in its old format.
-- A library whose files can't be kept, or whose upgrade can't be written (a full disk, a folder that can't be written
-  to), is not upgraded: it opens as it is, with no copy of this attempt left lying about, and the next open tries again. If what is on
-  disk after a failed write can't be read back to say whether the upgrade was written, the library is refused instead
-  (its way back stays). A library left like that is upgraded by its next snapshot, during the session or when it is
-  closed, and that snapshot keeps the files first too (and is not written when they can't be kept). When a snapshot
-  during the session does that, LightCraft tells where the files are kept, as it does at open (a snapshot when the
-  library is closed, or switched away from in Settings, has no one left to tell: the files are in the folder, named
-  as above). The files kept are the library as it was when it opened (the snapshot, and the log up to where it ended
-  then): what was changed since is in the files that replace them, not in the kept ones. (An earlier session of this
-  version may have added changes while the library stayed in its old format: they are in the log it opened with, and
-  an older version may refuse them.) Until then, changes
-  go on being appended to the library as it is, so that they can be saved at all where there is no room for a copy of
-  its files. (If the session ends without that snapshot, the next open keeps the log as it is then, which holds
-  those changes, and tells so; the files kept earlier stay beside it.)
+- A library that can't be kept, or whose upgrade can't be written (a full disk, a folder that can't be written to),
+  is not opened where working in it as it is would not be safe: one in a format before 14 (builds of those formats
+  read a setting a record leaves out as their own default), or one that states other defaults than this version's.
+  The error says why, and the catalog is not changed (a torn last record of its log is still cut off, as on any
+  open). If what is on disk after a failed write can't be read back to say whether the upgrade was written, the
+  library is refused too (its way back stays).
+  A library in format 14 or later, which states its defaults, opens as it is (if it lacks a setting this version has,
+  records are written whole until the snapshot that upgrades it, which keeps its files first): a later snapshot, during
+  the session or when it is closed, upgrades it, keeps the files first and is not written when they can't be kept, and
+  the next open tries again. The files that snapshot keeps are the library as it was when it opened (the snapshot, and
+  the log up to where it ended then): what was changed since is in the files that replace them, not in the kept ones.
+  When a snapshot during the session does that, LightCraft tells where the files are kept, as it does at open (a
+  snapshot when the library is closed, or switched away from in Settings, has no one left to tell: the files are in the
+  folder, named as above). Until then, changes go on being appended to the library as it is, so that they can be saved
+  at all where there is no room for a copy of its files. (If the session ends without that snapshot, the next open keeps
+  the log as it is then, which holds those changes, and tells so; the files kept earlier stay beside it.)
 - A library whose log was damaged is upgraded like any other. What it was is then its snapshot, kept under the name
   above, and its log, kept as `catalog.log.damaged-<seq>`: the snapshot alone is the library without the changes
   that log held. If the snapshot can't be kept, the library is refused and left as it was; if the damaged log can't

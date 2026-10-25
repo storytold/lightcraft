@@ -312,7 +312,7 @@ fn fs_store_roundtrip() {
 }
 
 /// The streamed snapshot is byte-for-byte what was written before streaming (issue #37), with
-/// the defaults a library states; FsStore and MemStore agree.
+/// the defaults a library states since format 14; FsStore and MemStore agree.
 #[test]
 fn streamed_snapshot_keeps_the_on_disk_format() {
     let (m, _, full) = sample_catalog_with_log();
