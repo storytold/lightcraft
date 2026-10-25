@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::headless::Headless;
 use crate::dialogs::import::{ImportDialog, scan_note};
+use crate::headless::Headless;
 use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
 

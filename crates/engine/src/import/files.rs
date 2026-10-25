@@ -114,12 +114,7 @@ pub fn expand_report(paths: &[String], skip: Option<&Path>, limits: crate::walk:
 
 /// ([`expand_report`], handing the listing of every folder that is walked to `note`, as
 /// [`expand_noting`] does.)
-fn expand_report_noting(
-    paths: &[String],
-    skip: Option<&Path>,
-    limits: crate::walk::Limits,
-    mut note: Option<crate::walk::NoteFolder>,
-) -> Expansion {
+fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, mut note: Option<crate::walk::NoteFolder>) -> Expansion {
     let mut out = Expansion::default();
     for p in paths {
         let p = Path::new(p);
