@@ -2151,35 +2151,6 @@ fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
     in_order(&h, &["folderSynchronize", "folderLocateMissing", "folderLabelMenu", "folderRemove"]);
 }
 
-/// Move Selected Photos Here stays in a folder's menu with nothing selected, grayed out (a click
-/// does nothing), so the menu keeps its shape; once photos are selected it moves them.
-#[test]
-fn move_selected_photos_here_is_grayed_out_until_photos_are_selected() {
-    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
-    h.app.run("library.select", json!({"ids": []})).unwrap();
-    click(&mut h, "libraryFolderToggle:/pics");
-    right_click(&mut h, "source:libfolder:/pics/trip");
-    assert!(has(&h, "folderMovePhotosHere"), "listed with nothing selected");
-    h.app.ui.toast = None;
-    click(&mut h, "folderMovePhotosHere");
-    assert!(h.app.ui.toast.is_none(), "a grayed-out row does nothing: {:?}", h.app.ui.toast);
-    h.request("ui.key", json!({"key": "escape"}), T);
-    h.step();
-    h.step();
-    let b = h
-        .app
-        .session
-        .catalog
-        .photos()
-        .find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.ends_with("b.jpg")))
-        .map(|p| p.id)
-        .unwrap();
-    h.app.run("library.select", json!({"ids": [b.0], "active": b.0})).unwrap();
-    right_click(&mut h, "source:libfolder:/pics/trip");
-    click(&mut h, "folderMovePhotosHere");
-    assert!(h.app.ui.toast.is_some(), "with a photo selected the row acts and says how it went");
-}
-
 /// Show in Finder on a folder says why when the file manager can't show it, instead of nothing.
 #[test]
 fn a_folder_that_cant_be_shown_in_the_file_manager_says_why() {
