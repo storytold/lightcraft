@@ -39,7 +39,8 @@ use lightcraft_raw::{
 /// a tone-only fallback for near-black scenes with too few colour pairs (#1587); DNG tone fitting uses a
 /// lens-corrected proxy when the file carries lens opcodes; validated A7CR distortion, including the lens data
 /// stored with each smart preview.
-pub const LOOK_VERSION: u32 = 12;
+/// 13: ISO 50 on the ILCE-7CR fits and renders one stop darker (`vendor::arw::extended_iso_exposure`).
+pub const LOOK_VERSION: u32 = 13;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
