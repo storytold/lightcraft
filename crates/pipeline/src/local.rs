@@ -477,7 +477,9 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     let w = img.width;
     if let Some(nr) = lum {
         let _t = crate::profiling().then(std::time::Instant::now);
-        let l = img.map(log_lum);
+        // The guide is the log-luminance of the pixel clamped to zero, as the image was before #840: signed noise near
+        // black would put Y <= 0 at log's floor, and those outliers stiffen the guided filter (less smoothing).
+        let l = img.map(|c| log_lum(c.map(|v| v.max(0.0))));
         let f = guided(&l, nr.sigma, nr.eps);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
@@ -1090,6 +1092,29 @@ mod nr_tests {
             s.detail.nr_color = nr_color;
             denoise(&mut img, &s, 1.0);
             assert!(img.data.iter().all(|p| p.iter().all(|v| *v >= 0.0)), "nr_color {nr_color}");
+        }
+    }
+
+    #[test]
+    fn luminance_nr_guide_is_the_clamped_image() {
+        // Signed noise near black (#840) must not reach log's floor: the luminance gain at a pixel is what it is
+        // with the image clamped to zero, so the smoothing strength matches the clamped image.
+        let noise = |x: usize, y: usize, k: usize| (((x * 7919 + y * 104729 + k * 15485863) % 101) as f32 / 101.0 - 0.5) * 0.03;
+        let signed = Rgb32f::from_fn(32, 32, |x, y| [0.004 + noise(x, y, 1), 0.004 + noise(x, y, 2), 0.002 + noise(x, y, 3)]);
+        assert!(signed.data.iter().any(|p| luminance_2020(*p) < 0.0));
+        let clamped = signed.map(|c| c.map(|v| v.max(0.0)));
+        let nr = || Some(NrLum { sigma: 3.0, eps: 0.25, k: 1.0 });
+        let (mut a, mut b) = (signed.clone(), clamped.clone());
+        apply_nr(&mut a, nr(), None);
+        apply_nr(&mut b, nr(), None);
+        for i in 0..a.data.len() {
+            for c in 0..3 {
+                // same gain g on both: a = signed * g, b = clamped * g
+                let (s0, c0) = (signed.data[i][c], clamped.data[i][c]);
+                if c0 > 1e-4 && s0 == c0 {
+                    assert!((a.data[i][c] / b.data[i][c] - 1.0).abs() < 1e-4, "{i} {c}");
+                }
+            }
         }
     }
 

@@ -22,6 +22,16 @@ fn log_lum_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroup
     dst[i] = log_lum(rgb_a(i));
 }
 
+// `log_lum` of an RGB image clamped to zero: the luminance NR guide (`local::apply_nr`, #840).
+@compute @workgroup_size(256)
+fn log_lum_pos_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    dst[i] = log_lum(max(rgb_a(i), vec3<f32>(0.0)));
+}
+
 // `dark_of`: the dark channel (dehaze).
 @compute @workgroup_size(256)
 fn dark_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
