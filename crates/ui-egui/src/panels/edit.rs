@@ -223,9 +223,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "color", "Color", |app, ui, d| {
         // White balance row
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
+            // a wider row widens the whole panel's content, so label and mode are cut short before the eyedropper, like
+            // the profile row. The label gives way first (down to `LABEL_MIN`), so the mode, which says what is set,
+            // stays whole where it can; both show their full text on hover. The row never wraps: a layout that changed
+            // with the mode would move the menu under the pointer.
+            const LABEL_MIN: f32 = 40.0;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
-                let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
+                let gap = ui.spacing().item_spacing.x;
+                let title = crate::i18n::tr("White Balance");
+                let mode = crate::i18n::tr(d.wb.mode.label());
+                let mode_w = ui.painter().layout_no_wrap(mode.to_string(), t.font(14.0), t.text_label).size().x + 20.0;
+                let label_max = (ui.available_width() - 28.0 - 2.0 * gap - mode_w).max(LABEL_MIN);
+                ui.label(crate::widgets::one_line(ui.painter(), title, t.font(13.0), t.text_dim, label_max));
+                let max = ui.available_width() - 28.0 - gap;
+                let r = crate::widgets::dropdown_within(ui, "wbMode", mode, t.font(14.0), t.text_label, max);
                 egui::Popup::menu(&r).show(|ui| {
                     for m in WbMode::ALL {
                         if m == WbMode::Custom {
@@ -1282,8 +1293,11 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     let bands = lightcraft_develop::MIXER_BANDS;
     let sel = bands.iter().position(|b| *b == app.ui.mixer_mode).unwrap_or(0);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
+        // the gaps narrow before the swatches would run into the margin (the narrowest panel)
+        let n = bands.len() as f32;
+        let gap = ((ui.available_width() - 22.0 * n) / (n - 1.0).max(1.0)).clamp(0.0, 5.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.spacing_mut().item_spacing.x = gap;
             for (i, b) in bands.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(b));
@@ -1299,25 +1313,55 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
             }
         });
     });
-    // targeted adjustment: pick the attribute, then drag on the photo
+    // targeted adjustment: pick the attribute, then drag on the photo. A wider row would widen the whole panel's
+    // content, so the gaps narrow first (English keeps one row in the default panel), then a button that still doesn't
+    // fit starts the next row, aligned after the target icon, as in the Edit header.
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-            paint(ui.painter(), r, Icon::Target, t.icon);
-            let items: &[(&str, &str)] =
-                if crate::is_bw(d) { &[("lum", "B&W Mix")] } else { &[("hue", "Hue"), ("sat", "Saturation"), ("lum", "Luminance")] };
-            for (k, label) in items {
-                let tool = format!("tat:{k}");
-                let active = app.ui.tool == tool;
-                if text_button(ui, &format!("tatMixer-{k}"), crate::i18n::tr(label), active)
-                    .on_hover_text(crate::i18n::tr("Targeted adjustment: drag up/down on the photo to adjust the colours there"))
-                    .clicked()
-                {
-                    set_tat(app, ui.ctx(), &tool, active);
-                }
+        const GAP: f32 = 6.0;
+        const MIN_GAP: f32 = 2.0;
+        const ICON: f32 = 20.0;
+        let items: &[(&str, &str)] =
+            if crate::is_bw(d) { &[("lum", "B&W Mix")] } else { &[("hue", "Hue"), ("sat", "Saturation"), ("lum", "Luminance")] };
+        let widths: Vec<f32> = items.iter().map(|(_, label)| crate::widgets::text_button_size(ui, label)).collect();
+        let full = ui.available_width();
+        let buttons: f32 = widths.iter().sum();
+        let gaps = items.len() as f32;
+        let gap = ((full - ICON - buttons) / gaps).clamp(MIN_GAP, GAP);
+        // (half a point of slack: the gap that exactly fills the row must not wrap on rounding)
+        let gap = if ICON + buttons + gaps * gap <= full + 0.5 { gap } else { GAP };
+        let avail = full - ICON - gap;
+        let mut rows: Vec<Vec<(&str, &str)>> = Vec::new();
+        let mut row = Vec::new();
+        let mut used = 0.0;
+        for (&(k, label), &w) in items.iter().zip(&widths) {
+            if !row.is_empty() && used + gap + w > avail + 0.5 {
+                rows.push(std::mem::take(&mut row));
             }
-        });
+            used = if row.is_empty() { w } else { used + gap + w };
+            row.push((k, label));
+        }
+        rows.push(row);
+        for (r, row) in rows.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                if r == 0 {
+                    let (icon, _) = ui.allocate_exact_size(vec2(ICON, ICON), Sense::hover());
+                    paint(ui.painter(), icon, Icon::Target, t.icon);
+                } else {
+                    ui.add_space(ICON + gap);
+                }
+                for &(k, label) in row {
+                    let tool = format!("tat:{k}");
+                    let active = app.ui.tool == tool;
+                    if text_button(ui, &format!("tatMixer-{k}"), crate::i18n::tr(label), active)
+                        .on_hover_text(crate::i18n::tr("Targeted adjustment: drag up/down on the photo to adjust the colours there"))
+                        .clicked()
+                    {
+                        set_tat(app, ui.ctx(), &tool, active);
+                    }
+                }
+            });
+        }
     });
     let b = bands[sel];
     if crate::is_bw(d) {
