@@ -79,7 +79,13 @@ fn compose_jpeg_xmp(embedded: &Embedded, packets: &container::JpegXmpPackets) ->
 
 /// The JPEG container's checked XMP composition result, paired with the other embedded blocks.
 pub(crate) fn jpeg_embedded(bytes: &[u8]) -> (Embedded, Result<Option<XmpData>, EmbeddedXmpError>) {
-    let (mut embedded, packets) = container::jpeg_segments_with_packets(bytes);
+    let (mut embedded, discovery_packets) = container::jpeg_segments_with_packets(bytes, None);
+    let extension_guid =
+        embedded.xmp.as_deref().and_then(|packet| parse_xmp(packet).ok()).and_then(|standard| xmp::extended_xmp_reference(&standard).ok().flatten());
+    let packets = match extension_guid {
+        Some(guid) => container::jpeg_segments_with_packets(bytes, Some(&guid)).1,
+        None => discovery_packets,
+    };
     let parsed = compose_jpeg_xmp(&embedded, &packets);
     let result = match parsed {
         Ok((data, extension)) => {
@@ -537,6 +543,15 @@ mod tests {
         jpeg
     }
 
+    fn append_extended_chunk(jpeg: &mut Vec<u8>, guid: &str, total_length: u32, offset: u32, data: &[u8]) {
+        let mut payload = JPEG_XMP_EXT_SIG.to_vec();
+        payload.extend_from_slice(guid.as_bytes());
+        payload.extend_from_slice(&total_length.to_be_bytes());
+        payload.extend_from_slice(&offset.to_be_bytes());
+        payload.extend_from_slice(data);
+        jpeg.extend(jpeg_segment(0xe1, &payload));
+    }
+
     fn xmp_document(body: &str) -> String {
         format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {body}></rdf:Description></rdf:RDF></x:xmpmeta>"#
@@ -670,6 +685,47 @@ mod tests {
             xmp_document(r#"xmlns:exif="http://ns.adobe.com/exif/1.0/"><exif:Flash rdf:parseType="Resource"><exif:Mode>2</exif:Mode></exif:Flash>"#);
         let jpeg = xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension));
         assert_eq!(extract(&jpeg).flash.map(|flash| flash.raw), Some(17));
+    }
+
+    #[test]
+    fn extended_xmp_ignores_malformed_chunks_for_unreferenced_guids() {
+        let guid = "A1234567890123456789012345678901";
+        let other_guid = "B1234567890123456789012345678901";
+        let extension = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Referenced title""#);
+        let mut jpeg = xmp_jpeg(&referenced_standard(guid, ""), guid, &extension, &split_chunks(&extension));
+        let mut malformed = JPEG_XMP_EXT_SIG.to_vec();
+        malformed.extend_from_slice(other_guid.as_bytes());
+        jpeg.extend(jpeg_segment(0xe1, &malformed));
+
+        assert_eq!(extract(&jpeg).title.as_deref(), Some("Referenced title"));
+        assert_eq!(parse_embedded_xmp(&jpeg).unwrap().unwrap().metadata.title.as_deref(), Some("Referenced title"));
+    }
+
+    #[test]
+    fn extended_xmp_ignores_chunk_limit_for_unreferenced_guids() {
+        let guid = "C1234567890123456789012345678901";
+        let other_guid = "D1234567890123456789012345678901";
+        let extension = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Referenced title""#);
+        let mut jpeg = xmp_jpeg(&referenced_standard(guid, ""), guid, &extension, &split_chunks(&extension));
+        for _ in 0..4097 {
+            append_extended_chunk(&mut jpeg, other_guid, 1, 0, &[]);
+        }
+
+        assert_eq!(parse_embedded_xmp(&jpeg).unwrap().unwrap().metadata.title.as_deref(), Some("Referenced title"));
+    }
+
+    #[test]
+    fn extended_xmp_ignores_received_byte_limit_for_unreferenced_guids() {
+        let guid = "E1234567890123456789012345678901";
+        let other_guid = "F1234567890123456789012345678901";
+        let extension = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Referenced title""#);
+        let mut jpeg = xmp_jpeg(&referenced_standard(guid, ""), guid, &extension, &split_chunks(&extension));
+        let data = vec![0; 65_200];
+        for _ in 0..258 {
+            append_extended_chunk(&mut jpeg, other_guid, 65_200, 0, &data);
+        }
+
+        assert_eq!(parse_embedded_xmp(&jpeg).unwrap().unwrap().metadata.title.as_deref(), Some("Referenced title"));
     }
 
     #[test]

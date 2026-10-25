@@ -114,7 +114,9 @@ pub(crate) struct ExtendedXmpChunk {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct JpegXmpPackets {
+    /// Whether any Extended XMP APP1 marker was present, used to reject unreferenced extensions.
     pub(crate) saw_extension: bool,
+    /// Validation errors for the referenced GUID selected by the caller.
     pub(crate) extension_error: Option<String>,
     pub(crate) chunks: Vec<ExtendedXmpChunk>,
     received_bytes: usize,
@@ -169,9 +171,10 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
     crate::jpeg_embedded(b).0
 }
 
-/// Collect JPEG metadata and retain raw Extended XMP chunk headers for checked assembly after
-/// the standard packet's namespace-qualified GUID reference has been parsed.
-pub(crate) fn jpeg_segments_with_packets(b: &[u8]) -> (Embedded, JpegXmpPackets) {
+/// Collect JPEG metadata and, when supplied, only validate and retain chunks for the referenced GUID.
+/// Passing `None` discovers the standard packet and extension presence without accumulating chunks,
+/// allowing the caller to apply chunk and byte limits only after resolving the reference.
+pub(crate) fn jpeg_segments_with_packets(b: &[u8], expected_guid: Option<&str>) -> (Embedded, JpegXmpPackets) {
     let mut out = Embedded::default();
     if !b.starts_with(&[0xff, 0xd8]) {
         return (out, JpegXmpPackets::default());
@@ -208,66 +211,39 @@ pub(crate) fn jpeg_segments_with_packets(b: &[u8]) -> (Embedded, JpegXmpPackets)
         let end = segment_end.min(b.len());
         let Some(payload) = b.get(header_end..end) else { break };
         match marker {
-            0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
-            0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
+            0xe1 if expected_guid.is_none() && payload.starts_with(b"Exif\0") && out.exif.is_none() => {
+                out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec());
+            }
+            0xe1 if expected_guid.is_none() && payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
                 out.xmp = Some(String::from_utf8_lossy(payload.get(XMP_SIG.len()..).unwrap_or(&[])).into_owned());
             }
             0xe1 if payload.starts_with(XMP_EXT_SIG) => {
                 packets.saw_extension = true;
-                if !complete {
-                    packets.extension_error.get_or_insert_with(|| "Extended XMP APP1 segment is truncated".into());
-                } else if let Some(p) = payload.get(XMP_EXT_SIG.len()..) {
-                    if p.len() < 40 {
-                        packets.extension_error.get_or_insert_with(|| "Extended XMP APP1 header is truncated".into());
-                    } else {
-                        let Some(guid_bytes) = p.get(..32) else {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP GUID is truncated".into());
-                            i = segment_end;
-                            continue;
-                        };
-                        let Some(guid) = normalized_guid(guid_bytes) else {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP GUID is not 32 hexadecimal characters".into());
-                            i = segment_end;
-                            continue;
-                        };
-                        let Some(length_bytes) = p.get(32..36).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()) else {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP full length is truncated".into());
-                            i = segment_end;
-                            continue;
-                        };
-                        let Some(offset_bytes) = p.get(36..40).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()) else {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP offset is truncated".into());
-                            i = segment_end;
-                            continue;
-                        };
-                        let total_length = u32::from_be_bytes(length_bytes);
-                        let offset = u32::from_be_bytes(offset_bytes);
-                        let Some(data) = p.get(40..) else {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP data is truncated".into());
-                            i = segment_end;
-                            continue;
-                        };
-                        let Some(received) = packets.received_bytes.checked_add(data.len()) else {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP received length overflow".into());
-                            i = segment_end;
-                            continue;
-                        };
-                        if usize::try_from(total_length).map_or(true, |length| length > MAX_EXTENDED_XMP_BYTES) {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP length exceeds the 16 MiB limit".into());
-                        } else if packets.chunks.len() >= MAX_EXTENDED_XMP_CHUNKS {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP has too many chunks".into());
-                        } else if received > MAX_EXTENDED_XMP_BYTES {
-                            packets.extension_error.get_or_insert_with(|| "Extended XMP received data exceeds the 16 MiB limit".into());
-                        } else {
-                            packets.received_bytes = received;
-                            packets.chunks.push(ExtendedXmpChunk { guid, total_length, offset, data: data.to_vec() });
+                if let Some(expected_guid) = expected_guid.filter(|_| packets.extension_error.is_none()) {
+                    match parse_extended_xmp_chunk(payload.get(XMP_EXT_SIG.len()..), complete, expected_guid) {
+                        Ok(Some(chunk)) => {
+                            let Some(received) = packets.received_bytes.checked_add(chunk.data.len()) else {
+                                packets.extension_error = Some("Extended XMP received length overflow".into());
+                                i = segment_end;
+                                continue;
+                            };
+                            if usize::try_from(chunk.total_length).map_or(true, |length| length > MAX_EXTENDED_XMP_BYTES) {
+                                packets.extension_error = Some("Extended XMP length exceeds the 16 MiB limit".into());
+                            } else if packets.chunks.len() >= MAX_EXTENDED_XMP_CHUNKS {
+                                packets.extension_error = Some("Extended XMP has too many chunks".into());
+                            } else if received > MAX_EXTENDED_XMP_BYTES {
+                                packets.extension_error = Some("Extended XMP received data exceeds the 16 MiB limit".into());
+                            } else {
+                                packets.received_bytes = received;
+                                packets.chunks.push(chunk);
+                            }
                         }
+                        Ok(None) => {}
+                        Err(error) => packets.extension_error = Some(error),
                     }
-                } else {
-                    packets.extension_error.get_or_insert_with(|| "Extended XMP APP1 payload is truncated".into());
                 }
             }
-            0xe2 if payload.starts_with(b"ICC_PROFILE\0") => {
+            0xe2 if expected_guid.is_none() && payload.starts_with(b"ICC_PROFILE\0") => {
                 if !complete || payload.len() < 14 {
                     icc_invalid = true;
                 } else if let Some(header) = payload.get(12..14) {
@@ -296,7 +272,7 @@ pub(crate) fn jpeg_segments_with_packets(b: &[u8]) -> (Embedded, JpegXmpPackets)
                     icc_invalid = true;
                 }
             }
-            0xed if payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => {
+            0xed if expected_guid.is_none() && payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => {
                 out.iptc = photoshop_iptc(payload.get(14..).unwrap_or(&[]));
             }
             _ => {}
@@ -339,6 +315,25 @@ fn normalized_guid(bytes: &[u8]) -> Option<String> {
         return None;
     }
     Some(bytes.iter().map(|byte| char::from(*byte).to_ascii_uppercase()).collect())
+}
+
+fn parse_extended_xmp_chunk(payload: Option<&[u8]>, complete: bool, expected_guid: &str) -> Result<Option<ExtendedXmpChunk>, String> {
+    let Some(payload) = payload else { return Ok(None) };
+    let Some(guid_bytes) = payload.get(..32) else { return Ok(None) };
+    let Some(guid) = normalized_guid(guid_bytes) else { return Ok(None) };
+    if guid != expected_guid {
+        return Ok(None);
+    }
+    if !complete {
+        return Err("Extended XMP APP1 segment is truncated".into());
+    }
+    if payload.len() < 40 {
+        return Err("Extended XMP APP1 header is truncated".into());
+    }
+    let length_bytes = payload.get(32..36).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()).ok_or("Extended XMP full length is truncated")?;
+    let offset_bytes = payload.get(36..40).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()).ok_or("Extended XMP offset is truncated")?;
+    let data = payload.get(40..).ok_or("Extended XMP data is truncated")?;
+    Ok(Some(ExtendedXmpChunk { guid, total_length: u32::from_be_bytes(length_bytes), offset: u32::from_be_bytes(offset_bytes), data: data.to_vec() }))
 }
 
 /// IPTC-IIM block (resource 0x0404) from a Photoshop image-resource stream (`8BIM` records).
