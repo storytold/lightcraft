@@ -101,6 +101,15 @@ impl LibraryWork {
         self.tally.as_ref().is_some_and(|(of, t)| *of == library && t.revision() == cat.revision && t.exact())
     }
 
+    /// Whether a count of every photo of library `library` is still running after a change too large to follow photo by
+    /// photo: the tally then shows the folders from before it. Not once the count is done, though nothing took its
+    /// result (the sidebar is not drawn): the next [`LibraryWork::current`] does, and a command that calls it is
+    /// right. Also `false` while the tally trails and no count has started, because only `current` starts one (with the
+    /// sidebar not drawn that is the next command that asks for the folders). A read-only look: it counts nothing.
+    pub fn lags(&self, library: u64) -> bool {
+        self.tally.as_ref().is_some_and(|(of, _)| *of == library) && self.recount.as_ref().is_some_and(|r| r.library == library) && self.busy()
+    }
+
     /// Whether a count of every photo is under way (its result is taken by the next
     /// [`LibraryWork::current`]).
     pub fn busy(&self) -> bool {

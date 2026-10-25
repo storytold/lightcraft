@@ -180,3 +180,77 @@ fn a_folder_tree_made_while_the_counts_lag_is_not_a_fresh_one() {
     assert_eq!(folder_count(&mut h, "New"), Some(MAX_FOLLOWED + 1));
     assert!(h.app.caches.folder_tree_if_fresh(&h.app.session.catalog, library).is_some(), "counted again: fresh");
 }
+
+/// While the library is counted again after a batch too large to follow, the tree shown is the one from before it: a
+/// photo of a folder the batch made has no row there yet, so Show in Folders is not offered until the count is done.
+#[test]
+fn show_in_folders_is_not_offered_for_a_folder_the_lagging_tally_does_not_have_yet() {
+    let mut h = app(400);
+    assert_eq!(folder_count(&mut h, "Z"), Some(200));
+    let gate = Arc::new(Mutex::new(()));
+    let held = gate.lock().unwrap_or_else(PoisonError::into_inner);
+    let g = gate.clone();
+    h.app.caches.library.count_with(Arc::new(move |cat: &Catalog| {
+        drop(g.lock().unwrap_or_else(PoisonError::into_inner));
+        LibraryTally::of(cat)
+    }));
+    batch(&mut h, MAX_FOLLOWED + 1, "Entities/New");
+    let new = h.app.session.catalog.photos().find(|p| matches!(&p.source, Source::File { path } if path.contains("/New/"))).unwrap().id;
+    h.app.run("library.select", json!({"ids": [new.0]})).unwrap();
+    for _ in 0..5 {
+        h.step();
+        assert!(h.app.caches.library.busy(), "counted in the background");
+        assert!(!crate::menus::show_in_folders_enabled(&h.app, Some(new)), "its folder is not in the tree shown yet");
+    }
+    drop(held);
+    assert!(h.settle(T));
+    assert_eq!(folder_count(&mut h, "New"), Some(MAX_FOLLOWED + 1));
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(new)), "counted: the folder has its row");
+}
+
+/// Nothing follows the catalog while the sidebar is not drawn, so the tally trails every edit: that is no reason to
+/// refuse Show in Folders, which turns the sidebar on and counts for itself.
+#[test]
+fn show_in_folders_is_offered_while_the_sidebar_is_hidden_and_the_tally_trails() {
+    let mut h = app(40);
+    let r = h.request("ui.set", json!({"leftPanel": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let id = h.app.session.catalog.photos().next().unwrap().id;
+    h.app.run("library.select", json!({"ids": [id.0]})).unwrap();
+    h.step();
+    h.app.run("photo.rate", json!({"rating": 3})).unwrap();
+    h.step();
+    assert!(!h.app.caches.library.is_current(&h.app.session.catalog, h.app.session.library_generation()), "the tally trails");
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(id)));
+    h.app.run("app.showInFolders", json!({"id": id.0})).unwrap();
+}
+
+/// A count that finished while the sidebar was hidden is taken by the command's own look at the folders: the entry
+/// must not stay off waiting for a sidebar nobody opens.
+#[test]
+fn show_in_folders_is_offered_once_a_count_is_done_though_the_sidebar_was_hidden_meanwhile() {
+    let mut h = app(400);
+    let gate = Arc::new(Mutex::new(()));
+    let held = gate.lock().unwrap_or_else(PoisonError::into_inner);
+    let g = gate.clone();
+    h.app.caches.library.count_with(Arc::new(move |cat: &Catalog| {
+        drop(g.lock().unwrap_or_else(PoisonError::into_inner));
+        LibraryTally::of(cat)
+    }));
+    batch(&mut h, MAX_FOLLOWED + 1, "Entities/New");
+    let new = h.app.session.catalog.photos().find(|p| matches!(&p.source, Source::File { path } if path.contains("/New/"))).unwrap().id;
+    h.app.run("library.select", json!({"ids": [new.0]})).unwrap();
+    h.step();
+    assert!(h.app.caches.library.busy(), "counted in the background");
+    assert!(!crate::menus::show_in_folders_enabled(&h.app, Some(new)));
+    let r = h.request("ui.set", json!({"leftPanel": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    drop(held);
+    let start = std::time::Instant::now();
+    while h.app.caches.library.busy() {
+        assert!(start.elapsed() < T, "the count did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(new)), "the count is done: nothing lags");
+    h.app.run("app.showInFolders", json!({"id": new.0})).unwrap();
+}
