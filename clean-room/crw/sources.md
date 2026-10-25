@@ -122,3 +122,13 @@ checked out, diffed, logged or read.
   Tungsten/Fluorescent/Flash/Custom/Kelvin, index-29 "black levels for the D60" note),
   0x1030 WhiteSample field names, CanonShotInfo index 7 = WhiteBalance and the Canon
   WhiteBalance value enumeration, CanonModelID values. Prose documentation, no code.
+
+- 2026-10-25 — **Fetch** `https://www.xrite.com/service-support/new_color_specifications_for_colorchecker_sg_and_classic_charts`
+  (prose page): ColorChecker Classic charts made after November 2014 use new reference data,
+  published as CGATS files. The CGATS download itself was refused to scripts (HTTP 403) and
+  not worked around.
+- 2026-10-25 — **Fetch** `https://raw.githubusercontent.com/colour-science/colour/v0.4.2/colour/characterisation/datasets/colour_checkers/chromaticity_coordinates.py`
+  (colour-science, BSD-3-Clause; also its rendered docs page): the 24 post-November-2014
+  ColorChecker Classic L*a*b* values (D50), credited there to X-Rite's release. Reference
+  data only, the chart's measured colours; no camera or decoder content. Used in
+  `10-chart-calibration.md`.

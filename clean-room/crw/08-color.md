@@ -99,13 +99,15 @@ vs −0.67 GRBG). Unsampled PowerShots default to RGGB, unverified.
 - **Not derived yet**: D30 and PowerShot white balance (no 0x10a9/0x10aa; the 0x1030
   WhiteSample record holds an 8×8 packed sample patch — constant filler on G1/G6, varying on
   D30 — undeciphered). These bodies render with the neutral fallback.
-- **No colour matrices**: none of the CRW bodies is in `spectral_table.rs`. Rendering uses
+- **Colour matrices**: none of the CRW bodies is in `spectral_table.rs`. Rendering uses
   the engine's per-file starting look fitted to the file's own embedded JPEG
   (`camera_preview::file_local_look` lists CRW; `docs/camera-preview-colour.md`) — accepted
   on all 10 decodable public corpus files, holdout RMS 0.009–0.043, including the D30 and
-  the PowerShots, whose missing white balance the fitted matrix absorbs. Candidate
-  follow-up: real matrices from controlled captures (maintainer's D60 offer) or published
-  spectral sensitivity data.
+  the PowerShots, whose missing white balance the fitted matrix absorbs.
+  **Update 2026-10-25:** the EOS D60 has dual-illuminant matrices of our own, fitted to
+  ColorChecker Classic shots under a tungsten bulb and direct sun (`10-chart-calibration.md`,
+  `crates/raw/src/chart_table.rs`). They give its white balance a Kelvin scale and are its
+  colour when the JPEG fit fails; the look stays the JPEG fit. The other CRW bodies have none.
 
 ## 4 Orientation and capture time
 

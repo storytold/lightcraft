@@ -160,6 +160,13 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             }
             Err(Err(e)) => return Err(e),
         };
+        // what the Exif reader can't see, the decoder may have read from the raw's own records (a CRW keeps make,
+        // model and capture time in CIFF records, no Exif): it fills the gaps, so the catalog knows the camera
+        let (meta, captured) = {
+            let mut m = m.clone();
+            m.fill_missing(&raw.metadata);
+            meta_of(&m)
+        };
         let (w, h) = raw.developed_size();
         let (mut w, mut h) = (w.max(1) as u32, h.max(1) as u32);
         if raw.orientation.swaps_axes() {
@@ -1143,6 +1150,31 @@ pub(crate) mod tests {
     /// multipliers as Kelvin; any other raw stays relative (6500 / 0 = as shot). The catalog's decision from the
     /// format and camera string agrees.
     #[test]
+    fn crw_probes_name_their_camera_from_the_ciff_records() {
+        // no Exif in a CRW: the camera and capture time come from the decoder's records, and the catalog's camera
+        // string decides the white-balance scale (the D60 has chart-measured matrices, the 10D none)
+        let dir = std::env::var_os("LIGHTCRAFT_CORPUS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+            .join("raw");
+        for (name, camera, kelvin) in
+            [("crw-canon-eos-d60.crw", "Canon Canon EOS D60", true), ("crw-canon-eos-10d-a.crw", "Canon Canon EOS 10D", false)]
+        {
+            let Ok(bytes) = std::fs::read(dir.join(name)) else {
+                lightcraft_testkit::skip!(Corpus, "{name} absent");
+                continue;
+            };
+            assert!(lightcraft_meta::extract(&bytes).model.is_none(), "{name}: no Exif to read");
+            let info = probe_bytes(name, &bytes).unwrap();
+            assert_eq!(info.meta.camera, camera, "{name}");
+            assert!(info.captured.is_some(), "{name}");
+            assert_eq!(lightcraft_catalog::relative_wb_camera(&info.format, &info.meta.camera), !kelvin, "{name}");
+            let (t, _) = info.as_shot_wb.unwrap();
+            assert_eq!(t != 6500.0, kelvin, "{name}: {t}");
+        }
+    }
+
+    #[test]
     fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
         use lightcraft_raw::{ColorData, RawFormat};
         let meta = |make: &str, model: &str| lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
@@ -1189,10 +1221,17 @@ pub(crate) mod tests {
         assert!(other.relative && other.scale_white.is_none());
         let unknown = WbScaleOf::new(RawFormat::Nef, &ColorData::default(), mul, &lightcraft_meta::Metadata::default());
         assert!(unknown.relative && unknown.as_shot(d65) == (6500.0, 0.0));
-        // CRW: no matrices and no measured camera — relative, so its JPEG-fitted look applies
-        let crw = WbScaleOf::new(RawFormat::Crw, &ColorData::default(), mul, &meta("Canon", "Canon EOS D60"));
+        // CRW: no matrices in the file. The EOS D60 has chart-measured matrices: Kelvin through them, its multipliers
+        // for the sun its D50 matrix was measured under reading as D50; another body stays relative, so its
+        // JPEG-fitted look applies
+        let d60 = WbScaleOf::new(RawFormat::Crw, &ColorData::default(), Some([2.362, 1.0, 1.298]), &meta("Canon", "Canon EOS D60"));
+        assert!(!d60.own_matrix && !d60.relative && d60.legacy_relative && d60.scale_white.is_some());
+        let ((t, tint), (t50, tint50)) = (d60.as_shot(d65), xy_to_temp_tint(lightcraft_color::D50));
+        assert!((t - t50).abs() < 50.0 && (tint - tint50).abs() < 2.0, "{t} {tint} vs D50 {t50} {tint50}");
+        assert!(!lightcraft_catalog::relative_wb_camera("CRW", "Canon Canon EOS D60"));
+        let crw = WbScaleOf::new(RawFormat::Crw, &ColorData::default(), mul, &meta("Canon", "Canon EOS 10D"));
         assert!(crw.relative && !crw.legacy_relative && crw.scale_white.is_none());
-        assert!(lightcraft_catalog::relative_wb_camera("CRW", "Canon Canon EOS D60"));
+        assert!(lightcraft_catalog::relative_wb_camera("CRW", "Canon Canon EOS 10D"));
         // a file with matrices of its own (DNG): absolute from them, no matter whose camera
         let own = ColorData { illuminant: [21, 0], color_matrix: [Some(lightcraft_color::Mat3::IDENTITY), None], ..Default::default() };
         let dng = WbScaleOf::new(RawFormat::Dng, &own, mul, &meta("SONY", "ILCE-7M3"));
