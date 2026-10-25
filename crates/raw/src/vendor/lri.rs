@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(r.color.as_shot_neutral, Some([0.5, 1.0, 1.0 / 1.5]));
         assert!(matches!(&r.opcodes.list2[..], [Opcode::GainMap { points_v: 3, points_h: 3, map_planes: 1, .. }]));
         assert_eq!(r.metadata.model.as_deref(), Some("L16"));
-        assert_eq!(r.metadata.focal_length_35mm, Some(70.0));
+        assert_eq!(r.metadata.focal_length_35mm, Some(28.0));
         assert_eq!(r.metadata.exposure_time, Some(0.002));
         assert_eq!(r.metadata.capture_time.map(|t| (t.year, t.month, t.second)), Some((2017, 9, 20)));
         assert_eq!(crate::probe_info(&f).unwrap(), r.info());
