@@ -239,6 +239,27 @@ fn a_negative_zero_twin_is_never_what_others_share() {
     }
 }
 
+/// A change's settings that equal the photo's own as numbers but differ in the sign of a zero are not handed
+/// the photo's value, in either order.
+#[test]
+fn changes_never_take_the_photos_settings_across_a_negative_zero() {
+    let twin = |tint: f64| {
+        edited(|s| {
+            s.light.exposure = 0.5;
+            s.wb.tint = tint;
+        })
+    };
+    for (own, given) in [(0.0, -0.0), (-0.0, 0.0)] {
+        let mut c = catalog_of([photo(1)]);
+        c.apply(Op::SetDevelop { id: PhotoId(1), settings: twin(own), label: "Tint".into(), edited: None }).unwrap();
+        c.apply(Op::SetHistory { id: PhotoId(1), history: vec![HistoryStep { label: "Tint".into(), settings: twin(given) }] }).unwrap();
+        let p = c.photo(PhotoId(1)).unwrap();
+        assert!(!Arc::ptr_eq(&p.develop, &p.history[0].settings), "own {own:?}, given {given:?}");
+        assert_eq!(p.history[0].settings.wb.tint.is_sign_negative(), given.is_sign_negative());
+        assert_eq!(p.develop.wb.tint.is_sign_negative(), own.is_sign_negative());
+    }
+}
+
 /// Settings given by any change are shared: a history step pushed or set, and versions.
 #[test]
 fn settings_given_by_changes_are_shared() {
@@ -255,6 +276,40 @@ fn settings_given_by_changes_are_shared() {
     assert!(Arc::ptr_eq(&c.photo(PhotoId(2)).unwrap().history[0].settings, settings_of(&c, 1)), "SetHistory");
     // a new photo's settings are the shared defaults from the start
     assert!(Arc::ptr_eq(&photo(7).develop, &photo(8).develop));
+}
+
+/// Settings given by a change are shared with the photo's own settings even when the thread's list of recent
+/// values has since moved on to others: the target photo's settings are what they are compared with first.
+#[test]
+fn settings_given_by_changes_are_shared_with_the_photos_own_even_when_not_recent() {
+    let look = || edited(|s| s.light.exposure = 0.7);
+    let mut c = catalog_of((1..=2).map(photo));
+    c.apply(Op::SetDevelop { id: PhotoId(1), settings: look(), label: "Exposure".into(), edited: None }).unwrap();
+    // more different values than the thread remembers, held by another photo
+    let others = |c: &mut Catalog| {
+        let versions = (1..=6u32)
+            .map(|i| Version {
+                name: format!("V{i}"),
+                created: "2026".into(),
+                settings: edited(|s| s.light.exposure = f64::from(i) / 10.0 + 1.0),
+                auto: false,
+            })
+            .collect();
+        c.apply(Op::SetVersions { id: PhotoId(2), versions }).unwrap();
+    };
+    others(&mut c);
+    c.apply(Op::SetHistory { id: PhotoId(1), history: vec![HistoryStep { label: "A".into(), settings: look() }] }).unwrap();
+    let p = c.photo(PhotoId(1)).unwrap();
+    assert!(Arc::ptr_eq(&p.develop, &p.history[0].settings), "SetHistory");
+    others(&mut c);
+    c.apply(Op::PushHistory { id: PhotoId(1), step: HistoryStep { label: "B".into(), settings: look() } }).unwrap();
+    let p = c.photo(PhotoId(1)).unwrap();
+    assert!(Arc::ptr_eq(&p.develop, &p.history[1].settings), "PushHistory");
+    others(&mut c);
+    c.apply(Op::SetVersions { id: PhotoId(1), versions: vec![Version { name: "C".into(), created: "2026".into(), settings: look(), auto: false }] })
+        .unwrap();
+    let p = c.photo(PhotoId(1)).unwrap();
+    assert!(Arc::ptr_eq(&p.develop, &p.versions[0].settings), "SetVersions");
 }
 
 /// Settings that can't be read are still an error naming what is wrong, not shared defaults.

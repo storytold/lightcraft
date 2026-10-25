@@ -868,13 +868,14 @@ impl Catalog {
                 Op::SetLocal { id, local: std::mem::replace(&mut p.local, local) }
             }
             Op::SetVersions { id, mut versions } => {
-                shared::versions(&mut versions);
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).versions(&mut versions);
                 Op::SetVersions { id, versions: std::mem::replace(&mut p.versions, versions) }
             }
             Op::SetHistory { id, mut history } => {
-                history.iter_mut().for_each(shared::step);
                 let p = self.photo_mut(id)?;
+                let own = shared::Anchor::new(p.develop.clone());
+                history.iter_mut().for_each(|s| own.step(s));
                 let old = std::mem::replace(&mut p.history, history);
                 let old_cursor = p.history_cursor;
                 p.trim_history();
@@ -885,8 +886,8 @@ impl Catalog {
                 }
             }
             Op::PushHistory { id, mut step } => {
-                shared::step(&mut step);
                 let p = self.photo_mut(id)?;
+                shared::Anchor::new(p.develop.clone()).step(&mut step);
                 let old = p.history.clone();
                 let old_cursor = p.history_cursor.take();
                 // a new edit made from an earlier step drops the steps after it

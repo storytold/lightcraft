@@ -297,6 +297,40 @@ pub(crate) fn step(step: &mut HistoryStep) {
     step.settings = settings(step.settings.clone());
 }
 
+/// What a change's settings are compared with first: the photo's own settings.
+pub(crate) struct Anchor {
+    own: Arc<DevelopSettings>,
+    /// Whether `own` holds no negative zero (looked for once, and only when an equal value turned up).
+    exact: OnceCell<bool>,
+}
+
+impl Anchor {
+    pub(crate) fn new(own: Arc<DevelopSettings>) -> Self {
+        Self { own, exact: OnceCell::new() }
+    }
+
+    /// `s`, or the photo's own settings when equal (and neither holds a negative zero), or else what [`settings`] says.
+    fn settings(&self, s: Arc<DevelopSettings>) -> Arc<DevelopSettings> {
+        if Arc::ptr_eq(&self.own, &s) {
+            return s;
+        }
+        if *self.own == *s && *self.exact.get_or_init(|| !has_negative_zero(self.own.as_ref())) && !has_negative_zero(s.as_ref()) {
+            return self.own.clone();
+        }
+        settings(s)
+    }
+
+    pub(crate) fn step(&self, step: &mut HistoryStep) {
+        step.settings = self.settings(step.settings.clone());
+    }
+
+    pub(crate) fn versions(&self, versions: &mut [Version]) {
+        for v in versions {
+            v.settings = self.settings(v.settings.clone());
+        }
+    }
+}
+
 /// Share the settings of versions.
 pub(crate) fn versions(versions: &mut [Version]) {
     for v in versions {
