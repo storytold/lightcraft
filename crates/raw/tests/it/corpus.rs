@@ -1589,7 +1589,17 @@ fn corpus_light_lri() {
     assert!(img.color.color_matrix.iter().chain(&img.color.forward_matrix).all(Option::is_some));
     let n = img.color.as_shot_neutral.expect("as-shot white");
     assert!((n[0] - 0.495).abs() < 0.01 && (n[2] - 0.675).abs() < 0.01, "{n:?}");
-    assert_eq!(img.opcodes.list2.len(), 1, "vignetting gain map");
+    let [lightcraft_raw::Opcode::GainMap { points_v, points_h, map_planes, gains, .. }] = img.opcodes.list2.as_slice() else {
+        panic!("expected one DNG GainMap opcode");
+    };
+    assert_eq!((*points_v, *points_h, *map_planes), (13, 17, 1));
+    assert_eq!(gains.len(), 13 * 17);
+    // Independently checked against the sample's 17x13 LRI calibration grid:
+    // the centre is unity and the four corners compensate the strong falloff.
+    assert!((0.95..=1.05).contains(&gains[6 * 17 + 8]), "centre gain {}", gains[6 * 17 + 8]);
+    for i in [0, 16, 12 * 17, 13 * 17 - 1] {
+        assert!((2.5..=3.6).contains(&gains[i]), "corner gain[{i}] = {}", gains[i]);
+    }
     assert_eq!(img.metadata.model.as_deref(), Some("L16"));
     assert_eq!(img.metadata.capture_time.map(|t| (t.year, t.month, t.day)), Some((2017, 9, 28)));
     let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
