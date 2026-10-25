@@ -1091,6 +1091,11 @@ impl Catalog {
         }
     }
 
+    /// The catalog's photos, for the journal to keep as what is on disk.
+    pub(crate) fn into_photo_map(self) -> BTreeMap<PhotoId, Arc<Photo>> {
+        self.photos
+    }
+
     /// Give a catalog read without its photos the photos read from its segments.
     pub(crate) fn set_photos(&mut self, photos: BTreeMap<PhotoId, Arc<Photo>>) {
         self.photos = photos;

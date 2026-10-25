@@ -103,21 +103,69 @@ fn photos_are_saved_in_segments_listed_by_the_snapshot() {
     assert_same(&reopen(&m), &c);
 }
 
-/// Given a saved library, when the log is compacted, then every segment is written again under a
-/// new name and the files of the snapshot before are gone (no photo is taken to be on disk as
-/// it is: see the module docs of `segments`).
+/// Given a saved library, when one photo changes and the log is compacted, then only that
+/// photo's segment is rewritten: the other segment files are the same files.
 #[test]
-fn a_compaction_writes_every_segment_and_removes_the_old_files() {
+fn a_compaction_rewrites_only_the_segments_that_changed() {
     let (m, mut j, mut c) = library(12, 4);
     let before = listed(&m);
+    let files_before = m.files.lock().unwrap().clone();
     run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(6), rating: 5 }]);
     j.snapshot(&c).unwrap();
     let after = listed(&m);
-    assert_eq!((before.len(), after.len()), (3, 3));
-    assert_eq!(before.intersection(&after).count(), 0, "{before:?} -> {after:?}");
-    assert_eq!(j.stats().last_snapshot.segments, 3);
-    // the files of the snapshot before are gone
+    assert_eq!(before.intersection(&after).count(), 2, "{before:?} -> {after:?}");
+    for name in before.intersection(&after) {
+        assert_eq!(m.get(name), files_before.get(name).cloned());
+    }
+    assert_eq!(j.stats().last_snapshot.segments, 1);
+    // the replaced segment's old file is gone
     assert_eq!(segment_files(&m), after);
+    assert_same(&reopen(&m), &c);
+}
+
+/// Given a saved library in segments, when a file a compaction would keep is removed behind its
+/// back (a program that had the library open without its lock), then the compaction fails
+/// instead of committing a `catalog.snap` that lists a file that is gone, and the library still
+/// opens as it was.
+#[test]
+fn a_kept_segment_that_was_removed_stops_the_compaction() {
+    let (m, mut j, mut c) = library(12, 4);
+    let snapshot = m.get(SNAPSHOT);
+    let kept = listed(&m).into_iter().next().unwrap();
+    m.files.lock().unwrap().remove(&kept);
+    run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(6), rating: 5 }]);
+    assert!(j.snapshot(&c).is_err());
+    assert_eq!(m.get(SNAPSHOT), snapshot);
+    assert_eq!(segment_files(&m).len(), 2, "only the segments that were there stay");
+}
+
+/// Given a saved library, when nothing about its photos changed (an album was renamed), then
+/// a compaction writes no segment at all.
+#[test]
+fn a_change_that_touches_no_photo_rewrites_no_segment() {
+    let (m, mut j, mut c) = library(12, 4);
+    let before = listed(&m);
+    let album = c.albums().next().unwrap().id;
+    run(&mut j, &mut c, vec![Op::RenameAlbum { id: album, name: "Best".into() }]);
+    j.snapshot(&c).unwrap();
+    assert_eq!(listed(&m), before);
+    assert_eq!(j.stats().last_snapshot.segments, 0);
+    assert_same(&reopen(&m), &c);
+}
+
+/// Given a saved library, when photos are imported, then they go into new segments at the end
+/// and the segments of the photos that were there are left alone.
+#[test]
+fn an_import_adds_segments_and_leaves_the_others() {
+    let (m, mut j, mut c) = library(8, 4);
+    let before = listed(&m);
+    run(&mut j, &mut c, add(9..=20));
+    j.snapshot(&c).unwrap();
+    let after = listed(&m);
+    assert!(before.is_subset(&after), "{before:?} -> {after:?}");
+    let counts: Vec<u64> = manifest(&m)["segments"].as_array().unwrap().iter().map(|s| s["photos"].as_u64().unwrap()).collect();
+    assert_eq!(counts.iter().sum::<u64>(), 20);
+    assert!(counts.iter().all(|n| *n <= 8), "{counts:?}");
     assert_same(&reopen(&m), &c);
 }
 
@@ -159,6 +207,13 @@ fn widely_spaced_ids_fill_segments_like_any_others() {
     run(&mut j, &mut c, add(ids.clone()));
     j.snapshot(&c).unwrap();
     assert_eq!(listed(&m).len(), 3);
+    // one more, in the middle of the id range: its segment only
+    let before = listed(&m);
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    run(&mut j, &mut c, add([sorted[5] + 1]));
+    j.snapshot(&c).unwrap();
+    assert_eq!(before.intersection(&listed(&m)).count(), 2);
     assert_same(&reopen(&m), &c);
 }
 
@@ -270,16 +325,18 @@ fn a_background_compaction_writes_segments_and_keeps_later_changes() {
     j.policy.segment_photos = 4;
     run(&mut j, &mut c, add(1..=12));
     j.snapshot(&c).unwrap();
+    let before = listed(&m);
     run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(10), rating: 4 }]);
     j.snapshot_in_background(&c).unwrap();
     // changes while it is being written: to a segment it rewrites, and to one it doesn't
     run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(11), rating: 2 }, Op::SetRating { id: PhotoId(1), rating: 2 }]);
     assert_same(&reopen(&crash_copy(&m)), &c);
     j.wait().unwrap();
+    assert_eq!(before.intersection(&listed(&m)).count(), 2);
     assert_same(&reopen(&m), &c);
-    // the next compaction writes the changes made meanwhile
+    // the next compaction rewrites the segments of what changed meanwhile
     j.snapshot(&c).unwrap();
-    assert_eq!(j.stats().last_snapshot.segments, 3);
+    assert_eq!(j.stats().last_snapshot.segments, 2);
     assert_eq!(segment_files(&m), listed(&m));
     assert_same(&reopen(&m), &c);
 }
@@ -570,6 +627,98 @@ fn a_segment_list_that_does_not_hold_every_photo_is_refused() {
     v["photos"] = 13.into();
     m.set(SNAPSHOT, serde_json::to_vec(&v).unwrap());
     assert!(matches!(Journal::open(Box::new(m)).map(|_| ()), Err(CatalogError::Corrupt(_))));
+}
+
+/// Given a library that was closed and opened again, when one photo changes and the log is
+/// compacted, then only that photo's segment is rewritten: what is on disk is known from
+/// opening it, not only from having written it.
+#[test]
+fn a_compaction_after_reopening_rewrites_only_what_changed() {
+    let (m, j, _c) = library(12, 4);
+    drop(j);
+    let before = listed(&m);
+    let files_before = m.files.lock().unwrap().clone();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.policy.segment_photos = 4;
+    assert_eq!(j.snapshot_bytes(), m.get(SNAPSHOT).unwrap().len() as u64 + j.segments().iter().map(|s| s.bytes).sum::<u64>());
+    assert_eq!(j.stats().segments, 3);
+    run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(10), rating: 5 }]);
+    j.snapshot(&c).unwrap();
+    assert_eq!(j.stats().last_snapshot.segments, 1);
+    let after = listed(&m);
+    assert_eq!(before.intersection(&after).count(), 2);
+    for name in before.intersection(&after) {
+        assert_eq!(m.get(name), files_before.get(name).cloned());
+    }
+    let rewritten = after.difference(&before).next().unwrap();
+    assert_eq!(j.stats().last_snapshot.bytes, (m.get(SNAPSHOT).unwrap().len() + m.get(rewritten).unwrap().len()) as u64);
+    assert_same(&reopen(&m), &c);
+}
+
+/// A log replayed when the library is opened counts towards the next compaction like one
+/// written in this session: 2000 changes within one segment, then a restart, and it is due.
+#[test]
+fn a_replayed_log_is_due_for_compaction_like_any_other() {
+    let (m, mut j, mut c) = library(20_000, 500);
+    let ops: Vec<Op> = (0..2000u64).map(|k| Op::SetRating { id: PhotoId(1 + k % 400), rating: 1 + (k % 5) as u8 }).collect();
+    run(&mut j, &mut c, ops);
+    assert!(j.wants_snapshot());
+    drop(j);
+    let (j, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.replayed, 2000);
+    assert!(j.wants_snapshot());
+}
+
+/// Where photos go when segments change: a last segment that isn't full takes the photos added
+/// after it; a segment is split only past twice its size; a segment keeps its place in the id
+/// range when its first photo is removed; and a segment is never written over a file that is
+/// there.
+#[test]
+fn segments_are_laid_out_as_documented() {
+    let firsts = |m: &MemStore| manifest(m)["segments"].as_array().unwrap().iter().map(|s| s["first"].as_u64().unwrap()).collect::<Vec<_>>();
+    let counts = |m: &MemStore| manifest(m)["segments"].as_array().unwrap().iter().map(|s| s["photos"].as_u64().unwrap()).collect::<Vec<_>>();
+    // a last segment of 2 (of 4) takes the next photos
+    let (m, mut j, mut c) = library(10, 4);
+    run(&mut j, &mut c, add(11..=12));
+    j.snapshot(&c).unwrap();
+    assert_eq!((firsts(&m), counts(&m)), (vec![1, 5, 9], vec![4, 4, 4]));
+    // now full: the next ones start a segment
+    run(&mut j, &mut c, add(13..=13));
+    j.snapshot(&c).unwrap();
+    assert_eq!((firsts(&m), counts(&m)), (vec![1, 5, 9, 13], vec![4, 4, 4, 1]));
+
+    // a segment grows to twice its size before it is split (ids with room between them)
+    let m = MemStore::new();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.policy.segment_photos = 4;
+    run(&mut j, &mut c, add((1..=10).map(|k| k * 10)));
+    j.snapshot(&c).unwrap();
+    assert_eq!((firsts(&m), counts(&m)), (vec![10, 50, 90], vec![4, 4, 2]));
+    run(&mut j, &mut c, add(51..=54));
+    j.snapshot(&c).unwrap();
+    assert_eq!((firsts(&m), counts(&m)), (vec![10, 50, 90], vec![4, 8, 2]));
+    run(&mut j, &mut c, add(55..=55));
+    j.snapshot(&c).unwrap();
+    assert_eq!((firsts(&m), counts(&m)), (vec![10, 50, 54, 80, 90], vec![4, 4, 4, 1, 2]));
+    assert_same(&reopen(&m), &c);
+
+    // the first photo of a segment removed: the segment still starts where it did
+    let (m, mut j, mut c) = library(12, 4);
+    run(&mut j, &mut c, vec![Op::RemovePhoto { id: PhotoId(5) }]);
+    j.snapshot(&c).unwrap();
+    assert_eq!((firsts(&m), counts(&m)), (vec![1, 5, 9], vec![4, 3, 4]));
+
+    // two snapshots at the same op (the second of a catalog that differs): the segment written
+    // second is a new file, not the first one written over
+    let (m, mut j, c) = library(12, 4);
+    let first = listed(&m);
+    let mut other = c.clone();
+    other.apply(Op::SetRating { id: PhotoId(2), rating: 5 }).unwrap();
+    j.snapshot(&other).unwrap();
+    let second = listed(&m);
+    assert_eq!(first.intersection(&second).count(), 2);
+    assert!(second.difference(&first).all(|n| !first.contains(n)));
+    assert_same(&reopen(&m), &other);
 }
 
 /// A store that records the names it is asked to read or remove, fails writing the segments
@@ -1144,6 +1293,134 @@ fn a_store_without_segments_keeps_one_file() {
     assert_same(&reopen(&back), &c3);
 }
 
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(96))]
+
+    /// Whatever is done to a library (photos added at the end, in gaps and below the first
+    /// one, removed, changed; snapshots in the foreground and by the worker; closing and
+    /// opening), opening its files gives the catalog as it is, and a snapshot taken right
+    /// after another has nothing to write: what the journal takes to be on disk is on disk.
+    #[test]
+    fn segments_hold_the_catalog_whatever_is_done(
+        per in 1usize..6,
+        steps in proptest::collection::vec((0u8..10, 0u64..40, 1u64..6), 1..60),
+    ) {
+        let m = MemStore { background: true, ..Default::default() };
+        let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+        j.policy.segment_photos = per;
+        let mut next = 1000u64;
+        for (what, pick, n) in steps {
+            let ids: Vec<PhotoId> = c.photos().map(|p| p.id).collect();
+            let some = |k: u64| ids.get((k as usize) % ids.len().max(1)).copied();
+            match what {
+                // an import at the end
+                0 | 1 => {
+                    run(&mut j, &mut c, add(next..next + n));
+                    next += n + pick % 3;
+                }
+                // photos between and below the ones there are
+                2 => {
+                    let id = 1 + pick * 23 % 990;
+                    if c.photo(PhotoId(id)).is_none() {
+                        run(&mut j, &mut c, add([id]));
+                    }
+                }
+                3 => {
+                    if let Some(id) = some(pick) {
+                        run(&mut j, &mut c, vec![Op::RemovePhoto { id }]);
+                    }
+                }
+                // a run of photos removed
+                4 => {
+                    let gone: Vec<Op> = ids.iter().skip(pick as usize % ids.len().max(1)).take(n as usize * 2).map(|id| Op::RemovePhoto { id: *id }).collect();
+                    run(&mut j, &mut c, gone);
+                }
+                5 | 6 => {
+                    if let Some(id) = some(pick) {
+                        run(&mut j, &mut c, vec![Op::SetRating { id, rating: (n % 6) as u8 }]);
+                    }
+                }
+                7 => {
+                    j.snapshot(&c).unwrap();
+                    proptest::prop_assert_eq!(reopen(&m).to_snapshot(), c.to_snapshot());
+                    j.snapshot(&c).unwrap();
+                    proptest::prop_assert_eq!(j.stats().last_snapshot.segments, 0);
+                }
+                8 => {
+                    j.snapshot_in_background(&c).unwrap();
+                    if pick % 2 == 0
+                        && let Some(id) = some(pick)
+                    {
+                        run(&mut j, &mut c, vec![Op::SetRating { id, rating: (n % 6) as u8 }]);
+                    }
+                    j.wait().unwrap();
+                }
+                _ => {
+                    drop(j);
+                    let (j2, c2, _) = Journal::open(Box::new(m.clone())).unwrap();
+                    proptest::prop_assert_eq!(c2.to_snapshot(), c.to_snapshot());
+                    j = j2;
+                    c = c2;
+                    j.policy.segment_photos = per;
+                    j.remove_unlisted_segments();
+                }
+            }
+            proptest::prop_assert_eq!(reopen(&crash_copy(&m)).to_snapshot(), c.to_snapshot());
+        }
+        j.wait().unwrap();
+        j.snapshot(&c).unwrap();
+        proptest::prop_assert_eq!(reopen(&m).to_snapshot(), c.to_snapshot());
+        j.snapshot(&c).unwrap();
+        proptest::prop_assert_eq!(j.stats().last_snapshot.segments, 0);
+        proptest::prop_assert_eq!(segment_files(&m), listed(&m));
+        // every photo is in the one segment whose stretch of ids holds it
+        let firsts: Vec<u64> = j.segments().iter().map(|s| s.first.0).collect();
+        proptest::prop_assert!(firsts.windows(2).all(|w| w[0] < w[1]));
+        proptest::prop_assert_eq!(j.segments().iter().map(|s| s.photos).sum::<u64>(), c.len() as u64);
+    }
+}
+
+/// Segments are sized by what they hold, not only by how many photos: where records are large
+/// (long captions here; edited photos with their history in a real library), a segment holds
+/// fewer of them, so that a change to one photo rewrites about as much either way.
+#[test]
+fn large_records_go_into_segments_of_fewer_photos() {
+    let m = MemStore::new();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.policy.segment_photos = 2000;
+    j.policy.segment_bytes = 256 << 10;
+    let heavy: Vec<Op> = (1..=1000u64)
+        .map(|id| {
+            let mut p = photo(id);
+            p.meta.caption = "a caption ".repeat(200);
+            Op::AddPhoto { photo: Box::new(p) }
+        })
+        .collect();
+    run(&mut j, &mut c, heavy);
+    // a first snapshot, of photos whose size isn't known yet: by count
+    j.snapshot(&c).unwrap();
+    assert_eq!(j.segments().len(), 1);
+    // once it is, a segment that changes is cut to size, and so are photos added later
+    run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(1), rating: 1 }]);
+    let more: Vec<Op> = (1001..=1400u64)
+        .map(|id| {
+            let mut p = photo(id);
+            p.meta.caption = "a caption ".repeat(200);
+            Op::AddPhoto { photo: Box::new(p) }
+        })
+        .collect();
+    run(&mut j, &mut c, more);
+    j.snapshot(&c).unwrap();
+    let sizes: Vec<(u64, u64)> = j.segments().iter().map(|s| (s.photos, s.bytes)).collect();
+    assert!(sizes.len() >= 8, "{sizes:?}");
+    assert!(sizes.iter().all(|(photos, bytes)| *photos <= 260 && *bytes <= 600 << 10), "{sizes:?}");
+    assert_same(&reopen(&m), &c);
+
+    // small records: by count, as before
+    let (_m, j, _c) = library(1000, 300);
+    assert_eq!(j.segments().iter().map(|s| s.photos).collect::<Vec<_>>(), [300, 300, 300, 100]);
+}
+
 /// Given a library in segments that states other defaults for develop settings than this build
 /// has (an Exposure of +1), when it is opened, on one thread or several, then every photo has
 /// that Exposure, not this build's; and every segment is rewritten with this build's defaults,
@@ -1183,6 +1460,41 @@ fn a_library_in_segments_with_other_defaults_reads_as_it_was_written() {
     }
 }
 
+/// The sizes a library gets unless told otherwise: segments of about 2 MB, and of at most 4096
+/// photos where records are small. (Measured: `docs/catalog-persistence.md`, "Segment size".
+/// Larger ones rewrite more for the same edits; much smaller ones are many files to make
+/// durable when everything changed.)
+#[test]
+fn a_segment_is_about_two_megabytes_and_at_most_4096_photos() {
+    // small records: by count
+    let m = MemStore::new();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    run(&mut j, &mut c, add(1..=10_000));
+    j.snapshot(&c).unwrap();
+    assert_eq!(j.segments().iter().map(|s| s.photos).collect::<Vec<_>>(), [4096, 4096, 1808]);
+    assert!(j.segments().iter().all(|s| s.bytes <= 2 << 20), "{:?}", j.segments().iter().map(|s| s.bytes).collect::<Vec<_>>());
+    assert_same(&reopen(&m), &c);
+
+    // large records: by size, once it is known
+    let m = MemStore::new();
+    let (mut j, mut c, _) = Journal::open(Box::new(m.clone())).unwrap();
+    let heavy: Vec<Op> = (1..=3000u64)
+        .map(|id| {
+            let mut p = photo(id);
+            p.meta.caption = "a caption ".repeat(200);
+            Op::AddPhoto { photo: Box::new(p) }
+        })
+        .collect();
+    run(&mut j, &mut c, heavy);
+    j.snapshot(&c).unwrap();
+    run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(1), rating: 1 }]);
+    j.snapshot(&c).unwrap();
+    let sizes: Vec<(u64, u64)> = j.segments().iter().map(|s| (s.photos, s.bytes)).collect();
+    assert!(sizes.len() >= 3, "{sizes:?}");
+    assert!(sizes.iter().all(|(photos, bytes)| *photos < 4096 && *bytes <= 5 << 19), "{sizes:?}");
+    assert_same(&reopen(&m), &c);
+}
+
 /// In a library folder the segments are files `segments/<first id>-<seq>.json`: a folder of
 /// their own beside `catalog.snap`, made with the first of them; what is left of one being
 /// written, and files nothing lists, are cleared out of it on request; other files are not.
@@ -1207,7 +1519,7 @@ fn segments_are_json_files_in_a_folder_of_their_own() {
     assert!(serde_json::from_str::<Value>(&text).unwrap()["photos"]["6"]["file_name"].is_string());
     run(&mut j, &mut c, vec![Op::SetRating { id: PhotoId(6), rating: 5 }]);
     j.snapshot(&c).unwrap();
-    assert_eq!(names(&dir.join("segments")), ["1-13.json", "5-13.json", "9-13.json"]);
+    assert_eq!(names(&dir.join("segments")), ["1-12.json", "5-13.json", "9-12.json"]);
     drop(j);
     // left by a crash, and a file that is somebody else's
     for (name, bytes) in [("77-1.json", "x"), ("77-2.json.tmp", "x"), ("notes.txt", "mine")] {
@@ -1216,7 +1528,7 @@ fn segments_are_json_files_in_a_folder_of_their_own() {
     let (mut j, back, _) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
     assert_same(&back, &c);
     j.remove_unlisted_segments();
-    assert_eq!(names(&dir.join("segments")), ["1-13.json", "5-13.json", "9-13.json", "notes.txt"]);
+    assert_eq!(names(&dir.join("segments")), ["1-12.json", "5-13.json", "9-12.json", "notes.txt"]);
     drop(j);
     let _ = std::fs::remove_dir_all(&dir);
 }

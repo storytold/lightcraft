@@ -36,12 +36,6 @@
 //!
 //! **Stores without segments** ([`Store::segmented`] is false: the browser's) keep the photos in
 //! `catalog.snap` itself, as formats up to 10 did. Either layout is read wherever it is found.
-//!
-//! This module is the writer and reader of the segments, used by [`crate::journal`] for format 11.
-//! The journal does not yet keep the baseline between snapshots, so each one writes every segment;
-//! writing only the ones whose photos changed comes in the next change.
-
-#![allow(dead_code, reason = "the journal calls the rest of it (keeping the baseline) in the next change")]
 
 use std::collections::BTreeMap;
 use std::ops::Bound;
@@ -123,7 +117,7 @@ enum Step {
 pub(crate) struct Size {
     /// At most this many (the journal's policy states it).
     pub per: usize,
-    /// And about this many bytes (0: any; the journal does not set it yet).
+    /// And about this many bytes ([`crate::SnapshotPolicy::segment_bytes`]; 0: any).
     pub bytes: u64,
     /// What a photo's record takes on average, as far as known (0: not known), for photos that
     /// are in no segment yet.
@@ -597,14 +591,6 @@ pub(crate) fn load(store: &mut dyn Store, handles: Vec<Box<dyn Store>>, segments
     Ok(photos)
 }
 
-/// The index in `segments` of the segment that holds (or would hold) photo `id`.
-pub(crate) fn segment_of(segments: &[Segment], id: PhotoId) -> Option<usize> {
-    if segments.is_empty() {
-        return None;
-    }
-    Some(segments.partition_point(|s| s.first <= id).saturating_sub(1))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,16 +808,6 @@ mod tests {
         let expected: BTreeSet<String> =
             names(&out.segments).into_iter().chain(["catalog.snap", "catalog.log", "segments/notes.txt"].map(String::from)).collect();
         assert_eq!(left, expected);
-    }
-
-    /// Given segments by their first ids, then the segment that holds (or would hold) an id is
-    /// the last one that starts at or before it, the first one for ids below them all.
-    #[test]
-    fn the_segment_of_a_photo_is_the_last_that_starts_at_or_before_it() {
-        let seg = |first: u64| Segment { name: segment_file(&format!("{first}-1")), first: PhotoId(first), photos: 1, bytes: 1, crc: 0 };
-        let list = [seg(10), seg(20), seg(30)];
-        assert_eq!([5, 10, 19, 20, 99].map(|id| segment_of(&list, PhotoId(id))), [Some(0), Some(0), Some(0), Some(1), Some(2)]);
-        assert_eq!(segment_of(&[], PhotoId(1)), None);
     }
 
     /// A store that can't write one file.

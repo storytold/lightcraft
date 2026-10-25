@@ -118,17 +118,25 @@ too; no upgrade from such a format exists yet, and a backup is the way back from
 
 ## Segments (format 11)
 
-A library in a folder on disk keeps its photos in segment files (`crates/catalog/src/segments.rs`), and opening it
-reads them on several threads.
+A compaction used to rewrite the whole catalog. A library in a folder on disk keeps its photos in segment files
+(`crates/catalog/src/segments.rs`), and a compaction writes only the segments whose photos changed, so its cost follows
+what changed, and opening a library reads its segments on several threads.
 
-- **Size.** A segment holds up to 4096 photos (`SnapshotPolicy::segment_photos`: a setting, not part of the format, so
-  a library written with one size opens with another). One that grows past twice that is cut into pieces; one left
-  without photos is dropped. A small library is one segment. The size follows the number of photos, not the size of
-  their records: a library of heavily edited photos has larger segments (sizing by bytes is a later change).
-- **What a compaction writes.** Every segment, each under a name no snapshot lists and each fsynced, then
+- **Which segments changed** is not worked out from the changes logged. The journal keeps the photos as the segments
+  on disk hold them (shared pointers, not copies) and compares: a photo is unchanged while the catalog still points
+  to the same one, and changing a photo copies it. So a segment is rewritten exactly when one of its photos was
+  changed, added or removed, whatever did it. Where nothing is known to be on disk (a library just upgraded from one
+  file, a snapshot thread that did not start or died, a library read over other defaults than this build's) every
+  segment is written.
+- **Size.** A segment holds up to 4096 photos and about 2 MB (measured: "Segment size" below): where records are
+  large (edited photos with their history), fewer photos, down to 64 (`SnapshotPolicy::segment_photos`,
+  `segment_bytes`: settings, not part of the format, so a library written with one size opens with another; the
+  record size of photos in no segment yet is taken from the snapshot there is). One that changes is cut into pieces
+  once it holds more than twice that; one left without photos is dropped. Photos added after a full last segment
+  start new ones, so an import leaves the existing segments alone. A small library is one segment.
+- **Commit.** New segments are written (several at once, each fsynced) under names no snapshot lists, then
   `catalog.snap` is replaced atomically, which is the commit, then the files it no longer lists are removed. A crash
-  at any point leaves a snapshot with all its segments. (Rewriting only the segments whose photos changed is a later
-  change.) A crash can leave segment files nothing lists. They are never read and never written over, and they are
+  at any point leaves a snapshot with all its segments. A crash can leave segment files nothing lists. They are never read and never written over, and they are
   removed when the library is next opened by a program that holds its lock (to a second program, the segments the
   first is writing for its next snapshot look the same). Only segment files are ever removed: not other files in the
   folder, and not the files of a one-file `catalog.snap` put back over a newer folder, which may be all there is of
@@ -146,26 +154,82 @@ reads them on several threads.
 - **Stores without segments.** The browser build keeps the photos in `catalog.snap` itself (its storage holds a fixed
   set of files). Either layout is read wherever it is found; a desktop library folder is not a browser library.
 
-## Measurements: segments (format 11)
+## Measurements: only the changed segments are written (format 11)
 
 `cargo run --release -p lightcraft-catalog --example persist_bench -- <scratch dir> 300000`, one run of each on an
-Apple M1 Max (internal SSD) on 2026-10-25, with other builds running on the machine (a load average of 20 to 50), so read
-the figures as rough. The catalog is 300,000 photos in the benchmark's default mix (90 % Local browse records of raws,
-10 % library photos with an edit), 180 MB in one file. "Before" is the parent of this change, which writes that one
-file; "after" writes segments.
+Apple M1 Max (internal SSD) on 2026-10-25, with other builds running on the machine (a load average of 15 to 40), so read
+the figures as rough. The catalog is the benchmark's default mix of 300,000 photos (90 % Local browse records of raws,
+10 % library photos with an edit), 180 MB. "Before" is the parent of this change, which writes every segment each time;
+"after" writes the ones whose photos changed.
 
-| | Before (one file) | After (segments) |
+| | Before (every segment) | After (changed segments) |
 |---|---|---|
-| Open (load the snapshot, replay the log) | 259 ms | 78 ms |
-| Compaction of 2000 records, synchronous (median of 3) | 840 ms | 448 ms |
-| Compaction in the background, the worker's time (3 runs) | 922 to 1,072 ms | 752 to 767 ms |
-| Caller blocked by a background compaction (median) | 15.4 ms | 13.9 ms |
-| Appending one change, with its fsync (median) | 4.3 ms | 4.1 ms |
-| An append during a background compaction: median and p95 (3 runs) | 4.2 to 4.5 ms, 7.7 to 7.9 ms | 5.6 to 7.4 ms, 17.5 to 20.0 ms |
+| Compaction of 2000 records (changes to one photo), synchronous (median of 3) | 545 ms | 48 ms |
+| The same in the background, the worker's time (3 runs) | 785 to 929 ms | 102 to 111 ms |
+| An append during a background compaction: median and p95 (3 runs) | 5.8 to 9.2 ms, 24.8 to 30.6 ms | 4.4 to 5.8 ms, 8.7 to 9.3 ms |
+| Compaction after 1000 changes in one place (the first 1000 photos) | 180.3 MB written, 421 ms | 2.5 MB written, 59 ms |
+| Compaction after 6000 changes all over the library (every 50th photo) | 180.3 MB written, 497 ms | 180.3 MB written, 554 ms |
+| Open | 81 ms | 77 ms |
+| Appending one change, with its fsync (median) | 4.2 ms | 4.1 ms |
 
-Every compaction writes every segment in this change, on several threads, so a compaction of a catalog this size is
-quicker than writing one file, and opening is about three times quicker. Appends made while a background compaction runs
-are slower, because the segments are made durable on several threads at once while the log is. Only this one mix
-and size were measured.
+Changes in one place write about what the segments there hold, and the time follows. Changes that touch every segment
+write all of them, as before, and the 11 % more time in the one run above is within what these runs vary by here; the
+extra cost is looking through the catalog for what changed. Only this one mix and size were measured for this change.
 
-**What this does not change.** The whole catalog is held in memory, as before.
+**What this does not change.** The whole catalog is still held in memory.
+
+### Segment size
+
+How large a segment is is a setting (`SnapshotPolicy::segment_photos`, `segment_bytes`), not part of the format: a
+library written with one size opens with another, and its segments are cut to the new size as they are next
+rewritten. These runs were made on this change before it was split into parts (the same segment writer and the same
+changed-segments rule), and were not repeated for the parts. They varied the number of photos per segment with no size in bytes (same machine; a one-off harness
+around `Journal`, not kept in the repository; one run per row, saves and opens the median of three; page cache warm).
+"20 places" is 50 changes at each of 20 places spread over the library. The megabytes are what a save rewrites, which
+is also what the next backup copies.
+
+3.5 million unedited JPEGs (1,455 MB of catalog):
+
+| Photos per segment | Segment size | Segments | Open | One place | 20 places | All over |
+|---|---|---|---|---|---|---|
+| 2,048 | 0.9 MB | 1,709 | 1,116 ms | 48 ms (1.0 MB) | 143 ms (17 MB) | 7.8 s |
+| 4,096 | 1.7 MB | 855 | 975 ms | 56 ms (1.8 MB) | 138 ms (34 MB) | 4.7 s |
+| 8,192 | 3.4 MB | 428 | 1,002 ms | 63 ms (3.4 MB) | 189 ms (68 MB) | 3.3 s |
+| 16,384 | 6.8 MB | 214 | 998 ms | 75 ms (6.8 MB) | 290 ms (136 MB) | 2.6 s |
+| 32,768 | 13.6 MB | 107 | 844 ms | 95 ms (13.5 MB) | 432 ms (272 MB) | 2.1 s |
+| 65,536 | 26.9 MB | 54 | 864 ms | 146 ms (27.0 MB) | 803 ms (544 MB) | 2.0 s |
+
+1 million unedited JPEGs (414 MB), with the import that made them ("written": all snapshots together, as a multiple of
+the final one). A segment holds at most the photos per segment of its row, so a library of 1 million photos needs at
+least 1,000,000 ÷ that many segments (245 at 4,096): the counts below are the ones the harness reported and are lower
+than that for every row, so they do not describe a library of exactly 1 million photos; the harness
+was not kept, and they were not remeasured. Read the columns as how the sizes compare with each other, not as counts
+for a library of that size (the 3.5 million table above counts as expected):
+
+| Photos per segment | Segments | Import | Written | Open | One place | 20 places | All over |
+|---|---|---|---|---|---|---|---|
+| 1,024 | 922 | 29.5 s | 1.08 | 333 ms | 40 ms | 131 ms (9 MB) | 4.3 s |
+| 2,048 | 442 | 24.7 s | 1.14 | 256 ms | 39 ms | 127 ms (21 MB) | 2.1 s |
+| 4,096 | 207 | 23.7 s | 1.22 | 250 ms | 45 ms | 176 ms (44 MB) | 1.1 s |
+| 8,192 | 91 | 22.9 s | 1.35 | 251 ms | 55 ms | 235 ms (102 MB) | 0.84 s |
+| 16,384 | 49 | 20.4 s | 1.78 | 258 ms | 61 ms | 308 ms (182 MB) | 0.66 s |
+| 65,536 | 14 | 19.7 s | 2.92 | 305 ms | 139 ms | 516 ms (413 MB) | 0.53 s |
+
+50,000 edited raws with 20 history steps each (169 MB):
+
+| Photos per segment | Segment size | Open | One place | 20 places | All over |
+|---|---|---|---|---|---|
+| 128 | 0.4 MB | 115 ms | 94 ms (3.5 MB) | 179 ms (12 MB) | 1.9 s |
+| 256 | 0.9 MB | 116 ms | 122 ms (3.5 MB) | 218 ms (21 MB) | 1.3 s |
+| 512 | 1.7 MB | 119 ms | 188 ms (3.5 MB) | 324 ms (38 MB) | 1.1 s |
+| 1,024 | 6.7 MB | 127 ms | 340 ms (6.8 MB) | 1,172 ms (135 MB) | 1.1 s |
+| 4,096 | 18.7 MB | 199 ms | 917 ms (20 MB) | 1,904 ms (169 MB) | 1.9 s |
+| 8,192 | 28.1 MB | 286 ms | 1,598 ms (35 MB) | 2,844 ms (169 MB) | 2.8 s |
+
+What a save of a few changes rewrites follows the size of a segment, and for edited photos so does its time. Changes
+to every segment go the other way, since each file is made durable on its own. Opening is the same from about 2000
+photos per segment up. So segments are about 2 MB and at most 4096 photos, which keeps what scattered changes rewrite
+and what a backup after them copies small, and makes a save that touches every segment (rare, and in the
+background) about 1.4 times as slow where records are small. The size is not
+adjusted to how a library is used: it already follows the size of the records, the measurements are flat around it,
+and every change of size would rewrite segments that backups share.

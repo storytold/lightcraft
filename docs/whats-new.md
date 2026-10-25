@@ -16,6 +16,9 @@
   `docs/catalog-persistence.md`). A damaged segment is named when the library is opened, and nothing is modified. Copy
   or back up the whole library folder: `catalog.snap` alone no longer holds the photos. (The browser build keeps its
   photos in `catalog.snap`.)
+- Saving rewrites only the segments whose photos changed: after edits in one place, 2.5 MB where it was the whole
+  catalog (59 ms where it was 421 ms, for 300,000 photos; one run, `docs/catalog-persistence.md`). A segment holds up to
+  4096 photos and about 2 MB.
 - Segment files that a crash left beside a library are removed the next time it is opened, and a library folder that has
   segment files but no `catalog.snap` (a folder copied in part, or a `catalog.snap` that was removed) is no longer
   opened as a new, empty library: LightCraft says that the snapshot is missing and changes nothing.

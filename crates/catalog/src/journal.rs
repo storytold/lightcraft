@@ -95,7 +95,7 @@
 
 use crate::segments::{self, Photos, Segment};
 use crate::store::Store;
-use crate::{Catalog, CatalogError, Op, Result};
+use crate::{Catalog, CatalogError, Op, PhotoId, Result};
 
 pub const SNAPSHOT: &str = "catalog.snap";
 pub const LOG: &str = "catalog.log";
@@ -166,14 +166,23 @@ const fn newest(formats: &[Format]) -> u32 {
 pub struct SnapshotPolicy {
     pub max_records: u64,
     pub max_bytes: u64,
-    /// Photos per segment (see [`crate::segments`]): a segment is written in pieces of this many
-    /// once it holds more than twice as many.
+    /// Photos per segment (see [`crate::segments`]): a segment that changed is written in pieces
+    /// of this many once it holds more than twice as many.
     pub segment_photos: usize,
+    /// And about this many bytes: where records are large (edited photos with their history), a
+    /// segment holds fewer photos, down to 64. 0: any size.
+    pub segment_bytes: u64,
 }
 
 impl Default for SnapshotPolicy {
     fn default() -> Self {
-        SnapshotPolicy { max_records: 2000, max_bytes: 16 << 20, segment_photos: 4096 }
+        SnapshotPolicy {
+            max_records: 2000,
+            max_bytes: 16 << 20,
+            // (measured: docs/catalog-persistence.md, "Segment size")
+            segment_photos: 4096,
+            segment_bytes: 2 << 20,
+        }
     }
 }
 
@@ -260,8 +269,8 @@ pub struct PersistStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotTiming {
-    /// Writing the segments (serialised, fsynced and, when a one-file library is split, read
-    /// back).
+    /// Writing the segments that changed (serialised, fsynced and, when a one-file library is
+    /// split, read back).
     pub serialize_ms: f64,
     /// Writing `catalog.snap` (serialised, `sync_all`, the atomic rename) and removing the
     /// segment files it no longer lists.
@@ -275,7 +284,7 @@ pub struct SnapshotTiming {
     pub blocking_ms: f64,
     /// Written by a worker thread.
     pub background: bool,
-    /// Bytes written: `catalog.snap` and the segments.
+    /// Bytes written: `catalog.snap` and the segments that changed.
     pub bytes: u64,
     /// Segments written.
     pub segments: u64,
@@ -317,8 +326,10 @@ pub struct Journal {
     /// and, once that snapshot is, the names for [`Journal::take_kept`].
     kept_pending: Option<Vec<String>>,
     kept_written: Vec<String>,
+    head_bytes: u64,
     /// The segments `catalog.snap` lists, and the photos they hold (see [`crate::segments`]).
     segments: Vec<Segment>,
+    baseline: Photos,
     /// `catalog.snap` itself holds photos: a one-file library (formats up to 10, or written
     /// where there are no segments).
     inline_photos: bool,
@@ -358,7 +369,7 @@ struct Pending {
     start_ms: f64,
     /// Returns how it went, with the photos on disk then: the ones it wrote, or after a failure
     /// the ones that were there before.
-    worker: std::thread::JoinHandle<std::io::Result<Saved>>,
+    worker: std::thread::JoinHandle<(std::io::Result<Saved>, Photos)>,
 }
 
 fn io(e: std::io::Error) -> CatalogError {
@@ -455,6 +466,7 @@ struct Job<'a> {
     catalog: &'a Catalog,
     /// The segments on disk and the photos they hold.
     segments: &'a [Segment],
+    baseline: &'a Photos,
     /// How large segments are to be.
     size: segments::Size,
     /// The library is in one file: read the segments it is split into back before committing.
@@ -470,9 +482,11 @@ struct Saved {
     head_bytes: u64,
     /// `catalog.snap` holds the photos itself (the store has no segments).
     inline_photos: bool,
+    /// The stretches of ids whose photos it wrote (see [`segments::refresh`]).
+    changed: Vec<(std::ops::Bound<PhotoId>, std::ops::Bound<PhotoId>)>,
 }
 
-/// Write the snapshot of `job`: every segment, then `catalog.snap`, which
+/// Write the snapshot of `job`: the segments whose photos changed, then `catalog.snap`, which
 /// lists the segments and is the commit (replaced atomically); then the segment files it no
 /// longer lists are removed. Where the store has no segments, `catalog.snap` holds the photos
 /// itself. An error leaves the snapshot before this one as it was.
@@ -480,22 +494,24 @@ fn write_snapshot(store: &mut dyn Store, job: &Job<'_>) -> std::io::Result<Saved
     let t0 = web_time::Instant::now();
     let segmented = store.segmented();
     let written = if segmented {
-        // (no photos are taken to be on disk as they are: every segment is written)
-        let baseline = Photos::new();
         let on_disk =
-            segments::OnDisk { version: VERSION, seq: job.seq, segments: job.segments, baseline: &baseline, size: job.size, verify: job.verify };
+            segments::OnDisk { version: VERSION, seq: job.seq, segments: job.segments, baseline: job.baseline, size: job.size, verify: job.verify };
         Some(segments::write(store, job.catalog.photo_map(), &on_disk)?)
     } else {
         None
     };
-    // Every segment written is still there: a program that opened the library without its lock
-    // doesn't know them, and committing a snapshot that lists a file that is gone would leave a
-    // library that doesn't open.
-    if let Some(w) = &written
-        && !segments::present(store, &w.new)
-    {
-        segments::discard(store, &w.new);
-        return Err(std::io::Error::other("a segment was removed while the snapshot was being written (is the library open in another program?)"));
+    // Every segment the snapshot will list is still there, the ones kept as well as the ones
+    // written: a program that opened the library without its lock may have removed files it took
+    // for unused, and committing a snapshot that lists a file that is gone would leave a library
+    // that doesn't open. Only the files written for this snapshot are removed again.
+    if let Some(w) = &written {
+        let listed: Vec<String> = w.segments.iter().map(|s| s.name.clone()).collect();
+        if !segments::present(store, &listed) {
+            segments::discard(store, &w.new);
+            return Err(std::io::Error::other(
+                "a segment was removed while the snapshot was being written (is the library open in another program?)",
+            ));
+        }
     }
     let serialize_ms = ms_since(t0);
     let head;
@@ -538,7 +554,7 @@ fn write_snapshot(store: &mut dyn Store, job: &Job<'_>) -> std::io::Result<Saved
         Some(w) => segments::discard(store, &w.obsolete),
         None => segments::discard(store, &job.segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>()),
     }
-    let (segments, count, bytes) = written.map_or((Vec::new(), 0, 0), |w| (w.segments, w.written, w.bytes));
+    let (segments, count, bytes, changed) = written.map_or((Vec::new(), 0, 0, Vec::new()), |w| (w.segments, w.written, w.bytes, w.changed));
     let timing = SnapshotTiming {
         serialize_ms,
         write_sync_ms: (ms_since(t0) - serialize_ms).max(0.0),
@@ -546,7 +562,7 @@ fn write_snapshot(store: &mut dyn Store, job: &Job<'_>) -> std::io::Result<Saved
         segments: count,
         ..Default::default()
     };
-    Ok(Saved { timing, segments, head_bytes, inline_photos: !segmented && !job.catalog.is_empty() })
+    Ok(Saved { timing, segments, head_bytes, inline_photos: !segmented && !job.catalog.is_empty(), changed })
 }
 
 /// The highest `seq` a snapshot may hold; beyond it the counter is treated as corrupt, far from overflow.
@@ -583,7 +599,7 @@ fn write_one_file_snapshot(store: &mut dyn Store, seq: u64, version: u32, catalo
         Ok(())
     })?;
     let timing = SnapshotTiming { serialize_ms, write_sync_ms: (ms_since(t0) - serialize_ms).max(0.0), bytes: head_bytes, ..Default::default() };
-    Ok(Saved { timing, segments: Vec::new(), head_bytes, inline_photos: !catalog.is_empty() })
+    Ok(Saved { timing, segments: Vec::new(), head_bytes, inline_photos: !catalog.is_empty(), changed: Vec::new() })
 }
 
 /// Just the identification of `catalog.snap` (read before the catalog itself).
@@ -706,6 +722,7 @@ impl Journal {
         report.snapshot_seq = snapshot_seq;
         // the photos: in `catalog.snap` itself (a one-file library), or in the segments it lists
         let inline_photos = !catalog.is_empty();
+        let mut baseline = Photos::new();
         if !listed.is_empty() {
             if inline_photos {
                 return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: holds photos and lists segments")));
@@ -715,6 +732,12 @@ impl Journal {
                 std::io::ErrorKind::InvalidData => CatalogError::Corrupt(e.to_string()),
                 _ => io(e),
             })?;
+            if store.segmented() && !report.other_defaults {
+                // (shared with the catalog: pointers, not copies. Not where the segments were
+                // written with other defaults: none of them is what this build would write, so
+                // none is what the next snapshot may keep.)
+                baseline = photos.clone();
+            }
             catalog.set_photos(photos);
         }
         if stated.is_some_and(|n| n != catalog.len() as u64) {
@@ -741,8 +764,10 @@ impl Journal {
             kept_pending: None,
             kept_written: Vec::new(),
             header_incomplete: false,
+            head_bytes,
             opened_with_segments: !listed.is_empty(),
             segments: listed,
+            baseline,
             inline_photos,
             log_records: 0,
             log_bytes: 0,
@@ -854,7 +879,8 @@ impl Journal {
             j.store
                 .write_atomic(SNAPSHOT, empty.as_bytes())
                 .map_err(|e| CatalogError::Io(format!("can't write the new library's {SNAPSHOT}: {e}")))?;
-            j.snapshot_bytes = empty.len() as u64;
+            j.head_bytes = empty.len() as u64;
+            j.snapshot_bytes = j.head_bytes;
         } else if let (Some(from), false) = (older, rewritten) {
             // A library in a format that writes compact records and states its defaults may go on
             // as it is when it can't be upgraded now (the next open tries again): what is appended
@@ -1151,7 +1177,14 @@ impl Journal {
                 _ => Err(e),
             };
         }
-        let job = Job { seq, catalog, segments: &self.segments, size: self.segment_size(), verify: self.inline_photos || self.segments.is_empty() };
+        let job = Job {
+            seq,
+            catalog,
+            segments: &self.segments,
+            baseline: &self.baseline,
+            size: self.segment_size(catalog),
+            verify: self.inline_photos || self.segments.is_empty(),
+        };
         let saved = match write_snapshot(self.store.as_mut(), &job) {
             Ok(saved) => saved,
             Err(e) => {
@@ -1182,7 +1215,14 @@ impl Journal {
         // (if the library was behind) are kept
         self.behind = None;
         let mut timing = saved.timing;
-        self.adopt(saved);
+        // what is on disk now: as before, but for the stretches this snapshot wrote
+        let mut on_disk = std::mem::take(&mut self.baseline);
+        if self.store.segmented() {
+            segments::refresh(&mut on_disk, catalog.photo_map(), &saved.changed);
+        } else {
+            on_disk.clear();
+        }
+        self.adopt(saved, on_disk);
         self.seq = seq;
         self.snapshot_seq = seq;
         self.upgraded_later();
@@ -1224,7 +1264,7 @@ impl Journal {
         };
         log::warn!("catalog: can't upgrade from format v{from} ({why}): saved in that format, not upgraded");
         let mut timing = saved.timing;
-        self.adopt(saved);
+        self.adopt(saved, Photos::new());
         self.seq = seq;
         self.snapshot_seq = seq;
         // (a header that states this build's defaults: records are compact again)
@@ -1266,16 +1306,26 @@ impl Journal {
         let Some(mut writer) = self.store.background_writer() else { return self.snapshot(catalog) };
         let copy = catalog.clone();
         let seq = self.seq;
-        // The worker takes the segment list with it. Nothing else writes snapshots meanwhile.
+        // The worker takes what is on disk with it (the segment list and the photos they hold)
+        // and gives back what is on disk when it is done. Nothing else writes snapshots meanwhile.
         let listed = self.segments.clone();
-        let (size, verify) = (self.segment_size(), self.inline_photos || self.segments.is_empty());
+        let baseline = std::mem::take(&mut self.baseline);
+        let (size, verify) = (self.segment_size(catalog), self.inline_photos || self.segments.is_empty());
         let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || {
-            let job = Job { seq, catalog: &copy, segments: &listed, size, verify };
-            write_snapshot(writer.as_mut(), &job)
+            let job = Job { seq, catalog: &copy, segments: &listed, baseline: &baseline, size, verify };
+            match write_snapshot(writer.as_mut(), &job) {
+                Ok(saved) => {
+                    let on_disk = if writer.segmented() { copy.into_photo_map() } else { Photos::new() };
+                    (Ok(saved), on_disk)
+                }
+                Err(e) => (Err(e), baseline),
+            }
         });
         let worker = match spawned {
             Ok(w) => w,
             Err(e) => {
+                // (what is on disk went with the thread that didn't start: the snapshot written
+                // now takes nothing on disk for granted and writes every segment)
                 log::warn!("catalog: can't start a snapshot thread ({e}); writing it now");
                 return self.snapshot(catalog);
             }
@@ -1317,11 +1367,14 @@ impl Journal {
     fn finish(&mut self) -> Result<()> {
         let Some(p) = self.pending.take() else { return Ok(()) };
         let t0 = web_time::Instant::now();
-        let written = p.worker.join().unwrap_or_else(|_| Err(std::io::Error::other("snapshot thread panicked")));
+        // (a worker that panicked took what is on disk with it: the next snapshot takes nothing
+        // on disk for granted and writes every segment)
+        let (written, on_disk) = p.worker.join().unwrap_or_else(|_| (Err(std::io::Error::other("snapshot thread panicked")), Photos::new()));
         let saved = match written {
             Ok(saved) => saved,
             Err(e) => {
                 // the log still holds every record: nothing lost, retry later
+                self.baseline = on_disk;
                 self.stats.failed_snapshots += 1;
                 self.retry_at_records = self.log_records.saturating_add(self.policy.max_records);
                 log::error!("catalog: background snapshot failed: {e}");
@@ -1337,7 +1390,7 @@ impl Journal {
         // Keep exactly the ones appended since (a crash before this rewrite skips the stale ones).
         let t1 = web_time::Instant::now();
         let mut timing = saved.timing;
-        self.adopt(saved);
+        self.adopt(saved, on_disk);
         self.snapshot_seq = p.seq;
         self.upgraded_later();
         self.header_incomplete = false;
@@ -1360,15 +1413,20 @@ impl Journal {
         Ok(())
     }
 
-    /// How large the segments of a snapshot are to be.
-    fn segment_size(&self) -> segments::Size {
-        segments::Size { per: self.policy.segment_photos, bytes: 0, record_bytes: 0 }
+    /// How large the segments of a snapshot of `catalog` are to be.
+    fn segment_size(&self, catalog: &Catalog) -> segments::Size {
+        // (for photos in no segment yet: what a record takes on average in the snapshot there is)
+        let photos = self.snapshot_bytes.saturating_sub(if self.inline_photos { 0 } else { self.head_bytes });
+        let record_bytes = photos.checked_div(catalog.len() as u64).unwrap_or(0);
+        segments::Size { per: self.policy.segment_photos, bytes: self.policy.segment_bytes, record_bytes }
     }
 
     /// A snapshot was committed: what is on disk now.
-    fn adopt(&mut self, saved: Saved) {
+    fn adopt(&mut self, saved: Saved, on_disk: Photos) {
+        self.head_bytes = saved.head_bytes;
         self.snapshot_bytes = saved.head_bytes + saved.segments.iter().map(|s| s.bytes).sum::<u64>();
         self.segments = saved.segments;
+        self.baseline = on_disk;
         self.inline_photos = saved.inline_photos;
     }
 
@@ -1470,10 +1528,11 @@ impl Drop for Journal {
     /// snapshot of a journal reopened on the same files). The log is left whole: the snapshot's
     /// records in it are skipped as stale on the next load.
     fn drop(&mut self) {
-        if let Some(p) = self.pending.take()
-            && let Ok(Err(e)) = p.worker.join()
-        {
-            log::error!("catalog: background snapshot failed: {e}");
+        if let Some(p) = self.pending.take() {
+            let (written, _) = p.worker.join().unwrap_or_else(|_| (Err(std::io::Error::other("snapshot thread panicked")), Photos::new()));
+            if let Err(e) = written {
+                log::error!("catalog: background snapshot failed: {e}");
+            }
         }
     }
 }
