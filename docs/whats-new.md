@@ -88,6 +88,11 @@
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
   is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's
   temporary files, issue #1502).
+- A damaged or crafted lossy DNG, Epson ERF or Mamiya MEF can no longer make LightCraft set aside gigabytes of memory
+  (or crash it on the web) for a JPEG whose header claims a far larger picture than it holds (issue #2560). Each JPEG in
+  a lossy DNG may be no larger than the tile or strip it fills, and the embedded preview used to measure white balance
+  no larger than 16 megapixels, the most that measurement uses; both are checked from the JPEG header before anything is
+  decoded.
 
 ### Keys reach text fields and the shortcut editor on macOS
 - While a text field has focus, the native menu now lets go of the keys the field needs (`G`, the digits `0`–`9`,

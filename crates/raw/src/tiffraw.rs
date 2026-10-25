@@ -2,7 +2,7 @@
 
 use crate::unpack::*;
 use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
-use lightcraft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
+use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
 use lightcraft_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
 
@@ -178,8 +178,19 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             Ok(ChunkPx::U16(v))
         }
         comp::LOSSY_JPEG => {
-            // lossy DNG: each chunk is a baseline (DCT) JPEG of 8-bit samples
-            let (px, jw, jh, jc) = lossy_jpeg(src, cpp)?;
+            // lossy DNG: each chunk is a baseline (DCT) JPEG of 8-bit samples, its frame no larger than the nominal
+            // chunk rounded up to whole 16-pixel MCUs (a last strip may be coded at the full RowsPerStrip); these
+            // edge caps also bound its pixel count. An image's only strip may be coded at a RowsPerStrip taller than
+            // the image, which a parsed file clamps to the image height: its frame height is left open and its pixel
+            // count bounded instead, at a few times the strip's
+            let mcu = |v: usize| v.div_ceil(16).saturating_mul(16);
+            let (max_h, max_px) = match info.layout {
+                Layout::Strips { rows_per_strip } if rows_per_strip >= info.height => {
+                    (usize::from(u16::MAX), mcu(cw).saturating_mul(mcu(info.height as usize)).saturating_mul(ONLY_STRIP_SLACK))
+                }
+                _ => (mcu(ch.max(info.chunk_size().1.min(info.height) as usize)), usize::MAX),
+            };
+            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, (mcu(cw), max_h), max_px)?;
             let mut v = vec![0u16; n];
             for y in 0..ch.min(jh) {
                 for x in 0..cw.min(jw) {
@@ -205,6 +216,10 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
     }
 }
 
+/// How many times an image's only lossy strip, rounded up to whole MCUs, its JPEG frame may hold: room for a
+/// RowsPerStrip a few times the image height without opening a 65535-row frame on a wide image.
+const ONLY_STRIP_SLACK: usize = 4;
+
 /// A chunk's nominal size and the part of it inside the image (smaller for edge tiles).
 fn chunk_dims(info: &ImageInfo, c: &Chunk) -> (usize, usize, usize, usize) {
     let (cw, ch) = (c.width as usize, c.height as usize);
@@ -228,17 +243,26 @@ fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: 
     jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())
 }
 
-/// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels).
-pub(crate) fn lossy_jpeg(src: &[u8], cpp: usize) -> Result<(Vec<u8>, usize, usize, usize)> {
+/// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels). A frame wider or taller than
+/// `max` (width, height) or of more than `max_px` pixels is refused from its header, before the output it declares
+/// is allocated (issue #2560).
+pub(crate) fn lossy_jpeg(src: &[u8], cpp: usize, max: (usize, usize), max_px: usize) -> Result<(Vec<u8>, usize, usize, usize)> {
     use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
+    let corrupt = |e: zune_jpeg::errors::DecodeErrors| RawError::Corrupt(format!("lossy JPEG tile: {e}"));
     let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
+    // zune's own limits stay open so that an oversized frame is a `Limit` from the check below, not a format error
     let opts = DecoderOptions::default().set_max_width(1 << 16).set_max_height(1 << 16).set_strict_mode(false).jpeg_set_out_colorspace(cs);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(src), opts);
-    let px = d.decode().map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))?;
+    d.decode_headers().map_err(corrupt)?;
     let info = d.info().ok_or_else(|| RawError::Corrupt("lossy JPEG tile without a header".into()))?;
     let (w, h) = (info.width as usize, info.height as usize);
+    // `output_buffer_size` is `None` when w·h·channels overflows `usize` (wasm32), which `decode` would unwrap
+    if w > max.0 || h > max.1 || w.checked_mul(h).is_none_or(|p| p > max_px) || d.output_buffer_size().is_none() {
+        return Err(RawError::Limit("lossy JPEG frame larger than expected"));
+    }
+    let px = d.decode().map_err(corrupt)?;
     let c = if cpp == 1 { 1 } else { 3 };
     if w == 0 || h == 0 || px.len() < w * h * c {
         return Err(RawError::Corrupt("lossy JPEG tile: short output".into()));
@@ -342,17 +366,28 @@ mod lossy_tests {
     use super::*;
     use lightcraft_tiff::image::Layout;
 
+    /// A `w`×`h` baseline JPEG: red `shade`, a green ramp across, blue 200.
+    fn rgb_jpeg(w: usize, h: usize, shade: u8) -> Vec<u8> {
+        let px: Vec<u8> = (0..w * h).flat_map(|i| [shade, (i % w * 15) as u8, 200]).collect();
+        let mut out = Vec::new();
+        jpeg_encoder::Encoder::new(&mut out, 100).encode(&px, w as u16, h as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+        out
+    }
+
+    /// `jpeg` with its SOF0 header declaring a `w`×`h` frame; the coded data stays as it was.
+    fn with_frame_size(mut jpeg: Vec<u8>, w: u16, h: u16) -> Vec<u8> {
+        let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+        jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        jpeg
+    }
+
     /// A lossy-DNG-style image: two 16×8 tiles, each a baseline JPEG, the right one cut short
     /// by the image edge.
     #[test]
     fn lossy_jpeg_tiles_decode() {
         let (tw, th) = (16usize, 8usize);
-        let tile = |shade: u8| {
-            let px: Vec<u8> = (0..tw * th).flat_map(|i| [shade, (i % tw * 15) as u8, 200]).collect();
-            let mut out = Vec::new();
-            jpeg_encoder::Encoder::new(&mut out, 100).encode(&px, tw as u16, th as u16, jpeg_encoder::ColorType::Rgb).unwrap();
-            out
-        };
+        let tile = |shade: u8| rgb_jpeg(tw, th, shade);
         let (a, b) = (tile(40), tile(220));
         let mut file = vec![0u8; 8];
         let oa = file.len() as u64;
@@ -380,6 +415,113 @@ mod lossy_tests {
         assert!((px(2, 3)[0] as i32 - 40).abs() <= 3 && (px(2, 3)[2] as i32 - 200).abs() <= 3, "{:?}", px(2, 3));
         assert!((px(20, 3)[0] as i32 - 220).abs() <= 3, "second tile: {:?}", px(20, 3));
         assert!((px(10, 5)[1] as i32 - 150).abs() <= 6, "green ramp: {:?}", px(10, 5));
+    }
+
+    /// A 16×8 lossy tile whose JPEG header declares a 4096×4096 frame is refused from that header, before the frame
+    /// is allocated and decoded (issue #2560); the same tile with its own header decodes.
+    #[test]
+    fn lossy_tile_declaring_more_than_its_tile_is_refused_from_its_header() {
+        let info = |len: usize| ImageInfo {
+            width: 16,
+            height: 8,
+            bits_per_sample: vec![8, 8, 8],
+            samples_per_pixel: 3,
+            compression: comp::LOSSY_JPEG,
+            photometric: 34892,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: 16, tile_height: 8 },
+            offsets: vec![0],
+            byte_counts: vec![len as u64],
+        };
+        let tile = rgb_jpeg(16, 8, 40);
+        assert!(read_image(&tile, &info(tile.len()), ByteOrder::Little, Packing::Msb).is_ok());
+        let huge = with_frame_size(tile, 4096, 4096);
+        let r = read_image(&huge, &info(huge.len()), ByteOrder::Little, Packing::Msb);
+        assert!(matches!(r, Err(RawError::Limit(_))), "{:?}", r.map(|_| ()));
+    }
+
+    /// A 16×40 lossy image in strips of 32 rows whose last strip is coded at the full 32 rows, past the image's
+    /// bottom edge, still decodes; a last strip whose header declares more rows than RowsPerStrip is refused.
+    #[test]
+    fn lossy_last_strip_coded_at_its_full_rows_per_strip_decodes() {
+        let info = |a: usize, b: usize| ImageInfo {
+            width: 16,
+            height: 40,
+            bits_per_sample: vec![8, 8, 8],
+            samples_per_pixel: 3,
+            compression: comp::LOSSY_JPEG,
+            photometric: 34892,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Strips { rows_per_strip: 32 },
+            offsets: vec![0, a as u64],
+            byte_counts: vec![a as u64, b as u64],
+        };
+        let (a, b) = (rgb_jpeg(16, 32, 40), rgb_jpeg(16, 32, 220));
+        let file = [a.as_slice(), b.as_slice()].concat();
+        let RawData::U16(v) = read_image(&file, &info(a.len(), b.len()), ByteOrder::Little, Packing::Msb).unwrap() else { panic!("integer samples") };
+        assert_eq!(v.len(), 16 * 40 * 3);
+        let red = |x: usize, y: usize| v[(y * 16 + x) * 3] as i32;
+        assert!((red(3, 20) - 40).abs() <= 3 && (red(3, 36) - 220).abs() <= 3, "{} {}", red(3, 20), red(3, 36));
+        let tall = with_frame_size(b, 16, 4096);
+        let file = [a.as_slice(), tall.as_slice()].concat();
+        let r = read_image(&file, &info(a.len(), tall.len()), ByteOrder::Little, Packing::Msb);
+        assert!(matches!(r, Err(RawError::Limit(_))), "{:?}", r.map(|_| ()));
+    }
+
+    /// A 16×20 lossy image whose only strip is coded at a RowsPerStrip of 64, past the image's bottom edge, decodes,
+    /// both with RowsPerStrip as written and as a parsed file clamps it to the image height (review of #2560); a
+    /// frame far taller than the strip is still refused.
+    #[test]
+    fn lossy_only_strip_coded_past_the_image_height_decodes() {
+        let info = |rows_per_strip: u32, len: usize| ImageInfo {
+            width: 16,
+            height: 20,
+            bits_per_sample: vec![8, 8, 8],
+            samples_per_pixel: 3,
+            compression: comp::LOSSY_JPEG,
+            photometric: 34892,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Strips { rows_per_strip },
+            offsets: vec![0],
+            byte_counts: vec![len as u64],
+        };
+        let strip = rgb_jpeg(16, 64, 40);
+        for rps in [64, 20] {
+            let RawData::U16(v) = read_image(&strip, &info(rps, strip.len()), ByteOrder::Little, Packing::Msb).unwrap() else {
+                panic!("integer samples")
+            };
+            assert_eq!(v.len(), 16 * 20 * 3, "RowsPerStrip {rps}");
+            assert!((v[(19 * 16 + 3) * 3] as i32 - 40).abs() <= 3, "RowsPerStrip {rps}: {}", v[(19 * 16 + 3) * 3]);
+            let tall = with_frame_size(strip.clone(), 16, 4096);
+            let r = read_image(&tall, &info(rps, tall.len()), ByteOrder::Little, Packing::Msb);
+            assert!(matches!(r, Err(RawError::Limit(_))), "RowsPerStrip {rps}: {:?}", r.map(|_| ()));
+        }
+    }
+
+    /// A frame past either edge cap or the pixel cap is refused before it is decoded, up to the 65535×65535 a JPEG
+    /// header can declare (about 12.9 GB of RGB output), under a tile's caps and under the embedded preview's.
+    #[test]
+    fn lossy_jpeg_frame_past_its_caps_is_refused() {
+        let limit = |r: Result<(Vec<u8>, usize, usize, usize)>| matches!(r, Err(RawError::Limit(_)));
+        let preview = (u16::MAX as usize, u16::MAX as usize);
+        let jpeg = rgb_jpeg(16, 8, 40);
+        let (px, w, h, c) = lossy_jpeg(&jpeg, 3, (16, 16), 256).unwrap();
+        assert_eq!((px.len(), w, h, c), (16 * 8 * 3, 16, 8, 3));
+        assert!(limit(lossy_jpeg(&jpeg, 3, (8, 16), 256)), "wider than the tile");
+        assert!(limit(lossy_jpeg(&jpeg, 3, (16, 4), 256)), "taller than the tile");
+        assert!(limit(lossy_jpeg(&jpeg, 3, (16, 16), 64)), "more pixels than allowed");
+        let huge = with_frame_size(jpeg, u16::MAX, u16::MAX);
+        assert!(limit(lossy_jpeg(&huge, 3, (16, 16), 256)));
+        assert!(limit(lossy_jpeg(&huge, 3, preview, crate::wb_estimate::MAX_PREVIEW_PIXELS)));
     }
 
     fn strip_info(compression: u16, offsets: Vec<u64>, byte_counts: Vec<u64>) -> ImageInfo {
