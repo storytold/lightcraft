@@ -29,12 +29,11 @@ mod task;
 
 #[cfg(test)]
 pub(crate) use body::grid_height;
+pub(crate) use body::scan_note;
 #[cfg(test)]
 pub(crate) use body::thumb_edge;
 #[cfg(test)]
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
-#[cfg(test)]
-pub(crate) use body::scan_note;
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
 pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
 #[cfg(not(target_arch = "wasm32"))]
