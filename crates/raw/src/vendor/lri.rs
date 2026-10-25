@@ -483,14 +483,17 @@ mod tests {
     /// view settings' white balance.
     fn sample(w: usize, h: usize) -> (Vec<u8>, Vec<u16>) {
         let px: Vec<u16> = (0..w * h).map(|i| 42 + (i * 37 % 900) as u16).collect();
+        let higher_id_px: Vec<u16> = (0..w * h).map(|i| 100 + (i * 19 % 800) as u16).collect();
         let mono: Vec<u16> = vec![500; w * h];
-        let (a, b) = (pack10(&mono), pack10(&px));
-        let data = [a.clone(), b].concat();
+        let (a, b, c) = (pack10(&mono), pack10(&higher_id_px), pack10(&px));
+        let data = [a.clone(), b.clone(), c].concat();
         let time = [var(1, 2017), var(2, 9), var(3, 28), var(4, 6), var(5, 24), var(6, 20)].concat();
         let capture = [
             bytes(3, &time),
             module_msg(1, w as u64, h as u64, HEADER as u64, (-1, -1)),
+            // Keep ID 5 before ID 0 to verify selection is by module ID, not file order.
             module_msg(5, w as u64, h as u64, (HEADER + a.len()) as u64, (1, 0)),
+            module_msg(0, w as u64, h as u64, (HEADER + a.len() + b.len()) as u64, (1, 0)),
         ]
         .concat();
         let colour_a = [
@@ -508,10 +511,16 @@ mod tests {
         let gains: Vec<u8> = [2.0f32, 1.5, 2.0, 1.5, 1.0, 1.5, 2.0, 1.5, 2.0].iter().flat_map(|g| g.to_le_bytes()).collect();
         let grid = [var(1, 3), var(2, 3), bytes(3, &gains)].concat();
         let vignetting = bytes(4, &bytes(2, &[var(1, 0), bytes(2, &grid)].concat()));
-        // a record for another module, then this one's in two records, as the sample spreads them
+        // Calibration for the monochrome module, then ID 5, then ID 0. Both colour modules are valid;
+        // ID 0's records are deliberately later so selection must use the lowest ID, not record order.
         let other = bytes(13, &[var(1, 1), bytes(2, &colour_a)].concat());
-        let cal = [other, bytes(13, &[var(1, 5), vignetting].concat()), bytes(13, &[var(1, 5), bytes(2, &colour_a), bytes(2, &colour_d65)].concat())]
-            .concat();
+        let cal = [
+            other,
+            bytes(13, &[var(1, 5), bytes(2, &colour_a), bytes(2, &colour_d65)].concat()),
+            bytes(13, &[var(1, 0), vignetting].concat()),
+            bytes(13, &[var(1, 0), bytes(2, &colour_a), bytes(2, &colour_d65)].concat()),
+        ]
+        .concat();
         let sensor = bytes(16, &[var(1, 2), bytes(2, &[f32f(1, 42.0), f32f(2, 1023.0)].concat())].concat());
         let header = [bytes(8, b"L16"), cal, sensor].concat();
         let wb = bytes(15, &[f32f(1, 2.0), f32f(2, 1.0), f32f(3, 1.0), f32f(4, 1.5)].concat());
