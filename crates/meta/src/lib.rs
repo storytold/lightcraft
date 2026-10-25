@@ -115,9 +115,13 @@ fn compose_non_jpeg_xmp(embedded: &Embedded) -> Result<Option<XmpData>, Embedded
     }
 }
 
+fn embedded_jpeg_payload(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.starts_with(&[0xff, 0xd8]) { Some(bytes) } else { container::raf_jpeg(bytes) }
+}
+
 fn embedded_with_xmp(bytes: &[u8]) -> (Embedded, Result<Option<XmpData>, EmbeddedXmpError>) {
-    if bytes.starts_with(&[0xff, 0xd8]) {
-        return jpeg_embedded(bytes);
+    if let Some(jpeg) = embedded_jpeg_payload(bytes) {
+        return jpeg_embedded(jpeg);
     }
     let embedded = embedded(bytes);
     let parsed = compose_non_jpeg_xmp(&embedded);
@@ -429,8 +433,8 @@ pub fn extract(bytes: &[u8]) -> Metadata {
 /// complete metadata inspection.
 pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
     let is_psd = bytes.starts_with(b"8BPS");
-    let (e, parsed_xmp) = if bytes.starts_with(&[0xff, 0xd8]) {
-        jpeg_embedded(bytes)
+    let (e, parsed_xmp) = if let Some(jpeg) = embedded_jpeg_payload(bytes) {
+        jpeg_embedded(jpeg)
     } else {
         let e = container::try_embedded(bytes)?;
         let parsed = compose_non_jpeg_xmp(&e);
@@ -547,6 +551,17 @@ mod tests {
         let split = packet.len() / 2;
         let (first, second) = packet.as_bytes().split_at(split);
         [(split as u32, second), (0, first)]
+    }
+
+    fn raf_with_jpeg(jpeg: &[u8]) -> Vec<u8> {
+        let offset = 120u32;
+        let length = u32::try_from(jpeg.len()).expect("test JPEG fits RAF length");
+        let mut raf = b"FUJIFILMCCD-RAW 0201FF000000TEST".to_vec();
+        raf.resize(offset as usize, 0);
+        raf[84..88].copy_from_slice(&offset.to_be_bytes());
+        raf[88..92].copy_from_slice(&length.to_be_bytes());
+        raf.extend_from_slice(jpeg);
+        raf
     }
 
     #[test]
@@ -742,6 +757,24 @@ mod tests {
 
         assert_eq!(extract(&jpeg), Metadata::default(), "best-effort extraction ignores invalid XMP");
         assert!(matches!(try_extract(&jpeg), Err(ExtractError::MalformedXmp)));
+    }
+
+    #[test]
+    fn raf_extended_xmp_errors_remain_fail_closed() {
+        let guid = "A1234567890123456789012345678901";
+        let extension = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Extended title""#);
+        let standard = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Standard title""#);
+        let unreferenced_extension = raf_with_jpeg(&xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension)));
+        let missing_extension = raf_with_jpeg(&xmp_jpeg(&referenced_standard(guid, ""), guid, &extension, &[]));
+
+        assert_eq!(extract(&unreferenced_extension).title.as_deref(), Some("Standard title"), "best-effort reads retain standard XMP");
+        for (name, raf) in [("unreferenced extension", unreferenced_extension), ("missing referenced extension", missing_extension)] {
+            assert!(parse_embedded_xmp(&raf).is_err(), "{name} must retain the JPEG validation error");
+            assert!(matches!(try_extract(&raf), Err(ExtractError::MalformedXmp)), "{name} must fail closed");
+        }
+
+        let valid = raf_with_jpeg(&xmp_jpeg(&referenced_standard(guid, ""), guid, &extension, &split_chunks(&extension)));
+        assert_eq!(try_extract(&valid).unwrap().title.as_deref(), Some("Extended title"));
     }
 
     #[test]

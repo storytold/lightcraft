@@ -36,12 +36,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
         return crate::psd::embedded(bytes);
     }
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
-        // Fujifilm RAF: metadata lives in the embedded JPEG whose (offset, length) are big-endian u32s at byte 84
-        let be = |i: usize| bytes.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
-        return match (be(84), be(88)) {
-            (Some(o), Some(l)) if o > 0 => bytes.get(o..o.saturating_add(l).min(bytes.len())).map(jpeg_segments).unwrap_or_default(),
-            _ => Embedded::default(),
-        };
+        return raf_jpeg(bytes).map(jpeg_segments).unwrap_or_default();
     }
     if let Some(m) = crate::mrw::parse(bytes) {
         // Minolta MRW: the `TTW` block is a complete TIFF with the Exif data
@@ -78,6 +73,24 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     } else {
         Embedded::default()
     }
+}
+
+/// Return the JPEG payload embedded in a Fujifilm RAF, if its offsets are readable.
+pub(crate) fn raf_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    if !bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return None;
+    }
+    let read_be_u32 = |offset: usize| {
+        let end = offset.checked_add(4)?;
+        let encoded: [u8; 4] = bytes.get(offset..end)?.try_into().ok()?;
+        Some(u32::from_be_bytes(encoded))
+    };
+    let offset = usize::try_from(read_be_u32(84)?).ok()?;
+    let length = usize::try_from(read_be_u32(88)?).ok()?;
+    if offset == 0 {
+        return None;
+    }
+    bytes.get(offset..offset.saturating_add(length).min(bytes.len()))
 }
 
 /// Locate metadata blocks while preserving PSD/PSB resource-structure errors for callers that
