@@ -263,13 +263,6 @@ fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
 
-/// The most `resync` spends re-validating the suffixes of one line whose whole bytes are not valid
-/// UTF-8 (a real fragment ends at any byte): one line of a modest malformed log that holds a start
-/// of a record in every few bytes used to re-validate the whole remaining suffix at every attempt
-/// (CWE-407). Past the budget the rest of the line stays a torn tail, which the damaged path keeps
-/// and reports, same state as before, minus the CPU.
-const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
-
 #[cfg(test)]
 thread_local! {
     /// Start markers that `resync` decoded on this thread (test builds only; see the cost test).
@@ -286,19 +279,12 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     // marker can match; searching every occurrence made a hostile line quadratic in its length.
     // Requiring i > 0 keeps the invariant that a fragment precedes the record.
     let whole = std::str::from_utf8(line).ok();
-    let mut spent = 0usize;
     let i = line.windows(START.len()).rposition(|w| w == START).filter(|&i| i > 0)?;
     #[cfg(test)]
     RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
     let text = match &whole {
         Some(t) => &t[i..],
-        None => {
-            if spent >= RESYNC_BUDGET_BYTES {
-                return None;
-            }
-            spent = spent.saturating_add(line.len() - i);
-            std::str::from_utf8(&line[i..]).ok()?
-        }
+        None => std::str::from_utf8(&line[i..]).ok()?,
     };
     let rec = decode_record(text.trim_end_matches('\u{0D}'))?;
     (rec.0 <= last.saturating_add(1)).then_some((i, rec))
