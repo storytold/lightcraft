@@ -51,11 +51,12 @@ fn match_combo(ui: &mut egui::Ui, salt: &str, m: &mut Match) {
         Match::Any => "any",
         Match::None => "none",
     };
-    crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
+    let combo = crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
         for x in [Match::All, Match::Any, Match::None] {
             ui.selectable_value(m, x, crate::i18n::tr(label(x)));
         }
     });
+    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Match"));
 }
 
 fn text_value(ui: &mut egui::Ui, v: &mut Value, width: f32, hint: &str, salt: &str) {
@@ -65,7 +66,7 @@ fn text_value(ui: &mut egui::Ui, v: &mut Value, width: f32, hint: &str, salt: &s
         other => other.to_string(),
     };
     let r = ui.add(egui::TextEdit::singleline(&mut s).hint_text(crate::i18n::tr(hint)).desired_width(width));
-    register(ui.ctx(), format!("field:{salt}"), r.rect);
+    register(ui, format!("field:{salt}"), r.rect);
     if r.changed() {
         *v = json!(s);
     }
@@ -149,7 +150,7 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             let mut unit = stored_unit.to_lowercase();
             let mut changed =
                 ui.add(egui::DragValue::new(&mut n).range(1.0..=10_000.0).clamp_existing_to_range(false).speed(0.2).fixed_decimals(0)).changed();
-            crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
+            let combo = crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
                 for u in ["hours", "days", "weeks", "months", "years"] {
                     if ui.selectable_label(unit.trim_end_matches('s') == u.trim_end_matches('s'), crate::i18n::tr(u)).clicked() {
                         unit = u.to_string();
@@ -157,6 +158,7 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
                     }
                 }
             });
+            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Unit"));
             if changed {
                 *v = json!({"n": n.round(), "unit": unit});
             }
@@ -198,26 +200,31 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
         (Some(Kind::Number), _) => number_value(ui, v, field),
         (Some(Kind::Choice(c)), _) => {
             let cur = v.as_str().unwrap_or("").to_string();
-            crate::widgets::combo_box(format!("{salt}-choice")).width(120.0).selected_text(crate::i18n::choice_text(field, &cur)).show_ui(ui, |ui| {
-                for (id, _) in c.iter() {
-                    if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
-                        *v = json!(id);
+            let combo = crate::widgets::combo_box(format!("{salt}-choice"))
+                .width(120.0)
+                .selected_text(crate::i18n::choice_text(field, &cur))
+                .show_ui(ui, |ui| {
+                    for (id, _) in c.iter() {
+                        if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
+                            *v = json!(id);
+                        }
                     }
-                }
-            });
+                });
+            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
         }
         (Some(Kind::Bool), _) => {
             // the catalog's reading of the value ("false" is no); one that is neither yes nor no is
             // shown as written and kept until a choice replaces it, so the dialog reports it
             let cur = bool_value(v);
             let text = cur.map_or_else(|| v.to_string(), |b| crate::i18n::bool_text(b).to_string());
-            crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
+            let combo = crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
                 for b in [true, false] {
                     if ui.selectable_label(cur == Some(b), crate::i18n::bool_text(b)).clicked() {
                         *v = json!(b);
                     }
                 }
             });
+            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
         }
         (Some(Kind::Date), _) => {
             text_value(ui, v, 120.0, "2026-04 or 2026-04-12", salt);
@@ -236,7 +243,7 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         let mut pick = None;
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
             let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
-            register(ui.ctx(), format!("ruleFieldItem:{id}:{salt}"), r.rect);
+            register(ui, format!("ruleFieldItem:{id}:{salt}"), r.rect);
             if r.clicked() {
                 pick = Some(id);
                 ui.close();
@@ -258,11 +265,12 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
                     item(ui, id);
                 }
             });
-            register(ui.ctx(), format!("ruleFieldGroup:{group}:{salt}"), r.response.rect);
+            register(ui, format!("ruleFieldGroup:{group}:{salt}"), r.response.rect);
         }
         pick
     });
-    register(ui.ctx(), format!("ruleField:{salt}"), r.response.rect);
+    crate::widgets::name_combo(&r.response, crate::i18n::tr("Field"));
+    register(ui, format!("ruleField:{salt}"), r.response.rect);
     let Some(Some(id)) = r.inner else { return };
     if field == id {
         return;
@@ -287,7 +295,7 @@ fn problem_note(ui: &mut egui::Ui, problem: Option<&Problem>, salt: &str) {
     let Some(p) = problem else { return };
     let t = Tokens::get(ui.ctx());
     let r = ui.label(RichText::new(format!("⚠ {}", crate::i18n::problem_text(p))).color(t.caution).small());
-    register(ui.ctx(), format!("ruleProblem:{salt}"), r.rect);
+    register(ui, format!("ruleProblem:{salt}"), r.rect);
 }
 
 /// Edit `rs` in place; `salt` keeps widget ids apart between groups, `path` is where `rs` sits
@@ -322,17 +330,19 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
                     let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
-                    crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
-                        for (id, l) in ops_for(kind) {
-                            if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
-                                let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
-                                *op = id.to_string();
-                                if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
-                                    *value = default_value(field, op);
+                    let combo =
+                        crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
+                            for (id, l) in ops_for(kind) {
+                                if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
+                                    let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
+                                    *op = id.to_string();
+                                    if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
+                                        *value = default_value(field, op);
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Operator"));
                     value_editor(ui, field, op, value, &rsalt, env);
                     // − and + at the end of the row, after the value however long it is: a
                     // right-to-left layout put them over the value when the row had no room left
@@ -340,12 +350,12 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     let buttons = small_button_width(ui, "−") + ui.spacing().item_spacing.x + small_button_width(ui, "+");
                     ui.add_space((ui.available_width() - buttons).max(0.0));
                     let del = ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this rule"));
-                    register(ui.ctx(), format!("button:ruleRemove-{rsalt}"), del.rect);
+                    register(ui, format!("button:ruleRemove-{rsalt}"), del.rect);
                     if del.clicked() {
                         remove = Some(i);
                     }
                     let add = ui.small_button("+").on_hover_text(crate::i18n::tr("Add a rule (⌥-click: a group)"));
-                    register(ui.ctx(), format!("button:ruleAdd-{rsalt}"), add.rect);
+                    register(ui, format!("button:ruleAdd-{rsalt}"), add.rect);
                     if add.clicked() {
                         let group = ui.input(|i| i.modifiers.alt) && depth < 3;
                         insert = Some((
@@ -367,7 +377,7 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
     if rs.rules.is_empty() || depth == 0 {
         ui.horizontal(|ui| {
             let add = ui.small_button(crate::i18n::tr("+ Rule"));
-            register(ui.ctx(), format!("button:ruleAddEnd-{salt}"), add.rect);
+            register(ui, format!("button:ruleAddEnd-{salt}"), add.rect);
             if add.clicked() {
                 rs.rules.push(new_rule());
             }

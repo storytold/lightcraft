@@ -9,12 +9,19 @@ use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 
 /// Standard dropdown chevrons, including settings, import/export and rule editors.
-pub fn combo_box(id: impl egui::AsIdSalt) -> egui::ComboBox {
+pub fn combo_box(id: impl egui::AsIdSalt) -> egui::ComboBox<'static> {
     egui::ComboBox::from_id_salt(id)
         .icon(|ui, rect, visuals, _| {
             paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
         })
         .popup_style(list_style.into())
+}
+
+/// Name a dropdown for screen readers. egui 0.37's `ComboBox::from_id_salt` publishes only the
+/// selected text as the node's value, so an otherwise unlabelled combo has no accessible name and
+/// the strict kittest check rejects it. Call this on the response returned by `show_ui`.
+pub fn name_combo(response: &egui::Response, label: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, response.enabled(), label));
 }
 
 /// A dropdown's list and its submenus: items without the resting border of a button, as egui's
@@ -26,7 +33,9 @@ fn list_style(style: &mut egui::Style) {
 
 /// A native button with a vector arrow beside its text; egui reserves the icon's space.
 pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon, leading: bool) -> Response {
-    let id = ui.next_auto_id().with("arrow");
+    // 0.37 atoms take a local `IdSalt` (not a root `Id`); the button reports the custom atom's
+    // rect under the same salt.
+    let id = egui::IdSalt::new(("lc-arrow", ui.next_auto_id()));
     let mut atoms = text.into_atoms();
     let arrow = egui::Atom::custom(id, vec2(16.0, 16.0));
     if leading {
@@ -70,29 +79,111 @@ pub fn context_menu_close(response: &Response, default: egui::PopupCloseBehavior
 
 // ------------------------------------------------------------------ automation registry
 
-#[derive(Clone, Default)]
-pub struct Registry(pub Vec<(String, Rect)>);
+/// The real egui widget that owns a registered automation rectangle.
+///
+/// Automation ids are names for scripts; egui hit-tests widget [`egui::Id`]s in a [`egui::LayerId`].
+/// [`register`] records a small non-interactive probe with the registered rect so the control
+/// channel can ask egui itself whether that rectangle owns the pointer, rather than guessing from
+/// unrelated interactive rectangles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WidgetHit {
+    pub id: egui::Id,
+    pub layer_id: egui::LayerId,
+    /// The widget's clipped interaction rectangle in its layer's local coordinates, recorded in
+    /// the same pass as the registration. Delivery checks this instead of calling
+    /// `Context::read_response` before the next pass: at that point `read_response` can still see
+    /// the pass before the registry that was just published.
+    pub interact_rect: Rect,
+}
 
-/// Record a widget's automation id and screen rect for this frame.
-pub fn register(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
+#[derive(Clone, Default)]
+pub struct Registry {
+    pub rects: Vec<(String, Rect)>,
+    pub hits: Vec<(String, WidgetHit)>,
+    /// How many times each automation id was registered in this pass (for stable duplicate probe
+    /// ids). A map keeps registration linear; scanning `rects` would make a pass O(N²).
+    occurrences: std::collections::HashMap<String, usize>,
+}
+
+/// Record a widget's automation id and screen rect for this frame, and register a hover probe at
+/// the same rectangle in the current UI layer.
+///
+/// The probe senses hover only (no click or drag), so it never takes a click from the widget it
+/// describes. It records the current UI layer and its clipped `Response::interact_rect` in the
+/// same pass, and the control channel asks egui for the top-most interactable layer at the point.
+/// A probe below a non-modal foreground/dim overlay is therefore refused without ever pressing the
+/// overlay. A point below the top modal dialog is instead left to egui's modal routing: the dialog
+/// consumes it, or a click on the backdrop closes the dialog, and no background widget is pressed.
+pub fn register(ui: &egui::Ui, id: impl Into<String>, rect: Rect) {
+    let ctx = ui.ctx();
+    let registry = egui::Id::unique("lc-registry");
     let id = id.into();
-    ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0.push((id, rect)));
+    // Stable across frames even when unrelated widgets come and go: the probe id names the
+    // automation id (and a duplicate occurrence of the same id in this pass), not its position.
+    let duplicate = ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(registry);
+        let occurrence = registry.occurrences.entry(id.clone()).or_insert(0);
+        let duplicate = *occurrence;
+        *occurrence = occurrence.saturating_add(1);
+        duplicate
+    });
+    let hit = rect.is_finite().then(|| {
+        let id = egui::Id::unique(("lc-automation-hit", id.as_str(), duplicate));
+        let response = ui.interact(rect, id, egui::Sense::hover());
+        WidgetHit { id, layer_id: response.layer_id, interact_rect: response.interact_rect }
+    });
+    ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(registry);
+        registry.rects.push((id.clone(), rect));
+        if let Some(hit) = hit {
+            registry.hits.push((id, hit));
+        }
+    });
+}
+
+/// Record a widget whose real egui [`egui::Response`] is available. More precise than
+/// [`register`]'s hover probe: the response carries the widget's own id, layer and clipped
+/// geometry, and remains a valid automation target when disabled (`ui.clickWidget` on a disabled
+/// control is a successful no-op, which is the documented automation semantics).
+pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Response) {
+    let id = id.into();
+    let ctx = response.ctx.clone();
+    ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"));
+        registry.rects.push((id.clone(), rect));
+        registry.hits.push((id, WidgetHit { id: response.id, layer_id: response.layer_id, interact_rect: response.interact_rect }));
+    });
+}
+
+/// Record painted geometry that has no interactive egui widget of its own (a preview image, a
+/// drop card). `ui.clickWidget` will not press it: there is no widget hit to own the press.
+pub fn register_geometry(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
+    let id = id.into();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry")).rects.push((id, rect)));
 }
 
 /// Esc was handled this frame by something nested (an open popup closed on it): containers such
 /// as dialogs shouldn't close too. Keyed to the frame, so it lapses by itself on the next one.
 pub fn take_escape(ctx: &egui::Context) {
     let frame = ctx.cumulative_frame_nr();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("lc-escape-taken"), frame));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("lc-escape-taken"), frame));
 }
 
 /// Whether [`take_escape`] was called this frame.
 pub fn escape_taken(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<u64>(egui::Id::new("lc-escape-taken"))) == Some(ctx.cumulative_frame_nr())
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::unique("lc-escape-taken"))) == Some(ctx.cumulative_frame_nr())
 }
 
+/// Take this pass's registered rectangles and their egui hit owners. The app publishes both only
+/// for a completed, nondiscarded pass.
+pub fn take_registries(ctx: &egui::Context) -> (Vec<(String, Rect)>, Vec<(String, WidgetHit)>) {
+    let registry = ctx.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"))));
+    (registry.rects, registry.hits)
+}
+
+/// Take only the registered rectangles (for unit tests that inspect layout).
 pub fn take_registry(ctx: &egui::Context) -> Vec<(String, Rect)> {
-    ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0))
+    take_registries(ctx).0
 }
 
 // ------------------------------------------------------------------ preview-only raws
@@ -143,8 +234,8 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
         })
         .response;
     let r = r.on_hover_text(crate::i18n::tr_format!("Decoder: {reason}", reason = reason));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, crate::i18n::tr("Preview only: editing the camera's embedded JPEG")));
-    register(ui.ctx(), format!("notice:previewOnly:{key}"), r.rect);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, crate::i18n::tr("Preview only: editing the camera's embedded JPEG")));
+    register(ui, format!("notice:previewOnly:{key}"), r.rect);
     reload
 }
 
@@ -262,7 +353,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let pad_r = 22.0;
     let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
-    let id = ui.id().with(spec.id);
+    let id = ui.scope_id().with(spec.id);
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     // Keyboard focus survives leaving the row; vertical wheel edits need a fresh click or drag
     // in it (at most one slider is armed: `wheel_slider_key`).
@@ -324,14 +415,14 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let reset_hint = crate::i18n::tr_format!("{name} — double-click to reset it", name = label_text);
     let label_resp = if enabled { label_resp.on_hover_text(reset_hint.as_str()) } else { label_resp };
     crate::widgets::announce(&label_resp, crate::i18n::tr_format!("Reset {name}", name = label_text.clone()));
-    register(ui.ctx(), format!("sliderLabel:{}", spec.id), label_rect);
-    register(ui.ctx(), format!("slider:{}", spec.id), track_rect);
+    register(ui, format!("sliderLabel:{}", spec.id), label_rect);
+    register(ui, format!("slider:{}", spec.id), track_rect);
     // the value: click it to type an exact one, drag it sideways to scrub (over the label, so it
     // takes the click)
     let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
     let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click_and_drag() } else { Sense::hover() });
     crate::widgets::announce(&value_resp, format!("{label_text}: {}", crate::i18n::tr("Click to type a value, drag to change it")));
-    register(ui.ctx(), format!("sliderValue:{}", spec.id), value_rect);
+    register(ui, format!("sliderValue:{}", spec.id), value_rect);
     // say that an exact value can be typed here (issue #534: an exact crop angle was hard to find)
     let value_resp = if enabled { value_resp.on_hover_text(crate::i18n::tr("Click to type a value, drag to change it")) } else { value_resp };
     let typing_id = id.with("typing");
@@ -618,14 +709,24 @@ pub fn nudged(spec: &ControlSpec, value: f64, steps: f64) -> f64 {
     (((value + unit * steps) / step).round() * step).clamp(spec.min, spec.max)
 }
 
+/// Announce a disclosure row with AccessKit's real `Expanded` state.
+///
+/// egui 0.37's `WidgetInfo::selected` maps to AccessKit `Toggled`; a custom disclosure row must
+/// publish `Expanded` instead (the built-in `CollapsingHeader` does this through
+/// `accesskit_node_builder`). Use one helper so section headers, flyouts and fold titles agree.
+pub(crate) fn announce_disclosure(resp: &egui::Response, enabled: bool, expanded: bool, label: impl ToString) {
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, enabled, label.to_string()));
+    resp.ctx.accesskit_node_builder(resp.id, |node| node.set_expanded(expanded));
+}
+
 /// Collapsible section header ("› Light"). Returns the response (click toggles).
 pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (Response, Option<bool>) {
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
-    register(ui.ctx(), format!("section:{id}"), r);
+    announce_disclosure(&resp, true, open, title);
+    register(ui, format!("section:{id}"), r);
     let p = ui.painter();
     if ui.rect_contains_pointer(r) {
         p.rect_filled(r, 0.0, t.chrome.gamma_multiply(1.06));
@@ -641,9 +742,9 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
         && (ui.rect_contains_pointer(r) || !on)
     {
         let eye = Rect::from_center_size(pos2(r.right() - 34.0, r.center().y), vec2(18.0, 18.0));
-        let er = ui.interact(eye, ui.id().with(("eye", id)), Sense::click());
+        let er = ui.interact(eye, ui.scope_id().with(("eye", id)), Sense::click());
         crate::widgets::announce_selected(&er, crate::i18n::tr("Show / hide"), on);
-        register(ui.ctx(), format!("sectionEye:{id}"), eye);
+        register(ui, format!("sectionEye:{id}"), eye);
         paint(ui.painter(), eye, Icon::Eye, if on { t.icon } else { t.text_disabled });
         if !on {
             ui.painter().line_segment([eye.left_bottom(), eye.right_top()], Stroke::new(1.5, t.text_disabled));
@@ -670,9 +771,9 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
     let w = ui.available_width();
     let (outer, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let r = Rect::from_min_max(pos2(outer.left() + 16.0, outer.top() + 4.0), pos2(outer.right() - 16.0, outer.bottom() - 4.0));
-    let resp = ui.interact(r, ui.id().with(("flyout", id)), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
-    register(ui.ctx(), format!("flyout:{id}"), r);
+    let resp = ui.interact(r, ui.scope_id().with(("flyout", id)), Sense::click());
+    announce_disclosure(&resp, true, open, title);
+    register(ui, format!("flyout:{id}"), r);
     let p = ui.painter();
     p.rect_filled(r, 4.0, if resp.hovered() { t.hover.gamma_multiply(0.8) } else { t.inset });
     let tile = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(r.height() - 8.0, r.height() - 8.0));
@@ -696,8 +797,8 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
     let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
-    register(ui.ctx(), format!("button:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
+    register(ui, format!("button:{id}"), r);
     let fill = if active {
         t.pressed
     } else if resp.hovered() {
@@ -728,7 +829,7 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 let i = row_i * per_row + j;
                 let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
                 crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
-                register(ui.ctx(), format!("button:{id}-{key}"), r);
+                register(ui, format!("button:{id}-{key}"), r);
                 let fill = if active == Some(i) {
                     t.pressed
                 } else if resp.hovered() {
@@ -753,8 +854,8 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     let tooltip = crate::i18n::tr(tooltip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, tooltip));
-    register(ui.ctx(), format!("icon:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, tooltip));
+    register(ui, format!("icon:{id}"), r);
     let p = ui.painter();
     let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
     if active {
@@ -789,8 +890,8 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     let elided = galley.elided;
     let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, text));
-    register(ui.ctx(), format!("dropdown:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
+    register(ui, format!("dropdown:{id}"), r);
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
@@ -959,13 +1060,13 @@ pub(crate) fn screen_reader_name(ctx: &egui::Context, id: egui::Id, name: &str) 
 /// A hand-drawn clickable area (an icon, a tile, a row) announced as a button named `name`.
 pub(crate) fn announce(resp: &egui::Response, name: impl Into<String>) {
     let name = name.into();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, resp.enabled(), name.clone()));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, resp.enabled(), name.clone()));
 }
 
 /// The same for one that is on or off (a toggle, a selected row or swatch).
 pub(crate) fn announce_selected(resp: &egui::Response, name: impl Into<String>, selected: bool) {
     let name = name.into();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, resp.enabled(), selected, name.clone()));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, resp.enabled(), selected, name.clone()));
 }
 
 /// `r`, named `name` for screen readers: a plain egui field or slider whose caption is drawn
@@ -1019,12 +1120,12 @@ mod numeric_entry_tests;
 mod slider_reset_tests;
 
 fn focused_slider_key() -> egui::Id {
-    egui::Id::new("lightcraft-focused-slider")
+    egui::Id::unique("lightcraft-focused-slider")
 }
 
 /// The slider a click or drag armed for vertical wheel edits, if any.
 fn wheel_slider_key() -> egui::Id {
-    egui::Id::new("lightcraft-wheel-slider")
+    egui::Id::unique("lightcraft-wheel-slider")
 }
 
 /// Whether the widget with keyboard focus is a develop slider selected by a click, drag or Tab.

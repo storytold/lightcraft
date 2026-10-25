@@ -20,7 +20,7 @@ use crate::widgets::register;
 
 /// Where the preview's choice lives (egui memory): `None` = the photo's slide.
 fn preview_key() -> egui::Id {
-    egui::Id::new("settingsSlideshowPreviewShows")
+    egui::Id::unique("settingsSlideshowPreviewShows")
 }
 
 /// What the Settings preview shows: a title screen, or (`None`) the active photo's slide.
@@ -64,7 +64,7 @@ fn slider(
 ) {
     let mut v = value * k;
     let r = ui.add(egui::Slider::new(&mut v, (range.start() * k)..=(range.end() * k)).suffix(suffix).max_decimals(1));
-    register(ui.ctx(), format!("slider:{id}"), r.rect);
+    register(ui, format!("slider:{id}"), r.rect);
     let p = json!({ t.id(): { key: v / k } });
     if r.changed() {
         if let Ok(next) = app.session.slide_titles.merged(&p) {
@@ -81,7 +81,7 @@ fn slider(
 fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &str, value: [u8; 3]) {
     let mut c = value;
     let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-    register(ui.ctx(), format!("button:{id}"), r.rect);
+    register(ui, format!("button:{id}"), r.rect);
     if r.changed() {
         set(app, ui.ctx(), t, key, json!(c));
     }
@@ -89,7 +89,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &
 
 /// The screen's text field (`field:{id}`), saved when the edit ends.
 fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &str) {
-    let mem = egui::Id::new(("slideshow-title-field", id));
+    let mem = egui::Id::unique(("slideshow-title-field", id));
     let mut s: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| value.to_string());
     let widget = format!("field:{id}");
     let r = TextField::singleline(&widget, &mut s).hint(crate::i18n::tr("Title text")).width(ui.available_width().clamp(80.0, 260.0)).show(ui);

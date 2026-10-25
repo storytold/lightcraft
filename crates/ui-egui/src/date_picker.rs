@@ -238,8 +238,8 @@ impl<'a> DatePicker<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let DatePicker { id, value, precisions, min, max, today } = self;
         let mut button = crate::widgets::icon_button(ui, &format!("datePicker:{id}"), Icon::Calendar, vec2(24.0, 22.0), false, true, "Pick a date");
-        register(ui.ctx(), format!("datePicker:{id}"), button.rect);
-        let state = egui::Id::new(("datePicker", id.as_str()));
+        register(ui, format!("datePicker:{id}"), button.rect);
+        let state = egui::Id::unique(("datePicker", id.as_str()));
         if button.clicked() {
             // open on the value (or today), at its precision when it is one of those offered
             let at = value.or(today).unwrap_or(PickedDate::year(2026));
@@ -257,7 +257,7 @@ impl<'a> DatePicker<'a> {
                 ui.horizontal(|ui| {
                     for p in precisions {
                         let r = ui.selectable_label(view.precision == *p, crate::i18n::tr(p.label()));
-                        register(ui.ctx(), format!("datePickerPrecision:{}:{id}", p.id()), r.rect);
+                        register(ui, format!("datePickerPrecision:{}:{id}", p.id()), r.rect);
                         if r.clicked() {
                             view.precision = *p;
                         }
@@ -267,8 +267,8 @@ impl<'a> DatePicker<'a> {
             }
             ui.horizontal(|ui| {
                 let prev = crate::widgets::arrow_button(ui, "", Icon::ChevronLeft, true);
-                prev.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), crate::i18n::tr("Previous page")));
-                register(ui.ctx(), format!("datePickerPrev:{id}"), prev.rect);
+                prev.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Previous page")));
+                register(ui, format!("datePickerPrev:{id}"), prev.rect);
                 let title = match view.precision {
                     Precision::Day => crate::i18n::date_group_label(&format!("{:04}-{:02}", view.year, view.month), false),
                     Precision::Month => format!("{:04}", view.year),
@@ -280,8 +280,8 @@ impl<'a> DatePicker<'a> {
                 ui.label(RichText::new(title).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let next = crate::widgets::arrow_button(ui, "", Icon::ChevronRight, false);
-                    next.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), crate::i18n::tr("Next page")));
-                    register(ui.ctx(), format!("datePickerNext:{id}"), next.rect);
+                    next.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Next page")));
+                    register(ui, format!("datePickerNext:{id}"), next.rect);
                     if next.clicked() {
                         view = step(view, true);
                     }
@@ -294,7 +294,7 @@ impl<'a> DatePicker<'a> {
                 let allowed = in_bounds(&date, min.as_ref(), max.as_ref());
                 let text = if holds_today(&date, today) { RichText::new(text).strong().underline() } else { RichText::new(text) };
                 let r = ui.add_enabled(allowed, egui::Button::selectable(*value == Some(date), text).min_size(vec2(26.0, 0.0)));
-                register(ui.ctx(), format!("datePickerCell:{}:{id}", date.iso()), r.rect);
+                register(ui, format!("datePickerCell:{}:{id}", date.iso()), r.rect);
                 if r.clicked() {
                     *picked = Some(date);
                 }

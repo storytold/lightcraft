@@ -12,12 +12,12 @@ pub const STEP: f64 = 0.005;
 pub const BIG_STEP: f64 = 0.05;
 
 fn focused_key() -> Id {
-    Id::new("lc-canvas-handle-focused")
+    Id::unique("lc-canvas-handle-focused")
 }
 
 /// The egui id of the stand-in registered as `key` (to focus it, or find it in tests).
 pub fn id(key: &str) -> Id {
-    Id::new("lc-canvas-handle").with(key)
+    Id::unique("lc-canvas-handle").with(key)
 }
 
 /// Whether a canvas handle holds the keyboard focus: it keeps the arrow keys and Return from the
@@ -49,11 +49,11 @@ pub fn handle(ui: &mut Ui, key: &str, name: &str, value: String, at: Pos2) -> Ha
     let rect = Rect::from_center_size(at, vec2(14.0, 14.0));
     let resp = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
     let label = name.to_string();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
     ui.ctx().accesskit_node_builder(id, |node| {
         node.set_value(value);
     });
-    crate::widgets::register(ui.ctx(), format!("canvasHandle:{key}"), rect);
+    crate::widgets::register(ui, format!("canvasHandle:{key}"), rect);
     let mut out = HandleKeys::default();
     if !resp.has_focus() {
         return out;

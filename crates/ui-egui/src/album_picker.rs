@@ -211,8 +211,8 @@ impl<'a> AlbumPicker<'a> {
             ui.add_sized(vec2(width, ui.spacing().interact_size.y), egui::Button::new(text.as_str()).truncate().right_text(" ")).on_hover_text(text);
         let arrow_color = crate::theme::Tokens::get(ui.ctx()).icon;
         disclosure(ui.painter(), egui::pos2(button.rect.right() - 10.0, button.rect.center().y), true, arrow_color);
-        register(ui.ctx(), format!("albumPicker:{id}"), button.rect);
-        let key = egui::Id::new(("albumPicker", id.as_str()));
+        register(ui, format!("albumPicker:{id}"), button.rect);
+        let key = egui::Id::unique(("albumPicker", id.as_str()));
         if button.clicked() {
             // open on the chosen album's folders, with the search empty and ready for typing
             let open = chosen.map(|c| ancestors(entries, c)).unwrap_or_default();
@@ -232,7 +232,7 @@ impl<'a> AlbumPicker<'a> {
             }
             let search_box =
                 ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(crate::i18n::tr("Search albums")).desired_width(f32::INFINITY));
-            register(ui.ctx(), format!("albumPickerSearch:{id}"), search_box.rect);
+            register(ui, format!("albumPickerSearch:{id}"), search_box.rect);
             if state.focus {
                 search_box.request_focus();
                 state.focus = false;
@@ -252,7 +252,7 @@ impl<'a> AlbumPicker<'a> {
                     let resp = ui
                         .add_enabled(e.blocked.is_none(), egui::Button::selectable(Some(e.id) == chosen || highlighted, label).truncate())
                         .on_hover_text(label);
-                    register(ui.ctx(), format!("albumPickerItem:{}:{id}", e.id), resp.rect);
+                    register(ui, format!("albumPickerItem:{}:{id}", e.id), resp.rect);
                     let resp = match &e.blocked {
                         Some(why) => resp.on_disabled_hover_text(why.as_str()),
                         None => resp,
@@ -289,10 +289,10 @@ impl<'a> AlbumPicker<'a> {
                                 egui::TextStyle::Button.resolve(ui.style()),
                                 t.text_label,
                             );
-                            register(ui.ctx(), format!("albumPickerFolder:{}:{id}", e.id), r.rect);
+                            register(ui, format!("albumPickerFolder:{}:{id}", e.id), r.rect);
                             // what assistive tools announce: the folder, and whether it is open
                             let name = e.name.clone();
-                            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, &name));
+                            crate::widgets::announce_disclosure(&r, true, open, &name);
                             if r.clicked() {
                                 // the click took the keyboard from the search box: give it back
                                 state.focus = true;

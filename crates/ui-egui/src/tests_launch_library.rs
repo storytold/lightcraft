@@ -968,8 +968,19 @@ fn recent_libraries_are_checked_again_only_when_the_window_comes_back() {
 /// (FredApps on #2689, #2774).
 #[test]
 fn a_library_found_again_comes_back_to_the_launch_list() {
+    found_again(false);
+}
+
+/// The same when every frame is laid out twice (`request_discard`): an answer applied in a frame is
+/// visible through all of its passes, and scheduling does not ask about it again in that frame.
+#[test]
+fn a_library_found_again_comes_back_to_the_launch_list_across_a_multipass_frame() {
+    found_again(true);
+}
+
+fn found_again(multipass: bool) {
     use std::sync::atomic::{AtomicBool, Ordering};
-    let dir = temp("found-again");
+    let dir = temp(if multipass { "found-again-multipass" } else { "found-again" });
     let a = make_library(&dir.join("A"));
     let plugged = std::sync::Arc::new(AtomicBool::new(false));
     let p = plugged.clone();
@@ -981,6 +992,21 @@ fn a_library_found_again_comes_back_to_the_launch_list() {
     app.ui.settings.recent_libraries = vec![a.clone()];
     app.library_problem = Some(LibraryProblem::choose_later(&app.ui.settings));
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    if multipass {
+        // The existing context hook egui calls at the start of every pass: ask for the second layout
+        // pass on every pass 0 (which egui otherwise does only for e.g. a Grid sizing change).
+        h.view.ctx.on_begin_pass(
+            "test: force a second layout pass",
+            std::sync::Arc::new(|ui: &mut egui::Ui| {
+                if ui.ctx().current_pass_index() == 0 {
+                    ui.ctx().request_discard("test: force a second layout pass");
+                }
+            }),
+        );
+        let passes = h.view.ctx.cumulative_pass_nr();
+        h.step();
+        assert_eq!(h.view.ctx.cumulative_pass_nr() - passes, 2, "the hook forced the second pass");
+    }
     let row = |h: &Headless| h.app.library_problem.as_ref().and_then(|p| p.chooser.as_ref()).map(|c| c.libraries[0].clone()).unwrap();
     assert!(
         h.step_until(T, |h| {

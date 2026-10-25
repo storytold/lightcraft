@@ -1098,55 +1098,41 @@ impl Catalog {
             }
             st.photos.len() >= 2
         });
-        let parents: Vec<(AlbumId, Option<AlbumId>)> = self.albums.values().map(|a| (a.id, a.parent)).collect();
-        // A folder chain is shared by every album under it, so each chain is validated once and its
-        // verdict is what later albums reused: a valid chain encoded in a flat snapshot made the old
-        // per-album walk quadratic in the album count (CWE-407).
-        enum Chain {
-            Ok,
-            Bad,
-        }
-        let mut chains: std::collections::HashMap<AlbumId, Chain> = std::collections::HashMap::new();
-        for (id, parent) in parents {
-            let Some(p) = parent else { continue };
-            if chains.contains_key(&id) {
-                continue;
-            }
-            // Walk up from `p` once, recording everything seen; what it reaches decides every node
-            // walked (a chain already judged by an earlier album stops the walk early — the rest of
-            // the chain was judged then).
+        let albums: Vec<AlbumId> = self.albums.keys().copied().collect();
+        // Validate each parent link once (CWE-407), caching only chains that now reach a root.
+        // A cached bad verdict is not enough: skipping its ancestors would leave their broken
+        // links/cycle intact when a lower-id child was the first to walk into that chain.
+        let mut valid: std::collections::HashSet<AlbumId> = std::collections::HashSet::new();
+        for id in albums {
             let mut walked: Vec<AlbumId> = Vec::new();
-            let ok = {
-                let mut cur = Some(p);
+            let broken = {
+                let mut cur = id;
                 let mut on: std::collections::HashSet<AlbumId> = std::collections::HashSet::new();
                 loop {
-                    match cur {
-                        None => break true,
-                        Some(c) => {
-                            if c == id || !on.insert(c) {
-                                break false;
-                            }
-                            match chains.get(&c) {
-                                Some(Chain::Bad) => break false,
-                                Some(Chain::Ok) => break true,
-                                None => {}
-                            }
-                            match self.albums.get(&c) {
-                                Some(a) if a.folder => walked.push(c),
-                                _ => break false,
-                            }
-                            cur = self.albums[&c].parent;
-                        }
+                    if valid.contains(&cur) {
+                        break None;
                     }
+                    if !on.insert(cur) {
+                        // Detach one actual cycle node, not the child that first reached it.
+                        break self.albums.get(&cur).and_then(|a| a.parent).map(|parent| (cur, parent));
+                    }
+                    walked.push(cur);
+                    let Some(parent) = self.albums.get(&cur).and_then(|a| a.parent) else { break None };
+                    if !self.albums.get(&parent).is_some_and(|a| a.folder) {
+                        break Some((cur, parent));
+                    }
+                    cur = parent;
                 }
             };
-            for c in walked {
-                chains.insert(c, if ok { Chain::Ok } else { Chain::Bad });
-            }
-            if !ok && let Some(a) = self.albums.get_mut(&id) {
+            if let Some((id, p)) = broken
+                && let Some(a) = self.albums.get_mut(&id)
+            {
                 changed.push(format!("album {}: its folder {} is missing, not a folder or inside it: moved to the top level", id.0, p.0));
                 a.parent = None;
             }
+            // Only visited nodes are cached, after every one can reach the repaired root or a
+            // previously validated chain. Unvisited ancestors never inherit a guessed verdict.
+            valid.extend(walked);
         }
         let past = |last: Option<u64>| last.map_or(1, |v| v.saturating_add(1));
         let (photo, album, stack) = (

@@ -198,7 +198,7 @@ fn the_thumbnail_placeholder_stands_apart_in_every_theme() {
 fn a_failed_filmstrip_thumbnail_is_announced_with_its_reason() {
     let spoken = |failed: bool| {
         let (nodes, _, _) = frames(Vec::new(), |ui| {
-            let resp = ui.interact(Rect::from_min_size(pos2(10.0, 10.0), vec2(120.0, 80.0)), egui::Id::new("film-test"), egui::Sense::click());
+            let resp = ui.interact(Rect::from_min_size(pos2(10.0, 10.0), vec2(120.0, 80.0)), egui::Id::unique("film-test"), egui::Sense::click());
             crate::widgets::announce(&resp, crate::panels::detail::film_spoken("IMG_0001.jpg", failed));
         });
         nodes.into_iter().find(|n| n.role == "Button").map(|n| n.label)

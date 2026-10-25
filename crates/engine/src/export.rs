@@ -2026,6 +2026,18 @@ pub fn write_file_durable(path: &str, bytes: &[u8]) -> Result<(), String> {
     write_with(path, bytes, true)
 }
 
+/// Write `path` only when nothing exists there: the destination is prepared as a complete temp
+/// file and published with create-new semantics, so a file that appears after a caller's check is
+/// never replaced. Screenshots of an initially absent path use this instead of the overwriting
+/// writer.
+pub fn write_file_new(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    lightcraft_catalog::safe_file::write_new(p, bytes).map_err(|e| format!("{path}: {e}"))
+}
+
 fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String> {
     use lightcraft_catalog::safe_file::{write_atomic, write_atomic_nosync};
     let p = std::path::Path::new(path);

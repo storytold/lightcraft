@@ -202,7 +202,7 @@ fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
 fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
-    let resp = ui.interact(area, egui::Id::new(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
+    let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
     crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, resp) };
     let caption_h = 26.0;
@@ -308,7 +308,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         let now = ui.input(|i| i.time);
         // (the wait belongs to the photo in the pane: one moved in starts its own)
         let rendering = ui.ctx().data_mut(|d| {
-            let (photo, wait) = d.get_temp_mut_or(egui::Id::new(("compare-rendering", i)), (id, None));
+            let (photo, wait) = d.get_temp_mut_or(egui::Id::unique(("compare-rendering", i)), (id, None));
             if *photo != id {
                 (*photo, *wait) = (id, None);
             }
@@ -361,9 +361,9 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         && lr.right() < cap.right()
     {
         pt.circle_filled(lr.center(), 5.0, super::grid::label_color(l));
-        register(ui.ctx(), format!("cull:{}:label", id.0), lr);
+        register(ui, format!("cull:{}:label", id.0), lr);
     }
-    register(ui.ctx(), format!("cull:{}", id.0), display);
+    register(ui, format!("cull:{}", id.0), display);
     (display, resp)
 }
 
@@ -574,7 +574,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // remove from the survey (deselect) on hover
         if resp.hovered() && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
-            let xresp = ui.interact(xr, egui::Id::new(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
+            let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
             ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
             paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);

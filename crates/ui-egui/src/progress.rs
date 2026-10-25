@@ -109,14 +109,14 @@ impl Progress {
         let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         resp.widget_info(|| {
             let mut info = match label {
-                Some(l) => egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, ui.is_enabled(), l),
-                None => egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator),
+                Some(l) => egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, ui.is_enabled(), l),
+                None => egui::WidgetInfo::new(egui::Role::ProgressIndicator),
             };
             info.value = self.fraction.map(|f| f64::from(percent(f)));
             info
         });
         if let Some(w) = &self.widget {
-            crate::widgets::register(ui.ctx(), w.clone(), rect);
+            crate::widgets::register(ui, w.clone(), rect);
         }
         if !ui.is_rect_visible(rect) {
             return resp;
@@ -182,7 +182,7 @@ pub fn paint_spinner(p: &egui::Painter, rect: Rect, color: Color32, time: f64) {
 pub fn spinner(ui: &mut Ui, size: f32) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator));
+    resp.widget_info(|| egui::WidgetInfo::new(egui::Role::ProgressIndicator));
     if ui.is_rect_visible(rect) {
         paint_spinner(ui.painter(), rect, t.text_dim, ui.input(|i| i.time));
         ui.ctx().request_repaint_after(FRAME);

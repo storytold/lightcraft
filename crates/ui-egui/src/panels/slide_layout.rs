@@ -45,7 +45,7 @@ fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
         Unit::Degrees => (value, -180.0..=180.0, "°"),
     };
     let r = ui.add(egui::Slider::new(&mut v, range).suffix(suffix).max_decimals(1));
-    register(ui.ctx(), format!("slider:{id}"), r.rect);
+    register(ui, format!("slider:{id}"), r.rect);
     let value = match unit {
         Unit::Percent => v / 100.0,
         Unit::Degrees => v,
@@ -64,7 +64,7 @@ fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
 fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: [u8; 3]) {
     let mut c = value;
     let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-    register(ui.ctx(), format!("button:{id}"), r.rect);
+    register(ui, format!("button:{id}"), r.rect);
     if r.changed() {
         set(app, json!({ key: c }));
     }
@@ -132,7 +132,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let active = app.session.active();
     let mut on = s.background_image.is_some();
     let r = ui.add_enabled(on || active.is_some(), egui::Checkbox::new(&mut on, crate::i18n::tr("Background image")));
-    register(ui.ctx(), "check:settings.slideshowBackgroundImage", r.rect);
+    register(ui, "check:settings.slideshowBackgroundImage", r.rect);
     if r.changed() {
         set(app, json!({"backgroundImage": if on { active.map(|a| a.0) } else { None }}));
     }
@@ -185,7 +185,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
     let rect = Rect::from_center_size(room.center(), vec2(fit_w, fit_h));
     let h = rect.height();
     let w = rect.width();
-    register(ui.ctx(), "slideshow:preview", rect);
+    register(ui, "slideshow:preview", rect);
     let p = ui.painter_at(room.expand(1.0));
     p.rect_stroke(rect, 0.0, Stroke::new(1.0, t.text_dim.gamma_multiply(0.5)), egui::StrokeKind::Outside);
     super::slide_titles::preview_choice(ui);
@@ -203,7 +203,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
         );
         let paint = ui
             .ctx()
-            .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("settingsSlideshowTemplateSaid")))
+            .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("settingsSlideshowTemplateSaid")))
             .with_clip_rect(room.intersect(ui.clip_rect()));
         paint.rect_filled(band, 0.0, Color32::from_black_alpha(190));
         paint.galley(pos2(band.left() + 4.0, band.top() + 3.0), galley, Color32::WHITE);
@@ -230,7 +230,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
     let overlay_key = if overlays.any() { overlays.pixel_key() ^ shown.rotate_left(5) } else { 0 };
     let key = s.pixel_key() ^ id.0.rotate_left(17) ^ ((pw as u64) << 32 | ph as u64) ^ overlay_key.rotate_left(29);
     let now = ui.input(|i| i.time);
-    let mem = egui::Id::new("settingsSlideshowPreviewKey");
+    let mem = egui::Id::unique("settingsSlideshowPreviewKey");
     let (last, since) = ui.ctx().data(|d| d.get_temp::<(u64, f64)>(mem)).unwrap_or((0, f64::NEG_INFINITY));
     let current = app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == id);
     if last != key {
@@ -280,7 +280,7 @@ fn title_preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, rect: R
     let compose = std::sync::Arc::new(lightcraft_engine::slide_title::TitleCompose::new(&look.titles, &look.overlays, title, pw, ph));
     let key = compose.key();
     let now = ui.input(|i| i.time);
-    let mem = egui::Id::new("settingsSlideshowTitlePreviewKey");
+    let mem = egui::Id::unique("settingsSlideshowTitlePreviewKey");
     let (last, since) = ui.ctx().data(|d| d.get_temp::<(u64, f64)>(mem)).unwrap_or((0, f64::NEG_INFINITY));
     if last != key {
         ui.ctx().data_mut(|d| d.insert_temp(mem, (key, now)));

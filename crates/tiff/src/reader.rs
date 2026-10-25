@@ -338,6 +338,25 @@ pub fn decode(o: ByteOrder, typ: FieldType, b: &[u8]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Value;
+    use crate::tags as t;
+    use crate::writer::{IfdBuilder, TiffWriter};
+
+    /// A value budget the caller sets bounds what is decoded: an entry claiming more value bytes than
+    /// the budget allows is dropped, entries that fit are read (the sparse header-read path, where the
+    /// buffer holds the file's logical size but only a few kilobytes were ever loaded, sizes its
+    /// budget from what was fetched, not from whatever length the file claims).
+    #[test]
+    fn the_value_budget_drops_over_budget_entries_and_keeps_the_rest() {
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Keep".into()));
+        ifd0.set(0x9000, Value::Byte(vec![0; 2 << 20]));
+        let file = TiffWriter { order: ByteOrder::Little, bigtiff: false }.write(&[ifd0]).unwrap();
+        let opts = ParseOptions { value_budget: Some(1 << 20), ..Default::default() };
+        let tiff = Tiff::parse_with(&file, &opts).unwrap();
+        assert_eq!(tiff.ifds[0].string(t::MAKE), Some("Keep".to_string()), "a fitting entry is read");
+        assert!(tiff.ifds[0].get(0x9000).is_none(), "the over-budget entry is dropped");
+    }
 
     /// A BigTIFF whose first IFD, at 80, declares `declared` entries but holds one, followed by a next-IFD pointer
     /// `next`; a valid one-entry IFD sits at 16.

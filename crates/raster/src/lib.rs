@@ -268,6 +268,27 @@ impl Rgba8 {
         }
         Some(Self { width, height, data: bytes.as_chunks::<4>().0.iter().map(|c| [c[0], c[1], c[2], c[3]]).collect() })
     }
+
+    /// Build an image from exactly `width * height` RGBA pixels.
+    ///
+    /// This copies each pixel once, straight into the image's own buffer, so a caller that already
+    /// holds a pixel array (an egui `ColorImage`, say) does not need a second full byte vector.
+    /// `None` for a zero or overflowing size, or a pixel count that is not exactly `width * height`.
+    pub fn from_pixels(width: usize, height: usize, pixels: impl IntoIterator<Item = [u8; 4]>) -> Option<Self> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let expected = width.checked_mul(height)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(expected).ok()?;
+        for (i, pixel) in pixels.into_iter().enumerate() {
+            if i == expected {
+                return None;
+            }
+            data.push(pixel);
+        }
+        (data.len() == expected).then_some(Self { width, height, data })
+    }
     /// Linear Rec.709/sRGB primaries float image from 8-bit sRGB.
     pub fn to_linear(&self) -> Rgb32f {
         use lightcraft_color::transfer::decode_srgb8;
@@ -355,5 +376,16 @@ mod tests {
         let img = Rgba8::from_fn(16, 16, |x, y| [(x * 16) as u8, (y * 16) as u8, 7, 255]);
         assert_eq!(img.to_linear().to_srgb8(), img);
         assert_eq!(Rgba8::from_bytes(16, 16, &img.as_bytes()).unwrap(), img);
+    }
+
+    #[test]
+    fn from_pixels_requires_exactly_the_stated_pixels() {
+        let img = Rgba8::from_fn(4, 3, |x, y| [x as u8, y as u8, 9, 255]);
+        let rebuilt = Rgba8::from_pixels(4, 3, img.as_bytes().as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2], p[3]])).unwrap();
+        assert_eq!(rebuilt, img);
+        assert!(Rgba8::from_pixels(4, 3, vec![[0, 0, 0, 0]; 11]).is_none(), "too few pixels");
+        assert!(Rgba8::from_pixels(4, 3, vec![[0, 0, 0, 0]; 13]).is_none(), "too many pixels");
+        assert!(Rgba8::from_pixels(0, 3, std::iter::empty()).is_none());
+        assert!(Rgba8::from_pixels(usize::MAX, 2, std::iter::empty()).is_none());
     }
 }

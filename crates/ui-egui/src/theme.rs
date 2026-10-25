@@ -386,7 +386,7 @@ pub const WHEEL_STRIP_SHARE: f32 = 1.0 / 3.0;
 pub const WHEEL_ZOOM_PER_POINT: f32 = 40.0 / 200.0 / WHEEL_LINE_POINTS;
 
 fn theme_id() -> egui::Id {
-    egui::Id::new("lightcraft-theme")
+    egui::Id::unique("lightcraft-theme")
 }
 
 /// The theme `ctx` is styled with (none before the first [`apply_kind`]).

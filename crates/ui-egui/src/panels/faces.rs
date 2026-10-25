@@ -21,7 +21,7 @@ use crate::widgets::register;
 /// machine once they have been idle for a few seconds, or while another app has the keyboard but this window is still
 /// on screen; most of it while they are looking at the scan's progress.
 fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> (&'static str, bool) {
-    let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
+    let (focused, minimized) = ctx.input(|i| (i.raw.focused, i.viewport().minimized.unwrap_or(false)));
     let watching =
         matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "faces") || app.ui.view == crate::state::ViewMode::People;
     (pace_for(focused, minimized, now - app.caches.last_input, now - app.caches.last_move, watching), focused && !minimized)
@@ -30,7 +30,7 @@ fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> (&'static st
 /// The pace for other background work that reads the library's files (the focus-point reader): the face scan's, without
 /// the "watching" speed-up.
 pub(crate) fn background_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> &'static str {
-    let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
+    let (focused, minimized) = ctx.input(|i| (i.raw.focused, i.viewport().minimized.unwrap_or(false)));
     pace_for(focused, minimized, now - app.caches.last_input, now - app.caches.last_move, false)
 }
 
@@ -58,12 +58,12 @@ fn pace_for(focused: bool, minimized: bool, worked: f64, moved: f64, watching: b
 const REFRESH_SECS: f64 = 1.5;
 
 fn list_id() -> egui::Id {
-    egui::Id::new("faces-model-list")
+    egui::Id::unique("faces-model-list")
 }
 
 /// The engine's model list, re-read at most every [`REFRESH_SECS`], or at once after an action changed it.
 fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
-    let now = ctx.input(|i| i.time);
+    let now = app.tick_now();
     let epoch = app.caches.faces_epoch;
     if let Some((e, at, v)) = ctx.data(|d| d.get_temp::<(u64, f64, Value)>(list_id()))
         && e == epoch
@@ -156,7 +156,7 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(message).font(t.font(12.5)).color(t.text_dim));
             let r = ui.button(button);
-            register(ui.ctx(), "faces:setup", r.rect);
+            register(ui, "faces:setup", r.rect);
             if r.clicked() {
                 take_step(app, ui.ctx(), step);
             }
@@ -170,7 +170,7 @@ fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Val
     heading(ui, t, "Processor");
     let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
     let r = ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only"));
-    register(ui.ctx(), "check:settings.facesCpuOnly", r.rect);
+    register(ui, "check:settings.facesCpuOnly", r.rect);
     if r.changed() {
         match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
             Ok(_) => app.caches.faces_epoch += 1,
@@ -194,7 +194,7 @@ fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Val
                 crate::progress::spinner(ui, 12.0);
             }
             let r = ui.label(text);
-            register(ui.ctx(), format!("faces:device:{what}"), r.rect);
+            register(ui, format!("faces:device:{what}"), r.rect);
             if let Some(why) = why {
                 r.on_hover_text(sentence(why));
             }
@@ -257,7 +257,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let r = ui
         .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
         .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
-    register(ui.ctx(), "check:settings.facesEnabled", r.rect);
+    register(ui, "check:settings.facesEnabled", r.rect);
     if r.changed() {
         match app.run("faces.enable", json!({"enabled": on})) {
             Ok(_) => app.caches.faces_epoch += 1,
@@ -291,7 +291,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         let can = app.services.pick_model_file.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Add a model file…")));
-        register(ui.ctx(), "faces:addModel", r.rect);
+        register(ui, "faces:addModel", r.rect);
         if r.clicked() {
             let _ = app.run("dialog.faceModel", json!({}));
         }
@@ -388,14 +388,14 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
                     let r = ui.button(crate::i18n::tr("Remove"));
-                    register(ui.ctx(), format!("faces:remove:{id}"), r.rect);
+                    register(ui, format!("faces:remove:{id}"), r.rect);
                     if r.clicked() {
                         let _ = app.run("faces.models.remove", json!({"id": id}));
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {
                         let r = ui.button("Use");
-                        register(ui.ctx(), format!("faces:use:{id}"), r.rect);
+                        register(ui, format!("faces:use:{id}"), r.rect);
                         if r.clicked() {
                             let _ = app.run("faces.models.select", json!({"id": id}));
                             app.caches.faces_epoch += 1;
@@ -405,7 +405,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                     match dl_state {
                         Some("running") => {
                             let r = ui.button(crate::i18n::tr("Cancel"));
-                            register(ui.ctx(), format!("faces:cancelDownload:{id}"), r.rect);
+                            register(ui, format!("faces:cancelDownload:{id}"), r.rect);
                             if r.clicked() {
                                 let _ = app.run("faces.models.downloadCancel", json!({"id": id}));
                                 app.caches.faces_dl_watch.retain(|w| w != &id);
@@ -418,7 +418,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                 let r = ui.button(crate::i18n::tr("Open page")).on_hover_text(crate::i18n::tr(
                                     "Opens the model's own page in your browser, to read about it or get the file yourself.",
                                 ));
-                                register(ui.ctx(), format!("faces:get:{id}"), r.rect);
+                                register(ui, format!("faces:get:{id}"), r.rect);
                                 if r.clicked() {
                                     open_page(app, url);
                                 }
@@ -431,7 +431,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                     if detector { "" } else { ", starts using it" }
                                 );
                                 let r = ui.button(label).on_hover_text(tip);
-                                register(ui.ctx(), format!("faces:download:{id}"), r.rect);
+                                register(ui, format!("faces:download:{id}"), r.rect);
                                 if r.clicked() {
                                     open_download_dialog(app, m);
                                 }
@@ -505,7 +505,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     }
     if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {
         let r = ui.link("Open the model's page");
-        register(ui.ctx(), "faceModel:page", r.rect);
+        register(ui, "faceModel:page", r.rect);
         if r.clicked() {
             open_page(app, url);
         }
@@ -647,11 +647,11 @@ pub fn name_editor(
     let t = Tokens::get(ctx);
     let mut outcome = Editor::Open;
     let opening = edit.fresh;
-    let shown = egui::Area::new(egui::Id::new("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
+    let shown = egui::Area::new(egui::Id::unique("face-name-editor")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(230.0);
             let r = ui.add(egui::TextEdit::singleline(&mut edit.text).hint_text("Name").desired_width(220.0));
-            register(ui.ctx(), "field:faceName", r.rect);
+            register(ui, "field:faceName", r.rect);
             if edit.fresh {
                 r.request_focus();
                 edit.fresh = false;
@@ -677,14 +677,14 @@ pub fn name_editor(
                     None => name.clone(),
                 };
                 let b = ui.add(egui::Button::new(RichText::new(label).color(t.text_label)).frame(false).min_size(egui::vec2(220.0, 0.0)));
-                register(ui.ctx(), format!("faceName:pick:{name}"), b.rect);
+                register(ui, format!("faceName:pick:{name}"), b.rect);
                 if b.clicked() {
                     outcome = Editor::Submit(name);
                 }
             }
             if let Some(label) = setup.short() {
                 let b = ui.add(egui::Button::new(RichText::new(label).font(t.font(12.0)).color(t.accent)).frame(false));
-                register(ui.ctx(), "faces:setup", b.rect);
+                register(ui, "faces:setup", b.rect);
                 if b.clicked() {
                     outcome = Editor::Setup;
                 }
@@ -705,9 +705,15 @@ pub fn name_editor(
 
 /// Called every frame: keeps the background face indexer going while recognition is on, and notes whether it is
 /// running, how many faces it has done and how many photos are left (the loupe's suggestions depend on it).
+/// `pump_background` plus the UI-input half; the app's own phases keep them apart.
 pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
-    watch_downloads(app, ctx);
-    let now = ctx.input(|i| i.time);
+    let now = app.tick_now();
+    pump_ui_input(app, ctx, now);
+    pump_background(app, ctx, now);
+}
+
+/// Fresh pointer/key activity (UI phase only).
+pub fn pump_ui_input(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let (working, moving) = ctx.input(|i| {
         let key_or_scroll = i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::MouseWheel { .. }));
         (i.pointer.any_down() || key_or_scroll, i.pointer.is_moving())
@@ -718,6 +724,11 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     if moving || working {
         app.caches.last_move = now;
     }
+}
+
+/// Worker results and pacing on monotonic deadlines; safe while hidden.
+pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
+    watch_downloads(app, ctx);
     if now < app.caches.faces_next_pump {
         return;
     }

@@ -215,6 +215,7 @@ fn notch(h: &mut Headless, dy: f32) {
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, dy),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: egui::Modifiers::NONE,
     });
     h.step();

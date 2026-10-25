@@ -50,6 +50,7 @@ pub mod tasks;
 pub mod text_field;
 pub mod theme;
 pub mod titlebar;
+pub mod updates_ui;
 pub mod widgets;
 pub mod window_place;
 
@@ -139,6 +140,8 @@ mod tests_launch_library;
 mod tests_layout_image;
 #[cfg(test)]
 mod tests_library_problem;
+#[cfg(test)]
+mod tests_lifecycle_037;
 #[cfg(test)]
 mod tests_lightroom_destination;
 #[cfg(test)]
@@ -305,6 +308,10 @@ pub struct Services {
     /// Save dialog for an exported print template (`.lcprint`).
     pub save_print_template: Option<SaveFile>,
     pub write: Option<WriteFn>,
+    /// Create-new writer (never replaces an existing path), for screenshots of destinations that
+    /// did not exist when the request was admitted. Required for such captures: falling back to
+    /// [`Self::write`] would reopen the admission-to-write race.
+    pub write_new: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,
     /// PNG encoder (the host links an image encoder; the UI crate stays codec-free).
@@ -403,17 +410,61 @@ pub struct LightcraftApp {
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
+    pub(crate) updates_rt: updates_ui::Runtime,
     /// Quitting was stopped to ask first: changes couldn't be saved, or tasks are running.
     pub quit_prompt: Option<QuitPrompt>,
+    /// Keyboard/focus/input state for the prompt above, including its one-frame creation barrier.
+    pub(crate) notice_input: panels::notices::PromptInput,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
+    /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).
+    pending_gestures: Vec<PendingGesture>,
+    /// Completed, nondiscarded UI layouts. A gesture admitted before this advanced may resolve.
+    layout_epoch: u64,
     screenshot_token: u64,
+    /// Bytes reserved by admitted, not-yet-drained screenshots (in-flight and completed alike).
+    shot_bytes: usize,
+    /// A geometry change since the last logic call: a completed image from an older epoch is
+    /// stale even when the window has meanwhile been resized back to the issued size.
+    shot_geometry_epoch: u64,
+    last_shot_geometry: Option<ShotGeometry>,
+    /// The texture limit the host last reported (`RawInput::max_texture_side`), retained across
+    /// passes where the host reports it only once.
+    max_texture_side: usize,
+    /// Monotonic app clock (`web_time::Instant`), not the wall clock and not egui's per-pass time:
+    /// timers must keep advancing while the window is hidden.
+    clock: AppClock,
+    /// The language already sent to `Context::set_language`, so a logic pass does not allocate a
+    /// `String` just to compare it.
+    accesskit_language: Option<String>,
+    /// When playback was auto-paused because the window became hidden (`None`: it is running, or
+    /// the user paused it). On unhide the pause is lifted and the slide keeps its remaining time.
+    slideshow_hidden_at: Option<f64>,
+    /// The app (not the user) paused the slideshow because the window was hidden.
+    slideshow_auto_paused: bool,
+    /// Files dropped since the last UI pass, consumed exactly once by the UI phase.
+    dropped_files: Vec<egui::DroppedFileHandle>,
+    /// A synthetic batch was injected into a pass and has not been consumed by a completed
+    /// (nondiscarded) UI pass yet: a hidden logic tick must not inject another one.
+    synthetic_in_flight: bool,
+    /// Completed, nondiscarded root UI passes; host frames, not layout passes.
+    ui_passes: u64,
+    /// Test-only: the library barrier's per-pass decisions, so a first-return test can observe the
+    /// dedicated shield/discard pass and the following background pass rather than only its input
+    /// effects (which the global shortcut guard also hides).
+    #[cfg(test)]
+    pub(crate) library_passes: Vec<panels::library_problem::LibraryPass>,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
+    /// A gesture was canceled after its synthetic pointer press reached egui. The next
+    /// [`Self::raw_input_hook`] cancels that press before egui's next input pass, without a
+    /// `PointerMoved` (which can start a drag) or a `PointerButton` release (which can become a
+    /// click).
+    pointer_cleanup: bool,
     /// Files the control channel (`ui.dropFiles`) holds over the window: every frame reports them
     /// as hovered, as the OS does while a drag is over the window.
     drop_hover: Vec<String>,
@@ -423,10 +474,15 @@ pub struct LightcraftApp {
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
-    /// Modifiers announced for synthetic input (held from a button down to its release).
+    /// Modifiers announced for synthetic input (held from a button down to its release). This is
+    /// only the app's synthetic ownership; the real host state is tracked separately in
+    /// `host_mods`, so a canceled synthetic gesture never clears a physically held key.
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
+    /// The host's last reported physical modifier state (`ModifiersChanged`), restored after a
+    /// synthetic gesture releases instead of unconditionally announcing `NONE`.
+    host_mods: egui::Modifiers,
     styled: bool,
     /// The language the installed fonts were built for: the CJK fallback order follows the UI
     /// language's script, so switching language reinstalls them.
@@ -442,8 +498,14 @@ pub struct LightcraftApp {
     /// drawn last (`ui.inspect` → `scroll`).
     pub grid_scroll: Option<f32>,
     pub film_scroll: Option<f32>,
-    /// Widget registry from the last frame (automation ids → rects).
+    /// Widget registry from the last completed, nondiscarded frame (automation ids → rects).
     pub widgets: Vec<(String, egui::Rect)>,
+    /// Egui hit owners for [`Self::widgets`] from the same completed pass. A press is delivered
+    /// only when this id still owns egui's pointer hit (see `control::widget_target_visible`).
+    pub widget_hits: Vec<(String, widgets::WidgetHit)>,
+    /// Registry collected by the pass being laid out, published only if that pass completes.
+    next_widgets: Vec<(String, egui::Rect)>,
+    next_widget_hits: Vec<(String, widgets::WidgetHit)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
@@ -523,6 +585,8 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
+    /// First-frame focus/input state for a newly shown blocking library window.
+    pub(crate) library_window_input: panels::library_problem::WindowBarrier,
     /// Alt/Option held as the window first appears offers the recent libraries once (issue
     /// #1290); the desktop host arms it when nothing chose the library already.
     pub alt_asks_for_library: bool,
@@ -534,6 +598,8 @@ pub struct LightcraftApp {
 }
 
 impl LightcraftApp {
+    /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
+    /// to a worker so frames apply results instead of waiting.
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
@@ -551,19 +617,38 @@ impl LightcraftApp {
             text_focus: false,
             headless_host: false,
             notices: vec![],
+            updates_rt: Default::default(),
             quit_prompt: None,
+            notice_input: Default::default(),
             quit_confirmed: false,
             control_rx: None,
             pending_screenshots: vec![],
+            pending_gestures: vec![],
+            layout_epoch: 0,
             screenshot_token: 0,
+            shot_bytes: 0,
+            shot_geometry_epoch: 0,
+            last_shot_geometry: None,
+            max_texture_side: MAX_TEXTURE_SIDE,
+            clock: AppClock::new(),
+            accesskit_language: None,
+            slideshow_hidden_at: None,
+            slideshow_auto_paused: false,
+            dropped_files: vec![],
+            synthetic_in_flight: false,
+            ui_passes: 0,
+            #[cfg(test)]
+            library_passes: vec![],
             shadow: None,
             synthetic: vec![],
+            pointer_cleanup: false,
             drop_hover: vec![],
             drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
+            host_mods: egui::Modifiers::NONE,
             styled: false,
             font_language: i18n::Locale::En,
             chinese_font: None,
@@ -574,6 +659,9 @@ impl LightcraftApp {
             grid_scroll: None,
             film_scroll: None,
             widgets: vec![],
+            widget_hits: vec![],
+            next_widgets: vec![],
+            next_widget_hits: vec![],
             gesture: None,
             brush_live: None,
             loupe_shown: None,
@@ -611,6 +699,7 @@ impl LightcraftApp {
             screen_profile: None,
             screen_profile_read: None,
             library_problem: None,
+            library_window_input: Default::default(),
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
@@ -626,11 +715,117 @@ impl LightcraftApp {
         self
     }
 
+    /// Attach the control-channel receiver and keep CPU copies of photo textures, which headless
+    /// screenshots need; returns the app for chaining.
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
         // keep CPU copies of photo textures so `ui.screenshot {"headless": true}` can draw them
         self.renderer.keep_pixels = true;
         self
+    }
+
+    /// Seconds on the app's monotonic clock. Every timer that must advance while the window is
+    /// hidden (imports, autosave, playback, toasts, captures) uses this, never `i.time`.
+    pub fn tick_now(&self) -> f64 {
+        self.clock.now()
+    }
+
+    /// The app clock in milliseconds, for control deadlines and timers.
+    fn tick_now_ms(&self) -> f64 {
+        self.clock.now() * 1000.0
+    }
+
+    /// The immutable identity a capture is bound to: the library generation. It changes when a
+    /// different library is opened, not on every edit, import batch or keyword op (`catalog.revision`
+    /// bumps on all of those), so a screenshot during interactive editing still belongs to the
+    /// document the user asked for.
+    fn shot_document_generation(&self) -> u64 {
+        self.session.library_generation()
+    }
+
+    /// Give a headless driver its simulated time (`None` returns to the monotonic host clock).
+    pub fn set_simulated_clock(&mut self, seconds: Option<f64>) {
+        self.clock.simulated = seconds.filter(|s| s.is_finite() && *s >= 0.0);
+    }
+
+    /// The window's current surface geometry as native points plus native pixels per point.
+    /// `run_logic` refreshes `input.viewports`, so this is fresh even while the UI is not laid out;
+    /// without one, the last laid-out content rect is used.
+    fn shot_geometry(&self, ctx: &egui::Context) -> ShotGeometry {
+        // Both `viewport.inner_rect` and the content rect are in egui points, and `pixels_per_point`
+        // already includes the UI zoom (egui-winit divides by the zoomed ppp). Multiplying by the
+        // zoom again would reserve a surface that is too small, so the zoom is only tracked as a
+        // change signal.
+        let zoom = ctx.zoom_factor();
+        let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+        let pixels_per_point = ctx.input(|i| i.pixels_per_point());
+        let viewport = ctx.input(|i| {
+            i.viewport().inner_rect.filter(|r| r.width() > 0.0 && r.height() > 0.0).map_or_else(|| i.content_rect().size(), |inner| inner.size())
+        });
+        ShotGeometry { viewport, pixels_per_point, zoom, epoch: self.shot_geometry_epoch }
+    }
+
+    /// Track geometry changes as a generation. Called once per logic tick from the refreshed
+    /// viewport information, so a hidden window still notices a resize.
+    fn note_shot_geometry(&mut self, ctx: &egui::Context) {
+        let mut now = self.shot_geometry(ctx);
+        if let Some(last) = self.last_shot_geometry
+            && (last.viewport != now.viewport || last.pixels_per_point != now.pixels_per_point || last.zoom != now.zoom)
+        {
+            self.shot_geometry_epoch = self.shot_geometry_epoch.wrapping_add(1);
+            now.epoch = self.shot_geometry_epoch;
+        }
+        self.last_shot_geometry = Some(now);
+    }
+
+    /// The texture limit the host reported (16 384 unless it said otherwise).
+    fn max_texture_side(&self) -> usize {
+        self.max_texture_side
+    }
+
+    /// Retain the host's `RawInput::max_texture_side`. Hosts (egui-winit, `Headless`) report it
+    /// only when it changes, so keep the last value instead of assuming 16 384.
+    fn note_max_texture_side(&mut self, ctx: &egui::Context) {
+        if let Some(limit) = ctx.input(|i| i.raw.max_texture_side)
+            && limit > 0
+        {
+            self.max_texture_side = limit;
+        }
+    }
+
+    /// Reserve a new image's `bytes` against the aggregate screenshot budget, or report why not.
+    fn reserve_shot_bytes(&mut self, bytes: usize) -> Result<(), String> {
+        if bytes > MAX_SHOT_BYTES {
+            return Err(format!("ui.screenshot: {bytes} bytes is over the {MAX_SHOT_BYTES}-byte per-image limit"));
+        }
+        let total = self.shot_bytes.checked_add(bytes).ok_or("ui.screenshot: byte reservation overflow")?;
+        if total > MAX_SHOT_TOTAL_BYTES {
+            return Err(format!("ui.screenshot: {total} bytes reserved is over the {MAX_SHOT_TOTAL_BYTES}-byte limit"));
+        }
+        self.shot_bytes = total;
+        Ok(())
+    }
+
+    /// A surface that grew after admission (a stale `content_rect` on Wayland, a resize between
+    /// issue and completion): bound the *new image* against the per-image limit, then reserve only
+    /// the growth against the aggregate. The old per-image check would compare the delta to the
+    /// per-image cap and name the delta as if it were the image.
+    fn grow_shot_reservation(&mut self, current_reserved: usize, image_bytes: usize) -> Result<(), String> {
+        if image_bytes > MAX_SHOT_BYTES {
+            return Err(format!("ui.screenshot: {image_bytes} bytes is over the {MAX_SHOT_BYTES}-byte per-image limit"));
+        }
+        let extra = image_bytes.saturating_sub(current_reserved);
+        let total = self.shot_bytes.checked_add(extra).ok_or("ui.screenshot: byte reservation overflow")?;
+        if total > MAX_SHOT_TOTAL_BYTES {
+            return Err(format!("ui.screenshot: {total} bytes reserved is over the {MAX_SHOT_TOTAL_BYTES}-byte limit"));
+        }
+        self.shot_bytes = total;
+        Ok(())
+    }
+
+    /// Release a reservation; never let an accounting bug underflow `usize`.
+    fn release_shot_bytes(&mut self, bytes: usize) {
+        self.shot_bytes = self.shot_bytes.saturating_sub(bytes);
     }
 
     /// The open person page, the way back to it, and the photo it was opened from follow a rename.
@@ -715,8 +910,7 @@ impl LightcraftApp {
                 _ => None,
             };
             if let Some(message) = completed {
-                // Menu clicks can arrive before the next frame updates last_time.
-                let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
+                let now = self.tick_now();
                 self.ui.toast = Some((message, now + TOAST_SECONDS, None));
             }
         }
@@ -730,8 +924,7 @@ impl LightcraftApp {
                 }
                 None => i18n::tr("Color label cleared").into(),
             };
-            // Native menu clicks can arrive before logic() updates last_time after an idle gap.
-            let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
+            let now = self.tick_now();
             self.ui.toast = Some((text, now + TOAST_SECONDS, label));
         }
         match &r {
@@ -801,10 +994,34 @@ impl LightcraftApp {
         Ok(())
     }
 
-    /// Show a transient toast at the bottom of the canvas (like the reference app's HUD).
-    /// Advance a running slideshow.
-    fn slideshow_tick(&mut self, ctx: &egui::Context) {
-        panels::slideshow::tick(self, ctx);
+    /// Advance a running slideshow, but not while the window is hidden: in 0.36 `i.time` froze
+    /// there, and a minimized show must not keep waking the event loop or requesting full-size
+    /// slide renders overnight. Playback is auto-paused on hide and resumed on unhide with the
+    /// slide's remaining time preserved.
+    fn slideshow_tick(&mut self, ctx: &egui::Context, now: f64) {
+        let hidden = ctx.input(|i| i.viewport().visible() == Some(false));
+        let Some(run) = self.ui.slideshow.as_mut() else {
+            self.slideshow_hidden_at = None;
+            self.slideshow_auto_paused = false;
+            return;
+        };
+        if hidden {
+            if self.slideshow_hidden_at.is_none() {
+                self.slideshow_hidden_at = Some(now);
+                if !run.play.is_paused() {
+                    run.play.toggle_pause(now);
+                    self.slideshow_auto_paused = true;
+                }
+            }
+            return;
+        }
+        if self.slideshow_hidden_at.take().is_some() && self.slideshow_auto_paused {
+            self.slideshow_auto_paused = false;
+            if run.play.is_paused() {
+                run.play.toggle_pause(now);
+            }
+        }
+        panels::slideshow::tick(self, ctx, now);
     }
 
     /// Announce the end of a Build Previews run.
@@ -842,7 +1059,7 @@ impl LightcraftApp {
         match (unsaved, self.ui.unsaved_seen) {
             (Some((n, e)), false) => {
                 self.ui.unsaved_seen = true;
-                let t = ctx.input(|i| i.time);
+                let t = self.tick_now();
                 self.ui.toast = Some((
                     crate::i18n::tr_format!(
                         "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
@@ -880,8 +1097,8 @@ impl LightcraftApp {
     }
 
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
-    pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
-        let t = ctx.input(|i| i.time);
+    pub fn toast_for(&mut self, _ctx: &egui::Context, text: impl Into<String>, secs: f64) {
+        let t = self.tick_now();
         self.ui.toast = Some((text.into(), t + secs, None));
     }
 
@@ -900,9 +1117,8 @@ impl LightcraftApp {
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
-    fn ai_mask_detail(&mut self, ctx: &egui::Context) {
+    fn ai_mask_detail(&mut self, ctx: &egui::Context, now: f64) {
         let polled = self.session.segment_poll();
-        let now = ctx.input(|i| i.time);
         if polled.changed {
             ctx.request_repaint();
         }
@@ -968,11 +1184,14 @@ impl LightcraftApp {
     }
 
     /// A toast for an error the user has to read and act on (stays 6 s).
-    pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
-        let t = ctx.input(|i| i.time);
+    pub fn toast_error(&mut self, _ctx: &egui::Context, text: impl Into<String>) {
+        let t = self.tick_now();
         self.ui.toast = Some((text.into(), t + 6.0, None));
     }
 
+    /// Take the control receiver for this frame, run every queued request whose sender still
+    /// wants it, and reply directly or admit its screenshot/gesture to a later completed pass.
+    /// Requests abandoned by their sender are skipped rather than executed late.
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
@@ -986,68 +1205,540 @@ impl LightcraftApp {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
-                control::Outcome::Screenshot { path, headless } => {
-                    self.screenshot_token += 1;
-                    let now = now_ms();
-                    self.pending_screenshots.push(PendingShot {
-                        token: self.screenshot_token,
-                        path,
-                        reply,
-                        headless: headless && !self.headless_host,
-                        not_before: now + 120.0,
-                        deadline: now + SCREENSHOT_SETTLE_MS,
-                        frames: 0,
-                        sent_at: None,
-                    });
+                control::Outcome::Screenshot { target, headless } => {
+                    if let Err(error) = self.admit_shot(ctx, target, headless, reply.clone()) {
+                        let _ = reply.send(serde_json::json!({"ok": false, "error": error}));
+                    }
+                }
+                control::Outcome::Gesture { method, params } => {
+                    if let Err(error) = self.admit_gesture(ctx, method, params, reply.clone()) {
+                        let _ = reply.send(serde_json::json!({"ok": false, "error": error}));
+                    }
                 }
             }
         }
         self.control_rx = Some(rx);
     }
 
-    /// Advance pending screenshots: wait (≥ 3 frames, ≥ 120 ms) until no renders are in flight
-    /// (or a timeout), then capture — via the host's compositor, or headlessly
-    /// ([`Self::headless_screenshot`]) when asked or when the compositor delivers nothing.
+    /// The navigation/document/modal/panel state that decides what an automation id means.
+    fn gesture_frame(&self) -> GestureFrame {
+        GestureFrame {
+            view: self.ui.view,
+            active: self.session.active(),
+            library: self.session.library_generation(),
+            dialog: self.ui.dialog.as_ref().map(std::mem::discriminant),
+            left_panel: self.ui.left_panel,
+            right: self.ui.right,
+            presets: self.ui.presets,
+            filmstrip: self.ui.filmstrip,
+        }
+    }
+
+    /// Queue a synthetic-input request. Nothing is answered and no event is queued until a
+    /// completed layout newer than this admission exists (see [`Self::resolve_pending_gestures`]).
+    fn admit_gesture(&mut self, ctx: &egui::Context, method: String, params: Value, reply: Sender<ControlResponse>) -> Result<(), String> {
+        if self.pending_gestures.len() >= MAX_PENDING_GESTURES {
+            return Err(format!("{}: {MAX_PENDING_GESTURES} control gestures are already pending", method));
+        }
+        let now = self.tick_now_ms();
+        self.pending_gestures.push(PendingGesture {
+            method,
+            params,
+            reply,
+            admitted_epoch: self.layout_epoch,
+            frame: self.gesture_frame(),
+            deadline_ms: now + GESTURE_TIMEOUT_MS,
+            resolved_pass: None,
+            remaining_events: 0,
+            started: false,
+            target: None,
+            pressed: None,
+            result: Value::Null,
+        });
+        ctx.request_repaint();
+        Ok(())
+    }
+
+    /// Resolve one queued gesture against the fresh widgets/image rect of the pass that just
+    /// completed. A changed view/document/dialog/panel state cancels instead of retargeting.
+    fn resolve_pending_gestures(&mut self, ctx: &egui::Context) {
+        if self.pending_gestures.is_empty() {
+            return;
+        }
+        let now = self.tick_now_ms();
+        let frame = self.gesture_frame();
+        let epoch = self.layout_epoch;
+        let mut gestures = std::mem::take(&mut self.pending_gestures);
+        let mut keep = Vec::with_capacity(gestures.len());
+        for mut gesture in gestures.drain(..) {
+            if gesture.resolved_pass.is_some() {
+                // Already handed to the delivery queue; `reply_delivered_gestures` (or
+                // `expire_gestures`) owns its deadline and must remove its unsent events too.
+                keep.push(gesture);
+                continue;
+            }
+            if now > gesture.deadline_ms {
+                // Only this request failed to get a fresh layout. A later gesture has its own
+                // deadline and must not be canceled with it.
+                let _ =
+                    gesture.reply.send(serde_json::json!({"ok": false, "error": format!("{} timed out before the UI consumed it", gesture.method)}));
+                continue;
+            }
+            if epoch <= gesture.admitted_epoch {
+                keep.push(gesture);
+                continue;
+            }
+            if gesture.frame != frame {
+                let _ = gesture.reply.send(serde_json::json!({
+                    "ok": false,
+                    "error": format!("{} canceled: the view, document, dialog or panel layout changed before a fresh layout", gesture.method),
+                }));
+                continue;
+            }
+            let before = self.synthetic.len();
+            match control::gesture_events(self, ctx, &gesture.method, &gesture.params) {
+                Ok(outcome) => {
+                    gesture.target = outcome.target;
+                    gesture.result = outcome.result;
+                    gesture.resolved_pass = Some(self.ui_passes);
+                    gesture.remaining_events = self.synthetic.len().saturating_sub(before);
+                    gesture.started = gesture.remaining_events == 0;
+                    keep.push(gesture);
+                }
+                Err(error) => {
+                    let _ = gesture.reply.send(serde_json::json!({"ok": false, "error": error}));
+                }
+            }
+        }
+        self.pending_gestures = keep;
+    }
+
+    /// Answer gestures whose last synthetic event a completed, nondiscarded UI pass consumed.
+    /// A zero-event action waits for one completed pass after resolution.
+    ///
+    /// Delivery does not compare the frame again: the gesture's own event may legitimately change
+    /// the view, document, dialog or panel (a click that opens a dialog, a key that starts Compare),
+    /// so a second snapshot would cancel exactly the input that did its job. Freshness is checked
+    /// before resolution ([`Self::resolve_pending_gestures`]) and again immediately before the
+    /// batch is injected ([`Self::drop_gestures_stale_before_injection`]).
+    fn reply_delivered_gestures(&mut self) {
+        if self.pending_gestures.is_empty() {
+            return;
+        }
+        let now = self.tick_now_ms();
+        // Cancel only the gestures that actually stalled: their unsent events are at the front of
+        // the queue, and gestures queued behind them are independent input that must survive.
+        let mut i = 0;
+        while i < self.pending_gestures.len() {
+            if self.pending_gestures[i].resolved_pass.is_none() || now <= self.pending_gestures[i].deadline_ms {
+                i += 1;
+                continue;
+            }
+            let at_head = self.head_gesture() == Some(i);
+            let gesture = self.pending_gestures.remove(i);
+            self.cancel_gesture_events(&gesture, at_head);
+            let _ = gesture.reply.send(serde_json::json!({
+                "ok": false,
+                "error": format!("{} timed out before the UI consumed its last event", gesture.method),
+            }));
+        }
+        if !self.synthetic.is_empty() || self.synthetic_in_flight {
+            return;
+        }
+        let mut gestures = std::mem::take(&mut self.pending_gestures);
+        let mut keep = Vec::with_capacity(gestures.len());
+        for mut gesture in gestures.drain(..) {
+            let Some(resolved) = gesture.resolved_pass else {
+                keep.push(gesture);
+                continue;
+            };
+            if self.ui_passes <= resolved {
+                keep.push(gesture);
+                continue;
+            }
+            if gesture.remaining_events > 0 {
+                // A defensive queue reset (a non-head gesture owned unsent events) dropped this
+                // batch. It must not become an `ok: true` for input no panel ever saw.
+                let _ = gesture.reply.send(serde_json::json!({
+                    "ok": false,
+                    "error": format!("{} canceled: its queued input was dropped before delivery", gesture.method),
+                }));
+                continue;
+            }
+            let result = std::mem::take(&mut gesture.result);
+            let _ = gesture.reply.send(serde_json::json!({"ok": true, "result": result}));
+        }
+        self.pending_gestures = keep;
+    }
+
+    /// The gesture whose events sit at the head of the synthetic queue.
+    fn head_gesture(&self) -> Option<usize> {
+        self.pending_gestures.iter().position(|gesture| gesture.resolved_pass.is_some() && gesture.remaining_events > 0)
+    }
+
+    /// Fail resolved gestures whose view/document/dialog/panel snapshot changed before their
+    /// first synthetic batch reached the next completed pass. A hidden logic tick runs between
+    /// passes and may change what an automation id or a photo click means; fail closed instead of
+    /// delivering it against the new state.
+    ///
+    /// A widget gesture also has to keep aiming at the requested widget. egui attributes a click
+    /// to the widget under the press point in the *previous completed pass*, while the control
+    /// batch spans several host frames (a move, then press, then release). Recheck the target
+    /// before the first event and before every press; if it moved or disappeared, cancel this
+    /// gesture with an error instead of clicking whatever is now at those coordinates.
+    ///
+    /// Only the gesture at the head of the queue is checked, and later batches of the same gesture
+    /// may see its own partial effect (the first click of a double click selects the photo the
+    /// second one opens). A second, concurrently queued gesture is checked when its events reach
+    /// the head.
+    fn drop_gestures_stale_before_injection(&mut self, ctx: &egui::Context) -> bool {
+        let Some(head) = self.head_gesture() else { return false };
+        let first_batch = !self.pending_gestures[head].started;
+        if first_batch && self.pending_gestures[head].frame != self.gesture_frame() {
+            let gestures = std::mem::take(&mut self.pending_gestures);
+            for gesture in gestures {
+                if gesture.resolved_pass.is_none() {
+                    self.pending_gestures.push(gesture);
+                } else {
+                    if gesture.pressed.is_some() {
+                        self.queue_pointer_cleanup();
+                    }
+                    let _ = gesture.reply.send(serde_json::json!({
+                        "ok": false,
+                        "error": format!("{} canceled: the view, document, dialog or panel layout changed before delivery", gesture.method),
+                    }));
+                }
+            }
+            self.synthetic.clear();
+            return true;
+        }
+        let Some(target) = self.pending_gestures[head].target.clone() else { return false };
+        let press_next = matches!(self.synthetic.first(), Some(egui::Event::PointerButton { pressed: true, .. }));
+        let release_next = matches!(self.synthetic.first(), Some(egui::Event::PointerButton { pressed: false, .. }));
+        // A drag legitimately ends outside the widget it started on; only a click must still find
+        // its target at the release that egui attributes the click to. A hover must still find a
+        // visible widget for its single pointer move.
+        let check_release = release_next && target.check_release;
+        let check_visible = first_batch && target.check_visible;
+        if !first_batch && !press_next && !check_release && !check_visible {
+            return false;
+        }
+        let latest = control::widget_rect(self, &target.id);
+        let latest_hit = control::widget_hit(self, &target.id);
+        // A press must go to the widget that owns the point. A click's release must too (a drag
+        // may legitimately end outside the widget it started on), so an overlay that appears
+        // between press and release cancels the click before the release rather than activating it.
+        // A hover's single move must also still find the widget visible: the documented contract
+        // rejects a clipped or newly covered target instead of moving the pointer at stale coordinates.
+        let must_own = press_next || (release_next && target.check_release) || check_visible;
+        // A quit prompt or settings notice owns input even before its Foreground areas have
+        // settled (egui's first layout pass is non-interactable), and even when a control request
+        // is resolved against the registry of that first pass. Only the prompt's own buttons pass.
+        let notice_ok = !must_own || crate::panels::notices::allows_target(self, latest_hit);
+        let still_aimed = latest.is_some_and(|rect| {
+            // A changed widget cancels any gesture before its first event. Owned presses, click
+            // releases and hovers must also be inside egui's clipped, visible part and be the
+            // topmost widget hit: a target scrolled out of its panel, or one under a non-modal
+            // overlay, must not be pressed or hovered at stale coordinates.
+            let geometry_ok = rect == target.rect || rect.contains(target.at);
+            geometry_ok && notice_ok && (!must_own || control::widget_target_visible(ctx, latest_hit, target.at))
+        });
+        if still_aimed {
+            return false;
+        }
+        let outside_registered = !target.rect.contains(target.at);
+        let reason = match latest {
+            None => "disappeared",
+            Some(rect) if !(rect == target.rect || rect.contains(target.at)) => "moved",
+            Some(_) if outside_registered => "has no visible interaction area at the requested point",
+            Some(_) => "is no longer visible",
+        };
+        let phase = if first_batch {
+            "its first event"
+        } else if check_release {
+            "its release"
+        } else {
+            "its press"
+        };
+        // Only this gesture's unsent events are removed: they are at the front of the queue, and
+        // gestures resolved after it are checked in turn when they reach the head. Failing the
+        // whole click would also discard unrelated input.
+        let gesture = self.pending_gestures.remove(head);
+        self.cancel_gesture_events(&gesture, true);
+        let _ = gesture.reply.send(serde_json::json!({
+            "ok": false,
+            "error": format!("{} canceled: widget `{}` {reason} before {phase}; nothing was retargeted", gesture.method, target.id),
+        }));
+        true
+    }
+
+    /// Remove a canceled gesture's unsent events from the front of the queue and release a pointer
+    /// button it left down. Callers cancel in queue order, so the events removed are exactly this
+    /// gesture's unsent prefix; a later gesture's events stay queued.
+    fn cancel_gesture_events(&mut self, gesture: &PendingGesture, at_head: bool) {
+        if at_head {
+            let unsent = gesture.remaining_events.min(self.synthetic.len());
+            self.synthetic.drain(..unsent);
+        } else if gesture.remaining_events > 0 {
+            // The queue order makes only the head own unsent events. If a caller ever breaks that
+            // invariant, fail safe: stale synthetic input must not reach an unrelated widget, even
+            // at the cost of dropping the rest of this batch instead of panicking or guessing a
+            // prefix. `reply_delivered_gestures` fails any gesture whose events disappeared this
+            // way instead of reporting a false success.
+            log::warn!("canceled non-head gesture still owned {} unsent synthetic events; dropping the queue", gesture.remaining_events);
+            self.synthetic.clear();
+            self.synthetic_in_flight = false;
+        }
+        if gesture.pressed.is_some() {
+            self.queue_pointer_cleanup();
+        }
+    }
+
+    /// Cancel every synthetic gesture that a newly shown prompt or blocking library window makes
+    /// unsafe.
+    ///
+    /// A gesture whose input is still queued must not be delivered under the barrier or later when
+    /// it is gone. A gesture whose press already reached egui must be released without a click. A
+    /// gesture that already delivered all its events may still complete its reply: the barrier may
+    /// well be its own result (e.g. a key that opened the quit prompt). `all` is for a batch already
+    /// injected this host frame before the barrier was discovered after `raw_input_hook`: the
+    /// barrier filter drops it before any panel sees it, so even a fully injected gesture must fail
+    /// rather than report a successful delivery.
+    fn cancel_gestures_for_barrier(&mut self, all: bool, reason: &str) {
+        // All not-yet-injected events belong to the queue's head, one gesture at a time. Cancel
+        // them in order so only that gesture's unsent prefix is removed.
+        while let Some(head) = self.head_gesture() {
+            let gesture = self.pending_gestures.remove(head);
+            self.cancel_gesture_events(&gesture, true);
+            let _ = gesture.reply.send(serde_json::json!({
+                "ok": false,
+                "error": format!("{} canceled: {reason} before its input was delivered", gesture.method),
+            }));
+        }
+        let mut i = 0;
+        while i < self.pending_gestures.len() {
+            if all || self.pending_gestures[i].resolved_pass.is_none() || self.pending_gestures[i].pressed.is_some() {
+                let gesture = self.pending_gestures.remove(i);
+                self.cancel_gesture_events(&gesture, false);
+                let _ = gesture.reply.send(serde_json::json!({
+                    "ok": false,
+                    "error": format!("{} canceled: {reason} before its input was delivered", gesture.method),
+                }));
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Cancel a press that reached egui without making it a click or starting a drag. The reset
+    /// itself happens before egui's next input pass in [`Self::raw_input_hook`], where replacing
+    /// the pointer state and stopping the drag is safe (the same approach as the sibling
+    /// SoundCraft/VectorCraft apps). No pointer movement is injected: moving beyond
+    /// `max_click_dist` suppresses a click but can also start a drag on a slider or curve.
+    fn queue_pointer_cleanup(&mut self) {
+        self.pointer_cleanup = true;
+    }
+
+    /// Apply a queued pointer cancellation before egui processes the next input pass.
+    fn apply_pointer_cleanup(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if !std::mem::take(&mut self.pointer_cleanup) {
+            return;
+        }
+        ctx.input_mut(|input| input.pointer = egui::PointerState::default());
+        ctx.stop_dragging();
+        if self.synthetic_mods != egui::Modifiers::NONE {
+            // The cleanup removes only the app's synthetic modifiers, never a real host change.
+            // A host `ModifiersChanged` in this same raw batch is already authoritative and was
+            // recorded before this call; otherwise restore the host's last known state (which may
+            // be a physically held Shift), rather than clearing it unconditionally with NONE.
+            let host_changed = raw.events.iter().any(|event| matches!(event, egui::Event::ModifiersChanged(_)));
+            self.synthetic_mods = egui::Modifiers::NONE;
+            if !host_changed {
+                raw.events.push(egui::Event::ModifiersChanged(self.host_mods));
+            }
+        }
+        self.synthetic_mods_release = false;
+    }
+
+    /// Fail pending gestures at the monotonic deadline even when no UI pass runs (a hidden window
+    /// whose paint request the host ignored). `logic` calls this every tick.
+    fn expire_gestures(&mut self) {
+        if self.pending_gestures.is_empty() {
+            return;
+        }
+        let now = self.tick_now_ms();
+        if !self.pending_gestures.iter().any(|gesture| now > gesture.deadline_ms) {
+            return;
+        }
+        // Cancel exactly the stalled requests, in queue order, so a later gesture's input survives.
+        let mut i = 0;
+        while i < self.pending_gestures.len() {
+            if now <= self.pending_gestures[i].deadline_ms {
+                i += 1;
+                continue;
+            }
+            let at_head = self.head_gesture() == Some(i);
+            let gesture = self.pending_gestures.remove(i);
+            self.cancel_gesture_events(&gesture, at_head);
+            let _ = gesture.reply.send(serde_json::json!({"ok": false, "error": format!("{} timed out before the UI consumed it", gesture.method)}));
+        }
+    }
+
+    /// Admit a `ui.screenshot` request against the bounded capture budget. Nothing is written and
+    /// no capture is issued here: [`Self::issue_screenshots`] waits for a settled, nondiscarded UI
+    /// pass and a fresh geometry generation.
+    fn admit_shot(
+        &mut self,
+        ctx: &egui::Context,
+        target: Option<lightcraft_engine::originals::WriteTarget>,
+        headless: bool,
+        reply: Sender<ControlResponse>,
+    ) -> Result<(), String> {
+        if self.pending_screenshots.len() >= MAX_PENDING_SHOTS {
+            return Err(format!("ui.screenshot: {MAX_PENDING_SHOTS} requests are already pending; wait for a reply first"));
+        }
+        let geometry = self.last_shot_geometry.unwrap_or_else(|| self.shot_geometry(ctx));
+        let bytes = geometry.bytes(self.max_texture_side()).ok_or_else(|| geometry.rejection(self.max_texture_side()))?;
+        self.reserve_shot_bytes(bytes)?;
+        self.screenshot_token = self.screenshot_token.wrapping_add(1);
+        let now = self.tick_now_ms();
+        self.pending_screenshots.push(PendingShot {
+            token: self.screenshot_token,
+            target,
+            reply,
+            headless: headless && !self.headless_host,
+            admitted_passes: self.ui_passes,
+            not_before_ms: now + SHOT_SETTLE_MS,
+            // Capture the current settled frame at this instant even if renders are still in flight
+            // (0.36 did this at its three-second deadline, so automation never got an error instead
+            // of an image while a slider/import kept the renderer busy).
+            force_ms: now + SHOT_FORCE_BUSY_MS,
+            // Settle + forced capture + compositor fallback + the headless settle, all from admission.
+            deadline_ms: now + SHOT_SETTLE_MS + SCREENSHOT_SETTLE_MS + SCREENSHOT_FALLBACK_MS + SCREENSHOT_SETTLE_MS,
+            sent_at_ms: None,
+            reserved: bytes,
+            slot: None,
+            issued: None,
+            issued_library: self.shot_document_generation(),
+        });
+        ctx.request_repaint();
+        Ok(())
+    }
+
+    /// Advance pending screenshots: wait (≥ 3 completed UI frames, ≥ 120 ms) until no renders are
+    /// in flight — or until the forced-capture instant, so sustained rendering cannot turn a
+    /// request into a timeout — then capture through the compositor's one-shot callback, or
+    /// headlessly ([`Self::headless_screenshot`]) when asked or when the compositor delivers nothing.
     fn issue_screenshots(&mut self, ctx: &egui::Context) {
         if self.pending_screenshots.is_empty() {
             return;
         }
-        let now = now_ms();
+        let now = self.tick_now_ms();
         let busy = self.renderer.in_flight() > 0 || self.merge.busy();
+        let max_side = self.max_texture_side();
+        let library = self.shot_document_generation();
+        let geometry = self.last_shot_geometry.unwrap_or_else(|| self.shot_geometry(ctx));
         let mut shots = std::mem::take(&mut self.pending_screenshots);
         let mut shadow_ticked = false;
-        shots.retain_mut(|s| {
-            if let Some(sent) = s.sent_at {
+        let mut keep = Vec::with_capacity(shots.len());
+        for mut shot in shots.drain(..) {
+            // Hard deadline from admission: a compositor fallback does not extend it.
+            if now > shot.deadline_ms {
+                let _ = shot.reply.send(serde_json::json!({"ok": false, "error": format!("screenshot {} timed out", shot.token)}));
+                if let Some(slot) = shot.slot.take() {
+                    slot.cancel();
+                }
+                self.release_shot_bytes(shot.reserved);
+                continue;
+            }
+            if let Some(sent) = shot.sent_at_ms {
                 if now - sent < SCREENSHOT_FALLBACK_MS || self.headless_host {
-                    return true;
+                    keep.push(shot);
+                    continue;
                 }
                 // The compositor delivered nothing (display asleep, window occluded): go headless.
                 log::warn!("ui.screenshot: no frame from the compositor after {SCREENSHOT_FALLBACK_MS} ms; rendering headlessly");
-                s.sent_at = None;
-                s.headless = true;
-                s.deadline = now + SCREENSHOT_SETTLE_MS;
+                if let Some(slot) = shot.slot.take() {
+                    slot.cancel();
+                }
+                shot.sent_at_ms = None;
+                shot.issued = None;
+                shot.headless = true;
             }
-            s.frames += 1;
-            let ready = now >= s.not_before && s.frames >= 3 && (!busy || now > s.deadline);
-            if s.headless {
+            // A busy renderer only defers the capture until the forced instant; after that the
+            // settled frame that exists now is captured (0.36's deadline behavior), never an error.
+            let ready = shot_ready(now, &shot, busy, self.ui_passes);
+            if !ready {
+                keep.push(shot);
+                continue;
+            }
+            if shot.headless {
                 // The shadow frame requests the renders the UI needs, even while the window shows nothing.
-                let img = if ready || !shadow_ticked { self.headless_screenshot(ctx, ready) } else { None };
+                let img = if shadow_ticked { None } else { self.headless_screenshot(ctx, true) };
                 shadow_ticked = true;
                 if let Some(img) = img {
-                    let _ = s.reply.send(control::save_screenshot(self, &img, s.path.as_deref()));
-                    return false;
+                    let bytes = img.size[0].checked_mul(img.size[1]).and_then(|p| p.checked_mul(std::mem::size_of::<egui::Color32>()));
+                    match bytes {
+                        Some(bytes) if bytes > shot.reserved => {
+                            // A stale/undersized reservation is not a user error: grow it to the
+                            // actual image and encode it when the per-image and aggregate caps allow.
+                            if let Err(error) = self.grow_shot_reservation(shot.reserved, bytes) {
+                                let _ = shot.reply.send(serde_json::json!({"ok": false, "error": error}));
+                                self.release_shot_bytes(shot.reserved);
+                                continue;
+                            }
+                            shot.reserved = bytes;
+                        }
+                        Some(_) => {}
+                        None => {
+                            let reply = serde_json::json!({
+                                "ok": false,
+                                "error": "ui.screenshot: the rendered image has invalid dimensions",
+                            });
+                            let _ = shot.reply.send(reply);
+                            self.release_shot_bytes(shot.reserved);
+                            continue;
+                        }
+                    }
+                    let _ = shot.reply.send(control::save_screenshot(self, &img, shot.target.as_ref()));
+                    self.release_shot_bytes(shot.reserved);
+                    continue;
                 }
-                true
-            } else {
-                if ready {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(s.token)));
-                    s.sent_at = Some(now);
-                }
-                true
+                keep.push(shot);
+                continue;
             }
-        });
-        shots.append(&mut self.pending_screenshots);
-        self.pending_screenshots = shots;
+            // The compositor path needs a real, laid-out UI and fresh fonts; a queued request on a
+            // hidden window is kept alive by RequestPaintWhileHidden from `logic`.
+            if !self.fonts_ready || self.ui_passes == 0 {
+                keep.push(shot);
+                continue;
+            }
+            // Revalidate the reservation against the geometry the command is actually bound to.
+            let Some(bytes) = geometry.bytes(max_side) else {
+                let _ = shot.reply.send(serde_json::json!({"ok": false, "error": geometry.rejection(max_side)}));
+                self.release_shot_bytes(shot.reserved);
+                continue;
+            };
+            if bytes > shot.reserved {
+                if let Err(error) = self.grow_shot_reservation(shot.reserved, bytes) {
+                    let _ = shot.reply.send(serde_json::json!({"ok": false, "error": error}));
+                    self.release_shot_bytes(shot.reserved);
+                    continue;
+                }
+                shot.reserved = bytes;
+            }
+            // One slot and one callback per issue; the callback only holds a weak slot and wakes
+            // the viewport. File writes and replies happen in `collect_screenshots`.
+            let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_SHOT_BYTES);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(callback));
+            log::debug!("ui.screenshot {}: issued at {:?}, {} bytes reserved", shot.token, geometry.viewport, shot.reserved);
+            shot.slot = Some(slot);
+            shot.sent_at_ms = Some(now);
+            shot.issued = Some(geometry);
+            shot.issued_library = library;
+            keep.push(shot);
+        }
+        self.pending_screenshots = keep;
         if !self.pending_screenshots.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
@@ -1086,7 +1777,7 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
-        view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.ui(ui));
+        view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
@@ -1098,29 +1789,76 @@ impl LightcraftApp {
         img
     }
 
-    fn collect_screenshots(&mut self, ctx: &egui::Context) {
+    /// Take each completed capture once, reject stale generations before writing anything, and
+    /// reply exactly once. A late callback after cancel/drop finds no slot and is inert.
+    fn collect_screenshots(&mut self, _ctx: &egui::Context) {
         if self.pending_screenshots.is_empty() {
             return;
         }
-        let events: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                        Some((token, image.clone()))
+        let now = self.tick_now_ms();
+        let current = self.last_shot_geometry;
+        let library = self.shot_document_generation();
+        let mut shots = std::mem::take(&mut self.pending_screenshots);
+        let mut keep = Vec::with_capacity(shots.len());
+        for mut shot in shots.drain(..) {
+            let completed = shot.slot.as_ref().and_then(craft_ui::capture::CaptureSlot::take);
+            match completed {
+                Some(Ok(image)) => {
+                    let stale =
+                        shot.issued.is_none_or(|issued| current.is_none_or(|now| now.epoch != issued.epoch)) || shot.issued_library != library;
+                    if stale {
+                        // A resize/DPI/zoom or library change between issue and completion: never
+                        // combine old pixels with new geometry. Retry with a fresh slot.
+                        shot.slot = None;
+                        shot.sent_at_ms = None;
+                        shot.issued = None;
+                        shot.not_before_ms = now + SHOT_SETTLE_MS;
+                        keep.push(shot);
+                        continue;
                     }
-                    _ => None,
-                })
-                .collect()
-        });
-        for (token, image) in events {
-            if let Some(i) = self.pending_screenshots.iter().position(|s| s.token == token) {
-                let s = self.pending_screenshots.remove(i);
-                let _ = s.reply.send(control::save_screenshot(self, &image, s.path.as_deref()));
+                    let pixels = image.size[0].checked_mul(image.size[1]).and_then(|p| p.checked_mul(std::mem::size_of::<egui::Color32>()));
+                    let Some(bytes) = pixels else {
+                        let reply = serde_json::json!({
+                            "ok": false,
+                            "error": "ui.screenshot: the rendered image has invalid dimensions",
+                        });
+                        let _ = shot.reply.send(reply);
+                        self.release_shot_bytes(shot.reserved);
+                        continue;
+                    };
+                    if bytes > shot.reserved {
+                        // Wayland reports no `inner_rect`, so the reservation can be based on a stale
+                        // content rect while the compositor returns the new, larger surface. Treat a
+                        // larger-but-legal image as a stale reservation and grow it; never mix it
+                        // with geometry of another epoch (checked above).
+                        if let Err(error) = self.grow_shot_reservation(shot.reserved, bytes) {
+                            let _ = shot.reply.send(serde_json::json!({"ok": false, "error": error}));
+                            self.release_shot_bytes(shot.reserved);
+                            continue;
+                        }
+                        shot.reserved = bytes;
+                    }
+                    self.release_shot_bytes(shot.reserved);
+                    let _ = shot.reply.send(control::save_screenshot(self, &image, shot.target.as_ref()));
+                }
+                Some(Err(error)) => {
+                    let _ = shot.reply.send(serde_json::json!({"ok": false, "error": error.to_string()}));
+                    self.release_shot_bytes(shot.reserved);
+                }
+                None => {
+                    if now > shot.deadline_ms {
+                        let _ = shot.reply.send(serde_json::json!({"ok": false, "error": format!("screenshot {} timed out", shot.token)}));
+                        if let Some(slot) = shot.slot.take() {
+                            slot.cancel();
+                        }
+                        self.release_shot_bytes(shot.reserved);
+                    } else {
+                        keep.push(shot);
+                    }
+                }
             }
         }
+        self.pending_screenshots = keep;
     }
 
     /// The process is about to end (settings and library are saved by then): make sure nothing is
@@ -1140,19 +1878,38 @@ impl LightcraftApp {
         stopped && idle
     }
 
-    /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
+    /// Background and queue work. Called before layout on every host pass and, while the window is
+    /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
+    /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
-        let t0 = now_ms();
-        panels::library_problem::logic(self, ctx);
-        self.logic_inner(ctx);
-        self.perf.logic_ms = now_ms() - t0;
+        // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
+        // Compare against the cached string: `Context::language()` allocates on every call, and
+        // this runs on every UI pass and every hidden logic tick.
+        let language = self.ui.language.code();
+        if self.accesskit_language.as_deref() != Some(language) {
+            ctx.set_language(Some(language.to_owned()));
+            self.accesskit_language = Some(language.to_owned());
+        }
+        let t0 = monotonic_ms();
+        self.note_max_texture_side(ctx);
+        self.note_shot_geometry(ctx);
+        self.ensure_fonts(ctx);
+        // Applying the theme belongs to logic: a host that only calls `logic` (and every hidden
+        // tick) must see an Appearance Mode / system-theme change, and the UI pass that follows
+        // then draws with the new visuals. `ui` keeps its own call for a settings change made by
+        // a command during the same pass; it is a no-op when the theme already matches.
+        self.sync_theme(ctx);
+        self.logic_background(ctx);
+        self.perf.logic_ms = monotonic_ms() - t0;
     }
 
-    fn logic_inner(&mut self, ctx: &egui::Context) {
+    /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
+    fn ensure_fonts(&mut self, ctx: &egui::Context) {
         if !self.styled {
             theme::install_fonts_with_chinese(ctx, self.chinese_font.as_ref());
             theme::apply(ctx);
+            Self::drop_legacy_panel_state(ctx);
             // File → Add from Device lists cards scanned in the background: show hot-plugs
             let repaint = ctx.clone();
             lightcraft_engine::devices::on_change(move || repaint.request_repaint());
@@ -1170,25 +1927,32 @@ impl LightcraftApp {
         } else {
             self.fonts_ready = true;
         }
-        self.sync_theme(ctx);
+    }
+
+    /// 0.36 stored each `PanelState` under the panel's exact `Id`; 0.37 stores it under
+    /// `parent_ui.scope_id().with_salt(id_salt)`, so the old entries are unreachable and the
+    /// panels reset once by simply not finding them. Remove the old keys anyway so egui memory
+    /// does not retain dead entries (no document, workspace JSON, catalog or XMP data is
+    /// migrated; nothing above a user's photo edits depends on them).
+    fn drop_legacy_panel_state(ctx: &egui::Context) {
+        for salt in ["top_bar", "bottom_bar", "tool_strip", "library-problem-banner"] {
+            ctx.data_mut(|d| d.remove::<egui::containers::panel::PanelState>(egui::Id::unique(salt)));
+        }
+    }
+
+    /// Queues and timers. Each consumed queue is drained once per call; time-gated work uses the
+    /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
+    /// a no-op rather than a duplicate.
+    fn logic_background(&mut self, ctx: &egui::Context) {
         panels::notices::logic(self);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        // (once a frame: a pass drawn again after a discard has no input of its own, and still the
-        // widgets of the pass thrown away, where a request would find them out of place)
-        if ctx.current_pass_index() == 0 {
-            let now = ctx.input(|i| i.time);
-            let dt = now - self.last_time;
-            if dt > 0.0 {
-                self.perf.fps = self.perf.fps * 0.9 + (1.0 / dt).min(240.0) * 0.1;
-            }
-            self.last_time = now;
-            self.drain_control(ctx);
-        }
+        let now = self.tick_now();
+        self.drain_control(ctx);
         self.apply_settings(ctx);
-        if !self.synthetic.is_empty() {
+        if self.queued_input_needs_repaint() {
             ctx.request_repaint();
         }
         self.renderer.poll(ctx, &mut self.session);
@@ -1196,31 +1960,30 @@ impl LightcraftApp {
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
         sync::poll_run(self, ctx);
-        import::tick(self, ctx);
+        // Import commits batches and must not run twice in one host frame. The first layout pass
+        // and a hidden logic tick both report pass index 0; a second pass reports 1. A wall-clock
+        // gate cannot express that (a slow discarded first pass would re-run it).
+        if import_tick_allowed(ctx) {
+            import::tick(self, ctx);
+        }
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        updates_ui::tick(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
-        self.slideshow_tick(ctx);
-        panels::faces::pump(self, ctx);
-        // back from an external editor: pick up the files it saved
-        let focused = ctx.input(|i| i.focused);
-        if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
-            let ids = self.ui.external_edits.clone();
-            if let Ok(r) = self.session.execute("photo.reload", &serde_json::json!({"ids": ids}))
-                && r["reloaded"].as_array().is_some_and(|a| !a.is_empty())
-            {
-                self.toast(ctx, crate::i18n::tr("Updated the edits saved in the external editor"));
-            }
-        }
-        self.ui.was_focused = focused;
+        self.ai_mask_detail(ctx, now);
+        self.place_names_outcome(ctx);
+        self.slideshow_tick(ctx, now);
+        panels::denoise::pump_background(self, ctx, now);
+        panels::faces::pump_background(self, ctx, now);
+        model_setup::pump(self, ctx, now);
+        focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
-            let now = ctx.input(|i| i.time);
             if now - self.ui.auto_import_at >= 3.0
                 && self.import.is_none()
                 && self.sync_run.is_none()
@@ -1257,7 +2020,6 @@ impl LightcraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.session.unsaved_sidecars() > 0 {
-                let now = ctx.input(|i| i.time);
                 if now - self.ui.sidecar_retry_at >= 10.0 {
                     self.ui.sidecar_retry_at = now;
                     self.session.retry_unsaved_sidecars();
@@ -1290,25 +2052,111 @@ impl LightcraftApp {
             self.ui.known_cards = None;
         }
         self.session.persist_if_dirty();
-        panels::denoise::pump(self, ctx);
-        model_setup::pump(self, ctx);
-        panels::faces::pump(self, ctx);
-        focus_scan::pump(self, ctx);
+        self.expire_gestures();
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
-        if self.fonts_ready {
+        self.request_paint_while_hidden(ctx);
+    }
+
+    /// While hidden, queued captures and an injected gesture step need a real UI pass; a pending
+    /// screenshot command paints by itself once issued.
+    fn request_paint_while_hidden(&self, ctx: &egui::Context) {
+        // `logic` runs per layout pass; one command per host frame is enough.
+        if ctx.current_pass_index() != 0 {
+            return;
+        }
+        // `ViewportInfo::visible()`: minimized or fully occluded is `Some(false)`; `None`
+        // (headless, `RawInput::default()`) is normal and must not be treated as hidden.
+        let hidden = ctx.input(|i| i.viewport().visible() == Some(false));
+        if hidden && self.needs_ui_pass_while_hidden() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+        }
+    }
+
+    /// A hidden window needs a real UI pass for queued/settling captures, for control gestures
+    /// that still have to resolve or deliver, and for an injected synthetic step. An already
+    /// issued screenshot has its own compositor-driven paint and must not request another
+    /// `RequestPaintWhileHidden`; its fallback and timeout keep running from `logic`.
+    fn needs_ui_pass_while_hidden(&self) -> bool {
+        !self.pending_gestures.is_empty()
+            || self.pointer_cleanup
+            || self.pending_screenshots.iter().any(|shot| shot.sent_at_ms.is_none())
+            || !self.synthetic.is_empty()
+            || self.synthetic_in_flight
+    }
+
+    /// Queued synthetic input, including a queued pointer cancellation that is not part of
+    /// `synthetic`, needs the next visible frame even when an earlier stall left the synthetic
+    /// queue empty.
+    fn queued_input_needs_repaint(&self) -> bool {
+        !self.synthetic.is_empty() || self.pointer_cleanup
+    }
+
+    /// Input, layout and setup for a known UI phase: at most once per host frame, and never from a
+    /// hidden logic tick. `current_pass_index() == 0` is the first pass of this `run_ui`; a second
+    /// pass has empty events.
+    fn ui_pass(&mut self, ctx: &egui::Context) {
+        if ctx.current_pass_index() != 0 {
+            return;
+        }
+        // A prompt owns the keyboard and focus. A notice may have been added by this frame's logic
+        // after `raw_input_hook`; capture its Tab/Enter/Space/Escape and drop everything else
+        // before any panel, focused control or shortcut reads the input. A new prompt gets a
+        // shielding pass whose background is not drawn at all (see `draw_window`).
+        let batch_in_flight = self.synthetic_in_flight;
+        if panels::notices::prepare_ui_pass(self, ctx) {
+            self.cancel_gestures_for_barrier(batch_in_flight, "a modal prompt appeared");
+        }
+        panels::library_problem::prepare_ui_pass(self, ctx, batch_in_flight);
+        let now = self.tick_now();
+        // the last pass's time is fine here: this is a UI phase, not a hidden tick
+        let t = ctx.input(|i| i.time);
+        let dt = t - self.last_time;
+        if dt > 0.0 {
+            self.perf.fps = self.perf.fps * 0.9 + (1.0 / dt).min(240.0) * 0.1;
+        }
+        self.last_time = t;
+        panels::denoise::pump_ui_input(self, ctx, now);
+        panels::faces::pump_ui_input(self, ctx, now);
+        // A prompt owns the library too: files dropped while it is up wait in the queue and are
+        // imported on the first UI pass after it goes away, never behind it.
+        if !panels::notices::blocks_input(self) {
+            self.import_dropped_files(ctx);
+        }
+        self.check_external_editor(ctx);
+        // Recent-library checks and launch-list keys read focus/time/keys: they belong to the UI
+        // phase, not the hidden-capable `logic` tick (plan §4.5 / migration input contract).
+        panels::library_problem::logic(self, ctx);
+        if self.fonts_ready && !updates_ui::blocks_input(self) {
             shortcuts::handle(self, ctx);
         }
+    }
+
+    /// Take the host's dropped files, exactly once. The queue is filled by `raw_input_hook`, so a
+    /// hidden logic tick can never replay the last pass's drop. Web hosts call this in their UI
+    /// phase (they need `bytes_async`, which is not available on a native file path).
+    pub fn take_dropped_files(&mut self) -> Vec<egui::DroppedFileHandle> {
+        std::mem::take(&mut self.dropped_files)
+    }
+
+    /// Import native drops as presets, face models or photos.
+    fn import_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = self.take_dropped_files();
+        if dropped.is_empty() {
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        self.handle_dropped_files(ctx);
+        self.handle_dropped_files(ctx, dropped);
+        #[cfg(target_arch = "wasm32")]
+        let _ = (dropped, ctx);
     }
 
     /// Files dropped on the window: face models open their licence dialog, presets import as
     /// presets, photos and folders go to the import review (or straight in, Settings ▸ Import).
     #[cfg(not(target_arch = "wasm32"))]
-    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+    fn handle_dropped_files(&mut self, ctx: &egui::Context, dropped: Vec<egui::DroppedFileHandle>) {
         let dropped: Vec<String> =
-            ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().to_string()).filter(|p| !p.is_empty()).collect());
+            dropped.iter().map(|f| egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string()).filter(|p| !p.is_empty()).collect();
         if dropped.is_empty() {
             return;
         }
@@ -1353,6 +2201,28 @@ impl LightcraftApp {
         if let Err(e) = started {
             self.toast(ctx, e);
         }
+    }
+
+    /// A file dropped by the host, kept for the next UI pass (web hosts consume their own queue).
+    fn queue_dropped_files(&mut self, raw: &mut egui::RawInput) {
+        if !raw.dropped_files.is_empty() {
+            self.dropped_files.append(&mut raw.dropped_files);
+        }
+    }
+
+    /// Back from an external editor: pick up the files it saved. Reads `i.focused`, which
+    /// `run_logic` does not refresh, so it belongs to the UI phase.
+    fn check_external_editor(&mut self, ctx: &egui::Context) {
+        let focused = ctx.input(|i| i.focused);
+        if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
+            let ids = self.ui.external_edits.clone();
+            if let Ok(r) = self.session.execute("photo.reload", &serde_json::json!({"ids": ids}))
+                && r["reloaded"].as_array().is_some_and(|a| !a.is_empty())
+            {
+                self.toast(ctx, crate::i18n::tr("Updated the edits saved in the external editor"));
+            }
+        }
+        self.ui.was_focused = focused;
     }
 
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
@@ -1409,8 +2279,8 @@ impl LightcraftApp {
     /// While no display profile is chosen, show previews through the profile of the screen the
     /// window is on (`services.screen_profile`), read about once a second so moving the window to
     /// another screen is followed. Without the service (or a profile) the display is sRGB.
-    fn follow_screen_profile(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
+    fn follow_screen_profile(&mut self, _ctx: &egui::Context) {
+        let now = self.tick_now();
         if self.services.screen_profile.is_none() || self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
             return;
         }
@@ -1437,13 +2307,13 @@ impl LightcraftApp {
         self.screen_profile = icc;
     }
 
-    /// Inject synthetic events (pointer events one per frame; key sequences up to the release).
-    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
-        // the frame after a synthetic release / key: modifiers back up
-        if std::mem::take(&mut self.synthetic_mods_release) && self.synthetic_mods != egui::Modifiers::NONE {
-            self.synthetic_mods = egui::Modifiers::NONE;
-            raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-        }
+    /// Take the host's dropped files once and inject synthetic events (pointer events one per
+    /// frame; key sequences up to the release).
+    ///
+    /// The hook also runs before a hidden logic-only tick, so it injects at most one batch and
+    /// keeps that batch in flight until a completed UI pass consumed it. It never injects while
+    /// the fonts are not installed (the pass would draw nothing and the events would be lost).
+    pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let file = |p: &String| (!p.is_empty()).then(|| std::path::PathBuf::from(p));
         if !self.drop_pending.is_empty() {
             raw.dropped_files = std::mem::take(&mut self.drop_pending)
@@ -1454,6 +2324,53 @@ impl LightcraftApp {
         if !self.drop_hover.is_empty() {
             raw.hovered_files = self.drop_hover.iter().map(|p| egui::HoveredFile { path: file(p), ..Default::default() }).collect();
         }
+        // Queue after injecting, so a `ui.dropFiles` request is consumed exactly once by the UI phase.
+        self.queue_dropped_files(raw);
+        // Track the real host modifier state separately from the app's synthetic ownership. A host
+        // change means the host now owns the modifier state: relinquish any synthetic claim and do
+        // not later synthesise a release for a key that is physically held.
+        if let Some(host_mods) = raw.events.iter().rev().find_map(|event| match event {
+            egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
+            _ => None,
+        }) {
+            self.host_mods = host_mods;
+            self.synthetic_mods = egui::Modifiers::NONE;
+            self.synthetic_mods_release = false;
+        }
+        // A prompt owns all input. On its first host frame this also removes pointer/touch input
+        // before egui computes its hit test; later frames keep only key releases, the prompt's own
+        // keys, and AccessKit actions targeted at a prompt button. See `notices::filter_raw_input`.
+        let batch_in_flight = self.synthetic_in_flight;
+        if crate::panels::notices::prepare_raw_input(self, ctx, raw) {
+            // A prompt appearing during a synthetic drag must abort the drag, not let its remaining
+            // move/release events act under the prompt or after it is dismissed. If a whole batch
+            // was already injected, it is unsafe as well: this frame's prompt filter drops it
+            // before a panel sees it, so it must not report a successful delivery.
+            self.cancel_gestures_for_barrier(batch_in_flight, "a modal prompt appeared");
+            self.queue_pointer_cleanup();
+        }
+        // Enforce the stall deadline before injecting another event: a request that expired during
+        // a long frame gap must not get one more event on the frame that resumes.
+        self.expire_gestures();
+        // A canceled press is released by resetting egui's pointer state before its next input
+        // pass, even while another batch is in flight or the fonts are not ready, so the pointer
+        // cannot stay down. No move/release event is injected: either could start a drag or
+        // become a click on the widget being canceled.
+        self.apply_pointer_cleanup(ctx, raw);
+        if !self.fonts_ready || self.synthetic_in_flight {
+            return;
+        }
+        if self.drop_gestures_stale_before_injection(ctx) {
+            // The stale check can cancel the head gesture while its press is already down.
+            self.apply_pointer_cleanup(ctx, raw);
+            return;
+        }
+        // the frame after a synthetic release / key: restore the host's physical modifiers, not
+        // necessarily NONE (Shift may still be held while a synthetic Alt gesture is released)
+        if std::mem::take(&mut self.synthetic_mods_release) && self.synthetic_mods != egui::Modifiers::NONE {
+            self.synthetic_mods = egui::Modifiers::NONE;
+            raw.events.push(egui::Event::ModifiersChanged(self.host_mods));
+        }
         if self.synthetic.is_empty() {
             return;
         }
@@ -1461,7 +2378,9 @@ impl LightcraftApp {
             egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. } => 1,
             _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
         };
-        if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
+        // A press needs the pointer at its position before the button event; the move that is
+        // itself the first event is delivered by the drain below, so it must not be sent twice.
+        if let Some(egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
             raw.events.push(egui::Event::PointerMoved(*p));
         }
         // egui's `input.modifiers` follow `ModifiersChanged` events, not the modifiers carried by
@@ -1479,7 +2398,49 @@ impl LightcraftApp {
             }
             self.synthetic_mods_release = ends;
         }
+        let blocked_by_prompt = self.synthetic[..n].iter().any(|event| !crate::panels::notices::prompt_allows_event(self, event));
+        let head = self.head_gesture();
+        if let Some(head) = head {
+            let gesture = &mut self.pending_gestures[head];
+            for event in &self.synthetic[..n] {
+                match event {
+                    egui::Event::PointerButton { button, pressed: true, .. } => {
+                        gesture.pressed = Some(InjectedPress { button: *button });
+                    }
+                    egui::Event::PointerButton { button, pressed: false, .. }
+                        if gesture.pressed.as_ref().is_some_and(|press| press.button == *button) =>
+                    {
+                        gesture.pressed = None;
+                    }
+                    _ => {}
+                }
+            }
+            gesture.started = true;
+            gesture.remaining_events = gesture.remaining_events.saturating_sub(n);
+        }
         raw.events.extend(self.synthetic.drain(..n));
+        // The same barrier applies after injection: only the prompt's own keys and targeted
+        // AccessKit actions survive; host input and `ui.text`/clipboard never reach the background.
+        crate::panels::notices::filter_raw_input(self, raw);
+        if blocked_by_prompt && let Some(index) = head {
+            // A settled prompt is already laid out, so this is not the prompt-creation-cancels-all
+            // path: only the gesture whose batch the barrier removed fails. Allowed prompt keys,
+            // pointer input and targeted AccessKit actions still report a successful delivery.
+            let gesture = self.pending_gestures.remove(index);
+            self.cancel_gesture_events(&gesture, true);
+            let _ = gesture.reply.send(serde_json::json!({
+                "ok": false,
+                "error": format!("{} canceled: the open modal prompt blocked this input", gesture.method),
+            }));
+        }
+        // The 5 s deadline is a delivery-stall limit, not a limit on a gesture's frame count: a
+        // drag feeds one event per host frame, so every batch that the app consumes proves the UI
+        // is alive and restarts the clock for the whole queue.
+        let now = self.tick_now_ms();
+        for gesture in &mut self.pending_gestures {
+            gesture.deadline_ms = now + GESTURE_TIMEOUT_MS;
+        }
+        self.synthetic_in_flight = true;
     }
 
     /// Lights Out: veil everything but the photo (the loupe's image, or the grid / Compare /
@@ -1492,7 +2453,7 @@ impl LightcraftApp {
         let screen = ctx.content_rect();
         let keep = if self.ui.view == state::ViewMode::Detail { self.image_rect.or(self.canvas_rect) } else { self.canvas_rect };
         let veil = egui::Color32::from_black_alpha((a.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("lights-out")));
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("lights-out")));
         let k = keep.unwrap_or(egui::Rect::NOTHING).intersect(screen);
         if !k.is_positive() {
             p.rect_filled(screen, 0.0, veil);
@@ -1521,7 +2482,7 @@ impl LightcraftApp {
                 }
             }
         });
-        self.perf.frame_ms = now_ms() - t0;
+        self.perf.frame_ms = monotonic_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
     }
@@ -1567,7 +2528,8 @@ impl LightcraftApp {
         }
     }
 
-    /// Lay out the whole window.
+    /// Lay out the whole window: input/setup for the known UI phase, then presentation, then the
+    /// frame bookkeeping. A hidden `run_logic` never reaches this.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
@@ -1575,28 +2537,109 @@ impl LightcraftApp {
             ctx.request_repaint();
             return;
         }
+        self.sync_theme(&ctx);
+        self.ui_pass(&ctx);
+        self.draw_window(ui);
+        self.finish_ui_pass(&ctx);
+    }
+
+    /// A completed, nondiscarded pass is a settled frame; a discarded pass threw its widgets away
+    /// and must not advance the geometry generation a capture binds to.
+    fn finish_ui_pass(&mut self, ctx: &egui::Context) {
+        // Any pass consumed the injected batch; a discarded pass still read its events and the
+        // next pass has none. Only a nondiscarded pass, however, is a settled frame a capture may
+        // bind to and a control gesture may resolve against.
+        self.synthetic_in_flight = false;
+        if ctx.will_discard() {
+            self.next_widgets.clear();
+            self.next_widget_hits.clear();
+            return;
+        }
+        self.widgets = std::mem::take(&mut self.next_widgets);
+        self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        panels::notices::finish_ui_pass(self, ctx);
+        panels::library_problem::finish_ui_pass(self, ctx);
+        self.ui_passes = self.ui_passes.wrapping_add(1);
+        self.layout_epoch = self.layout_epoch.wrapping_add(1);
+        self.resolve_pending_gestures(ctx);
+        self.reply_delivered_gestures();
+        if self.pointer_cleanup {
+            // A canceled press may be discovered by a timeout after the synthetic queue emptied;
+            // nothing else may ask for the frame that applies its cancellation.
+            ctx.request_repaint();
+        }
+    }
+
+    /// Presentation only: the window's panels, dialogs and overlays.
+    fn draw_window(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let t0 = monotonic_ms();
+        panels::library_problem::begin_draw(self);
+        // A command or shortcut drawn before this can create the window after `ui_pass`; catch it
+        // here before any panel draws with the still-focused background text field.
+        let batch_in_flight = self.synthetic_in_flight;
+        panels::library_problem::prepare_ui_pass(self, &ctx, batch_in_flight);
+        // A newly shown blocking library window gets the same barrier as a prompt: its first Area
+        // layout is non-interactable and hit testing still uses the previous pass, so background
+        // panels (and a focused text field) must not draw in that pass.
+        if panels::library_problem::shield_pass(self, &ctx) {
+            #[cfg(test)]
+            self.library_passes.push(panels::library_problem::LibraryPass::Shield);
+            panels::library_problem::show(self, &ctx, false);
+            (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
+            ctx.request_discard("library problem: shield the window's creation frame");
+            self.end_frame(&ctx, t0);
+            return;
+        }
+        // A newly shown prompt gets one pass with no background. egui's first Area layout is
+        // non-interactable and its hit test uses the previous pass, so drawing panels here would
+        // let a pointer press/release in the prompt's creation frame act underneath it. `ui()` then
+        // reruns this pass with empty raw input, where the settled prompt and the full window draw
+        // together. This is a state/input-routing barrier, not a wholesale input disable: once
+        // settled, raw pointer input still reaches the prompt backdrop (a no-op) or its buttons.
+        if panels::notices::shield_pass(self, &ctx) {
+            panels::notices::show(self, &ctx);
+            (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
+            ctx.request_discard("notice: shield the prompt's creation frame");
+            self.end_frame(&ctx, t0);
+            return;
+        }
+        #[cfg(test)]
+        self.library_passes.push(panels::library_problem::LibraryPass::Background);
         panels::dialogs::prepare(self, ui);
-        let t0 = now_ms();
+        // Freeze this frame's notice barrier before `notices::show` can dismiss a prompt: the same
+        // click or key must never be acted on again by the dialog drawn after it.
+        let notice_blocks = panels::notices::blocks_input(self);
         if std::mem::take(&mut self.ui.quit) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.library_changed(&ctx);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
-        self.ai_mask_detail(&ctx);
-        self.place_names_outcome(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
             panels::second::show(self, &ctx);
+            if notice_blocks {
+                panels::notices::restore_prompt_pointer(self, &ctx);
+            }
             panels::notices::show(self, &ctx);
-            panels::dialogs::show(self, &ctx);
-            panels::library_problem::show(self, &ctx);
+            if notice_blocks {
+                panels::notices::hide_background_pointer(&ctx);
+            }
+            panels::dialogs::show(self, &ctx, notice_blocks);
+            updates_ui::show(self, &ctx);
+            panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
             drop_overlay::show(self, &ctx);
-            self.widgets = widgets::take_registry(&ctx);
+            if notice_blocks {
+                // Keep the real press/release state for the next pass: an ordinary click spans
+                // host frames, and resetting it above must only hide it from this pass's dialogs.
+                panels::notices::restore_prompt_pointer(self, &ctx);
+            }
+            (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
             self.end_frame(&ctx, t0);
             return;
         }
@@ -1610,9 +2653,16 @@ impl LightcraftApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
+        if notice_blocks {
+            panels::notices::restore_prompt_pointer(self, &ctx);
+        }
         panels::notices::show(self, &ctx);
-        panels::dialogs::show(self, &ctx);
-        panels::library_problem::show(self, &ctx);
+        if notice_blocks {
+            panels::notices::hide_background_pointer(&ctx);
+        }
+        panels::dialogs::show(self, &ctx, notice_blocks);
+        updates_ui::show(self, &ctx);
+        panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
@@ -1624,31 +2674,233 @@ impl LightcraftApp {
         panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
-        self.widgets = widgets::take_registry(&ctx);
+        if notice_blocks {
+            // Keep the real press/release state for the next pass: an ordinary click spans host
+            // frames, and resetting it above must only hide it from this pass's dialogs.
+            panels::notices::restore_prompt_pointer(self, &ctx);
+        }
+        (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         self.end_frame(&ctx, t0);
     }
 }
 
-/// How long a screenshot waits for in-flight renders.
+/// How long a screenshot waits for in-flight renders before it is captured anyway (and the
+/// headless fallback's settle budget).
 const SCREENSHOT_SETTLE_MS: f64 = 3000.0;
 /// How long a windowed screenshot waits for the compositor before falling back to headless.
 const SCREENSHOT_FALLBACK_MS: f64 = 2000.0;
+/// Screenshots admitted at once (queued, issued and completed-but-undrained).
+const MAX_PENDING_SHOTS: usize = 4;
+/// Bytes one screenshot image may use.
+const MAX_SHOT_BYTES: usize = 128 * 1024 * 1024;
+/// Largest RGBA surface that fits [`MAX_SHOT_BYTES`], checked with the viewport dimensions before
+/// layout. The CPU rasterizer's own `softpaint::MAX_IMAGE_PIXELS` may be larger; a snapshot that
+/// cannot be captured must be rejected up front rather than after admission.
+pub(crate) const MAX_SHOT_PIXELS: usize = MAX_SHOT_BYTES / std::mem::size_of::<egui::Color32>();
+/// Bytes all pending/completed screenshots may reserve together.
+const MAX_SHOT_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+/// Slack for PNG framing and deflate overhead while encoding one screenshot. zlib can exceed the
+/// raw bytes slightly for incompressible input; this bounds that transient honestly.
+const SHOT_ENCODE_SLACK_BYTES: usize = 64 * 1024;
+/// Peak working set of capture encoding: every reserved image (≤ [`MAX_SHOT_TOTAL_BYTES`]) plus,
+/// for the image being written, its `Rgba8` copy and encoded PNG (each ≤ [`MAX_SHOT_BYTES`] plus
+/// [`SHOT_ENCODE_SLACK_BYTES`]). Encoding runs on the UI thread, one image at a time.
+const MAX_SHOT_WORKING_SET_BYTES: usize = MAX_SHOT_TOTAL_BYTES + 2 * MAX_SHOT_BYTES + SHOT_ENCODE_SLACK_BYTES;
+const _: () = {
+    assert!(MAX_SHOT_WORKING_SET_BYTES > MAX_SHOT_TOTAL_BYTES);
+    assert!(SHOT_ENCODE_SLACK_BYTES > 0);
+    assert!(MAX_SHOT_BYTES.is_multiple_of(std::mem::size_of::<egui::Color32>()));
+    assert!(MAX_SHOT_PIXELS * std::mem::size_of::<egui::Color32>() == MAX_SHOT_BYTES);
+};
+/// Synthetic-input control requests waiting for a fresh layout/delivery at once.
+const MAX_PENDING_GESTURES: usize = 32;
+/// A control gesture is answered with an error after this long without a completed UI pass and
+/// delivery (milliseconds).
+/// How long synthetic input may wait without the UI consuming a batch. Each consumed batch
+/// restarts this clock, so it is a stall limit, not a cap on a many-step drag's total time.
+const GESTURE_TIMEOUT_MS: f64 = 5000.0;
+/// Completed UI frames a request waits for before it is issued (a settled, laid-out frame).
+const SHOT_SETTLE_FRAMES: u64 = 3;
+/// Time a request waits before it is issued, so a control command that triggered a layout change
+/// is not captured mid-change.
+const SHOT_SETTLE_MS: f64 = 120.0;
+/// A settled capture is issued at this instant even while renders are still in flight. The hard
+/// admission deadline below still leaves the compositor fallback and the headless settle after it.
+const SHOT_FORCE_BUSY_MS: f64 = SCREENSHOT_SETTLE_MS;
+/// The texture limit when the host has not reported one.
+const MAX_TEXTURE_SIDE: usize = 16_384;
+
+/// The viewport geometry a screenshot was issued for. A completion from an older generation is
+/// rejected even if the window has since returned to the same size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShotGeometry {
+    /// Viewport size in egui points (the same units as `content_rect`).
+    viewport: egui::Vec2,
+    /// Egui pixels per point, including UI zoom.
+    pixels_per_point: f32,
+    /// The UI zoom factor.
+    zoom: f32,
+    /// [`LightcraftApp::shot_geometry_epoch`] at issue.
+    epoch: u64,
+}
+
+impl ShotGeometry {
+    /// The surface pixels this geometry would produce, before the host's texture limit.
+    fn surface_pixels(self) -> Option<(usize, usize)> {
+        let w = (self.viewport.x * self.pixels_per_point).round();
+        let h = (self.viewport.y * self.pixels_per_point).round();
+        if !w.is_finite() || !h.is_finite() || w < 1.0 || h < 1.0 {
+            return None;
+        }
+        Some((w as usize, h as usize))
+    }
+
+    /// The surface pixels this geometry can produce, or `None` when it is not a usable surface or
+    /// exceeds one side of the host's texture limit.
+    fn pixels(self, max_texture_side: usize) -> Option<(usize, usize)> {
+        let (w, h) = self.surface_pixels()?;
+        (w <= max_texture_side && h <= max_texture_side).then_some((w, h))
+    }
+
+    /// Checked `width * height * 4` bytes for this geometry.
+    fn bytes(self, max_texture_side: usize) -> Option<usize> {
+        let (w, h) = self.pixels(max_texture_side)?;
+        w.checked_mul(h)?.checked_mul(std::mem::size_of::<egui::Color32>())
+    }
+
+    /// Why [`Self::bytes`] returned `None`: no laid-out surface, or one side over the host's limit.
+    /// The two are not the same user action (a driver/GL limit is not "the window has not drawn").
+    fn rejection(self, max_texture_side: usize) -> String {
+        match self.surface_pixels() {
+            None => "ui.screenshot: the window has no usable surface size yet (no frame has been laid out)".to_string(),
+            Some((w, h)) => format!("ui.screenshot: the {w}×{h} pixel surface is over the host's {max_texture_side}-pixel per-side texture limit"),
+        }
+    }
+}
+
+/// Import commits batches at most once per host frame. The first layout pass and a hidden
+/// `run_logic` tick both report pass index 0; a discarded frame's later passes report 1+. A
+/// wall-clock gate cannot express that (a slow first pass could re-run it within one frame).
+fn import_tick_allowed(ctx: &egui::Context) -> bool {
+    ctx.current_pass_index() == 0
+}
+
+/// Whether a pending request may be issued now: it has waited for the settle time and completed
+/// UI frames, and either no render is in flight or the forced-capture instant has passed.
+fn shot_ready(now_ms: f64, shot: &PendingShot, busy: bool, ui_passes: u64) -> bool {
+    let settled = ui_passes.saturating_sub(shot.admitted_passes) >= SHOT_SETTLE_FRAMES && now_ms >= shot.not_before_ms;
+    settled && (!busy || now_ms >= shot.force_ms)
+}
+
+/// The navigation/document/modal/panel state a gesture was admitted under. The same automation
+/// id can mean a different control after any of these changes; the request is canceled rather
+/// than retargeted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GestureFrame {
+    view: crate::state::ViewMode,
+    active: Option<lightcraft_catalog::PhotoId>,
+    library: u64,
+    dialog: Option<std::mem::Discriminant<crate::state::Dialog>>,
+    left_panel: bool,
+    right: crate::state::RightPanel,
+    presets: bool,
+    filmstrip: bool,
+}
+
+/// A synthetic-input control request waiting for a fresh layout and for its last event to be
+/// consumed by a completed UI pass.
+struct PendingGesture {
+    method: String,
+    params: Value,
+    reply: Sender<ControlResponse>,
+    /// [`LightcraftApp::layout_epoch`] at admission; resolution needs a later one.
+    admitted_epoch: u64,
+    frame: GestureFrame,
+    /// Monotonic stall deadline (milliseconds): delivery refreshes it whenever the UI consumes a
+    /// batch, so a long but progressing drag is not a timeout.
+    deadline_ms: f64,
+    /// [`LightcraftApp::ui_passes`] when the events were queued (`None`: not resolved yet).
+    resolved_pass: Option<u64>,
+    /// Synthetic events queued for this gesture that the host has not injected yet.
+    remaining_events: usize,
+    /// At least one batch of this gesture's events has reached a pass. Later batches may see the
+    /// gesture's own effect (a first click selects, the second opens), so the semantic frame
+    /// snapshot is only checked before the first one.
+    started: bool,
+    /// For a widget gesture, the id and point resolved against the completed layout. Delivery
+    /// rechecks the widget's fresh rect before the first event, before each press and (for a click)
+    /// before its release.
+    target: Option<control::GestureTarget>,
+    /// A pointer button this gesture has pressed but not yet released. Cancellation resets the
+    /// pointer state before egui's next input pass, so a refused click neither leaves the pointer
+    /// down nor turns the cleanup into a click or drag.
+    pressed: Option<InjectedPress>,
+    result: Value,
+}
+
+/// A pointer press delivered to the UI, kept so a canceled gesture knows that a button is down.
+#[derive(Clone, Copy, Debug)]
+struct InjectedPress {
+    button: egui::PointerButton,
+}
 
 /// A `ui.screenshot` request in progress.
 struct PendingShot {
     token: u64,
-    path: Option<String>,
+    /// Destination identity pinned at admission (revalidated immediately before the write).
+    target: Option<lightcraft_engine::originals::WriteTarget>,
     reply: Sender<ControlResponse>,
     headless: bool,
-    not_before: f64,
-    deadline: f64,
-    frames: u32,
+    /// Admitted UI pass count and monotonic deadlines (milliseconds).
+    admitted_passes: u64,
+    not_before_ms: f64,
+    /// At this instant a busy renderer no longer holds the capture back.
+    force_ms: f64,
+    deadline_ms: f64,
     /// When the viewport screenshot command went out.
-    sent_at: Option<f64>,
+    sent_at_ms: Option<f64>,
+    /// Bytes this request reserves until it is drained or cancelled.
+    reserved: usize,
+    /// The one-shot completion slot; only the app owns the strong reference.
+    slot: Option<craft_ui::capture::CaptureSlot>,
+    /// The geometry and document generation the issued command was bound to.
+    issued: Option<ShotGeometry>,
+    /// Library generation at issue (a different library changed mid-capture).
+    issued_library: u64,
 }
 
-/// Wall-clock milliseconds since the Unix epoch (`web-time` maps to `Date.now()` on the web).
+/// A monotonic clock for the app's own timers.
+///
+/// `web_time::Instant` is backed by the browser's `performance.now()` on WASM and by
+/// `std::time::Instant` natively: it never jumps with the wall clock and has no `Date.now()`
+/// zero-origin problem. A headless host may supply its simulated time instead.
+#[derive(Clone, Copy, Debug)]
+struct AppClock {
+    start: web_time::Instant,
+    simulated: Option<f64>,
+}
+
+impl AppClock {
+    /// Start the clock at the current monotonic instant with no simulated time.
+    fn new() -> Self {
+        Self { start: web_time::Instant::now(), simulated: None }
+    }
+
+    /// Seconds on the clock: the supplied simulated time when set, otherwise time since `new`.
+    fn now(&self) -> f64 {
+        self.simulated.unwrap_or_else(|| self.start.elapsed().as_secs_f64())
+    }
+}
+
+/// Monotonic milliseconds since the first call, for durations and deadlines.
+pub fn monotonic_ms() -> f64 {
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
+}
+
+/// Wall-clock milliseconds since the Unix epoch, only for names that must be unique in the world
+/// (`library-restored-<ms>`), never for timing or deadlines.
 pub fn now_ms() -> f64 {
     use web_time::{SystemTime, UNIX_EPOCH};
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)

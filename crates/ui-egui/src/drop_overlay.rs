@@ -69,6 +69,11 @@ fn lines(app: &LightcraftApp, paths: Vec<String>, unknown: bool) -> Vec<String> 
 
 /// Veil and card while files are dragged over the window.
 pub fn show(app: &LightcraftApp, ctx: &Context) {
+    // This card is an `Order::Tooltip` layer, above the prompt's Foreground window. While a prompt
+    // owns input the drag can only be background noise: do not paint over or register it.
+    if crate::panels::notices::blocks_input(app) {
+        return;
+    }
     let count = ctx.input(|i| i.raw.hovered_files.len());
     if count == 0 {
         return;
@@ -79,7 +84,7 @@ pub fn show(app: &LightcraftApp, ctx: &Context) {
     let lines = lines(app, known.clone(), known.len() < count);
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let painter = ctx.layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::new("drop-overlay")));
+    let painter = ctx.layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::unique("drop-overlay")));
     painter.rect_filled(screen, 0.0, Color32::from_black_alpha(150));
     painter.rect_stroke(screen.shrink(10.0), 12.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     let galleys: Vec<_> = lines.into_iter().map(|l| painter.layout(l, t.semibold(18.0), t.text, (screen.width() - 120.0).max(200.0))).collect();
@@ -94,6 +99,6 @@ pub fn show(app: &LightcraftApp, ctx: &Context) {
         painter.galley(Align2::CENTER_TOP.anchor_size(at, g.size()).min, g, t.text);
         y += height + 8.0;
     }
-    crate::widgets::register(ctx, "dropOverlay", card);
+    crate::widgets::register_geometry(ctx, "dropOverlay", card);
     ctx.request_repaint();
 }

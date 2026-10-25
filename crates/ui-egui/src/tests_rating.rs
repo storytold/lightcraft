@@ -230,7 +230,7 @@ fn a_rating_changed_from_outside_moves_the_focus_to_the_tab_stop() {
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 200.0))), events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
             let _ = row(rating.get()).show(ui);
-            stars_focused = (0..5).map(|i| ctx.memory(|m| m.has_focus(ui.id().with(("rating-star", "t", i as u8))))).collect();
+            stars_focused = (0..5).map(|i| ctx.memory(|m| m.has_focus(ui.scope_id().with(("rating-star", "t", i as u8))))).collect();
         });
         out.textures_delta.clear();
     }

@@ -235,7 +235,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         count = n
     );
     let r = ui.radio_value(new_library, false, merge);
-    crate::widgets::register(ui.ctx(), "radio:lightroomDestination-open", r.rect);
+    crate::widgets::register(ui, "radio:lightroomDestination-open", r.rect);
     let indent = ui.spacing().icon_width + ui.spacing().icon_spacing;
     let note = |ui: &mut egui::Ui, text: &str| {
         ui.horizontal(|ui| {
@@ -252,7 +252,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         },
     );
     let r = ui.radio_value(new_library, true, tr("Create a new library"));
-    crate::widgets::register(ui.ctx(), "radio:lightroomDestination-new", r.rect);
+    crate::widgets::register(ui, "radio:lightroomDestination-new", r.rect);
     ui.add_enabled_ui(*new_library, |ui| {
         // a field's caption, left-aligned in a column as wide as the longer one (in any language)
         let font = egui::TextStyle::Body.resolve(ui.style());
@@ -298,7 +298,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     // (it only speaks of merging: unticked and greyed out while a new library is chosen)
     let mut ticked = *dont_ask && !*new_library;
     let c = ui.add_enabled(!*new_library, egui::Checkbox::new(&mut ticked, tr("Don't ask again (always merge into the open library)")));
-    crate::widgets::register(ui.ctx(), "check:lightroomDontAsk", c.rect);
+    crate::widgets::register(ui, "check:lightroomDontAsk", c.rect);
     if !*new_library {
         *dont_ask = ticked;
     }

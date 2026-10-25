@@ -90,7 +90,7 @@ fn amount(app: &LightcraftApp, id: PhotoId) -> f64 {
     app.session.develop_of(id).unwrap().enhance.denoise
 }
 fn resume(app: &mut LightcraftApp) {
-    model_setup::pump(app, &egui::Context::default());
+    model_setup::pump(app, &egui::Context::default(), app.tick_now());
 }
 
 #[test]

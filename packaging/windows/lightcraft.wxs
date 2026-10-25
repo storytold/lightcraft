@@ -206,6 +206,9 @@
       <Component Id="LightcraftCli">
         <File Id="LightcraftCliExe" Source="$(var.BinDir)\lightcraft-cli.exe" KeyPath="yes" />
       </Component>
+      <Component Id="LightcraftNotice">
+        <File Id="LightcraftNoticeFile" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
+      </Component>
       <Component Id="LightcraftFontLicences">
         <File Id="LightcraftFontLicencesFile" Source="$(var.BinDir)\FONT-LICENCES.txt" KeyPath="yes" />
       </Component>

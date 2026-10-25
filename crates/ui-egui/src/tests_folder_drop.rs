@@ -95,7 +95,7 @@ fn release(h: &mut Headless, at: Pos2) {
 
 /// What the dragged label says this frame instead of the count, if a drop target set it.
 fn hint(h: &Headless) -> Option<String> {
-    h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::new("drag-photos-hint"))).map(|(_, text)| text)
+    h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint"))).map(|(_, text)| text)
 }
 
 /// Click a widget the way a person does (press and release on it).

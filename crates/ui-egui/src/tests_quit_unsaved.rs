@@ -106,6 +106,44 @@ fn quitting_with_unsaved_changes_asks_first() {
     assert!(h.app.quit_confirmed && crate::panels::notices::may_close(&mut h.app));
 }
 
+/// "Try Saving Again" can recreate the identical unsaved prompt. It is still a new prompt: its
+/// first frame is shielded and focus goes back to the safe Cancel, never the Retry button that was
+/// just used.
+#[test]
+fn retrying_an_unsaved_prompt_resets_focus_to_safe_cancel() {
+    let store = Unplugged::default();
+    let mut s = lightcraft_engine::Session::new();
+    let stores = LibraryStores { dir: "unplugged".into(), catalog: Box::new(store.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    store.fail.store(true, Ordering::SeqCst);
+    let r = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Kept"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(!crate::panels::notices::may_close(&mut h.app), "retried, still failing: ask");
+    h.step();
+    h.step();
+    let focused = |h: &Headless| h.view.ctx.memory(|m| m.focused());
+    let cancel = h.app.widget_hits.iter().rev().find(|(w, _)| w == "button:quitCancel").map(|(_, hit)| hit.id).expect("Cancel has a real response");
+    let retry = h.app.widget_hits.iter().rev().find(|(w, _)| w == "button:quitRetry").map(|(_, hit)| hit.id).expect("Retry has a real response");
+    assert_eq!(focused(&h), Some(cancel), "the safe Cancel starts focused");
+    assert_eq!(h.request("ui.key", json!({"key": "Tab"}), T)["ok"], true);
+    assert_eq!(focused(&h), Some(retry), "Tab moved focus to Retry");
+    // Activate Retry; the drive is still unplugged, so the same prompt is recreated.
+    assert_eq!(h.request("ui.key", json!({"key": "Space"}), T)["ok"], true);
+    h.step();
+    h.step();
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Unsaved(_))), "the retried save still asks");
+    let cancel_after =
+        h.app.widget_hits.iter().rev().find(|(w, _)| w == "button:quitCancel").map(|(_, hit)| hit.id).expect("the new Cancel has a real response");
+    let retry_after =
+        h.app.widget_hits.iter().rev().find(|(w, _)| w == "button:quitRetry").map(|(_, hit)| hit.id).expect("the new Retry has a real response");
+    assert_ne!(cancel_after, retry_after);
+    assert_eq!(focused(&h), Some(cancel_after), "the recreated prompt reset focus to safe Cancel");
+    assert!(!h.app.quit_confirmed, "nothing quit");
+}
+
 #[test]
 fn damaged_settings_file_is_shown() {
     let files = MemStore::new();

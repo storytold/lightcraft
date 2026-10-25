@@ -15,8 +15,9 @@ const EDGE: f32 = 6.0;
 /// How fast resting on a scroll arrow scrolls, in points per second.
 const SPEED: f32 = 600.0;
 
+/// The egui temp-data id holding the row a menu at `depth` hangs from.
 fn anchor_id(depth: usize) -> Id {
-    Id::new(("lc-menu-anchor", depth))
+    Id::unique(("lc-menu-anchor", depth))
 }
 
 /// Remember the row the submenu at `depth` (2 = a top-level menu's submenu) hangs from. It is
@@ -76,7 +77,7 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
     let screen = ctx.content_rect();
     // The menu frame's margin and stroke around the rows.
     let frame = ui.spacing().menu_margin.sum().y + 2.0;
-    let key = ui.id().with(("lc-menu-level", depth));
+    let key = ui.scope_id().with(("lc-menu-level", depth));
     // Rows' height from the last frame: does this level overflow?
     let content: Option<f32> = ctx.data(|d| d.get_temp(key));
     let room = level_room(screen, bar_bottom, depth, anchor(&ctx, depth), content, frame);
@@ -89,21 +90,27 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
     // No scrollbar: the ▲ / ▼ strips, the wheel and dragging scroll a menu, like native menus.
     // egui's floating bar is drawn over the rows' right edge, where the shortcut text ends, and in
     // its wide (hovered) state its background hides the last character (issue #691).
-    let out = egui::ScrollArea::vertical()
+    // 0.37's `ScrollAreaState.offset` is private: a scroll requested after layout is applied as
+    // the next frame's start offset instead of writing the state directly.
+    let scroll_to = ctx.data_mut(|d| d.remove_temp::<f32>(key.with("scroll-to")));
+    let mut area = egui::ScrollArea::vertical()
         .id_salt(("menu-level", depth))
         .max_height(height)
         .min_scrolled_height(height)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-        .scroll_source(egui::containers::scroll_area::ScrollSource::ALL)
-        .show(ui, rows);
+        .scroll_source(egui::containers::scroll_area::ScrollSource::ALL);
+    if let Some(y) = scroll_to {
+        area = area.vertical_scroll_offset(y);
+    }
+    let out = area.show(ui, rows);
     let down = over.then(|| ui.allocate_exact_size(vec2(0.0, ARROW), Sense::hover()).0);
     ctx.data_mut(|d| d.insert_temp(key, out.content_size.y));
-    crate::widgets::register(&ctx, format!("menu-level:{depth}"), ui.min_rect());
+    crate::widgets::register(ui, format!("menu-level:{depth}"), ui.min_rect());
     let (Some(up), Some(down)) = (up, down) else { return };
     let t = crate::theme::Tokens::get(&ctx);
     let x = ui.min_rect().x_range();
     let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
-    let offset = out.state.offset.y;
+    let offset = out.state.clamped_offset().y;
     let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
     let mut target = offset;
     for (strip, dir, live) in [(up, -1.0, offset > 0.5), (down, 1.0, offset < max - 0.5)] {
@@ -118,7 +125,7 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
         let id = key.with(dir < 0.0);
         let r = ui.interact(strip, id, Sense::hover());
         r.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, live, crate::i18n::tr(if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" }))
+            egui::WidgetInfo::labeled(egui::Role::Button, live, crate::i18n::tr(if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" }))
         });
         if live && pointer_on(ui, strip) {
             target = (offset + dir * SPEED * dt.max(1.0 / 120.0)).clamp(0.0, max);
@@ -132,10 +139,9 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
             }
         }
     }
-    if target != offset {
-        let mut st = out.state;
-        st.offset.y = target;
-        st.store(&ctx, out.id);
+    if (target - offset).abs() > 0.01 {
+        ctx.data_mut(|d| d.insert_temp(key.with("scroll-to"), target));
+        ctx.request_repaint();
     }
 }
 

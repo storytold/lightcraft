@@ -370,7 +370,7 @@ pub(crate) fn cancel_replaced_gesture(app: &crate::LightcraftApp, workspace: Opt
         _ => true,
     };
     if replaced && let Some(ctx) = &app.tasks.repaint {
-        craft_ui::docking::cancel_drag::<Panel>(ctx, egui::Id::new("lightcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ctx, egui::Id::unique("lightcraft-docking"));
     }
 }
 
@@ -397,11 +397,15 @@ fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, ren
     Ok(json!({"docking": app.ui.docking}))
 }
 
+/// Draw the docked workspace: restore or fall back from an invalid layout, sync panel
+/// visibility, render the panels and the current view in the canvas, then apply the docking
+/// actions. If the layout changed during the pass, any in-flight dock drag is cancelled and the
+/// docking actions it produced are not applied.
 pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
     if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, app)) {
-        app.ui.toast = Some((format!("Panel layout could not be restored: {error}"), ui.input(|input| input.time) + 8.0, None));
+        app.ui.toast = Some((format!("Panel layout could not be restored: {error}"), app.tick_now() + 8.0, None));
         workspace = from_ui(app);
         let _ = sync(&mut workspace, app);
     }
@@ -427,7 +431,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.font = t.font(12.0);
     // Tool and preset panels publish hover previews before the photo consumes them.
     let mut canvas = None;
-    let output = DockArea::new(egui::Id::new("lightcraft-docking")).show_with_limits(
+    let output = DockArea::new(egui::Id::unique("lightcraft-docking")).show_with_limits(
         ui,
         &workspace.layout,
         &style,
@@ -439,11 +443,11 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
                 canvas = Some(ui.new_child(egui::UiBuilder::new().id_salt("photo-view").max_rect(ui.max_rect())));
             }
             Panel::Library => {
-                crate::widgets::register(ui.ctx(), "panel:left_panel", ui.max_rect());
+                crate::widgets::register(ui, "panel:left_panel", ui.max_rect());
                 crate::panels::left::show(app, ui);
             }
             Panel::Tools => {
-                crate::widgets::register(ui.ctx(), "panel:right_panel", ui.max_rect());
+                crate::widgets::register(ui, "panel:right_panel", ui.max_rect());
                 crate::panels::right::show(app, ui);
             }
             Panel::Presets => crate::panels::presets::show(app, ui),
@@ -476,7 +480,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let _ = sync(&mut workspace, app);
     let stale = workspace.layout != rendered.layout || workspace.hidden != rendered.hidden;
     if stale {
-        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::new("lightcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::unique("lightcraft-docking"));
     }
     publish_visibility(app, &workspace);
     app.ui.docking = Some(workspace);
@@ -488,7 +492,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             .map_err(|error| error.to_string())
             .and_then(|action| command_impl(app, false, &json!({"action": action}), true))
         {
-            app.ui.toast = Some((format!("Panel move was not applied: {error}"), ui.input(|input| input.time) + 8.0, None));
+            app.ui.toast = Some((format!("Panel move was not applied: {error}"), app.tick_now() + 8.0, None));
         }
     }
 }

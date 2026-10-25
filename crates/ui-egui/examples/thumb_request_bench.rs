@@ -283,6 +283,7 @@ fn real() {
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, if (i / 45) % 2 == 0 { -12.0 } else { 12.0 }),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: Default::default(),
         });
         let t = Instant::now();

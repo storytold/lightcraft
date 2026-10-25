@@ -349,11 +349,10 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
             [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
         });
     }
-    let chrome = app
-        .ui
-        .docking
-        .as_ref()
-        .is_some_and(|workspace| craft_ui::docking::DockArea::new(egui::Id::new("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout));
+    let chrome =
+        app.ui.docking.as_ref().is_some_and(|workspace| {
+            craft_ui::docking::DockArea::new(egui::Id::unique("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
+        });
     if !chrome {
         return true;
     }
@@ -364,12 +363,20 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     })
 }
 
+/// Dispatch the global shortcut pass. It yields while a dialog, prompt, blocking library window,
+/// text field, name edit or shortcut recording owns input, then fires saved command bindings,
+/// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
         app.recording_shortcut = None;
     }
-    // Dialogs own their keys (including Esc and text editing); background photo actions wait.
-    if app.ui.dialog.is_some() {
+    // Dialogs own their keys (including Esc and text editing); background photo actions wait. A
+    // quit prompt or settings notice owns every key too: its Foreground dim only blocks the
+    // pointer, so without this a rating or navigation shortcut would still act behind it. The
+    // blocking library window (error or launch list) owns all app shortcuts for every settled
+    // frame, not only its shield pass; its own list keys are consumed earlier by
+    // `library_problem::logic`, and its buttons remain reachable through the control channel.
+    if app.ui.dialog.is_some() || crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_dialog_input(app) {
         return;
     }
     if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
@@ -1347,7 +1354,7 @@ mod tests {
                     },
                     |ui| {
                         let ctx = ui.ctx();
-                        egui::Popup::open_id(ctx, egui::Id::new("issue1771-menu"));
+                        egui::Popup::open_id(ctx, egui::Id::unique("issue1771-menu"));
                         assert!(egui::Popup::is_any_open(ctx));
                         super::super::handle(&mut h.app, ctx);
                     },

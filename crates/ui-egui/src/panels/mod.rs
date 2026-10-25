@@ -61,13 +61,16 @@ pub fn resizable_side(
     reserve: f32,
     add: impl FnOnce(&mut egui::Ui),
 ) -> Option<f32> {
-    let pid = egui::Id::new(id);
+    // `Panel::new` stores `IdSalt::new(id)`; the panel's persisted key is
+    // `parent_ui.scope_id().with_salt(that_salt)`, which is exactly `scope_id().with(id)`.
+    // (Passing an already-built `Id` through `Panel::left` would salt it a second time.)
+    let pid = ui.scope_id().with(id);
     ui.ctx().data_mut(|d| d.remove::<egui::containers::panel::PanelState>(pid));
     let avail = ui.available_rect_before_wrap();
     let max = (avail.width() - reserve - crate::state::MIN_PHOTO_WIDTH).clamp(limits.min, limits.max);
-    let panel = if left { egui::Panel::left(pid) } else { egui::Panel::right(pid) };
+    let panel = if left { egui::Panel::left(id) } else { egui::Panel::right(id) };
     let r = panel.frame(frame).resizable(true).size_range(limits.min..=max).default_size(limits.clamp(width).min(max)).show(ui, add);
-    crate::widgets::register(ui.ctx(), format!("panel:{id}"), r.response.rect);
+    crate::widgets::register(ui, format!("panel:{id}"), r.response.rect);
     // egui names the edge's drag widget `<panel id>.with("__resize")`; the width is measured from
     // the panel's fixed edge to the pointer (contents wider than the panel don't count)
     if !ui.ctx().is_being_dragged(pid.with("__resize")) {
@@ -80,7 +83,7 @@ pub fn resizable_side(
 
 /// The HUD toast at the bottom centre of the canvas.
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let now = ctx.input(|i| i.time);
+    let now = app.tick_now();
     let Some((text, until, label)) = app.ui.toast.clone() else { return };
     if now > until {
         app.ui.toast = None;
@@ -89,7 +92,7 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(canvas) = app.canvas_rect else { return };
     let t = Tokens::get(ctx);
     let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("toast")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("toast")));
     // long messages (a save warning, the web build's notices) wrap within the canvas
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
     let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
@@ -170,7 +173,7 @@ pub fn empty_state(ui: &mut egui::Ui, rect: Rect, title: &str, body: &str, actio
         let button =
             if i == 0 { egui::Button::new(label.color(egui::Color32::WHITE)).fill(t.accent) } else { egui::Button::new(label.color(t.text)) };
         let resp = ui.put(r, button);
-        crate::widgets::register(ui.ctx(), a.widget, resp.rect);
+        crate::widgets::register(ui, a.widget, resp.rect);
         if resp.clicked() {
             clicked = Some(a.command);
         }

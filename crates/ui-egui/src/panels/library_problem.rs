@@ -24,6 +24,246 @@ use crate::state::{AppSettings, LaunchLibrary};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
+/// Egui ids/layers shared by the window drawing and the control-channel barrier: the two blocking
+/// windows and their dim.
+const DIM_ID: &str = "library-problem-dim";
+const ERROR_WINDOW_ID: &str = "library-problem";
+const CHOOSER_WINDOW_ID: &str = "library-chooser";
+
+/// The named `Foreground` layer used by the dim and the two blocking library windows.
+fn foreground_layer(id: &str) -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(id))
+}
+
+/// The full-screen backdrop that takes the modal layer while the library window is up.
+pub(crate) fn dim_layer() -> egui::LayerId {
+    foreground_layer(DIM_ID)
+}
+
+/// Whether `layer` is one of the blocking library windows' own layers (the error window or the
+/// launch list). Their registered controls are the only targets allowed through the dim.
+fn is_window_layer(layer: egui::LayerId) -> bool {
+    layer == foreground_layer(ERROR_WINDOW_ID) || layer == foreground_layer(CHOOSER_WINDOW_ID)
+}
+
+/// Whether a control-channel press must be explicitly refused because the library window's dim
+/// owns the modal layer and the target is not one of that window's own controls. Ordinary dialogs
+/// keep their existing backdrop semantics; only this blocking window is different.
+pub(crate) fn refuses_control_target(top_modal: Option<egui::LayerId>, target: egui::LayerId) -> bool {
+    top_modal == Some(dim_layer()) && !is_window_layer(target)
+}
+
+/// Which blocking window is on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowMode {
+    Error,
+    Chooser,
+}
+
+/// What one draw pass did for the blocking library window (test instrumentation).
+///
+/// The first-return tests used to prove shielding only through a rating shortcut, which the global
+/// shortcut guard now blocks on every settled blocking frame. Recording the pass itself keeps
+/// those regressions non-vacuous: removing the shield pass, its discard or its settlement changes
+/// this sequence even though the rating shortcut would still stay blocked.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LibraryPass {
+    /// The dedicated shield pass for a newly visible window: only the window drew, background
+    /// input was dropped, and egui discarded the pass.
+    Shield,
+    /// A pass that went on to draw the background (with the visible window, when there is one).
+    Background,
+}
+
+/// First-frame input state for the blocking library window.
+///
+/// Its `Foreground` areas are non-interactable during their first layout pass, and a text field
+/// behind it may still own the keyboard focus. The frame that creates a window therefore draws
+/// only that window and drops background input, just as a new notice prompt does.
+#[derive(Default)]
+pub(crate) struct WindowBarrier {
+    /// The window whose completed layout has already settled. `None` until the first pass is
+    /// accepted (and again once the window or its banner replaces it).
+    shown: Option<WindowMode>,
+    /// The next pass 0 is the shielding pass for a newly shown window. Also armed while the
+    /// window is hidden by a prompt or by a dialog it opened, so the first pass that actually
+    /// draws it again is shielded rather than reusing a background pass's hit-test snapshot.
+    transition: bool,
+    /// The window actually drew in the pass being completed (reset at the start of every draw).
+    drawn: Option<WindowMode>,
+    /// The shield pass for the current transition has already run (the discarded pass drew only
+    /// the window); the following pass may settle it. Without this, a window that appeared in the
+    /// middle of a pass could settle without ever having had a dedicated shield pass.
+    shielded: bool,
+    /// The current transition may have dropped an injected synthetic batch; cancel its gesture
+    /// once so it reports an error instead of a false `ok: true`.
+    cancel_injected: bool,
+}
+
+impl WindowBarrier {
+    /// Begin a new shield transition. It stays armed until a completed pass has drawn the window
+    /// after a dedicated shield pass.
+    fn begin_transition(&mut self) {
+        self.transition = true;
+        self.shielded = false;
+        self.cancel_injected = true;
+    }
+}
+
+/// The blocking library window that is present (not dismissed), if any: the launch chooser when
+/// it is shown, otherwise the error window.
+fn present_mode(app: &LightcraftApp) -> Option<WindowMode> {
+    let problem = app.library_problem.as_ref().filter(|p| !p.dismissed)?;
+    Some(if problem.chooser.is_some() { WindowMode::Chooser } else { WindowMode::Error })
+}
+
+/// Whether the open dialog is the launch list's own New Library name prompt.
+///
+/// Any other dialog (Settings opened before Alt/Option created the chooser, for example) is not
+/// owned by the launch list: the blocking window stays visible over it and keeps owning input,
+/// instead of stepping aside for a dialog it did not open.
+fn chooser_owns_dialog(app: &LightcraftApp) -> bool {
+    app.library_problem.as_ref().is_some_and(|p| p.chooser.is_some())
+        && matches!(
+            app.ui.dialog.as_ref(),
+            Some(crate::state::Dialog::TextPrompt { command, .. }) if command == "app.newLibrary"
+        )
+}
+
+/// The window actually drawn this pass. A prompt suppresses it, and the launch list yields only to
+/// the New Library name dialog it opened itself.
+fn visible_mode(app: &LightcraftApp) -> Option<WindowMode> {
+    let mode = present_mode(app)?;
+    if crate::panels::notices::blocks_input(app) {
+        return None;
+    }
+    if mode == WindowMode::Chooser && chooser_owns_dialog(app) {
+        return None;
+    }
+    Some(mode)
+}
+
+/// Whether the blocking library window is actually on screen over the rest of the UI this frame,
+/// so a background dialog's own raw input handlers must stay still.
+pub(crate) fn blocks_dialog_input(app: &LightcraftApp) -> bool {
+    visible_mode(app).is_some()
+}
+
+/// A window drawn before its barrier saw it (a command late in a draw pass created it) must not
+/// settle this pass: arm the transition so the next frame gets the shielded first draw.
+fn note_first_draw(app: &mut LightcraftApp, mode: WindowMode) {
+    if app.library_window_input.shown != Some(mode) && !app.library_window_input.transition {
+        app.library_window_input.begin_transition();
+    }
+}
+
+/// Surrender egui's current keyboard focus, so a background field cannot receive text in the
+/// window's first shielded pass.
+fn clear_focus(ctx: &egui::Context) {
+    ctx.memory_mut(|memory| {
+        if let Some(id) = memory.focused() {
+            memory.surrender_focus(id);
+        }
+    });
+}
+
+/// Note a new blocking window before any panel or shortcut reads this pass's input. Its first
+/// frame clears a background text field's focus and drops text, pointer, wheel, keys and
+/// accessibility input. `keys_down` is cleared so no key is left held after the discarded pass;
+/// touch End/Cancel still reach egui to clear its private touch state. Modifier and window-focus
+/// changes also survive, as for a prompt.
+pub(crate) fn prepare_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context, batch_in_flight: bool) {
+    if ctx.current_pass_index() != 0 {
+        return;
+    }
+    // A pass 0 starts a new shield cycle; `shield_pass` records that its dedicated pass ran.
+    app.library_window_input.shielded = false;
+    let Some(mode) = visible_mode(app) else {
+        if app.library_problem.as_ref().is_none_or(|p| p.dismissed) {
+            app.library_window_input = WindowBarrier::default();
+        } else if !app.library_window_input.transition {
+            // The window is present but a prompt or the dialog it opened hides it. The next pass
+            // that actually draws it must be shielded: while hidden, its controls are absent from
+            // the previous pass's widget snapshot, and egui's hit test would belong to the
+            // background.
+            app.library_window_input.begin_transition();
+        }
+        return;
+    };
+    if app.library_window_input.shown != Some(mode) {
+        app.library_window_input.begin_transition();
+    }
+    if !app.library_window_input.transition {
+        return;
+    }
+    // A background text field may have kept or regained focus while the window was hidden by a
+    // prompt or dialog; the shielded first frame must not let it receive the host's text.
+    clear_focus(ctx);
+    if batch_in_flight && std::mem::take(&mut app.library_window_input.cancel_injected) {
+        // The library barrier below removes this pass's already-injected events before any panel
+        // sees them. Like the prompt barrier, the gesture that queued them must fail, never report
+        // a successful delivery of input that was discarded.
+        app.cancel_gestures_for_barrier(true, "a blocking library window appeared");
+    }
+    ctx.stop_dragging();
+    ctx.input_mut(|input| {
+        // The discarded pass must not leave a key held merely because its release arrived in the
+        // window's creation frame.
+        input.keys_down.clear();
+        input.pointer = egui::PointerState::default();
+        input.smooth_scroll_delta = egui::Vec2::ZERO;
+        input.events.retain(|event| {
+            matches!(
+                event,
+                egui::Event::ModifiersChanged(_)
+                    | egui::Event::WindowFocused(_)
+                    | egui::Event::Touch { phase: egui::TouchPhase::End | egui::TouchPhase::Cancel, .. }
+            )
+        });
+    });
+}
+
+/// Whether `draw_window` must render only the new blocking window for this first pass.
+pub(crate) fn shield_pass(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+    let shield = ctx.current_pass_index() == 0 && app.library_window_input.transition && visible_mode(app).is_some();
+    if shield {
+        app.library_window_input.shielded = true;
+    }
+    shield
+}
+
+/// Reset the per-pass draw witness before any panel runs. `show` marks the window only when it
+/// actually draws it; a prompt/dialog hiding the window must not inherit a previous pass's mark.
+pub(crate) fn begin_draw(app: &mut LightcraftApp) {
+    app.library_window_input.drawn = None;
+}
+
+/// A completed, nondiscarded pass has laid the window out. Only an actual draw after the shield
+/// pass settles it; a window hidden by a prompt or by the dialog it opened, or one that appeared
+/// midway through this pass (the banner's Open Library… button), keeps the transition armed so
+/// the first pass that draws it again is shielded.
+pub(crate) fn finish_ui_pass(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if ctx.will_discard() {
+        return;
+    }
+    if let Some(mode) = visible_mode(app) {
+        if app.library_window_input.drawn == Some(mode) && (!app.library_window_input.transition || app.library_window_input.shielded) {
+            app.library_window_input.shown = Some(mode);
+            app.library_window_input.transition = false;
+            app.library_window_input.shielded = false;
+            app.library_window_input.cancel_injected = false;
+        } else if !app.library_window_input.transition {
+            app.library_window_input.begin_transition();
+        }
+    } else if app.library_problem.as_ref().is_none_or(|p| p.dismissed) {
+        app.library_window_input = WindowBarrier::default();
+    } else if !app.library_window_input.transition {
+        // A prompt appeared or changed during the draw and now hides the window.
+        app.library_window_input.begin_transition();
+    }
+}
+
 /// How long after the window appears holding Alt/Option still asks (egui time, seconds). The
 /// modifier keys can't be read before the first frame, and macOS reports one held since before
 /// launch only once it changes, so it is watched over the first frames.
@@ -241,6 +481,24 @@ const CHECK_LABEL: &str = "Checking recent libraries";
 struct Answer {
     why: Option<Unavailable>,
     at: web_time::Instant,
+    /// The root UI frame that applied this answer ([`egui::Context::cumulative_frame_nr_for`]).
+    /// Scheduling must not ask about a check answer again in the frame that delivered it, which
+    /// also covers every layout pass of that frame; `None` for an answer no check worker made
+    /// (`opened`, or a check that couldn't start).
+    delivered_frame: Option<u64>,
+}
+
+impl Answer {
+    /// An answer from a check worker, delivered in root UI frame `delivered_frame`.
+    fn from_check(why: Option<Unavailable>, delivered_frame: u64) -> Answer {
+        Answer { why, at: web_time::Instant::now(), delivered_frame: Some(delivered_frame) }
+    }
+
+    /// An answer no check worker made, with no publication fence: it may be asked about again on
+    /// the next frame as before.
+    fn local(why: Option<Unavailable>) -> Answer {
+        Answer { why, at: web_time::Instant::now(), delivered_frame: None }
+    }
 }
 
 /// Answers to "can this recent library be opened?", each found on a worker thread of its own (a
@@ -321,7 +579,7 @@ impl RecentChecks {
 
     /// `path` was just opened (or made): it can be opened.
     pub fn opened(&mut self, path: &str) {
-        self.known.insert(path.to_string(), Answer { why: None, at: web_time::Instant::now() });
+        self.known.insert(path.to_string(), Answer::local(None));
     }
 
     /// Opening `path` from the launch window failed. That says nothing about whether it is there
@@ -354,7 +612,8 @@ fn start_checks(app: &mut LightcraftApp, paths: Vec<String>) {
             let path = path.clone();
             move |app, ctx, why| {
                 app.recent_checks.pending.remove(&path);
-                app.recent_checks.known.insert(path, Answer { why, at: web_time::Instant::now() });
+                let delivered_frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
+                app.recent_checks.known.insert(path, Answer::from_check(why, delivered_frame));
                 apply_answers(app);
                 ctx.request_repaint();
             }
@@ -376,7 +635,7 @@ fn start_checks(app: &mut LightcraftApp, paths: Vec<String>) {
             // no worker thread: say so on the row, and don't try again every frame
             Err(e) => {
                 log::warn!("{e}");
-                app.recent_checks.known.insert(path, Answer { why: Some(Unavailable::CheckFailed(e)), at: web_time::Instant::now() });
+                app.recent_checks.known.insert(path, Answer::local(Some(Unavailable::CheckFailed(e))));
                 apply_answers(app);
             }
         }
@@ -394,7 +653,7 @@ fn reap_checks(app: &mut LightcraftApp) {
     for path in dead {
         app.recent_checks.pending.remove(&path);
         let why = Unavailable::CheckFailed(crate::i18n::tr("This library couldn't be checked").to_string());
-        app.recent_checks.known.insert(path, Answer { why: Some(why), at: web_time::Instant::now() });
+        app.recent_checks.known.insert(path, Answer::local(Some(why)));
     }
     apply_answers(app);
 }
@@ -550,7 +809,12 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
             log::warn!("import: {e}");
         }
     }
+    let batch_in_flight = app.synthetic_in_flight;
     alt_at_launch(app, ctx);
+    // Alt/Option can create the launch list here, after the frame's input was accepted. Drop
+    // background text/pointer/keys and give it a shield pass before its own key handler reads them.
+    // An already injected synthetic batch is dropped by that barrier and must fail its gesture.
+    prepare_ui_pass(app, ctx, batch_in_flight);
     reap_checks(app);
     // the launch list asks for fresh answers once
     let listed: Option<Vec<String>> =
@@ -573,6 +837,12 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
     let focused = ctx.input(|i| i.focused);
     let regained = focused && !std::mem::replace(&mut app.recent_checks.focused, focused);
     let after = app.recent_checks.recheck_after;
+    // The frame whose UI phase is scheduling now. An answer applied during this frame (by
+    // `logic_background`'s `tasks::poll`, or a hidden logic tick just before the first visible UI)
+    // has this number too, so it is shown for at least this whole frame: scheduling it again in
+    // the same frame would erase it before any completed frame showed it, and a discarded layout
+    // pass must not change that. Unknown paths have no answer and still start immediately.
+    let frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
     let stale: Vec<String> = app
         .ui
         .settings
@@ -581,11 +851,9 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
         .take(crate::state::RECENT_LIBRARIES)
         .filter(|p| {
             !app.recent_checks.is_checking(p)
-                && app
-                    .recent_checks
-                    .known
-                    .get(*p)
-                    .is_none_or(|a| (regained || matches!(a.why, Some(Unavailable::NotFound))) && a.at.elapsed() > after)
+                && app.recent_checks.known.get(*p).is_none_or(|a| {
+                    a.delivered_frame != Some(frame) && (regained || matches!(a.why, Some(Unavailable::NotFound))) && a.at.elapsed() > after
+                })
         })
         .cloned()
         .collect();
@@ -600,7 +868,11 @@ pub fn logic(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
-    chooser_keys(app, ctx);
+    // A quit prompt or settings notice sits above the launch list; its Escape/Return must not
+    // quit or switch libraries behind the prompt.
+    if !crate::panels::notices::blocks_input(app) {
+        chooser_keys(app, ctx);
+    }
 }
 
 /// Alt/Option held during the first [`ALT_SECONDS`] after the window appears opens the launch list
@@ -630,10 +902,10 @@ fn alt_at_launch(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
-/// The launch list on screen (no dialog over it, e.g. New Library's name).
+/// The launch list on screen (not covered by the New Library name dialog it opened).
 fn chooser_shown(app: &LightcraftApp) -> Option<&Chooser> {
     let p = app.library_problem.as_ref().filter(|p| !p.dismissed)?;
-    p.chooser.as_ref().filter(|_| app.ui.dialog.is_none())
+    p.chooser.as_ref().filter(|_| !chooser_owns_dialog(app))
 }
 
 /// ↑ / ↓ move the selection, Return opens it (unless a button has the keyboard focus: it acts
@@ -675,33 +947,53 @@ fn select(app: &mut LightcraftApp, at: usize) {
 }
 
 /// Dim everything behind the window; it swallows clicks, so nothing there can be used meanwhile.
+/// The dim is `Foreground` and takes the modal layer: a `Middle` dialog such as Settings may be
+/// open underneath, and without this the dialog's own modal layer would let its controls receive
+/// clicks through the dim. Dialogs are drawn before this window, and a quit prompt or settings
+/// notice suppresses this window entirely (`show` returns early), so neither is covered by it.
+/// Pressing the dim raises its area, so each window is moved back above it after being shown.
 fn dim(ctx: &egui::Context) {
     let screen = ctx.content_rect();
-    egui::Area::new(egui::Id::new("library-problem-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(true).show(ctx, |ui| {
+    let dim = egui::Area::new(egui::Id::unique(DIM_ID)).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(true).show(ctx, |ui| {
+        // swallows clicks: nothing behind the window can be used meanwhile
         ui.allocate_rect(screen, egui::Sense::click_and_drag());
         ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
     });
+    // A bare interactable Area does not become the modal layer by itself. Without this, a
+    // Settings dialog opened before the library window can keep the modal layer and receive a
+    // control-channel press that the dim is meant to cover.
+    ctx.memory_mut(|memory| memory.set_modal_layer(dim.response.layer_id));
 }
 
-/// The blocking window (until a choice is made).
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+/// The blocking window (until a choice is made). `blocked` freezes the barrier of a quit prompt
+/// or settings notice that was on screen when this frame began: the launch list/error window is
+/// `Order::Foreground` too, so drawing it after the prompt could cover it and let the same
+/// click or key act twice. It returns on the first pass after the prompt goes away.
+pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
+    if blocked || crate::panels::notices::blocks_input(app) {
+        return;
+    }
     let Some(problem) = app.library_problem.clone() else { return };
     if problem.dismissed {
         return;
     }
     if let Some(chooser) = &problem.chooser {
-        // a dialog it opened (New Library's name) goes first; the list comes back after it
-        if app.ui.dialog.is_none() {
+        // its own New Library name dialog goes first; the list comes back after it. An unrelated
+        // dialog (Settings) does not hide the list: the blocking window stays above it.
+        if !chooser_owns_dialog(app) {
+            note_first_draw(app, WindowMode::Chooser);
             show_chooser(app, ctx, &problem, chooser);
+            app.library_window_input.drawn = Some(WindowMode::Chooser);
         }
         return;
     }
     let t = Tokens::get(ctx);
+    note_first_draw(app, WindowMode::Error);
     dim(ctx);
     let mut choice = None;
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
-    egui::Window::new(crate::i18n::tr("Your library couldn't be opened"))
-        .id(egui::Id::new("library-problem"))
+    let shown = egui::Window::new(crate::i18n::tr("Your library couldn't be opened"))
+        .id(egui::Id::unique(ERROR_WINDOW_ID))
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
@@ -731,7 +1023,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
                     let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui.ctx(), format!("button:{id}"), r.rect);
+                    register(ui, format!("button:{id}"), r.rect);
                     if r.clicked() {
                         choice = Some(c);
                     }
@@ -742,6 +1034,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 button(ui, "libraryQuit", "Quit", true, Choice::Quit);
             });
         });
+    if let Some(w) = &shown {
+        // A press on the dim raises its area; keep this window (and its own buttons) above it.
+        ctx.move_to_top(w.response.layer_id);
+    }
+    app.library_window_input.drawn = Some(WindowMode::Error);
     if let Some(c) = choice {
         act(app, c);
     }
@@ -811,8 +1108,8 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
     let can_pick = app.services.pick_folder.is_some();
     let open_now = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
-    egui::Window::new(crate::i18n::tr("Open a Library"))
-        .id(egui::Id::new("library-chooser"))
+    let shown = egui::Window::new(crate::i18n::tr("Open a Library"))
+        .id(egui::Id::unique(CHOOSER_WINDOW_ID))
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
@@ -826,7 +1123,7 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             ui.label(RichText::new(crate::i18n::tr("Choose the library to open.")).color(t.text_label));
             if chooser.libraries.is_empty() {
                 let r = ui.label(RichText::new(crate::i18n::tr("No recent libraries. Open one from a folder, or make a new one.")).color(t.text_dim));
-                register(ui.ctx(), "indicator:noRecentLibraries", r.rect);
+                register(ui, "indicator:noRecentLibraries", r.rect);
             }
             egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -845,7 +1142,7 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             let selected = chooser.selected.and_then(|i| chooser.libraries.get(i));
             let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
                 let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                register(ui.ctx(), format!("button:{id}"), r.rect);
+                register(ui, format!("button:{id}"), r.rect);
                 if r.clicked() {
                     choice = Some(c);
                 }
@@ -864,6 +1161,10 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
                 });
             });
         });
+    if let Some(w) = &shown {
+        // A press on the dim raises its area; keep the launch list above it.
+        ctx.move_to_top(w.response.layer_id);
+    }
     if let Some((i, open)) = clicked_row {
         select(app, i);
         if open {
@@ -913,8 +1214,8 @@ fn recent_row(ui: &mut egui::Ui, t: &Tokens, i: usize, library: &RecentLibrary, 
             ui.add(egui::Label::new(RichText::new(text).size(11.0).color(dim)).wrap().selectable(false));
         }
     });
-    let r = ui.interact(inner.response.rect, egui::Id::new(("library-recent", i)), egui::Sense::click());
-    register(ui.ctx(), format!("libraryRecent:{i}"), r.rect);
+    let r = ui.interact(inner.response.rect, egui::Id::unique(("library-recent", i)), egui::Sense::click());
+    register(ui, format!("libraryRecent:{i}"), r.rect);
     let fill = if selected {
         Some(t.tool_active)
     } else if r.hovered() {
@@ -945,15 +1246,21 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .font(t.semibold(12.5))
                         .color(t.canvas),
                 );
-                register(ui.ctx(), "indicator:temporarySession", r.rect);
+                register(ui, "indicator:temporarySession", r.rect);
                 let b = ui.add(
                     egui::Button::new(RichText::new(crate::i18n::tr("Open Library…")).color(t.canvas)).fill(egui::Color32::from_black_alpha(40)),
                 );
-                register(ui.ctx(), "button:libraryReopen", b.rect);
+                register(ui, "button:libraryReopen", b.rect);
                 reopen = b.clicked();
             });
         });
     if reopen && let Some(p) = app.library_problem.as_mut() {
         p.dismissed = false;
+        // The banner was drawn before the window; reopening it here would otherwise settle in this
+        // same pass, whose background already consumed its input. Shield the next frame's first
+        // actual window draw.
+        app.library_window_input.begin_transition();
+        clear_focus(ui.ctx());
+        ui.ctx().request_repaint();
     }
 }

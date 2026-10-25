@@ -156,7 +156,7 @@ pub fn ready(app: &LightcraftApp, item: Item) -> bool {
 }
 
 /// Advance a running slideshow (every frame, before drawing).
-pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let Some(run) = app.ui.slideshow.as_ref() else {
         app.renderer.release_slides(&[]);
         return;
@@ -165,7 +165,6 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         end(app);
         return;
     }
-    let now = ctx.input(|i| i.time);
     let mut play = run.play.clone();
     let t = play.tick(now, |id| ready(app, id));
     if let Some(run) = app.ui.slideshow.as_mut() {
@@ -295,7 +294,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // (`ui.pointer` positions are relative to it)
     app.image_rect = Some(canvas);
     let Some(run) = app.ui.slideshow.as_ref() else { return };
-    let now = ui.input(|i| i.time);
+    let now = app.tick_now();
     let ppp = ui.ctx().pixels_per_point();
     let side = super::detail::texture_side(ui.ctx());
     let want = wanted(&run.play, now);
@@ -369,7 +368,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             draw(frame.current, 1.0);
         }
     }
-    register(ui.ctx(), "slideshow:canvas", canvas);
+    register(ui, "slideshow:canvas", canvas);
     controls(app, ui, canvas, now);
 }
 

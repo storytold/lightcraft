@@ -322,6 +322,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "app.systemInfo",
             "app.openLogFolder",
             "---",
+            "app.checkForUpdates",
             "app.about",
         ],
     ),
@@ -941,6 +942,54 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
     r
 }
 
+/// What the native menu bar may do with one command it queued.
+///
+/// AppKit delivers menu accelerators and clicks straight to the host, so they never pass through
+/// [`crate::shortcuts::handle`]. The explicit policy below is the equivalent guard for that path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeCommand {
+    /// Run the command through the ordinary menu path.
+    Run,
+    /// Quit stays available: the host still runs the existing tasks/unsaved-changes confirmation.
+    Quit,
+    /// A quit/settings notice or the blocking library window owns input: drop the command.
+    Blocked,
+}
+
+/// The safety policy for commands queued by the native menu bar.
+///
+/// While a prompt or the blocking library window owns input, no queued command may act on the
+/// library behind it — including Settings… and About, which would otherwise open their dialog
+/// behind the blocking window. Quit is the one exception: the window itself offers Quit, and the
+/// host's existing confirmation ([`crate::panels::notices::may_close`]) still decides whether the
+/// process may end.
+pub fn native_command_policy(app: &LightcraftApp, id: &str) -> NativeCommand {
+    if id == "app.quit" {
+        return NativeCommand::Quit;
+    }
+    if crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_dialog_input(app) {
+        return NativeCommand::Blocked;
+    }
+    NativeCommand::Run
+}
+
+/// Run one command resolved from a native menu event under [`native_command_policy`].
+///
+/// The host calls this for every queued native command, so a macOS accelerator, click or About/
+/// Settings item respects the notice and blocking-library barriers. Ordinary dialogs retain
+/// their existing native-menu behavior.
+pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> NativeCommand {
+    let policy = native_command_policy(app, id);
+    match policy {
+        NativeCommand::Run => {
+            let _ = run_item(app, id, params);
+        }
+        NativeCommand::Blocked => log::debug!("native menu: {id} is blocked while another window owns input"),
+        NativeCommand::Quit => {}
+    }
+    policy
+}
+
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
     if mac {
@@ -1006,7 +1055,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             .iter()
             .map(|(title, _)| {
                 let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
-                crate::widgets::register(ui.ctx(), format!("menu:{title}"), r.rect);
+                crate::widgets::register(ui, format!("menu:{title}"), r.rect);
                 r
             })
             .collect();
@@ -1027,7 +1076,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         ui.spacing_mut().item_spacing.x = saved;
     } else {
         let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Menu")).font(font.clone()).color(t.text_label)).frame(false));
-        crate::widgets::register(ui.ctx(), "menu:all", r.rect);
+        crate::widgets::register(ui, "menu:all", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             crate::menu_level::level(ui, 1, bar_bottom, |ui| {
                 for (title, items) in &bar {
@@ -1056,7 +1105,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
 /// Returns the menu whose title was just clicked right after a hover opened it.
 fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<egui::Id> {
     let popup = egui::Popup::default_response_id;
-    let key = egui::Id::new("lc-menubar-hover-opened");
+    let key = egui::Id::unique("lc-menubar-hover-opened");
     let open = titles.iter().position(|r| egui::Popup::is_id_open(ctx, popup(r)));
     // the menu a hover opened, until it closes or is clicked
     let mut confirmed = None;
@@ -1095,7 +1144,7 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
 /// label), and while its submenu is open it is the anchor the next frame's room is measured from.
 fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
     let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
-    crate::widgets::register(ui.ctx(), format!("menusub:{label}"), r.response.rect);
+    crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
     if r.inner.is_some() {
         crate::menu_level::set_anchor(ui.ctx(), depth + 1, r.response.rect);
     }
@@ -1121,7 +1170,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                     b = b.shortcut_text(shortcut_text(sc, mac));
                 }
                 let r = ui.add_enabled(*enabled, b);
-                crate::widgets::register(ui.ctx(), format!("menuitem:{id}"), r.rect);
+                crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
@@ -1839,6 +1888,73 @@ mod tests {
         app.session.execute("library.select", &json!({"ids": [other.0]})).unwrap();
         run_item(&mut app, id, params.clone()).unwrap();
         assert_eq!(app.session.catalog.photo(other).unwrap().meta.copyright, "© Me");
+    }
+
+    /// Native menu accelerators never pass through `shortcuts::handle`: a command queued by the
+    /// native menu must obey the same blocking-window/prompt policy. Settings… and About must not
+    /// open behind the blocking window, and Quit stays available for its existing confirmation.
+    #[test]
+    fn native_menu_commands_respect_the_blocking_window_policy() {
+        use crate::panels::library_problem::LibraryProblem;
+        use crate::state::Dialog;
+
+        let mut h = crate::headless::Headless::new(app(), [1000.0, 760.0], 1.0);
+        h.settle(std::time::Duration::from_secs(20));
+        h.app.ui.view = ViewMode::PhotoGrid;
+        h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
+
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Blocked);
+        assert_eq!(native_command_policy(&h.app, "app.about"), NativeCommand::Blocked);
+        assert_eq!(native_command_policy(&h.app, "view.gridToggle"), NativeCommand::Blocked);
+        assert_eq!(native_command_policy(&h.app, "app.quit"), NativeCommand::Quit, "Quit keeps its own confirmation");
+        assert_eq!(run_native_command(&mut h.app, "app.settings", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "Settings must not open behind the blocking library window");
+        assert_eq!(run_native_command(&mut h.app, "app.about", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "About must not open behind the blocking library window");
+        assert_eq!(run_native_command(&mut h.app, "view.gridToggle", Value::Null), NativeCommand::Blocked);
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a menu command did not act on the library behind the window");
+        assert_eq!(
+            run_native_command(&mut h.app, "app.quit", Value::Null),
+            NativeCommand::Quit,
+            "Quit stays for the host's existing tasks/unsaved-changes confirmation"
+        );
+        assert!(h.app.ui.dialog.is_none());
+
+        // The launch list owns input the same way.
+        let settings = crate::state::AppSettings {
+            recent_libraries: vec!["/no/such/library-one".into()],
+            library_path: "/no/such/library-one".into(),
+            ..Default::default()
+        };
+        h.app.library_problem = Some(LibraryProblem::choose(&settings));
+        assert_eq!(native_command_policy(&h.app, "app.about"), NativeCommand::Blocked);
+        assert_eq!(run_native_command(&mut h.app, "app.about", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "About must not open behind the launch list");
+        // The launch list's own New Library prompt is not a background barrier: it keeps its
+        // priority instead of being treated as an unrelated dialog behind the list.
+        h.app.ui.dialog = Some(Dialog::TextPrompt {
+            title: "New Library".into(),
+            hint: "Library name".into(),
+            value: "New Library".into(),
+            command: "app.newLibrary".into(),
+            params: json!({}),
+            key: "name".into(),
+        });
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Run, "the launch list's own prompt is not a background barrier");
+        h.app.ui.dialog = None;
+
+        // A quit/settings notice owns input in the same way.
+        h.app.library_problem = None;
+        h.app.notices.push("The settings file could not be read and was reset.".into());
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Blocked);
+        assert_eq!(run_native_command(&mut h.app, "app.settings", Value::Null), NativeCommand::Blocked);
+        assert!(h.app.ui.dialog.is_none(), "Settings must not open behind a notice");
+
+        // Once nothing blocks input, the same queued command runs normally.
+        h.app.notices.clear();
+        assert_eq!(native_command_policy(&h.app, "app.settings"), NativeCommand::Run);
+        assert_eq!(run_native_command(&mut h.app, "app.settings", Value::Null), NativeCommand::Run);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::Settings { .. })), "the command runs when no barrier owns input");
     }
 
     #[test]

@@ -122,7 +122,7 @@ impl Rating {
     }
 
     fn star_id(&self, ui: &Ui, i: u8) -> egui::Id {
-        ui.id().with(("rating-star", &self.id, i))
+        ui.scope_id().with(("rating-star", &self.id, i))
     }
 
     /// Draw the row. Returns the new rating when a click or an arrow key changed it.
@@ -142,7 +142,7 @@ impl Rating {
             let sense = if i == stop || ui.memory(|m| m.has_focus(id)) { Sense::click() } else { Sense::CLICK };
             let resp = ui.interact(r, id, sense);
             announce_selected(&resp, format!("{} ★", i + 1), i < self.rating);
-            register(ui.ctx(), self.widget_id(i + 1), r);
+            register(ui, self.widget_id(i + 1), r);
             if resp.hovered() {
                 hover_n = Some(i + 1);
             }
@@ -201,7 +201,7 @@ pub fn favorite_button(ui: &mut Ui, widget: String, favorite: bool, name: &str) 
     announce_selected(&resp, name, favorite);
     // (rows scrolled out of view can't be clicked)
     if ui.is_rect_visible(r) {
-        register(ui.ctx(), widget, r);
+        register(ui, widget, r);
     }
     if resp.hovered() {
         ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));

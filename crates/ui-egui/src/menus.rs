@@ -263,6 +263,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Settings ▸ Display
     ("app.displayProfile", "Display Profile", None, ""),
     ("app.about", "About LightCraft", None, "Help"),
+    ("app.checkForUpdates", "Check for Updates…", None, "Help"),
     ("app.systemInfo", "System Info…", None, "Help"),
     ("app.openLogFolder", "Open Log Folder", None, "Help"),
     // the frame-rate display (`frame_rate`): a debugging aid, never saved
@@ -667,8 +668,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             } else if app.ui.keyword_painter.is_some() {
                 app.ui.keyword_painter = None;
             } else if app.ui.fullscreen {
-                app.ui.fullscreen = false;
-                app.ui.slideshow = None;
+                // Through `slideshow::end`: it also releases the held slide textures. Clearing the
+                // two fields directly left every rendered slide in the renderer.
+                crate::panels::slideshow::end(app);
             } else if !app.ui.tool.is_empty() {
                 app.ui.tool.clear();
             } else if app.ui.right == RightPanel::Crop && app.ui.view == ViewMode::Detail {
@@ -692,7 +694,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "view.slideshow" => {
             // the photos in view, full screen, with the playback settings (see panels::slideshow)
-            let now = ctx.input(|i| i.time);
+            let now = app.tick_now();
             let r = crate::panels::slideshow::start(app, p, now);
             if r.is_ok() {
                 app.toast(&ctx, crate::i18n::tr("Slideshow · Space pauses · Esc ends"));
@@ -700,7 +702,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             r
         }
         "slideshow.togglePause" | "slideshow.next" | "slideshow.previous" | "slideshow.end" => {
-            let now = ctx.input(|i| i.time);
+            let now = app.tick_now();
             crate::panels::slideshow::command(app, id, now)
         }
         "view.slideshowOptions" => {
@@ -708,11 +710,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.fullScreenPreview" => {
-            app.ui.fullscreen = !app.ui.fullscreen;
-            if !app.ui.fullscreen {
-                app.ui.slideshow = None;
-            }
             if app.ui.fullscreen {
+                // Through `slideshow::end`: it also releases the held slide textures. Clearing the
+                // two fields directly left every rendered slide in the renderer.
+                crate::panels::slideshow::end(app);
+            } else {
+                app.ui.fullscreen = true;
                 app.ui.zoom = Zoom::Fit;
                 app.ui.tool.clear();
                 let _ = app.session.end_interaction();
@@ -1585,6 +1588,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::About);
             Ok(Value::Null)
         }
+        "app.checkForUpdates" => crate::updates_ui::check(app),
         "photo.editInPhotoCraft" => edit_in(app, &ctx, p, true),
         "photo.editInExternal" => edit_in(app, &ctx, p, false),
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),

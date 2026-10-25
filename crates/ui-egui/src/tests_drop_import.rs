@@ -147,6 +147,31 @@ fn a_drop_while_a_dialog_is_open_leaves_the_dialog_and_imports_nothing() {
     assert!(h.app.ui.toast.is_some(), "the person is told why");
 }
 
+/// A prompt owns the library and the top layer: a drop while it is up stays queued (it is not
+/// imported behind the prompt), and the drop-hover card is not painted above it.
+#[test]
+fn a_drop_and_its_hover_card_wait_behind_a_notice_prompt() {
+    let dir = Scratch::new("prompt");
+    let mut h = app(&dir);
+    h.app.notices.push("The settings file could not be read and was reset.".into());
+    h.step();
+    h.step();
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:noticeOk"), "the notice is laid out");
+    drop_files(&mut h, &[dir.path("trip")], true);
+    assert!(!overlay(&h), "the drop-hover Tooltip layer must not cover the prompt");
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:noticeOk"), "the prompt still owns the window");
+    drop_files(&mut h, &[dir.path("trip")], false);
+    assert_eq!(photos(&h), 0, "nothing was imported behind the prompt");
+    assert!(h.app.ui.dialog.is_none() && h.app.import.is_none() && h.app.scan.is_none(), "the drop was not handled yet");
+    assert_eq!(h.app.dropped_files.len(), 1, "the dropped folder is queued until the prompt is gone");
+    assert_eq!(h.app.notices.len(), 1, "the notice is still up");
+    let r = h.request("ui.clickWidget", json!({"id": "button:noticeOk"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.notices.is_empty(), "OK dismisses the notice");
+    assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the queued drop opens its review after the prompt");
+    assert_eq!(photos(&h), 0, "the review still imports nothing before it is confirmed");
+}
+
 /// The scan of a dropped folder finishing while another dialog is open (the face model's licence, Settings…)
 /// keeps that dialog; the review opens, with the scan's photos, once it is closed.
 #[test]

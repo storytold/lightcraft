@@ -105,14 +105,14 @@ fn length(ui: &mut Ui, id: &str, inches: f64, unit: Unit, min_in: f64, max_in: f
             .max_decimals(decimals(unit))
             .suffix(format!(" {}", unit.label())),
     );
-    register(ui.ctx(), format!("drag:{id}"), r.rect);
+    register(ui, format!("drag:{id}"), r.rect);
     r.changed().then(|| unit.to_inches(v))
 }
 
 fn check(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
     let mut v = value;
     let r = ui.checkbox(&mut v, crate::i18n::tr(label));
-    register(ui.ctx(), format!("check:{id}"), r.rect);
+    register(ui, format!("check:{id}"), r.rect);
     r.changed().then_some(v)
 }
 
@@ -130,7 +130,7 @@ fn choice<V: PartialEq + Copy>(ui: &mut Ui, id: &str, options: &[(V, &str)], cur
 fn colour(ui: &mut Ui, id: &str, rgb: [u8; 3]) -> Option<[u8; 3]> {
     let mut c = rgb;
     let r = ui.color_edit_button_srgb(&mut c);
-    register(ui.ctx(), format!("color:{id}"), r.rect);
+    register(ui, format!("color:{id}"), r.rect);
     (c != rgb).then_some(c)
 }
 
@@ -284,7 +284,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         }
         let mut pt = im.stroke_width_pt;
         let r = ui.add(egui::DragValue::new(&mut pt).range(0.0..=36.0).speed(0.05).max_decimals(2).suffix(" pt"));
-        register(ui.ctx(), "drag:printStrokeWidth", r.rect);
+        register(ui, "drag:printStrokeWidth", r.rect);
         if r.changed() {
             patch(app, &ctx, json!({"image": {"strokeWidthPt": pt}}));
         }
@@ -303,9 +303,9 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             row(ui, t, "Grid", |ui| {
                 let (mut c, mut r) = (g.columns, g.rows);
                 let a = ui.add(egui::DragValue::new(&mut c).range(1..=layout::MAX_GRID).suffix(" cols"));
-                register(ui.ctx(), "drag:printColumns", a.rect);
+                register(ui, "drag:printColumns", a.rect);
                 let b = ui.add(egui::DragValue::new(&mut r).range(1..=layout::MAX_GRID).suffix(" rows"));
-                register(ui.ctx(), "drag:printRows", b.rect);
+                register(ui, "drag:printRows", b.rect);
                 if a.changed() || b.changed() {
                     patch(app, &ctx, json!({"layout": {"grid": {"columns": c, "rows": r}}}));
                 }
@@ -414,7 +414,8 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
                 }
             }
         });
-        register(ui.ctx(), "combo:printPaper", c.response.rect);
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
+        register(ui, "combo:printPaper", c.response.rect);
     });
     if l.page.paper.eq_ignore_ascii_case("custom") {
         row(ui, t, "Size", |ui| {
@@ -470,7 +471,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     row(ui, t, "Resolution", |ui| {
         let mut ppi = st.job.ppi;
         let r = ui.add(egui::DragValue::new(&mut ppi).range(72.0..=720.0).speed(1.0).max_decimals(0).suffix(" ppi"));
-        register(ui.ctx(), "drag:printPpi", r.rect);
+        register(ui, "drag:printPpi", r.rect);
         if r.changed() {
             patch(app, &ctx, json!({"job": {"ppi": ppi}}));
         }
@@ -501,7 +502,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
         let c = egui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
                 let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
-                register(ui.ctx(), format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
+                register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
                 if r.clicked() && color.profile != managed(space) {
                     patch_color(app, &ctx, "profile", to_value(managed(space)));
                 }
@@ -511,11 +512,12 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
             }
             if app.services.pick_display_profile.is_some() {
                 let r = ui.selectable_label(false, crate::i18n::tr("Other…"));
-                register(ui.ctx(), "item:printProfile-other", r.rect);
+                register(ui, "item:printProfile-other", r.rect);
                 pick |= r.clicked();
             }
         });
-        register(ui.ctx(), "combo:printProfile", c.response.rect);
+        crate::widgets::name_combo(&c.response, crate::i18n::tr("Profile"));
+        register(ui, "combo:printProfile", c.response.rect);
     });
     if pick && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next()) {
         patch_color(app, &ctx, "profile", json!({"kind": "icc", "path": path}));
@@ -534,7 +536,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
         row(ui, t, label, |ui| {
             let mut v = value;
             let r = ui.add(egui::DragValue::new(&mut v).range(-100.0..=100.0).speed(0.5).max_decimals(0));
-            register(ui.ctx(), format!("drag:print{label}"), r.rect);
+            register(ui, format!("drag:print{label}"), r.rect);
             if r.changed() {
                 patch_color(app, &ctx, key, json!(v));
             }
@@ -589,7 +591,6 @@ impl Sheet {
 }
 
 fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, ids: &[PhotoId], pages: usize) {
-    let ctx = ui.ctx().clone();
     // room for the page buttons and, for a package, the selected cell's row (which may wrap)
     let footer = if st.layout.style.is_package() { 104.0 } else { 44.0 };
     let size = vec2(ui.available_width(), (ui.available_height() - footer).max(120.0));
@@ -605,7 +606,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
     let inner = Rect::from_min_max(area.min + vec2(ruler, ruler), area.max).shrink(14.0);
     let scale = ((inner.width() as f64 / pw).min(inner.height() as f64 / ph) as f32).max(1.0);
     let sheet = Sheet { page: Rect::from_center_size(inner.center(), vec2(pw as f32, ph as f32) * scale), scale };
-    register(&ctx, "print:page", sheet.page);
+    register(ui, "print:page", sheet.page);
 
     painter.rect_filled(sheet.page.translate(vec2(2.0, 3.0)), 0.0, Color32::from_black_alpha(70));
     let bg = st.page.background;
@@ -655,7 +656,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
         let mut shown = Vec::new();
         for (i, (r, photo)) in cells.iter().enumerate() {
             let rect = sheet.rect(r);
-            register(&ctx, format!("print:gridcell:{i}"), rect);
+            register(ui, format!("print:gridcell:{i}"), rect);
             shown.extend(paint_cell(app, &painter, t, st, rect, *photo, &sheet, r));
         }
         page_options(&painter, st, &sheet, &shown, pu.page + 1);
@@ -668,7 +669,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
             pu.selected = None;
         }
         let label = ui.label(egui::RichText::new(format!("{} {} / {}", crate::i18n::tr("Page"), pu.page + 1, pages)).color(t.text));
-        register(ui.ctx(), "print:pageLabel", label.rect);
+        register(ui, "print:pageLabel", label.rect);
         if text_button(ui, "printPageNext", "▶", false).clicked() && pu.page + 1 < pages {
             pu.page += 1;
             pu.selected = None;
@@ -709,8 +710,8 @@ fn package_cells(
         let photo = if st.layout.style == Style::CustomPackage { c.photo.map(PhotoId).or(first) } else { first };
         let rect = sheet.rect(&c.rect);
         paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
-        let resp = ui.interact(rect, egui::Id::new(("print-cell", c.id)), Sense::click_and_drag());
-        register(&ctx, format!("print:cell:{}", c.id), rect);
+        let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
+        register(ui, format!("print:cell:{}", c.id), rect);
         if resp.clicked() || resp.drag_started() {
             pu.selected = Some(c.id);
         }
@@ -751,8 +752,8 @@ fn package_cells(
     painter.rect_stroke(rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
     let handle = Rect::from_center_size(rect.right_bottom(), Vec2::splat(HANDLE));
     painter.rect_filled(handle, 2.0, t.accent);
-    let resp = ui.interact(handle, egui::Id::new(("print-resize", sel.id)), Sense::drag());
-    register(&ctx, format!("print:resize:{}", sel.id), handle);
+    let resp = ui.interact(handle, egui::Id::unique(("print-resize", sel.id)), Sense::drag());
+    register(ui, format!("print:resize:{}", sel.id), handle);
     if resp.drag_started() {
         pu.drag = Some(Drag { cell: sel.id, origin: sel.rect, resize: true, press: press_origin(ui, &resp), total: Vec2::ZERO });
     }

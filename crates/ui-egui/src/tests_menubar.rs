@@ -18,7 +18,14 @@ fn app(size: [f32; 2]) -> Headless {
 }
 
 fn widget(h: &Headless, id: &str) -> Option<egui::Rect> {
-    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
+    h.app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| *r)
+}
+
+/// The scroll viewport clips a menu row independently of the popup's outer rectangle, which
+/// also contains its scroll arrows. Target the portion a real pointer can reach.
+fn visible_rect(h: &Headless, id: &str) -> Option<egui::Rect> {
+    let hit = h.app.widget_hits.iter().rev().find(|(w, _)| w == id)?.1;
+    Some(h.view.ctx.layer_transform_to_global(hit.layer_id).map_or(hit.interact_rect, |t| t * hit.interact_rect))
 }
 
 fn widgets_with(h: &Headless, prefix: &str) -> Vec<(String, egui::Rect)> {
@@ -44,6 +51,7 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
     // scrolled menu's submenus must open upward.
     let sizes = [[1280.0, 703.0], [1160.0, 560.0]];
     let mut submenus = 0;
+    let mut clipped_rows = 0;
     for size in sizes {
         for top in ["Photo", "File", "View"] {
             let what = format!("{size:?} {top}");
@@ -57,7 +65,16 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
             let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
             let rows: Vec<String> = widgets_with(&h, "menusub:").into_iter().filter(|(_, r)| level.contains_rect(*r)).map(|(id, _)| id).collect();
             for row in rows {
-                let r = h.request("ui.hoverWidget", json!({"id": row}), T);
+                let full = widget(&h, &row).unwrap_or_else(|| panic!("{what}: no {row}"));
+                let visible = visible_rect(&h, &row).unwrap_or_else(|| panic!("{what}: no hit area for {row}"));
+                assert!(full.is_positive() && visible.is_positive(), "{what}: {row} has no visible portion");
+                let at = visible.center();
+                if !visible.contains(full.center()) {
+                    clipped_rows += 1;
+                }
+                let fx = (at.x - full.left()) / full.width();
+                let fy = (at.y - full.top()) / full.height();
+                let r = h.request("ui.hoverWidget", json!({"id": row, "fx": fx, "fy": fy}), T);
                 assert_eq!(r["ok"], true, "{what}: {r}");
                 h.settle(SETTLE);
                 if widget(&h, "menu-level:2").is_none() {
@@ -69,6 +86,7 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
         }
     }
     assert!(submenus >= 6, "opened {submenus} submenus");
+    assert!(clipped_rows > 0, "exercise a row whose geometric centre is clipped away");
 }
 
 #[test]

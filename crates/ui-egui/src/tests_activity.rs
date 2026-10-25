@@ -78,7 +78,7 @@ fn more_than_three_rows_overflow_and_expand() {
     click(&mut h, "activity:more");
     assert_eq!(rows(&h), 5);
     // expanded, the stack grows to show them all
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::new("activity-stack"))).expect("the stack is drawn");
+    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
     for g in &guards {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
         assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
@@ -504,7 +504,7 @@ fn rows_added_later_grow_the_stack() {
     for _ in 0..5 {
         h.step();
     }
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::new("activity-stack"))).expect("the stack is drawn");
+    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
     for g in [&a, &b, &c] {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
         assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());

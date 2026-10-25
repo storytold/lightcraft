@@ -17,13 +17,13 @@ use super::settings::{heading, hint};
 use crate::LightcraftApp;
 use crate::text_field::TextField;
 use crate::theme::Tokens;
-use crate::widgets::register;
+use crate::widgets::{register, register_response};
 
 /// The user templates list is at most this tall (it scrolls past it).
 const USER_LIST_H: f32 = 180.0;
 
 fn hovered_key() -> egui::Id {
-    egui::Id::new("settingsSlideshowTemplateHovered")
+    egui::Id::unique("settingsSlideshowTemplateHovered")
 }
 
 /// The template the pointer is over in the browser (its id), which the preview shows.
@@ -43,7 +43,7 @@ enum Pending {
 }
 
 fn pending_key() -> egui::Id {
-    egui::Id::new("settingsSlideshowTemplatePending")
+    egui::Id::unique("settingsSlideshowTemplatePending")
 }
 
 fn pending(ctx: &egui::Context) -> Option<Pending> {
@@ -129,7 +129,7 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
     }
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
-    register(&ctx, format!("template:{}", tpl.id), rect);
+    register_response(format!("template:{}", tpl.id), rect, &resp);
     if resp.hovered() || resp.context_menu_opened() {
         *hovered = Some(tpl.id.clone());
     }
@@ -151,7 +151,7 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
 /// A menu entry registered as `button:{id}`.
 fn item(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool) -> bool {
     let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
-    register(ui.ctx(), format!("button:{id}"), r.rect);
+    register(ui, format!("button:{id}"), r.rect);
     r.clicked()
 }
 
@@ -228,7 +228,7 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // save the current settings as a new template
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        let mem = egui::Id::new("settingsSlideshowTemplateNewName");
+        let mem = egui::Id::unique("settingsSlideshowTemplateNewName");
         let mut name: String = ui.data(|d| d.get_temp(mem)).unwrap_or_default();
         let r = TextField::singleline("field:slideshowTemplateName", &mut name).hint(crate::i18n::tr("New template name")).width(180.0).show(ui);
         let save = crate::widgets::text_button(ui, "slideshowTemplateSave", "Save as Template", false).clicked()

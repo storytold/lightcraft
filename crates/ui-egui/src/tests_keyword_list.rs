@@ -456,8 +456,8 @@ fn ticking_a_keyword_keeps_the_list_in_place() {
     assert!(box_moved, "the box changed height (the list was held, not left alone)");
 }
 
-/// At the top of the panel the box is in sight: a ticked keyword's chip pushes the list down,
-/// as before.
+/// At the top of the panel the box is in sight: adding keyword chips pushes the list down
+/// without scrolling the panel. Checkbox interaction is covered separately above.
 #[test]
 fn at_the_top_the_box_grows_in_sight() {
     let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
@@ -465,7 +465,10 @@ fn at_the_top_the_box_grows_in_sight() {
     let (title, box_top) = (rect(&h, "keywordList:topLevel"), rect(&h, "field:keyword"));
     for k in ["aaa1", "aaa2", "aaa3", "aaa4", "aaa5", "aaa6"] {
         run(&mut h, "keyword.create", json!({"name": k}));
-        ask(&mut h, "ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}));
+        // Growing chips eventually push later rows outside this short viewport. Add through
+        // the command so this layout regression never relies on clicking a clipped checkbox.
+        run(&mut h, "photo.setMeta", json!({"ids": ids, "addKeywords": [k]}));
+        assert!(ids.iter().all(|id| keywords_of(&h, *id).iter().any(|keyword| keyword == k)), "{k} was added to both photos");
     }
     assert_eq!(rect(&h, "field:keyword"), box_top, "the panel stays at its top");
     assert!(rect(&h, "keywordList:topLevel").top() > title.top(), "the chips pushed the list down");

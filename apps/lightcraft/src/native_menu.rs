@@ -11,6 +11,11 @@
 //! - while a text field has keyboard focus, accelerators without ⌘ (`G`, `1`, `Delete`…) and the
 //!   text-editing ones (⌘A/⌘C/⌘V/⌘X/⌘Z) are removed, so typing and text editing work; they come
 //!   back when the field loses focus.
+//!
+//! Menu events never pass through the egui shortcut handler. [`NativeMenu::update`] therefore runs
+//! every queued command through [`lightcraft_ui_egui::menubar::run_native_command`]: while the
+//! blocking library window or a quit/settings notice owns input it drops the command (Settings…
+//! and About included), and only Quit stays available for the host's existing confirmation.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, channel};
@@ -480,17 +485,21 @@ impl NativeMenu {
         lightcraft_ui_egui::i18n::set_language(app.ui.language);
         let mut quit = false;
         while let Ok(key) = self.rx.try_recv() {
-            if key == QUIT {
+            // Resolve the native id to its command, then let the shared policy decide. Native menu
+            // events never reach `shortcuts::handle`, so this is the one guard for AppKit's
+            // accelerators and clicks: while the blocking library window or a quit/settings notice
+            // owns input, a queued command is dropped (Quit stays for the existing confirmation).
+            let (cmd, params) = if key == QUIT {
+                (key, serde_json::json!({}))
+            } else if key == "app.about" || key == SETTINGS {
+                (key, serde_json::json!({}))
+            } else if let Some(it) = self.items.get(&key) {
+                (it.cmd.clone(), it.params.clone())
+            } else {
+                continue;
+            };
+            if lightcraft_ui_egui::menubar::run_native_command(app, &cmd, params) == lightcraft_ui_egui::menubar::NativeCommand::Quit {
                 quit = true;
-                continue;
-            }
-            if key == "app.about" || key == SETTINGS {
-                let _ = app.run(&key, serde_json::json!({}));
-                continue;
-            }
-            if let Some(it) = self.items.get(&key) {
-                let (cmd, params) = (it.cmd.clone(), it.params.clone());
-                let _ = lightcraft_ui_egui::menubar::run_item(app, &cmd, params);
             }
         }
         let bar = menu_bar(app);

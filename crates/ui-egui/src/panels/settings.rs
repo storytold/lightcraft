@@ -94,7 +94,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     let room = max_height - (ui.cursor().top() - top) - 1.0;
     if room < PAGE_MIN_HEIGHT {
         body(app, ui, tab.as_str());
-        register(ui.ctx(), "settings:page", ui.min_rect());
+        register(ui, "settings:page", ui.min_rect());
         return;
     }
     let mut height = room.min(PAGE_SIZE.y);
@@ -131,9 +131,9 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
                 body(app, ui, tab.as_str());
             }
             // (what the page took: wider than the room for it would mean a control is cut off)
-            register(ui.ctx(), "settings:page", ui.min_rect());
+            register(ui, "settings:page", ui.min_rect());
         });
-    register(ui.ctx(), "settings:pageRoom", page.inner_rect);
+    register(ui, "settings:pageRoom", page.inner_rect);
 }
 
 /// `path` shortened to fit `max` (as `width` measures it) by dropping leading folders, after
@@ -169,7 +169,7 @@ fn path_label(ui: &mut egui::Ui, id: &str, path: &str, font: egui::FontId, color
         elide_path(path, (ui.available_width() - after).max(0.0), |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x);
     // (`truncate` is the last resort, for a room narrower than "…")
     let r = ui.add(egui::Label::new(RichText::new(&shown).font(font).color(color)).truncate().show_tooltip_when_elided(false));
-    register(ui.ctx(), format!("text:{id}"), r.rect);
+    register(ui, format!("text:{id}"), r.rect);
     if shown != path {
         r.on_hover_text(path);
     }
@@ -216,7 +216,7 @@ pub(super) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 /// A checkbox addressable as `check:{id}`; true when toggled.
 pub(super) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
     let r = ui.checkbox(value, crate::i18n::tr(label));
-    register(ui.ctx(), format!("check:{id}"), r.rect);
+    register(ui, format!("check:{id}"), r.rect);
     r.changed()
 }
 
@@ -255,12 +255,12 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
-        register(ui.ctx(), "button:settingsOpenLibrary", r.rect);
+        register(ui, "button:settingsOpenLibrary", r.rect);
         if r.clicked() {
             let _ = app.run("app.openLibrary", json!({}));
         }
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("New Library…")));
-        register(ui.ctx(), "button:settingsNewLibrary", r.rect);
+        register(ui, "button:settingsNewLibrary", r.rect);
         if r.clicked() {
             let _ = app.run("app.newLibrary", json!({}));
         }
@@ -360,7 +360,7 @@ fn edit_file_rows(ui: &mut egui::Ui, t: &Tokens, id: &str, file: &mut crate::sta
 // -------------------------------------------------------------------------------------- Import
 
 /// A preset picker: `None` = `none_label`. Returns the new choice when it changed.
-fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, current: Option<&str>, none_label: &str) -> Option<Option<String>> {
+fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, current: Option<&str>, none_label: &str) -> Option<Option<String>> {
     let name = |pid: &str| {
         app.session
             .presets
@@ -379,7 +379,8 @@ fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, current: Optio
             out = Some(Some(pid));
         }
     });
-    register(ui.ctx(), format!("combo:{id}"), r.response.rect);
+    crate::widgets::name_combo(&r.response, label);
+    register(ui, format!("combo:{id}"), r.response.rect);
     out.filter(|v| v.as_deref() != current)
 }
 
@@ -403,7 +404,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Raw defaults"));
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", d.raw_preset.as_deref(), "LightCraft Default") {
+        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw default"), d.raw_preset.as_deref(), "LightCraft Default") {
             let _ = app.run("library.preferences", json!({"import": {"rawPreset": v}}));
         }
     });
@@ -452,7 +453,8 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                             pick = Some(json!({"camera": cam, "preset": pid}));
                         }
                     });
-                    register(ui.ctx(), format!("combo:{id}"), r.response.rect);
+                    crate::widgets::name_combo(&r.response, crate::i18n::tr("Camera"));
+                    register(ui, format!("combo:{id}"), r.response.rect);
                     if let Some(c) = pick {
                         let _ = app.run("library.preferences", json!({"camera": c}));
                     }
@@ -462,7 +464,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
     row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", d.other_preset.as_deref(), "None") {
+        if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {
             let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
@@ -472,10 +474,10 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         [("copyright", "Copyright", "© 2026 Your Name", d.copyright.clone()), ("creator", "Creator", "Your Name", d.creator.clone())]
     {
         row(ui, t, label, |ui| {
-            let id = egui::Id::new(("settingsMeta", key));
+            let id = egui::Id::unique(("settingsMeta", key));
             let mut text: String = ui.data(|m| m.get_temp(id)).unwrap_or(value.clone());
             let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint_text).desired_width(240.0));
-            register(ui.ctx(), format!("field:settings.{key}"), r.rect);
+            register(ui, format!("field:settings.{key}"), r.rect);
             if r.lost_focus() && text.trim() != value {
                 let _ = app.run("library.preferences", json!({"import": {key: text.trim()}}));
             }
@@ -503,7 +505,8 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                         }
                     }
                 });
-            register(ui.ctx(), "combo:settingsMetaPreset", r.response.rect);
+            crate::widgets::name_combo(&r.response, crate::i18n::tr("Metadata preset"));
+            register(ui, "combo:settingsMetaPreset", r.response.rect);
             if let Some(n) = pick {
                 let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
             }
@@ -546,7 +549,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
             let can = app.services.pick_folder.is_some();
             let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
-            register(ui.ctx(), "button:settingsAutoFolder", r.rect);
+            register(ui, "button:settingsAutoFolder", r.rect);
             if r.clicked()
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
                 && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
@@ -565,7 +568,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 }
             });
             row(ui, t, crate::i18n::tr("Album"), |ui| {
-                let id = egui::Id::new("auto-album");
+                let id = egui::Id::unique("auto-album");
                 let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
                 let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
                 if r.lost_focus() {
@@ -632,7 +635,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 .color(t.text),
         );
         let r = ui.button(crate::i18n::tr("Clear Cache"));
-        register(ui.ctx(), "button:settingsClearCache", r.rect);
+        register(ui, "button:settingsClearCache", r.rect);
         if r.clicked() {
             let _ = app.run("library.clearPreviews", json!({}));
         }
@@ -661,7 +664,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 #[cfg(not(target_arch = "wasm32"))]
 fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // listing a big folder every frame would be slow: refresh every 2 s and after a change
-    let cache = egui::Id::new("smart-location");
+    let cache = egui::Id::unique("smart-location");
     let now = ui.input(|i| i.time);
     let loc: Value = match ui.data(|d| d.get_temp::<(f64, Value)>(cache)) {
         Some((at, v)) if now - at < 2.0 => v,
@@ -689,7 +692,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         );
         if !custom {
             let r = ui.label(RichText::new("(library default)").color(t.text));
-            register(ui.ctx(), "text:settingsSmartDefault", r.rect);
+            register(ui, "text:settingsSmartDefault", r.rect);
         }
     });
     let (count, bytes) = (loc["count"].as_u64().unwrap_or(0), loc["bytes"].as_u64().unwrap_or(0));
@@ -714,7 +717,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         );
     }
     // what happens to the previews already built when the folder changes
-    let mode_id = egui::Id::new("smart-existing");
+    let mode_id = egui::Id::unique("smart-existing");
     let mut mode: u8 = ui.data(|d| d.get_temp(mode_id)).unwrap_or(0);
     if count > 0 {
         row(ui, t, crate::i18n::tr("Existing previews"), |ui| {
@@ -729,7 +732,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.add_space(LABEL_W);
         if app.services.pick_folder.is_some() {
             let r = ui.button(crate::i18n::tr("Choose Folder…"));
-            register(ui.ctx(), "button:settingsSmartChoose", r.rect);
+            register(ui, "button:settingsSmartChoose", r.rect);
             if r.clicked()
                 && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
@@ -737,7 +740,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         }
         let r = ui.add_enabled(custom, egui::Button::new(crate::i18n::tr("Use Library Folder")));
-        register(ui.ctx(), "button:settingsSmartReset", r.rect);
+        register(ui, "button:settingsSmartReset", r.rect);
         if r.clicked() {
             result = Some(app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing})));
         }
@@ -782,7 +785,7 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, "", |ui| {
         let can = app.services.pick_display_profile.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Profile…")));
-        register(ui.ctx(), "button:settingsDisplayProfile", r.rect);
+        register(ui, "button:settingsDisplayProfile", r.rect);
         if r.clicked()
             && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
         {
@@ -791,7 +794,7 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         // with no profile chosen, previews follow the screen's own profile where the host knows it
         let none = if app.services.screen_profile.is_some() { crate::i18n::tr("Use Screen Profile") } else { crate::i18n::tr("Use sRGB") };
         let r = ui.add_enabled(!app.ui.settings.display_profile.is_empty(), egui::Button::new(none));
-        register(ui.ctx(), "button:settingsDisplayProfileNone", r.rect);
+        register(ui, "button:settingsDisplayProfileNone", r.rect);
         if r.clicked() {
             app.ui.settings.display_profile.clear();
         }
@@ -894,16 +897,20 @@ pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
                 for f in F::ALL {
                     let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
                     let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
-                    register(ui.ctx(), format!("button:{id}-{key}"), r.rect);
+                    register(ui, format!("button:{id}-{key}"), r.rect);
                     if r.clicked() {
                         *line = *f;
                     }
                 }
             });
-            register(ui.ctx(), format!("combo:{id}"), r.response.rect);
+            crate::widgets::name_combo(
+                &r.response,
+                &crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label())),
+            );
+            register(ui, format!("combo:{id}"), r.response.rect);
         }
         let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
-        register(ui.ctx(), format!("button:viewOptionsDefaults{n}"), r.rect);
+        register(ui, format!("button:viewOptionsDefaults{n}"), r.rect);
         if r.clicked() {
             *lines = defaults;
         }
@@ -925,7 +932,7 @@ pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
 fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, range: std::ops::RangeInclusive<f64>) {
     let mut v = value;
     let r = ui.add(egui::Slider::new(&mut v, range).logarithmic(key == "slideDuration").suffix(" s").max_decimals(1));
-    register(ui.ctx(), format!("slider:{id}"), r.rect);
+    register(ui, format!("slider:{id}"), r.rect);
     if r.changed()
         && let Ok(next) = app.session.slideshow.merged(&json!({ key: v }))
     {
@@ -968,7 +975,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ("slideshowExportVideo", "Export Video…", "video"),
         ] {
             let r = ui.add_enabled(!running, egui::Button::new(crate::i18n::tr(label)));
-            register(ui.ctx(), format!("button:{id}"), r.rect);
+            register(ui, format!("button:{id}"), r.rect);
             if r.clicked() {
                 let _ = app.run("dialog.slideshowExport", json!({"format": format}));
             }
@@ -1021,7 +1028,7 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             && let Some(mut c) = s.fade_color
         {
             let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
-            register(ui.ctx(), "button:slideshowFadeColor", r.rect);
+            register(ui, "button:slideshowFadeColor", r.rect);
             if r.changed() {
                 let _ = app.run("slideshow.playback", json!({"fadeColor": c}));
             }
@@ -1115,7 +1122,7 @@ fn theme_card<V: PartialEq + Copy>(
                     let hovered = ui.ctx().pointer_hover_pos().is_some_and(|p| row.contains(p));
                     ui.horizontal(|ui| {
                         let r = ui.radio_value(value, *v, crate::i18n::tr(kind.label()));
-                        register(ui.ctx(), format!("radio:theme-{}", kind.id()), r.rect);
+                        register(ui, format!("radio:theme-{}", kind.id()), r.rect);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let favorite = favorites.iter().any(|id| id == kind.id());
                             let r = ui
@@ -1123,7 +1130,7 @@ fn theme_card<V: PartialEq + Copy>(
                                 .on_hover_text(crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }));
                             r.widget_info(|| {
                                 egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button,
+                                    egui::Role::Button,
                                     true,
                                     format!(
                                         "{}: {}",
@@ -1132,7 +1139,7 @@ fn theme_card<V: PartialEq + Copy>(
                                     ),
                                 )
                             });
-                            register(ui.ctx(), format!("button:themeFavorite-{}", kind.id()), r.rect);
+                            register(ui, format!("button:themeFavorite-{}", kind.id()), r.rect);
                             if favorite || hovered {
                                 crate::rating::paint_star(ui.painter(), r.rect.shrink(4.0), favorite, if favorite { t.accent } else { t.text_dim });
                             }

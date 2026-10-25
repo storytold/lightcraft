@@ -130,7 +130,7 @@ fn long_dialogs_fit_a_short_window() {
 fn a_dialog_list_shrinks_to_fit_a_short_window() {
     let mut h = demo([1000.0, 320.0]);
     open(&mut h, "app.shortcuts");
-    let shrink = h.view.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("dialog-list-shrink"))).unwrap_or(0.0);
+    let shrink = h.view.ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("dialog-list-shrink"))).unwrap_or(0.0);
     assert!(shrink > 0.0, "the list gave up room");
     let dialog = rect(&h, "dialog:window");
     assert!(dialog.height() <= 320.0, "{dialog:?}");

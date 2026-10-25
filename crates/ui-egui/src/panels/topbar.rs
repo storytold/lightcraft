@@ -12,14 +12,14 @@ use crate::widgets::{icon_button, register};
 /// double-click zooms or restores it. Registered before the bar's widgets so they win the click.
 fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, bar: Rect, search_rect: Rect) {
     use crate::titlebar::{Gesture, WindowState, command_for};
-    register(ui.ctx(), "region:titlebar", bar);
-    let handle = egui::Id::new("titlebar-handle");
+    register(ui, "region:titlebar", bar);
+    let handle = egui::Id::unique("titlebar-handle");
     let resp = ui.interact(bar, handle, Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
     // a press that began on a button or the search field is theirs: dragging off it must not move the window
     // (while pressing, egui hovers every widget under the pointer; once the drag starts, only the dragged one)
     let ctx = ui.ctx().clone();
-    let memo = egui::Id::new("titlebar-press-on-widget");
+    let memo = egui::Id::unique("titlebar-press-on-widget");
     if resp.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_pressed()) {
         let hovered = ctx.interaction_snapshot(|s| s.hovered.clone());
         let on_widget =
@@ -45,6 +45,9 @@ fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, bar: Rect, search_rect:
     }
 }
 
+/// Draw the top bar: the titlebar drag area, the in-window menus when there is no native menu
+/// bar, sidebar and back/forward buttons, the centred search field, the filter button with its
+/// active count, and the right-side action icons.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // room for the traffic lights; in full screen they are gone, and the sidebar button sits as far
@@ -133,9 +136,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             // filter icon right of the search field
             let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
-            let fresp = ui.interact(fr, egui::Id::new("filter-btn"), Sense::click());
+            let fresp = ui.interact(fr, egui::Id::unique("filter-btn"), Sense::click());
             crate::widgets::announce(&fresp, crate::i18n::tr("Filters"));
-            register(ui.ctx(), "icon:filter", fr);
+            register(ui, "icon:filter", fr);
             let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
             paint(
                 ui.painter(),
@@ -192,9 +195,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-                let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
+                let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
                 crate::widgets::announce(&resp, crate::i18n::tr(tip));
-                register(ui.ctx(), format!("icon:{id}"), r);
+                register(ui, format!("icon:{id}"), r);
                 let warn = id == "cloud" && unsaved.is_some();
                 let colour = if warn {
                     t.caution
@@ -208,7 +211,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let c = r.right_top() + vec2(-5.0, 6.0);
                     ui.painter().circle_filled(c, 6.0, t.reject);
                     ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
-                    register(ui.ctx(), "indicator:unsaved", r);
+                    register(ui, "indicator:unsaved", r);
                 }
                 // a refusal says why (Import while a Lightroom catalog is coming in)
                 if resp.clicked()
@@ -223,16 +226,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let (icon, mode) = appearance_icon(app.ui.settings.appearance_mode);
             let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
             let tip = format!("{}: {}", crate::i18n::tr("Appearance Mode"), crate::i18n::tr(mode));
-            let resp = ui.interact(r, egui::Id::new(("top", "appearance")), Sense::click()).on_hover_text(tip.clone());
+            let resp = ui.interact(r, egui::Id::unique(("top", "appearance")), Sense::click()).on_hover_text(tip.clone());
             crate::widgets::announce(&resp, tip.clone());
-            register(ui.ctx(), "icon:appearance", r);
+            register(ui, "icon:appearance", r);
             paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
             if resp.clicked() {
                 let _ = app.run("view.appearance", json!({}));
             }
             crate::widgets::context_menu(&resp, |ui| {
                 let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
-                register(ui.ctx(), "menu:appearanceSettings", settings.rect);
+                register(ui, "menu:appearanceSettings", settings.rect);
                 if settings.clicked() {
                     let _ = app.run("app.settings", json!({"tab": "interface"}));
                     ui.close();
@@ -246,7 +249,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     for kind in group {
                         let r = ui.selectable_label(app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind, crate::i18n::tr(kind.label()));
-                        register(ui.ctx(), format!("menu:themeFavorite-{}", kind.id()), r.rect);
+                        register(ui, format!("menu:themeFavorite-{}", kind.id()), r.rect);
                         if r.clicked() {
                             let _ = app.run("view.theme", json!({"theme": kind.id()}));
                             ui.close();

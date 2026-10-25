@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use lightcraft_tiff::{Ifd, Tiff, TiffError, tags as t};
+use lightcraft_tiff::{Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -16,8 +16,16 @@ pub fn read_exif(bytes: &[u8]) -> Metadata {
 
 /// Like [`read_exif`] but reports a structurally invalid TIFF header / IFD0.
 pub fn try_read_exif(bytes: &[u8]) -> Result<Metadata, TiffError> {
+    try_read_exif_with(bytes, &ParseOptions::default())
+}
+
+/// [`try_read_exif`] with the caller's parser options (its value allocation budget in particular).
+/// A decoder working from a sparse buffer — only selected ranges of the logical file are actually
+/// loaded, the rest is zeros — must not size its allocations by the logical file length, which
+/// unrelated bytes of the file can inflate at no cost to the attacker.
+pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata, TiffError> {
     let data = strip_exif_header(bytes);
-    let tiff = Tiff::parse(data)?;
+    let tiff = Tiff::parse_with(data, opts)?;
     let mut m = from_tiff(&tiff);
     // Panasonic writes no LensModel, only the name in its maker note (and in a RW2 that note is not in the raw's own Exif)
     if m.lens_model.is_none() {

@@ -89,7 +89,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     let t = Tokens::get(ui.ctx());
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.canvas);
-    register(ui.ctx(), "filterchips", bar);
+    register(ui, "filterchips", bar);
     let font = t.font(12.0);
     let right = bar.right() - 16.0;
     let mut x = bar.left() + 20.0;
@@ -107,9 +107,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         let text_r = Rect::from_min_max(r.min, pos2(r.right() - 22.0, r.max.y));
         ui.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
         let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
-        let resp = ui.interact(xr, egui::Id::new(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
+        let resp = ui.interact(xr, egui::Id::unique(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
         crate::widgets::announce(&resp, format!("{}: {label}", crate::i18n::tr("Remove this filter")));
-        register(ui.ctx(), format!("chip:{i}"), xr);
+        register(ui, format!("chip:{i}"), xr);
         let col = if resp.hovered() { t.text } else { t.text_dim };
         let m = 3.5;
         let (a, b) = (xr.center() - vec2(m, m), xr.center() + vec2(m, m));

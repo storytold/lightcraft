@@ -665,6 +665,15 @@ impl Renderer {
         self.pending.len()
     }
 
+    /// Test seam: make the renderer look busy without starting a job (capture deadlines).
+    #[cfg(test)]
+    pub(crate) fn force_in_flight_for_test(&mut self, count: usize) {
+        self.pending.clear();
+        for i in 0..count {
+            self.pending.insert(Slot::Prefetch((i % 256) as u8), (0, 0));
+        }
+    }
+
     /// Why the last render for `slot` failed (until a render with another key succeeds).
     pub fn failure(&self, slot: Slot) -> Option<&str> {
         self.failed.get(&slot).map(|f| f.1.as_str())
@@ -784,9 +793,9 @@ impl Renderer {
         // wasm: run one job per frame on this thread, timed with the host clock
         #[cfg(target_arch = "wasm32")]
         let inline_ms = {
-            let t0 = crate::now_ms();
+            let t0 = crate::monotonic_ms();
             self.pool.run_inline(1);
-            crate::now_ms() - t0
+            crate::monotonic_ms() - t0
         };
         #[cfg(not(target_arch = "wasm32"))]
         let inline_ms = 0.0;

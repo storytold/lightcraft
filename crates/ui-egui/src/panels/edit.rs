@@ -199,7 +199,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
             let mut on = d.profile.camera_local_tone;
             let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
-            crate::widgets::register(ui.ctx(), "check:profile.cameraLocalTone", r.rect);
+            crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
             if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
@@ -447,7 +447,7 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     let mut pick: (Option<String>, Option<String>) = (None, None);
     let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
         let r = ui.selectable_label(id == cur, crate::i18n::profile_label(id, name));
-        register(ui.ctx(), format!("profileMenu:{key}:{id}"), r.rect);
+        register(ui, format!("profileMenu:{key}:{id}"), r.rect);
         if r.clicked() {
             pick.0 = Some(id.to_string());
         }
@@ -478,7 +478,7 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
                 }
             });
         });
-        register(ui.ctx(), format!("profileMenu:groupMenu:{g}"), r.response.rect);
+        register(ui, format!("profileMenu:groupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
@@ -497,7 +497,7 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
                 }
             });
         });
-        register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
+        register(ui, format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
@@ -511,13 +511,13 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
             crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
         };
         let r = ui.button(label);
-        register(ui.ctx(), "profileMenu:toggleFavorite", r.rect);
+        register(ui, "profileMenu:toggleFavorite", r.rect);
         if r.clicked() {
             let _ = app.run("profile.favorite", json!({"id": cur}));
         }
     }
     let r = ui.button(crate::i18n::tr("Browse…"));
-    register(ui.ctx(), "profileMenu:browse", r.rect);
+    register(ui, "profileMenu:browse", r.rect);
     if r.clicked() {
         let _ = app.run("panel.profiles", json!({}));
     }
@@ -565,7 +565,7 @@ fn section(
     crate::widgets::context_menu(&resp, |ui| {
         let mut solo = app.ui.single_panel;
         let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
-        register(ui.ctx(), "sectionMenu:solo", item.rect);
+        register(ui, "sectionMenu:solo", item.rect);
         if item.clicked() {
             if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
                 app.toast(ui.ctx(), e);
@@ -596,7 +596,7 @@ fn preview_histogram(app: &LightcraftApp, id: PhotoId) -> Option<lightcraft_rast
 /// the SDR layout and back while a slider moves. Every render with HDR bins replaces the one kept for the photo, so
 /// the histogram still follows the edit live; an SDR edit shows what it gets.
 fn steady_hdr_histogram(ctx: &egui::Context, id: PhotoId, hdr_edit: bool, hist: Option<Histogram>) -> Option<Histogram> {
-    let key = egui::Id::new(("hdrHistogram", id));
+    let key = egui::Id::unique(("hdrHistogram", id));
     match hist {
         Some(h) if h.hdr.is_some() => {
             ctx.data_mut(|d| d.insert_temp(key, h.clone()));
@@ -633,7 +633,7 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let legend = if hdr.is_some() { 26.0 } else { 0.0 };
     let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
-    register(ui.ctx(), "histogram", r);
+    register(ui, "histogram", r);
     let p = ui.painter();
     p.rect_filled(r, 0.0, t.button);
     let plot = Rect::from_min_max(r.min + vec2(0.0, 6.0), pos2(r.right(), r.bottom() - 26.0 - legend));
@@ -664,7 +664,7 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         p.text(pos2((x0 + plot.right()) / 2.0, y), Align2::CENTER_CENTER, crate::i18n::tr("HDR"), t.font(12.5), t.text_label);
         let info = Rect::from_center_size(pos2(plot.right() - 16.0, y), vec2(14.0, 14.0));
         paint(p, info, Icon::Info, t.text_label);
-        ui.interact(info, egui::Id::new("hdrHistogramInfo"), Sense::hover()).on_hover_text(crate::i18n::tr(
+        ui.interact(info, egui::Id::unique("hdrHistogramInfo"), Sense::hover()).on_hover_text(crate::i18n::tr(
             "Left: the standard (SDR) range up to SDR white. Right: the HDR range, one band per stop above SDR white (the orange line: the HDR headroom). With Visualize HDR range on, the bands take its colours.",
         ));
     }
@@ -736,9 +736,9 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ("shadows", shadow_rect, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),
         ("highlights", highlight_rect, "Highlight clipping", clipping.map(|(_, hi)| hi > 0.003)),
     ] {
-        let response = ui.interact(rect, ui.id().with(("histogram-clipping", name)), Sense::click());
-        register(ui.ctx(), format!("histogram:{name}"), rect);
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), app.ui.show_clipping, crate::i18n::tr(label)));
+        let response = ui.interact(rect, ui.scope_id().with(("histogram-clipping", name)), Sense::click());
+        register(ui, format!("histogram:{name}"), rect);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), app.ui.show_clipping, crate::i18n::tr(label)));
         clicked |= response.clicked();
         let active = app.ui.show_clipping;
         // Keep the hit target comfortable, with a smaller box and clear space to the plot edges.
@@ -784,7 +784,7 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     // the tonal zone the pointer is on replaces the EXIF strip while it is there
     if let Some(text) = zone.as_ref().and_then(|a| a.readout()) {
-        register(ui.ctx(), "histogramReadout", r);
+        register(ui, "histogramReadout", r);
         p.text(pos2(r.left() + r.width() / 2.0, r.bottom() - 13.0), Align2::CENTER_CENTER, text, t.font(12.5), t.text_label);
     } else if let Some(ph) = app.session.catalog.photo(id) {
         let m = &ph.meta;
@@ -821,12 +821,12 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let r = ui
                     .toggle_value(&mut dest, RichText::new("■").color(Color32::from_rgb(255, 40, 40)))
                     .on_hover_text(crate::i18n::tr("Show destination gamut warning"));
-                register(ui.ctx(), "button:proofDestWarning", r.rect);
+                register(ui, "button:proofDestWarning", r.rect);
                 let mut disp = app.ui.proof.display_warning;
                 let r2 = ui
                     .toggle_value(&mut disp, RichText::new("■").color(Color32::from_rgb(40, 90, 255)))
                     .on_hover_text(crate::i18n::tr("Show display gamut warning"));
-                register(ui.ctx(), "button:proofDisplayWarning", r2.rect);
+                register(ui, "button:proofDisplayWarning", r2.rect);
                 if dest != app.ui.proof.dest_warning || disp != app.ui.proof.display_warning {
                     let _ = app.run("view.softProof", json!({"destWarning": dest, "displayWarning": disp}));
                 }
@@ -838,7 +838,7 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let device = app.ui.proof_profile.as_ref().map(|(_, n)| n.clone());
             let shown = device.clone().unwrap_or_else(|| cur.label().to_string());
             let mut pick = false;
-            crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
+            let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
                 for s in OutputSpace::ALL {
                     if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
                         let _ = app.run("view.softProof", json!({"space": s}));
@@ -851,6 +851,7 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     pick = true;
                 }
             });
+            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Profile"));
             if pick
                 && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
                 && let Err(e) = app.run("view.softProof", json!({"profile": path}))
@@ -864,7 +865,7 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 use lightcraft_engine::proof::ProofIntent;
                 for (i, label) in [(ProofIntent::Perceptual, "Perceptual"), (ProofIntent::Relative, "Relative")] {
                     let r = ui.selectable_label(app.ui.proof_intent == i, crate::i18n::tr(label));
-                    register(ui.ctx(), format!("button:proofIntent-{}", i.name()), r.rect);
+                    register(ui, format!("button:proofIntent-{}", i.name()), r.rect);
                     if r.clicked() && app.ui.proof_intent != i {
                         let _ = app.run("view.softProof", json!({"intent": i.name()}));
                     }
@@ -872,13 +873,13 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             });
             let mut paper = app.ui.proof_paper_ink;
             let r = ui.checkbox(&mut paper, crate::i18n::tr("Simulate Paper & Ink"));
-            register(ui.ctx(), "button:proofPaperInk", r.rect);
+            register(ui, "button:proofPaperInk", r.rect);
             if r.changed() {
                 let _ = app.run("view.softProof", json!({"paperInk": paper}));
             }
         }
         let r = ui.button(crate::i18n::tr("Create Proof Copy"));
-        register(ui.ctx(), "button:createProofCopy", r.rect);
+        register(ui, "button:createProofCopy", r.rect);
         if r.clicked() {
             let target = app.ui.proof_profile.as_ref().map_or_else(|| app.ui.proof.space.label().to_string(), |(_, n)| n.clone());
             let name = crate::i18n::tr_format!("Proof Copy ({})", target);
@@ -978,8 +979,8 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         let x = from_screen_x(q);
         to_screen(x, model.at(x)).distance(q)
     };
-    let drag_id = egui::Id::new("curve-param-drag");
-    let cursor_id = egui::Id::new("curve-param-cursor");
+    let drag_id = egui::Id::unique("curve-param-drag");
+    let cursor_id = egui::Id::unique("curve-param-cursor");
     // (region, x, initial_amount, start_y): the region being dragged, the graph x the drag is anchored
     // at, the region's starting amount, and the starting screen Y position.
     let mut dragged: Option<(usize, f64, f64, f32)> = ui.data(|dd| dd.get_temp::<Option<(usize, f64, f64, f32)>>(drag_id)).flatten();
@@ -1061,7 +1062,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             ] {
                 let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
                 crate::widgets::announce(&resp, format!("{} {ch}", crate::i18n::tr("Curve channel")));
-                register(ui.ctx(), format!("curveChannel:{ch}"), r);
+                register(ui, format!("curveChannel:{ch}"), r);
                 let sel = app.ui.curve_channel == ch;
                 if ch == "parametric" {
                     paint(ui.painter(), r.shrink(4.0), Icon::Curve, if sel { t.text } else { t.icon });
@@ -1099,9 +1100,9 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     let side = (w - 48.0).max(80.0);
     let (outer, _) = ui.allocate_exact_size(vec2(w, side + 12.0), Sense::hover());
     let r = Rect::from_min_size(pos2(outer.left() + 24.0, outer.top() + 6.0), vec2(side, side));
-    let resp = ui.interact(r, egui::Id::new(("curve", &ch)), Sense::click_and_drag());
+    let resp = ui.interact(r, egui::Id::unique(("curve", &ch)), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Tone Curve"));
-    register(ui.ctx(), "curve", r);
+    register(ui, "curve", r);
     crate::widgets::context_menu(&resp, |ui| curve_reset_menu(app, ui, &ch));
     let p = ui.painter();
     p.rect_filled(r, 2.0, t.canvas);
@@ -1164,7 +1165,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     p.add(egui::Shape::line(line, Stroke::new(2.0, color)));
     // interaction: drag a point (both axes, between its neighbours; ⌥ = fine), drag empty space to add and
     // drag a new point, click empty space to add, double-click a point to delete it
-    let drag_id = egui::Id::new(("curve-drag", &ch));
+    let drag_id = egui::Id::unique(("curve-drag", &ch));
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
     let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
@@ -1298,7 +1299,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                         ui.separator();
                     }
                     let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), crate::i18n::builtin_label(&p.name, p.builtin));
-                    register(ui.ctx(), format!("curvePreset:{}", p.name), r.rect);
+                    register(ui, format!("curvePreset:{}", p.name), r.rect);
                     if r.clicked() {
                         let _ = app.run("curve.applyPreset", json!({"name": p.name}));
                         ui.close();
@@ -1315,7 +1316,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                 ui.separator();
                 let shaped = current.as_deref() != Some("Linear");
                 let r = ui.add_enabled(shaped, egui::Button::new(crate::i18n::tr("Save Point Curve…")));
-                register(ui.ctx(), "curvePresetMenu:save", r.rect);
+                register(ui, "curvePresetMenu:save", r.rect);
                 if r.clicked() {
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
@@ -1353,13 +1354,13 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
         crate::i18n::tr_format!("Reset {} Channel", crate::i18n::tr(channel_label(ch)))
     };
     let r = ui.button(label);
-    register(ui.ctx(), "curveMenu:resetChannel", r.rect);
+    register(ui, "curveMenu:resetChannel", r.rect);
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": ch}));
         ui.close();
     }
     let r = ui.button(crate::i18n::tr("Reset All Curves"));
-    register(ui.ctx(), "curveMenu:resetAll", r.rect);
+    register(ui, "curveMenu:resetAll", r.rect);
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
         ui.close();
@@ -1408,7 +1409,7 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
             for (i, b) in bands.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(b));
-                register(ui.ctx(), format!("mixerBand:{b}"), r);
+                register(ui, format!("mixerBand:{b}"), r);
                 ui.painter().circle_filled(r.center(), 9.0, hex(BAND_COLORS[i]));
                 if i == sel {
                     ui.painter().circle_stroke(r.center(), 10.5, Stroke::new(1.5, t.text));
@@ -1500,7 +1501,7 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
             for (i, p) in d.point_colors.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, format!("{} {}", crate::i18n::tr("Point Color"), i + 1));
-                register(ui.ctx(), format!("pointColor:{i}"), r);
+                register(ui, format!("pointColor:{i}"), r);
                 ui.painter().rect_filled(r.shrink(2.0), 3.0, oklch_color(p.lum, p.chroma, p.hue));
                 if i == sel {
                     ui.painter().rect_stroke(r, 4.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
@@ -1551,7 +1552,7 @@ fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
         let mut v = app.ui.hdr_visualize;
         let r = ui.checkbox(&mut v, "Visualize HDR");
-        register(ui.ctx(), "check:hdrVisualize", r.rect);
+        register(ui, "check:hdrVisualize", r.rect);
         if r.on_hover_text("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it").changed() {
             app.ui.hdr_visualize = v;
         }
@@ -1634,12 +1635,12 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     // the corners (eye, readout) count as the wheel for hovering
     let zone = r.expand(10.0);
     let hovering = ui.rect_contains_pointer(zone);
-    let resp = ui.interact(r, egui::Id::new(("wheel", key)), Sense::click_and_drag());
+    let resp = ui.interact(r, egui::Id::unique(("wheel", key)), Sense::click_and_drag());
     crate::widgets::announce(&resp, format!("{} {key}", crate::i18n::tr("Color wheel")));
     let resp = resp.on_hover_text(crate::i18n::tr(
         "Drag to set hue and saturation. Hold Shift to keep the hue, Cmd/Ctrl to keep the saturation, Alt/Option to fine-adjust. Double-click to reset.",
     ));
-    register(ui.ctx(), format!("wheel:{key}"), r);
+    register(ui, format!("wheel:{key}"), r);
     paint_wheel(ui.painter(), c, rad);
     if hidden {
         ui.painter().circle_filled(c, rad, Color32::from_black_alpha(150));
@@ -1658,7 +1659,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     // Modifiers (as in Lightroom): Shift keeps the hue, Cmd/Ctrl keeps the saturation, Alt moves
     // the puck a tenth as far as the pointer. Pressing or releasing one mid-drag re-grabs the
     // puck as it is at that moment.
-    let grab_id = egui::Id::new(("wheelGrab", key));
+    let grab_id = egui::Id::unique(("wheelGrab", key));
     let mods = ui.input(|i| WheelMods::from_modifiers(i.modifiers));
     let pointer = wheel_pointer(ui, &resp);
     let grab = match pointer {
@@ -1710,7 +1711,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     }
     // released, or Esc (egui ends a drag on it)
     if resp.drag_stopped()
-        && let Some(held) = ui.ctx().data_mut(|m| m.remove_temp::<WheelCapture>(egui::Id::new(WHEEL_CAPTURE)))
+        && let Some(held) = ui.ctx().data_mut(|m| m.remove_temp::<WheelCapture>(egui::Id::unique(WHEEL_CAPTURE)))
         && !held.dropped
     {
         give_pointer_back(ui.ctx(), held.origin);
@@ -1732,9 +1733,9 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     // the eye: on top of the wheel, shown while hovering or while the wheel is hidden
     if hovering || hidden {
         let eye = Rect::from_center_size(r.left_bottom() + vec2(2.0, -2.0), vec2(16.0, 16.0));
-        let er = ui.interact(eye, egui::Id::new(("wheelEye", key)), Sense::click());
+        let er = ui.interact(eye, egui::Id::unique(("wheelEye", key)), Sense::click());
         crate::widgets::announce(&er, crate::i18n::tr("Show / hide"));
-        register(ui.ctx(), format!("wheelEye:{key}"), eye);
+        register(ui, format!("wheelEye:{key}"), eye);
         paint(ui.painter(), eye, if hidden { Icon::EyeOff } else { Icon::Eye }, if hidden { t.text_disabled } else { t.icon });
         let er = er.on_hover_text(crate::i18n::tr(if hidden { "Show this wheel's effect" } else { "Hide this wheel's effect" }));
         if er.clicked() {
@@ -1856,7 +1857,7 @@ fn wheel_pointer(ui: &egui::Ui, resp: &egui::Response) -> Option<Pos2> {
         return Some(q);
     }
     let ctx = ui.ctx();
-    let id = egui::Id::new(WHEEL_CAPTURE);
+    let id = egui::Id::unique(WHEEL_CAPTURE);
     let held = ctx.data(|m| m.get_temp::<WheelCapture>(id)).filter(|_| !resp.drag_started());
     let mut cap = held.unwrap_or_else(|| {
         if cfg!(target_os = "macos") {
@@ -1899,7 +1900,7 @@ fn give_pointer_back(ctx: &egui::Context, origin: Pos2) {
 /// and is given back if no wheel drew this pass (the flyout closed or the view changed under the
 /// drag), so it is never left locked or hidden.
 pub(crate) fn wheel_pointer_frame_end(ctx: &egui::Context) {
-    let id = egui::Id::new(WHEEL_CAPTURE);
+    let id = egui::Id::unique(WHEEL_CAPTURE);
     let Some(cap) = ctx.data(|m| m.get_temp::<WheelCapture>(id)) else { return };
     if cap.pass != ctx.cumulative_pass_nr() {
         ctx.data_mut(|m| m.remove::<WheelCapture>(id));
@@ -2006,12 +2007,12 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
                     let r = crate::widgets::arrow_button(ui, "", icon, false);
                     r.widget_info(|| {
                         egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
+                            egui::Role::Button,
                             ui.is_enabled(),
                             crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)),
                         )
                     });
-                    crate::widgets::register(ui.ctx(), format!("button:quick-{ctl}-{txt}"), r.rect);
+                    crate::widgets::register(ui, format!("button:quick-{ctl}-{txt}"), r.rect);
                     if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)))
                         .clicked()
                     {

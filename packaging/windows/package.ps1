@@ -116,6 +116,8 @@ $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe') $Stage
+# The bundled egui font MIT notice is required even without optional craft-fonts.
+Copy-Item -LiteralPath (Join-Path $Root 'NOTICE') -Destination $Stage
 # Include the embedded fonts' unmodified OFL texts in both installer and portable releases.
 . (Join-Path $PSScriptRoot 'font-licences.ps1')
 Write-FontLicences (Join-Path $Stage 'FONT-LICENCES.txt') (Join-Path $Root 'assets\fonts\OFL-Inter.txt') $env:CRAFT_FONTS_DIR

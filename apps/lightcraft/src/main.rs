@@ -75,8 +75,10 @@ impl eframe::App for App {
         self.0.logic(ctx);
         self.1.tick(&mut self.0, ctx);
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+    /// Forwards the host's raw-input pass to the app's hook before egui processes it, keeping
+    /// modal/prompt input barriers and queued synthetic or dropped input ahead of the panels.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
@@ -404,15 +406,26 @@ impl PrefsWriter {
         }
     }
 
+    /// Per-frame host tick: records the window's placement while visible, asks for a repaint when
+    /// a remembered size is due, and saves settings/library at most every three seconds or
+    /// immediately after the library path changes; a failed save is reported once and retried.
     fn tick(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) {
         // (asked for before the input is read: the context is not asked from inside its own lock)
         let zoom = ctx.zoom_factor();
-        let (now, seen) = ctx.input(|i| (i.time, lightcraft_ui_egui::window_place::Seen::of(i.viewport(), i.content_rect(), zoom)));
+        // The monotonic app clock: `i.time` stands still while the window is hidden.
+        let now = app.tick_now();
+        let (hidden, seen) = ctx.input(|i| {
+            let hidden = i.viewport().visible() == Some(false);
+            (hidden, lightcraft_ui_egui::window_place::Seen::of(i.viewport(), i.content_rect(), zoom))
+        });
         // how the window is, to open like that next time (written with the settings below). What
-        // the settings hold is checked first: a script may have set it (`ui.set`)
+        // the settings hold is checked first: a script may have set it (`ui.set`). A hidden
+        // `run_logic` pass has no fresh content rect: keep the last known placement.
         let remembered = app.ui.window.and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
         let at = self.window_since.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f64();
-        app.ui.window = self.window.note(remembered, &seen, at);
+        if !hidden {
+            app.ui.window = self.window.note(remembered, &seen, at);
+        }
         if let Some(wait) = self.window.waits(at) {
             // (a size is only remembered once the window has rested at it: look again then, though
             // nothing else asks for a frame)
@@ -727,6 +740,7 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         // atomic (temp file + sync + rename): a failed write never leaves a truncated file
         write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
         write: Some(Box::new(lightcraft_engine::export::write_file)),
+        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
@@ -867,6 +881,11 @@ fn panic_log_path_with(env: impl Fn(&str) -> Option<std::ffi::OsString>, temp: s
 }
 
 fn main() -> eframe::Result {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::LIGHTCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
     lightcraft_engine::guard::install_hook(panic_log_path_with(|name| std::env::var_os(name), std::env::temp_dir()));
@@ -995,6 +1014,7 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }

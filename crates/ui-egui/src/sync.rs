@@ -184,7 +184,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     }
     let choice = |ui: &mut egui::Ui, on: &mut bool, n: usize, text: String, widget: &str| {
         let r = ui.add_enabled(n > 0, egui::Checkbox::new(on, text));
-        crate::widgets::register(ui.ctx(), widget, r.rect);
+        crate::widgets::register(ui, widget, r.rect);
     };
     let count = |text: &str, n: usize| format!("{} ({n})", crate::i18n::tr(text));
     let dim = |ui: &mut egui::Ui, s: &str| ui.label(egui::RichText::new(s).color(t.text_dim));

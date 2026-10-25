@@ -206,6 +206,7 @@ fn leaving_a_slider_disarms_wheel_edits_until_it_is_selected_again() {
         unit: egui::MouseWheelUnit::Point,
         delta: vec2(0.0, 120.0),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: Modifiers::NONE,
     };
     h.frame(vec![Event::PointerMoved(inside)]);
@@ -232,7 +233,13 @@ fn leaving_a_slider_disarms_wheel_edits_until_it_is_selected_again() {
     let before_sideways = h.value;
     h.frame(vec![
         Event::PointerMoved(inside),
-        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(120.0, 0.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(120.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        },
     ]);
     for _ in 0..40 {
         h.frame(vec![]);
@@ -270,7 +277,13 @@ fn leaving_the_row_during_a_drag_keeps_dragging_but_release_disarms_the_wheel() 
     let released = h.value;
     h.frame(vec![
         Event::PointerMoved(inside),
-        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -120.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -120.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        },
     ]);
     for _ in 0..40 {
         h.frame(vec![]);
@@ -294,6 +307,7 @@ fn a_drag_that_leaves_and_ends_back_in_the_row_disarms_the_wheel() {
         unit: egui::MouseWheelUnit::Point,
         delta: vec2(0.0, 120.0),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: Modifiers::NONE,
     }]);
     for _ in 0..40 {
@@ -308,6 +322,7 @@ fn leaving_and_returning_within_one_frame_still_disarms_the_wheel() {
         unit: egui::MouseWheelUnit::Point,
         delta: vec2(0.0, 120.0),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: Modifiers::NONE,
     };
     // a slow frame merges the moves out of the row and back (or out of the window and back)

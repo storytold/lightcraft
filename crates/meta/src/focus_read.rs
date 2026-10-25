@@ -171,7 +171,15 @@ fn tiff(r: &mut Reader, head: Vec<u8>) -> io::Result<Option<FocusPoint>> {
     loaded.insert(0, head.len() as u64);
     for _ in 0..MAX_ROUNDS {
         match plan(&buf, &loaded) {
-            Step::Ready => return Ok(crate::try_read_exif(&buf).ok().and_then(|m| m.focus)),
+            Step::Ready => {
+                // The decoder's allocation budget follows the bytes actually fetched, not the logical
+                // file length: only the loaded ranges are data, and an unrelated entry that claims a
+                // huge value must be cut by what leaving it cost, not by what the buffer claims to hold.
+                // The same 8 × / + 1 MiB shape the general TIFF reader uses, over `reader.bytes` instead.
+                let opts =
+                    lightcraft_tiff::ParseOptions { value_budget: Some(r.bytes.saturating_mul(8).saturating_add(1 << 20)), ..Default::default() };
+                return Ok(crate::try_read_exif_with(&buf, &opts).ok().and_then(|m| m.focus));
+            }
             Step::Nothing => return Ok(None),
             Step::Need(ranges) => {
                 for (a, b) in ranges {

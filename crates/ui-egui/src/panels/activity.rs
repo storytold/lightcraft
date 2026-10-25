@@ -73,7 +73,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut cancel = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
-    egui::Area::new(egui::Id::new("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
         // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
         // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
         // (the scroll area keeps to `max_height`).
@@ -96,7 +96,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.add_space(4.0);
                 let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
                 let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
-                register(ui.ctx(), "activity:more", r.rect);
+                register(ui, "activity:more", r.rect);
                 toggle = r.clicked();
             }
         });
@@ -132,7 +132,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
-                register(ui.ctx(), format!("activity:cancel:{}", task.id), rect);
+                register(ui, format!("activity:cancel:{}", task.id), rect);
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
@@ -142,7 +142,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
         }
     });
-    register(ui.ctx(), format!("activity:row:{}", task.id), r.response.rect);
+    register(ui, format!("activity:row:{}", task.id), r.response.rect);
     clicked
 }
 

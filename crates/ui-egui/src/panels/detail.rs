@@ -12,7 +12,7 @@ use crate::LightcraftApp;
 use crate::render::Slot;
 use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
 use crate::theme::Tokens;
-use crate::widgets::register;
+use crate::widgets::{register, register_geometry};
 
 /// An in-progress on-canvas gesture.
 #[derive(Clone, Debug)]
@@ -232,7 +232,7 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
         ui.input(|i| (i.zoom_delta(), i.translation_delta(), i.multi_touch().map(|t| t.center_pos).or(i.pointer.hover_pos())));
     // A notched mouse wheel (line/page units, no modifier) zooms around the pointer, through egui's smoothed wheel
     // delta like Ctrl+wheel (so it glides instead of jumping); trackpads report points and still pan.
-    let wheel_id = egui::Id::new("loupe-wheel-zoom");
+    let wheel_id = egui::Id::unique("loupe-wheel-zoom");
     if ui.input(|i| wheel_notches(&i.events)) != 0.0 {
         ui.data_mut(|d| d.insert_temp(wheel_id, true));
     }
@@ -345,13 +345,13 @@ pub(crate) fn draw_focus_point(p: &egui::Painter, img: Rect, photo: &lightcraft_
     let c = b.center();
     p.circle_filled(c, 2.5, Color32::from_black_alpha(170));
     p.circle_filled(c, 1.5, green);
-    register(p.ctx(), key, b);
+    register_geometry(p.ctx(), key, b);
 }
 
 /// Ease the loupe rect toward `target` while a click-zoom animation runs; otherwise follow it exactly.
 fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
     let t = if *anim { 0.22 } else { 0.0 };
-    let id = egui::Id::new("loupe_anim");
+    let id = egui::Id::unique("loupe_anim");
     let v = |k: &str, x: f32| ctx.animate_value_with_time(id.with(k), x, t);
     let (c, s) = (target.center(), target.size());
     let r = Rect::from_center_size(pos2(v("cx", c.x), v("cy", c.y)), vec2(v("w", s.x), v("h", s.y)));
@@ -498,6 +498,10 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &Window
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
+/// Draw the Develop loupe: the optional filmstrip, the fitted or zoomed photo (before/after and
+/// full-screen aware), crop overlays and the render requests for the current view, or, when no
+/// photo is active, the empty-library message if the library is empty and "No photo selected"
+/// otherwise.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
@@ -568,7 +572,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
     // tool's overlays need the frame's own geometry.
     let display_aspect = visible_texture_aspect.filter(|a| !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
-    let resp = ui.interact(canvas, egui::Id::new("loupe"), Sense::click_and_drag());
+    let resp = ui.interact(canvas, egui::Id::unique("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
@@ -881,7 +885,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some((bg, g)) = before_badge {
         p.rect_filled(bg, 4.0, Color32::from_black_alpha(160));
         p.galley(bg.min + vec2(8.0, 4.0), g, Color32::WHITE);
-        register(ui.ctx(), "canvas:beforeLabel", bg);
+        register(ui, "canvas:beforeLabel", bg);
     }
     // the line of a wipe over both
     if app.ui.before_after == BeforeAfter::Split {
@@ -895,7 +899,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)
     super::layout_overlay::draw(app, &p, img_rect);
-    register(ui.ctx(), "canvas:image", img_rect);
+    register(ui, "canvas:image", img_rect);
     let map = CanvasMap::new(&frame, img_rect);
     info_overlay(app, &p, canvas, &photo);
     if !fullscreen {
@@ -984,7 +988,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         && whole.iter().chain(windows.iter().map(|(v, _)| &v.slot)).any(|s| app.renderer.is_pending(*s) && !app.renderer.retrying(*s));
     let keys =
         [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore].map(|s| app.renderer.textures.get(&s).filter(|t| t.photo == id).map(|t| t.key));
-    let rendering = ui.ctx().data_mut(|d| rendering_overdue(d.get_temp_mut_or(egui::Id::new("loupe-rendering"), None), keys, coming, now));
+    let rendering = ui.ctx().data_mut(|d| rendering_overdue(d.get_temp_mut_or(egui::Id::unique("loupe-rendering"), None), keys, coming, now));
     // the render failed while a stand-in is up: what is on screen is all there will be (also while
     // a library change retries it)
     let failed = (!rendering
@@ -1051,7 +1055,7 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
         y += g.size().y + INFO_OVERLAY_GAP;
     }
     y = overlay_badges(p, &t, pos2(canvas.left() + 14.0, y), photo);
-    register(p.ctx(), "canvas:infoOverlay", Rect::from_min_max(canvas.min, pos2(canvas.left() + 320.0, y)));
+    register_geometry(p.ctx(), "canvas:infoOverlay", Rect::from_min_max(canvas.min, pos2(canvas.left() + 320.0, y)));
 }
 
 /// Where the info overlay's text starts below the canvas' top (without window controls over it),
@@ -1135,7 +1139,7 @@ fn overlay_badges(p: &egui::Painter, t: &Tokens, at: Pos2, photo: &lightcraft_ca
         paint(p, r, icon, color);
         x += side + 2.0;
     }
-    register(p.ctx(), "canvas:infoOverlayBadges", Rect::from_min_max(at, pos2(x, at.y + side + 2.0)));
+    register_geometry(p.ctx(), "canvas:infoOverlayBadges", Rect::from_min_max(at, pos2(x, at.y + side + 2.0)));
     at.y + OVERLAY_BADGES_H
 }
 
@@ -1183,7 +1187,7 @@ fn region_overlay(
     let clip = p.clip_rect();
     let pointer = ui.input(|i| i.pointer.hover_pos());
     // the box being dragged: (region index, its box so far)
-    let drag_key = egui::Id::new("region-drag");
+    let drag_key = egui::Id::unique("region-drag");
     let live: Option<(usize, lightcraft_geom::Rect)> = ui.data(|d| d.get_temp(drag_key));
     let mut edit = None;
     for (index, r) in photo.meta.regions.iter().enumerate() {
@@ -1196,7 +1200,7 @@ fn region_overlay(
         if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
-                let resp = ui.interact(Rect::from_center_size(c, vec2(14.0, 14.0)), egui::Id::new(("region-handle", index, h)), Sense::drag());
+                let resp = ui.interact(Rect::from_center_size(c, vec2(14.0, 14.0)), egui::Id::unique(("region-handle", index, h)), Sense::drag());
                 crate::widgets::announce(&resp, crate::i18n::tr("Resize region"));
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(*cursor);
@@ -1241,9 +1245,9 @@ fn region_overlay(
         }
         if dragging.is_none() && live.is_none() && pointer.is_some_and(|h| rect.expand(3.0).contains(h)) {
             let xr = Rect::from_center_size(pos2(rect.right() - 13.0, rect.top() + 13.0), vec2(16.0, 16.0));
-            let resp = ui.interact(xr, egui::Id::new(("region-x", index)), Sense::click());
+            let resp = ui.interact(xr, egui::Id::unique(("region-x", index)), Sense::click());
             crate::widgets::announce(&resp, crate::i18n::tr("Remove region"));
-            register(ui.ctx(), format!("regionRemove:{index}"), xr);
+            register(ui, format!("regionRemove:{index}"), xr);
             let fill = Color32::from_black_alpha(if resp.hovered() { 235 } else { 190 });
             p.rect_filled(xr, 2.0, fill);
             p.rect_stroke(xr, 2.0, Stroke::new(1.0, Color32::from_white_alpha(120)), StrokeKind::Inside);
@@ -1291,9 +1295,9 @@ fn region_overlay(
         p.galley(label.min + pad, g, text_color);
         if is_face && live.is_none() {
             // a click on the label opens the name box, filled with the name or the guess
-            let resp = ui.interact(label, egui::Id::new(("region-label", index)), Sense::click());
+            let resp = ui.interact(label, egui::Id::unique(("region-label", index)), Sense::click());
             crate::widgets::announce(&resp, crate::i18n::tr("Click to name this face"));
-            register(ui.ctx(), format!("regionLabel:{index}"), label);
+            register(ui, format!("regionLabel:{index}"), label);
             if resp.on_hover_text(crate::i18n::tr("Click to name this face")).clicked() {
                 let start = r.name.clone().or_else(|| hint.and_then(|h| h.suggestion.as_ref().map(|(n, _)| n.clone()))).unwrap_or_default();
                 *editing = Some(crate::state::NameEdit { photo: photo.id.0, index, text: start, fresh: true });
@@ -1338,9 +1342,9 @@ fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     let inset = FILTER_PILL_INSET;
     let w = (g.size().x + 40.0).min((canvas.width() - 2.0 * inset).max(60.0));
     let r = Rect::from_min_size(canvas.min + vec2(inset, inset), vec2(w, FILTER_PILL_HEIGHT));
-    let resp = ui.interact(r, egui::Id::new("loupe-filter-pill"), Sense::click());
+    let resp = ui.interact(r, egui::Id::unique("loupe-filter-pill"), Sense::click());
     crate::widgets::announce(&resp, crate::i18n::tr("Filters"));
-    register(ui.ctx(), "loupe:filters", r);
+    register(ui, "loupe:filters", r);
     p.rect_filled(r, 10.0, Color32::from_black_alpha(if resp.hovered() { 225 } else { 185 }));
     let text_clip = Rect::from_min_max(r.min, pos2(r.right() - 24.0, r.max.y));
     p.with_clip_rect(text_clip).galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, Color32::from_gray(225));
@@ -1365,8 +1369,8 @@ fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
     p.rect_filled(r, 13.0, Color32::from_black_alpha(185));
     crate::icons::paint(&p, Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(15.0, 15.0)), crate::icons::Icon::Info, t.caution);
     p.galley(pos2(r.left() + 29.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    register(ui.ctx(), "notice:previewOnly:loupe", r);
-    ui.interact(r, egui::Id::new("preview-only-pill"), Sense::hover()).on_hover_text(crate::widgets::preview_only_explanation(reason));
+    register(ui, "notice:previewOnly:loupe", r);
+    ui.interact(r, egui::Id::unique("preview-only-pill"), Sense::hover()).on_hover_text(crate::widgets::preview_only_explanation(reason));
 }
 
 /// One line of the info overlay for `photo`; `None` when the field is None or the photo has
@@ -1436,8 +1440,8 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect
     let view = Rect::from_min_max(to_nav(a), to_nav(b));
     p.rect_stroke(view, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
     p.rect_stroke(view.expand(1.5), 0.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Outside);
-    register(ui.ctx(), "canvas:navigator", frame);
-    let resp = ui.interact(frame.expand(5.0), egui::Id::new("navigator"), Sense::click_and_drag());
+    register(ui, "canvas:navigator", frame);
+    let resp = ui.interact(frame.expand(5.0), egui::Id::unique("navigator"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Navigator"));
     if (resp.clicked() || resp.dragged())
         && let Some(q) = resp.interact_pointer_pos()
@@ -1498,7 +1502,7 @@ pub(crate) fn loupe_pill(ui: &egui::Ui, canvas: Rect, over: Rect, navigator: Opt
         crate::icons::paint(&p, Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(13.0, 13.0)), crate::icons::Icon::Info, t.caution);
     }
     p.galley(pos2(r.left() + inset, r.center().y - g.size().y / 2.0), g, Color32::from_gray(225));
-    register(ui.ctx(), id, r);
+    register(ui, id, r);
     r
 }
 
@@ -1519,8 +1523,8 @@ pub(crate) fn failed_pill(
     let offline = matches!(&photo.source, lightcraft_catalog::Source::File { path } if app.session.media.availability.is_offline(path));
     let text = crate::i18n::tr(if offline { "Original offline · no smart preview" } else { "This photo can't be opened" });
     let r = loupe_pill(ui, canvas, over, navigator, id, text, true);
-    let resp = ui.interact(r, egui::Id::new(("render-failed", id)), Sense::hover()).on_hover_text(error);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{text}: {error}")));
+    let resp = ui.interact(r, egui::Id::unique(("render-failed", id)), Sense::hover()).on_hover_text(error);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{text}: {error}")));
 }
 
 fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {
@@ -1744,7 +1748,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     // handles: 0..3 corners, 4..7 edges (top, right, bottom, left)
     let handles: Vec<Pos2> = (0..8).map(|i| if i < 4 { pts[i] } else { lerp(pts[i - 4], pts[(i - 3) % 4], 0.5) }).collect();
     for (i, h) in handles.iter().enumerate() {
-        register(ui.ctx(), format!("cropHandle:{i}"), Rect::from_center_size(*h, vec2(14.0, 14.0)));
+        register(ui, format!("cropHandle:{i}"), Rect::from_center_size(*h, vec2(14.0, 14.0)));
         let s = if i < 4 { 12.0 } else { 9.0 };
         p.rect_filled(Rect::from_center_size(*h, vec2(s, 3.0)), 0.0, Color32::WHITE);
         p.rect_filled(Rect::from_center_size(*h, vec2(3.0, s)), 0.0, Color32::WHITE);
@@ -1950,7 +1954,7 @@ pub(crate) fn readout_rect(at: Pos2, size: egui::Vec2, bounds: Rect) -> Rect {
 
 /// On top of everything (the tooltip layer), so neither the photo nor a panel covers it.
 fn top_painter(ui: &egui::Ui, name: &'static str) -> egui::Painter {
-    ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(name)))
+    ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(name)))
 }
 
 /// The rotation pointer: a curved double arrow on a dark disc, so it reads over any photo,
@@ -1960,7 +1964,7 @@ fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
     let r = Rect::from_center_size(at, vec2(22.0, 22.0));
     p.circle_filled(at, 12.0, Color32::from_black_alpha(150));
     crate::icons::paint_turned(&p, r.shrink(2.0), crate::icons::Icon::RotateDrag, Color32::WHITE, turn);
-    register(ui.ctx(), "cropRotateCursor", r);
+    register(ui, "cropRotateCursor", r);
 }
 
 /// How far to turn the rotation pointer (radians, clockwise) so its arc, drawn bulging up, bulges
@@ -1994,7 +1998,7 @@ fn angle_readout(ui: &egui::Ui, at: Pos2, angle: f64, bounds: Rect) {
     let rect = readout_rect(at, galley.size() + vec2(12.0, 6.0), bounds);
     p.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
     p.galley(rect.min + vec2(6.0, 3.0), galley, Color32::WHITE);
-    register(ui.ctx(), "cropAngleReadout", rect);
+    register(ui, "cropAngleReadout", rect);
 }
 
 /// Guided Upright: draw up to four guides along lines that should be vertical or horizontal. Guides are
@@ -2027,7 +2031,7 @@ fn guided_overlay(
     };
     for (i, guide) in d.geometry.guides.iter().enumerate() {
         let (sa, sb) = on_screen(guide);
-        register(ui.ctx(), format!("uprightGuide:{i}"), Rect::from_two_pos(sa, sb));
+        register(ui, format!("uprightGuide:{i}"), Rect::from_two_pos(sa, sb));
         draw(sa, sb, selected == Some(i));
     }
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -2376,7 +2380,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                             let (x, y) = (rx * a_local.cos(), ry * a_local.sin());
                             let q = map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1));
                             p.circle_stroke(q, 5.0, Stroke::new(1.5, Color32::WHITE));
-                            register(ui.ctx(), format!("maskHandle:{}:{ci}:{}", m.id, i + 1), Rect::from_center_size(q, vec2(14.0, 14.0)));
+                            register(ui, format!("maskHandle:{}:{ci}:{}", m.id, i + 1), Rect::from_center_size(q, vec2(14.0, 14.0)));
                             grips.push((m.id, ci, i as u8 + 1, q));
                         }
 
@@ -2386,7 +2390,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                         let h1_q = map.screen(Point::new(center.x + (rx * co) * l.0, center.y + (rx * s) * l.1));
                         p.line_segment([h1_q, rot_q], Stroke::new(1.0, Color32::from_white_alpha(200)));
                         p.circle_stroke(rot_q, 4.0, Stroke::new(1.5, Color32::WHITE));
-                        register(ui.ctx(), format!("maskHandle:{}:{ci}:5", m.id), Rect::from_center_size(rot_q, vec2(14.0, 14.0)));
+                        register(ui, format!("maskHandle:{}:{ci}:5", m.id), Rect::from_center_size(rot_q, vec2(14.0, 14.0)));
                         grips.push((m.id, ci, 5, rot_q));
                     }
                 }
@@ -2401,7 +2405,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                     if sel {
                         for (i, q) in [a, b].iter().enumerate() {
                             p.circle_stroke(*q, 5.0, Stroke::new(1.5, Color32::WHITE));
-                            register(ui.ctx(), format!("maskHandle:{}:{ci}:{i}", m.id), Rect::from_center_size(*q, vec2(14.0, 14.0)));
+                            register(ui, format!("maskHandle:{}:{ci}:{i}", m.id), Rect::from_center_size(*q, vec2(14.0, 14.0)));
                             grips.push((m.id, ci, i as u8 + 1, *q));
                         }
                     }
@@ -2414,7 +2418,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             {
                 let q = map.screen(at);
                 pin(&pins, q, sel);
-                register(ui.ctx(), format!("maskPin:{}:{ci}", m.id), Rect::from_center_size(q, vec2(14.0, 14.0)));
+                register(ui, format!("maskPin:{}:{ci}", m.id), Rect::from_center_size(q, vec2(14.0, 14.0)));
                 grips.push((m.id, ci, 0, q));
             }
         }
@@ -2462,7 +2466,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
                 Ok(_) => {
                     if let Some(mid) = app.session.active_mask {
-                        app.ui.detail_due = Some((ui.input(|i| i.time) + 1.0, mid));
+                        app.ui.detail_due = Some((app.tick_now() + 1.0, mid));
                     }
                 }
                 Err(e) => app.ai_error(ui.ctx(), e, Some(("object", "new"))),
@@ -2697,11 +2701,11 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             }
             let dir = (tq - sq).normalized();
             p.arrow(sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()), Stroke::new(1.0, Color32::from_white_alpha(200)));
-            register(ui.ctx(), format!("spotSource:{i}"), Rect::from_center_size(sq, vec2(14.0, 14.0)));
+            register(ui, format!("spotSource:{i}"), Rect::from_center_size(sq, vec2(14.0, 14.0)));
             grips.push((i, true, sq, r));
         }
         pin(p, tq, sel);
-        register(ui.ctx(), format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
+        register(ui, format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
         grips.push((i, false, tq, r));
     }
     if spot_keys(app, ui, map, d, &grips) {
@@ -2812,7 +2816,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         }
     }
     // where a new spot goes: the photo's centre at first, then wherever the arrows took it
-    let key = egui::Id::new("lc-spot-placement");
+    let key = egui::Id::unique("lc-spot-placement");
     let place: (f64, f64) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5));
     let q = map.screen(Point::new(place.0, place.1));
     let keys = crate::canvas_keys::handle(
@@ -2912,6 +2916,11 @@ fn film_label(name: &str) -> String {
     if name.chars().nth(14).is_some() { format!("{}…", name.chars().take(13).collect::<String>()) } else { name.to_string() }
 }
 
+/// Draw the horizontal filmstrip in `r`: selectable thumbnail cells with names and format when
+/// film names are on, badges when film badges are on, and stack counts, following the active
+/// photo and scrolling sideways with the wheel. Clicks select: Command toggles and Shift extends
+/// the range; in Compare they adjust the pair's selection, and a plain click replaces the active
+/// side.
 pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(r, 0.0, t.canvas);
@@ -2929,10 +2938,10 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     // a vertical mouse wheel scrolls the strip sideways (horizontal trackpad scrolls still work)
     child.style_mut().always_scroll_the_only_direction = true;
     // only a new active photo (or the strip appearing) scrolls it; see `grid::follow_active`
-    let follow = super::grid::follow_active(child.ctx(), egui::Id::new("film-follow-active"), active, app.session.source);
+    let follow = super::grid::follow_active(child.ctx(), egui::Id::unique("film-follow-active"), active, app.session.source);
     // a wheel notch scrolls a third of its width; see `grid::wheel_step`
-    register(ui.ctx(), "filmstrip", child.max_rect());
-    let wheel = super::grid::wheel_step(&child, egui::Id::new("film-wheel"), child.max_rect(), child.max_rect().width(), true);
+    register(ui, "filmstrip", child.max_rect());
+    let wheel = super::grid::wheel_step(&child, egui::Id::unique("film-wheel"), child.max_rect(), child.max_rect().width(), true);
     egui::ScrollArea::horizontal().id_salt("filmstrip").auto_shrink([false, false]).show_viewport(&mut child, |ui, vp| {
         if wheel != egui::Vec2::ZERO {
             ui.scroll_with_delta_animation(wheel, egui::style::ScrollAnimation::none());
@@ -2949,10 +2958,10 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
                 continue;
             }
-            let resp = ui.interact(cr, egui::Id::new(("film", id.0)), Sense::click());
+            let resp = ui.interact(cr, egui::Id::unique(("film", id.0)), Sense::click());
             let failed = app.renderer.thumb(*id).is_none() && app.renderer.failure(Slot::Thumb(*id)).is_some();
             crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
-            register(ui.ctx(), format!("film:{}", id.0), cr);
+            register(ui, format!("film:{}", id.0), cr);
             let state = app.session.selection.state_of(*id);
             let sel = state == lightcraft_engine::SelectionState::Active;
             let p = ui.painter();
@@ -3003,13 +3012,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
                     let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
                     // like the grid's badge: a click expands / collapses the stack
-                    let badge = ui.interact(br, egui::Id::new(("film-stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
+                    let badge = ui.interact(br, egui::Id::unique(("film-stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
                         "Stack — click to expand"
                     } else {
                         "Stack — click to collapse"
                     });
                     crate::widgets::announce(&badge, crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" }));
-                    register(ui.ctx(), format!("filmstack:{}", id.0), br);
+                    register(ui, format!("filmstack:{}", id.0), br);
                     let p = ui.painter();
                     let fill = if badge.hovered() { Color32::from_black_alpha(230) } else { Color32::from_black_alpha(170) };
                     p.rect_filled(br, 7.5, fill);
@@ -3408,7 +3417,7 @@ mod wheel_zoom_tests {
     use super::*;
 
     fn wheel(unit: egui::MouseWheelUnit, y: f32, modifiers: egui::Modifiers) -> egui::Event {
-        egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, y), phase: egui::TouchPhase::Move, modifiers }
+        egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, y), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Unknown, modifiers }
     }
 
     #[test]
