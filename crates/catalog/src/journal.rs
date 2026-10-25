@@ -51,27 +51,23 @@
 //! for a library left in an older format because its files could not be kept or its upgrade
 //! written: it goes on as it is, and its log gets this build's ops until a snapshot upgrades it.)
 //!
-//! | Version | Written by | Adds |
-//! |---|---|---|
-//! | (none) | early builds: a log without a snapshot | |
-//! | 1 | up to v0.2.0 | |
-//! | 2 | after v0.2.0 | `Op::SetBrowsed`, `Catalog.browsed`, `Photo.local_baseline` |
-//! | 3 | albums by hand | `Op::SetAlbumOrder`, `Album.order` |
-//! | 4 | Reload reads lens data | `Op::SetEmbeddedLens` |
-//! | 5 | the keyword list | `Op::SetKeyword`, `Catalog.keyword_list` |
-//! | 6 | folder labels | `Op::SetFolderRecord`, `Catalog.folder_records` |
-//! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
-//! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
-//! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
-//! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
-//! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
-//! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
+//! Every format, what it adds and which build wrote it first is one row of [`FORMATS`]: the
+//! newest row is [`VERSION`], what this build writes.
 //!
 //! Rules:
-//! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
-//!   serialized field to the catalog, a photo, an album, a stack or develop settings that an older
-//!   build would misread or silently drop. New fields must deserialize from older data
-//!   (`#[serde(default)]`), so newer builds keep reading every older format.
+//! - **Add a row to [`FORMATS`]** in the change that adds an [`Op`] variant or a serialized field
+//!   to the catalog, a photo, an album, a stack or develop settings that an older build would
+//!   misread or silently drop. New fields must deserialize from older data (`#[serde(default)]`),
+//!   so newer builds keep reading every older format. The row says whether it adds an op
+//!   ([`NEW_OP`]) or only fields ([`FIELDS`]); a row's description is free to name an op either
+//!   way (a field an op carries), since nothing reads its words.
+//! - **A number means one format, and is final only on `main`.** Two changes written at the same
+//!   time both take the next number; the one that lands second takes the number after it (and
+//!   renames its fixture). A number that is spoken for but not in this build yet can have its
+//!   row all the same ([`Format::here`] set to `false`), so nothing else takes it.
+//! - **Every format from 6 on has a fixture**: a small library written by the build of that
+//!   format (`fixtures/v<N>-catalog.*`; `tests_stored::write_this_formats_fixture` writes this
+//!   build's), which every later build must open as it was (`tests_format_version`).
 //! - **Opening an older format upgrades it**: right after loading, [`Journal::open`] writes a
 //!   snapshot in this build's format (also for a new library), before anything is appended — so a
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
@@ -113,9 +109,63 @@ use crate::{Catalog, CatalogError, Op, Result};
 pub const SNAPSHOT: &str = "catalog.snap";
 pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
-/// The catalog format this build writes (and the newest it reads). See the module docs →
-/// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 12;
+/// One catalog format: a number in `catalog.snap` that says how the library beside it is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Format {
+    pub version: u32,
+    /// What it came with.
+    pub written_by: &'static str,
+    /// What it adds to the format before it.
+    pub adds: &'static str,
+    /// It adds an [`Op`] variant ([`NEW_OP`]), not only fields ([`FIELDS`]): the newest of these is the newest op's
+    /// format (the guard test `op_variants_are_versioned` holds that against the ops themselves).
+    pub adds_op: bool,
+    /// This build reads and writes what the format adds. `false`: the number is spoken for by a
+    /// change that is not in this build yet (see the module docs → *Format versions*).
+    pub here: bool,
+}
+
+/// A row of [`FORMATS`] that adds an [`Op`] variant ([`Format::adds_op`]).
+pub const NEW_OP: bool = true;
+/// A row of [`FORMATS`] that adds fields, or a way of storing records, but no op.
+pub const FIELDS: bool = false;
+
+const fn format(version: u32, written_by: &'static str, adds_op: bool, adds: &'static str) -> Format {
+    Format { version, written_by, adds, adds_op, here: true }
+}
+
+/// The newest format in `formats` that this build has and that adds an op, by each row's flag.
+pub fn newest_op_format(formats: &[Format]) -> Option<&Format> {
+    formats.iter().rev().find(|f| f.here && f.adds_op)
+}
+
+/// Every catalog format, oldest first. (Before them: early builds wrote a log without a snapshot.)
+pub const FORMATS: &[Format] = &[
+    format(1, "up to v0.2.0", FIELDS, ""),
+    format(2, "after v0.2.0", NEW_OP, "`Op::SetBrowsed`, `Catalog.browsed`, `Photo.local_baseline`"),
+    format(3, "albums by hand", NEW_OP, "`Op::SetAlbumOrder`, `Album.order`"),
+    format(4, "Reload reads lens data", NEW_OP, "`Op::SetEmbeddedLens`"),
+    format(5, "the keyword list", NEW_OP, "`Op::SetKeyword`, `Catalog.keyword_list`"),
+    format(6, "folder labels", NEW_OP, "`Op::SetFolderRecord`, `Catalog.folder_records`"),
+    format(7, "Kelvin white balance (#730)", NEW_OP, "`Op::SetAsShotWb`, `WhiteBalance.scale`"),
+    format(8, "the History cursor", NEW_OP, "`Op::SetHistoryCursor`, `Photo.history_cursor`"),
+    format(9, "preview-only recheck (#974)", FIELDS, "`Photo.preview_checked`, `Op::SetContent`'s `preview_checked`"),
+    format(10, "masks stay on the photo under lens corrections, Upright and Transform", FIELDS, "`Mask.on_photo` (develop settings)"),
+    format(11, "lens database profiles named in the Optics panel", FIELDS, "`EmbeddedLens.source`"),
+    format(12, "history steps and versions share segmentation grids (#2154)", FIELDS, "`Catalog.grids`, `SegMask.grid`"),
+];
+
+/// The catalog format this build writes (and the newest it reads): the newest of [`FORMATS`]
+/// that is [`Format::here`].
+pub const VERSION: u32 = newest(FORMATS);
+
+const fn newest(formats: &[Format]) -> u32 {
+    match formats.split_last() {
+        Some((f, _)) if f.here => f.version,
+        Some((_, rest)) => newest(rest),
+        None => 0,
+    }
+}
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

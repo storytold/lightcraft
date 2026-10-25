@@ -30,6 +30,186 @@ fn plain(id: u64) -> Photo {
     p
 }
 
+// ---- fixtures (also used, as they are, to write `fixtures/v<N>-catalog.*` with the build of format N)
+
+fn edited(d: impl FnOnce(&mut DevelopSettings)) -> Arc<DevelopSettings> {
+    let mut s = base();
+    d(&mut s);
+    Arc::new(s)
+}
+
+/// Settings with lists, choices and optional values: masks of several kinds, curve points,
+/// guides, an Upright transform, a locked crop aspect, spots, red eye, point colours.
+fn rich() -> DevelopSettings {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape, PointColor, RedEye, SegMask, Spot};
+    use lightcraft_geom::{Homography, Point};
+    let at = |x: f64, y: f64| Point { x, y };
+    let seg = |side: u32| SegMask { side, data: "eJxjYAAAAAEAAQ==".into(), rect: Some([0.1, 0.2, 0.6, 0.7]), grid: None };
+    let component = |shape: MaskShape| MaskComponent { name: None, op: MaskOp::default(), invert: false, shape };
+    let mut s = DevelopSettings { treatment: lightcraft_develop::Treatment::Bw, ..base() };
+    s.profile.id = "lc.mono".into();
+    s.profile.amount = 150.0;
+    s.profile.camera_local_tone = true;
+    s.wb.tint = 12.0;
+    s.curve.master = vec![at(0.0, 0.0), at(0.4, 0.55), at(1.0, 1.0)];
+    s.curve.red = vec![at(0.0, 0.1), at(1.0, 0.9)];
+    s.point_colors = vec![PointColor { hue_shift: 20.0, ..Default::default() }];
+    s.geometry.guides = vec![(at(0.1, 0.1), at(0.1, 0.9)), (at(0.9, 0.1), at(0.8, 0.9))];
+    s.geometry.upright_transform = Some(Homography([1.0, 0.01, 0.0, -0.01, 1.0, 0.0, 0.0, 0.002, 1.0]));
+    s.crop.aspect = Some((3, 2));
+    s.crop.flip_h = true;
+    s.crop.geometry.angle = 1.5;
+    s.spots = vec![Spot { points: vec![at(0.3, 0.3), at(0.32, 0.31)], source_offset: Some(at(0.05, 0.0)), ..Default::default() }];
+    s.red_eye = vec![RedEye { center: at(0.5, 0.4), catchlight: Some(at(0.1, -0.1)), ..Default::default() }];
+    s.masks = vec![
+        Mask {
+            id: 1,
+            name: "Sky".into(),
+            components: vec![
+                component(MaskShape::Linear { start: at(0.5, 0.0), end: at(0.5, 0.4) }),
+                MaskComponent {
+                    name: Some("Sun".into()),
+                    invert: true,
+                    ..component(MaskShape::Radial { center: at(0.7, 0.2), rx: 0.1, ry: 0.1, angle: 0.0, feather: 50.0, invert: false })
+                },
+                component(MaskShape::LuminanceRange { lo: 0.6, hi: 1.0, lo_feather: 0.1, hi_feather: 0.0 }),
+            ],
+            refine: 30.0,
+            ..Default::default()
+        },
+        Mask {
+            id: 2,
+            name: "Boat".into(),
+            components: vec![
+                component(MaskShape::Object {
+                    hint: vec![at(0.4, 0.6)],
+                    exclude: vec![at(0.1, 0.1)],
+                    seg: Some(seg(256)),
+                    detail: vec![seg(128), seg(64)],
+                    edge: 2.0,
+                }),
+                component(MaskShape::Prompt { text: "the red boat".into(), seg: None, detail: Vec::new(), edge: 0.0 }),
+                component(MaskShape::ColorRange { samples: vec![[0.5, 0.1, 0.2]], refine: 40.0 }),
+                component(MaskShape::People { person: 1, parts: vec!["face".into()] }),
+                component(MaskShape::Subject),
+            ],
+            ..Default::default()
+        },
+    ];
+    s.disabled_sections = vec!["detail".into(), "light".into()];
+    s
+}
+
+/// A photo with every field set to something other than what [`plain`] has, but for the few that
+/// formats after 6 added (the focus point, the camera's and lens's makers, the flash, the exposure bias, the serial
+/// number, the History cursor, the preview-only recheck).
+fn full() -> Photo {
+    let look = edited(|s| s.light.contrast = 20.0);
+    let now = Arc::new(DevelopSettings { light: lightcraft_develop::Light { exposure: 0.3, ..Default::default() }, ..rich() });
+    let mut p = plain(7);
+    p.kind = MediaKind::Raw;
+    p.file_size = 25_000_000;
+    p.captured = Some("2019-07-14T15:21:07".into());
+    p.meta = Meta {
+        camera: "Camera Model X".into(),
+        lens: "24-70mm f/2.8".into(),
+        focal_mm: Some(35.0),
+        aperture: Some(4.0),
+        shutter: "1/250".into(),
+        iso: Some(400),
+        location: "Old harbour".into(),
+        city: "Lisbon".into(),
+        state: "Lisboa".into(),
+        country: "Portugal".into(),
+        gps: Some((38.7, -9.1)),
+        title: "Harbour".into(),
+        caption: "Boats at dusk".into(),
+        alt_text: "Three boats".into(),
+        extended_description: "Three boats moored at dusk".into(),
+        copyright: "(c) Someone".into(),
+        copyright_status: CopyrightStatus::Copyrighted,
+        usage_terms: "All rights reserved".into(),
+        copyright_url: "https://example.org/rights".into(),
+        creator: "Someone".into(),
+        keywords: vec!["Places|Lisbon".into(), "boats".into()],
+        regions: vec![lightcraft_meta::Region {
+            rect: lightcraft_meta::Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some("Ana".into()),
+            description: None,
+        }],
+        // (no format with a fixture had these)
+        make: String::new(),
+        lens_make: String::new(),
+        flash: None,
+        exposure_bias: None,
+        serial_number: String::new(),
+        focus: None,
+    };
+    p.rating = 4;
+    p.flag = Flag::Pick;
+    p.label = Some(ColorLabel::Green);
+    p.develop = now.clone();
+    p.edited = Some("2026-10-10T13:00:00".into());
+    p.versions = vec![Version { name: "Warm".into(), created: "2026-10-10T12:30:00".into(), settings: look.clone(), auto: true }];
+    p.history = vec![HistoryStep { label: "Contrast".into(), settings: look.clone() }, HistoryStep { label: "Exposure".into(), settings: now }];
+    p.deleted = true;
+    p.local = true;
+    p.duration = Some(12.5);
+    p.as_shot_wb = Some((5200.0, 3.0));
+    p.content_hash = Some("00000000000000009e3779b97f4a7c15".into());
+    p.embedded_lens = Some(lightcraft_develop::EmbeddedLens { vignette: Some(Default::default()), ..Default::default() });
+    p.copy_of = Some(PhotoId(3));
+    p.copy_name = Some("Copy 1".into());
+    p.import_look = Some(look);
+    p.analysis = Some(Analysis { sharpness: 71.0, clipped: 0.02, group: Some(4), best: true });
+    p.preview_only = Some("unsupported raw variant".into());
+    p.local_baseline = Some(0xdead_beef);
+    p
+}
+
+/// Changes made after the snapshot of the format 6 fixture (they are its log).
+fn later_ops() -> Vec<Op> {
+    let warm = edited(|s| s.wb.temp += 500.0);
+    vec![
+        Op::SetDevelop { id: PhotoId(8), settings: warm.clone(), label: "Temperature".into(), edited: Some("2026-10-10T14:00:00".into()) },
+        Op::PushHistory { id: PhotoId(8), step: HistoryStep { label: "Temperature".into(), settings: warm } },
+        Op::SetMeta { id: PhotoId(8), meta: Box::new(Meta { title: "Harbour".into(), keywords: vec!["boats".into()], ..Default::default() }) },
+        Op::SetRating { id: PhotoId(9), rating: 3 },
+        Op::SetVersions {
+            id: PhotoId(9),
+            versions: vec![Version { name: "Rich".into(), created: "2026-10-10T14:05:00".into(), settings: Arc::new(rich()), auto: false }],
+        },
+    ]
+}
+
+/// What a fixture of format 7 on holds besides: a camera's as-shot white balance read later, and
+/// settings on the Kelvin scale (the format's `Op::SetAsShotWb` and `WhiteBalance.scale`).
+fn kelvin_ops() -> Vec<Op> {
+    let kelvin = edited(|s| {
+        s.wb.scale = lightcraft_develop::WbScale::Kelvin;
+        s.wb.temp = 5200.0;
+        s.wb.tint = 8.0;
+    });
+    vec![
+        Op::SetAsShotWb { id: PhotoId(8), wb: Some((5200.0, 8.0)) },
+        Op::SetDevelop { id: PhotoId(8), settings: kelvin, label: "White Balance".into(), edited: Some("2026-10-11T09:00:00".into()) },
+    ]
+}
+
+/// The changes a fixture's log holds: [`later_ops`], and from format 7 on [`kelvin_ops`]. (The
+/// fixtures of formats 8 and 9 hold the same library as format 7's: what those formats added, the
+/// History cursor and the preview-only recheck, is not in them.)
+fn fixture_ops(version: u32) -> Vec<Op> {
+    let mut ops = later_ops();
+    if version >= 7 {
+        ops.extend(kelvin_ops());
+    }
+    ops
+}
+
+// ---- end of fixtures
+
 fn catalog_of(photos: impl IntoIterator<Item = Photo>) -> Catalog {
     let mut c = Catalog::new();
     for p in photos {
@@ -422,4 +602,60 @@ impl serde::ser::SerializeStruct for &mut Skipped {
     fn end(self) -> Walked {
         Ok(())
     }
+}
+
+/// The library the fixture of format `version` holds (`fixtures/v<N>-catalog.*`): three photos
+/// in the snapshot, with a log of later changes.
+pub(crate) fn fixture_library(version: u32) -> Catalog {
+    let mut library = fixture_snapshot();
+    for op in fixture_ops(version) {
+        library.apply(op).unwrap();
+    }
+    // (the fixtures were written before a mask could stay on the photo, `Mask.on_photo` of main's format 10: their masks
+    // read as drawn on the corrected image, which is not how the masks built here are)
+    let mut library = Catalog::from_snapshot(&library.to_snapshot().replace("\"on_photo\":true", "\"on_photo\":false")).unwrap();
+    // (photo nine's baseline is the fingerprint of its settings as the builds that wrote the fixtures worked it out: this
+    // build gets another number for the same settings, since main's develop code changed after them)
+    if let Some(p) = library.photos.get_mut(&PhotoId(9)) {
+        Arc::make_mut(p).local_baseline = Some(5_167_973_575_965_256_545);
+    }
+    library
+}
+
+/// What the fixtures' snapshot holds: a photo with every field set, an untouched one, and a
+/// Local record with rich develop settings.
+fn fixture_snapshot() -> Catalog {
+    let mut rich_photo = plain(9);
+    rich_photo.develop = Arc::new(rich());
+    rich_photo.local = true;
+    rich_photo.set_local_baseline();
+    catalog_of([full(), plain(8), rich_photo])
+}
+
+/// Writes this build's fixture, `fixtures/v<VERSION>-catalog.*`: the fixture library as this
+/// build saves it, snapshot and log. Run it once, when a format is new: put two empty files there
+/// (the tests include them), then
+/// `cargo test -p lightcraft-catalog write_this_formats_fixture -- --ignored`. The files are then
+/// what that build wrote, and are never written again.
+#[test]
+#[ignore = "writes fixtures/v<VERSION>-catalog.*"]
+fn write_this_formats_fixture() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures");
+    let (snap, log) = (dir.join(format!("v{VERSION}-catalog.snap.json")), dir.join(format!("v{VERSION}-catalog.log.jsonl")));
+    let written = |f: &std::path::Path| std::fs::metadata(f).is_ok_and(|m| m.len() > 0);
+    assert!(!written(&snap) && !written(&log), "format {VERSION} has its fixture: a fixture is what that build wrote");
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    // the snapshot first, then the later changes as the log beside it
+    let mut library = fixture_snapshot();
+    let photos: Vec<Op> = library.photos().map(|p| Op::AddPhoto { photo: Box::new((**p).clone()) }).collect();
+    j.append(&photos).unwrap();
+    j.snapshot(&library).unwrap();
+    for op in fixture_ops(VERSION) {
+        library.apply(op.clone()).unwrap();
+        j.append(&[op]).unwrap();
+    }
+    drop(j);
+    std::fs::write(snap, m.get(SNAPSHOT).unwrap()).unwrap();
+    std::fs::write(log, m.get(LOG).unwrap()).unwrap();
 }

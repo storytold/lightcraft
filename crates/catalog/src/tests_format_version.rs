@@ -1,7 +1,7 @@
 //! Issue #102: catalog format versions. Older formats load and are upgraded; a newer format is
 //! refused with a clear error and left untouched (never read in part, truncated or set aside).
 
-use crate::journal::{LOG, SNAPSHOT, VERSION, encode_record};
+use crate::journal::{FORMATS, LOG, SNAPSHOT, VERSION, encode_record};
 use crate::*;
 
 fn photo(c: &mut Catalog) -> Op {
@@ -193,9 +193,8 @@ fn bad_crc_is_still_a_torn_tail() {
 }
 
 /// Guard for the version rule (see `journal` → *Format versions*): adding an [`Op`] variant breaks
-/// this match. When it does, bump `journal::VERSION`, add a row to the format table, and add the
-/// variant here under the new version. A version that only adds serialized fields raises
-/// `NEWEST_FIELDS` instead.
+/// this match. When it does, add a row to `journal::FORMATS` (flagged `NEW_OP`) and the variant
+/// here under the new number. A format that only adds serialized fields is a `FIELDS` row instead.
 #[test]
 fn op_variants_are_versioned() {
     fn since(op: &Op) -> u32 {
@@ -238,11 +237,89 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154) (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
-    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 12;
+    // (formats 9 to 12 added no op: they added fields)
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
-    assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+    // the newest format in this build that adds an op is the newest op's, and says so
+    let adds_an_op = crate::journal::newest_op_format(FORMATS).expect("a format adds an op");
+    assert_eq!(adds_an_op.version, newest, "the newest op's format is the newest row of FORMATS that adds one: {adds_an_op:?}");
+    assert!(adds_an_op.adds.contains("Op::SetHistoryCursor"), "{adds_an_op:?}");
+}
+
+/// A format that only adds a field may name the op that carries it ("`Op::SetContent`'s `preview_checked`", as #974
+/// does): which formats add an op is each row's own flag ([`crate::journal::Format::adds_op`]), never its wording.
+#[test]
+fn a_format_that_only_adds_a_field_may_name_an_op() {
+    use crate::journal::{Format, newest_op_format};
+    let row = |version, adds, adds_op| Format { version, written_by: "a build", adds, adds_op, here: true };
+    let formats = [row(1, "", false), row(2, "`Op::SetBrowsed`", true), row(3, "`Op::SetContent`'s `preview_checked`", false)];
+    assert_eq!(newest_op_format(&formats).map(|f| f.version), Some(2), "format 3 adds a field, whatever it names");
+}
+
+/// Given the list of catalog formats, then each row that says it adds an op names the op it adds: the flag and the
+/// words don't part.
+#[test]
+fn a_format_that_adds_an_op_names_it() {
+    for f in FORMATS.iter().filter(|f| f.adds_op) {
+        assert!(f.adds.contains("`Op::"), "format {} adds an op: its row names it ({:?})", f.version, f.adds);
+    }
+}
+
+/// Given the list of catalog formats, then each number is there once, in order and without a
+/// gap, and what this build writes is the newest of them it has (a number spoken for by a change
+/// that is not here yet, [`Format::here`] false, comes after it): a number never means two formats.
+#[test]
+fn a_format_number_means_one_format() {
+    let numbers: Vec<u32> = FORMATS.iter().map(|f| f.version).collect();
+    assert_eq!(numbers, (1..=FORMATS.len() as u32).collect::<Vec<_>>());
+    let here: Vec<u32> = FORMATS.iter().filter(|f| f.here).map(|f| f.version).collect();
+    assert_eq!(here, (1..=VERSION).collect::<Vec<_>>(), "this build has every format up to the one it writes, and none after");
+}
+
+/// The formats this build has that carry no fixture: 10 to 12 came with main, from builds whose libraries are not kept
+/// here (a fixture is what that build wrote, so none is made up).
+const WITHOUT_FIXTURE: [u32; 3] = [10, 11, 12];
+
+/// The library `fixtures/v<N>-catalog.*` holds, written by the build of format `N`.
+fn fixture(version: u32) -> Option<(&'static str, &'static str)> {
+    match version {
+        6 => Some((include_str!("fixtures/v6-catalog.snap.json"), include_str!("fixtures/v6-catalog.log.jsonl"))),
+        7 => Some((include_str!("fixtures/v7-catalog.snap.json"), include_str!("fixtures/v7-catalog.log.jsonl"))),
+        8 => Some((include_str!("fixtures/v8-catalog.snap.json"), include_str!("fixtures/v8-catalog.log.jsonl"))),
+        9 => Some((include_str!("fixtures/v9-catalog.snap.json"), include_str!("fixtures/v9-catalog.log.jsonl"))),
+        _ => None,
+    }
+}
+
+/// Given a library written by the build of each format from 6 on (its fixture), when this build
+/// opens it, then it reads as that library and is left in this build's format. A format whose
+/// change is not in this build yet has no fixture here, nor do the ones in [`WITHOUT_FIXTURE`]; every other one must
+/// have its own.
+#[test]
+fn every_format_has_a_fixture_that_opens_as_it_was() {
+    for f in FORMATS.iter().filter(|f| f.version >= 6) {
+        let expected = crate::tests_stored::fixture_library(f.version);
+        let Some((snap, log)) = fixture(f.version) else {
+            assert!(
+                !f.here || WITHOUT_FIXTURE.contains(&f.version),
+                "format {} has no fixture (tests_stored::write_this_formats_fixture writes it)",
+                f.version
+            );
+            continue;
+        };
+        assert!(f.here, "format {} has a fixture: it is in this build", f.version);
+        assert!(snap.starts_with(&format!("{{\"format\":\"lightcraft-catalog\",\"version\":{},", f.version)), "v{}", f.version);
+        let m = MemStore::new();
+        m.set(SNAPSHOT, snap.as_bytes().to_vec());
+        m.set(LOG, log.as_bytes().to_vec());
+        let (_, mut loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+        loaded.revision = expected.revision;
+        assert_eq!(loaded, expected, "v{}", f.version);
+        assert_eq!((r.failed, r.upgraded_from), (0, (f.version != VERSION).then_some(f.version)), "v{}", f.version);
+        assert_eq!(snapshot_version(&m), u64::from(VERSION), "v{}", f.version);
+    }
+    for version in WITHOUT_FIXTURE {
+        assert!(fixture(version).is_none(), "format {version} is listed as having no fixture");
+    }
 }
 
 // ---- an upgrade keeps what it replaces
@@ -274,14 +351,6 @@ impl Store for Refusing {
     }
     fn describe(&self) -> String {
         "refusing".into()
-    }
-}
-
-/// The library `fixtures/v<N>-catalog.*` holds, written by the build of format `N`.
-fn fixture(version: u32) -> Option<(&'static str, &'static str)> {
-    match version {
-        6 => Some((include_str!("fixtures/v6-catalog.snap.json"), include_str!("fixtures/v6-catalog.log.jsonl"))),
-        _ => None,
     }
 }
 

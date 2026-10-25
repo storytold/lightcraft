@@ -7,9 +7,9 @@
 //! - **determinism**: replaying the log reproduces the state exactly (property-tested).
 //!
 //! **Catalog format version** ([`journal::VERSION`], see [`journal`] → *Format versions*): adding
-//! an [`Op`] variant or a serialized field means bumping it. Newer builds read every older format
-//! (and upgrade it on open); older builds refuse a newer library with [`CatalogError::Newer`]
-//! instead of reading part of it.
+//! an [`Op`] variant or a serialized field means adding a row to [`journal::FORMATS`]. Newer
+//! builds read every older format (and upgrade it on open); older builds refuse a newer library
+//! with [`CatalogError::Newer`] instead of reading part of it.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
