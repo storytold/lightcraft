@@ -241,7 +241,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
                 if let Some(n) = &device {
                     let _ = MenuItem::new(n).selected(true).inert().show(ui);
                 }
-                if app.services.pick_display_profile.is_some() && MenuItem::new(crate::i18n::tr("Other…")).selected(false).show(ui).clicked() {
+                if app.services.pick_display_profile.is_some() && MenuItem::picker(crate::i18n::tr("Other…")).show(ui).clicked() {
                     pick = true;
                 }
             });

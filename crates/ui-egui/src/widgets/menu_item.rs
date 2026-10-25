@@ -39,6 +39,12 @@ pub struct MenuItem<'a> {
 }
 
 impl<'a> MenuItem<'a> {
+    /// The "Other…" row that ends a list of choices and opens a file picker: it stands in the
+    /// choices' column but is an action, so it is a plain button, not an unselected radio.
+    pub fn picker(label: &'a str) -> Self {
+        Self::new(label).check_slot(true)
+    }
+
     /// A row saying `label` (already translated).
     pub fn new(label: &'a str) -> Self {
         Self {

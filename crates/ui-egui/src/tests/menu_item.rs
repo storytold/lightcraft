@@ -175,9 +175,9 @@ fn every_kind_of_row_is_one_height() {
 
 #[test]
 fn a_shortcut_reads_as_the_platform_writes_it() {
-    assert_eq!(Kbd::new("Cmd+Shift+Z", true).text(), "⌘⇧Z");
+    assert_eq!(Kbd::new("Cmd+Shift+Z", true).text(), "⇧⌘Z");
     assert_eq!(Kbd::new("Cmd+Shift+Z", false).text(), "Ctrl+Shift+Z");
-    assert_eq!(Kbd::new("Cmd+Shift+Z", true).keys(), ["⌘", "⇧", "Z"]);
+    assert_eq!(Kbd::new("Cmd+Shift+Z", true).keys(), ["⇧", "⌘", "Z"]);
     assert_eq!(Kbd::new("Cmd+Shift+Z", false).keys(), ["Ctrl", "Shift", "Z"]);
     assert_eq!(Kbd::new("Delete", true).keys(), ["⌫"]);
     // the plus key itself isn't lost to the separator
@@ -189,7 +189,7 @@ fn a_shortcut_reads_as_the_platform_writes_it() {
 fn the_tooltip_shows_the_key_as_it_is_now_mapped() {
     let mut keymap = crate::shortcuts::Keymap::new();
     let default = tip_with_shortcut("Reset all edits", "develop.reset", &keymap, true);
-    assert_eq!(default, "Reset all edits (⌘⇧R)");
+    assert_eq!(default, "Reset all edits (⇧⌘R)");
     assert_eq!(tip_with_shortcut("Reset all edits", "develop.reset", &keymap, false), "Reset all edits (Ctrl+Shift+R)");
     keymap.insert("develop.reset".to_string(), "Shift+K".to_string());
     assert_eq!(tip_with_shortcut("Reset all edits", "develop.reset", &keymap, true), "Reset all edits (⇧K)");
@@ -281,6 +281,16 @@ fn exclusive_choices_are_radio_buttons_and_independent_toggles_are_checkboxes() 
     assert_eq!(role("Solo Mode"), Some(("CheckBox".to_string(), Some(true))));
     // a submenu row marking the current group is a plain button
     assert_eq!(role("Group"), Some(("Button".to_string(), None)));
+}
+
+/// The "Other…" row of a profile list opens a file picker: a screen reader must hear a button, not
+/// an unselected radio button.
+#[test]
+fn the_other_row_that_opens_a_picker_is_a_button_not_a_radio() {
+    let r = run(None, Vec::new(), |ui| vec![MenuItem::new("sRGB").selected(true).show(ui), MenuItem::picker("Other…").show(ui)]);
+    let role = |name: &str| r.nodes.iter().find(|(_, n, _)| n == name).map(|(role, _, t)| (role.clone(), *t));
+    assert_eq!(role("Other…"), Some(("Button".to_string(), None)), "{:?}", r.nodes);
+    assert_eq!(role("sRGB"), Some(("RadioButton".to_string(), Some(true))));
 }
 
 #[test]

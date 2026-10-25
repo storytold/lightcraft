@@ -534,7 +534,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
                 MenuItem::new(shown.as_str()).selected(true).inert().show(ui);
             }
             if app.services.pick_display_profile.is_some() {
-                let r = MenuItem::new(crate::i18n::tr("Other…")).selected(false).widget("item:printProfile-other").show(ui);
+                let r = MenuItem::picker(crate::i18n::tr("Other…")).widget("item:printProfile-other").show(ui);
                 pick |= r.clicked();
             }
         });

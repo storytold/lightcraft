@@ -73,6 +73,16 @@ impl<'a> Kbd<'a> {
         // a "+" key itself (`Cmd++`) splits into empty parts
         let plus = parts.last() == Some(&"") && parts.len() > 1;
         parts.retain(|p| !p.is_empty());
+        // on macOS the modifiers come in AppKit's and Apple's HIG order, ⌃⌥⇧⌘, however the binding spells them
+        if self.mac {
+            parts.sort_by_key(|p| match *p {
+                "Ctrl" => 0,
+                "Alt" => 1,
+                "Shift" => 2,
+                "Cmd" => 3,
+                _ => 4,
+            });
+        }
         let mut keys: Vec<String> = parts.into_iter().map(|p| crate::menubar::shortcut_text(p, self.mac)).collect();
         if plus {
             keys.push("+".to_string());
