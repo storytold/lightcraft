@@ -334,26 +334,32 @@ fn as_shot_neutral(blocks: &[Block]) -> Result<Option<[f64; 3]>> {
         }
     }
     let Some(g) = g else { return Ok(None) };
-    let (r, gr, gb, b) = (g.f32(1)?, g.f32(2)?, g.f32(3)?, g.f32(4)?);
-    let green = f64::from(gr + gb) / 2.0;
-    let n = [green / f64::from(r), 1.0, green / f64::from(b)];
-    Ok(n.iter().all(|v| v.is_finite() && *v > 0.0).then_some(n))
+    let neutral = (|| {
+        let (r, gr, gb, b) = (g.f32(1)?, g.f32(2)?, g.f32(3)?, g.f32(4)?);
+        let green = f64::from(gr + gb) / 2.0;
+        let n = [green / f64::from(r), 1.0, green / f64::from(b)];
+        n.iter().all(|v| v.is_finite() && *v > 0.0).then_some(n)
+    })();
+    Ok(neutral)
 }
 
 fn capture_time(m: &Msg) -> Result<Option<lightcraft_meta::DateTime>> {
     let Some(t) = m.sub(3)? else { return Ok(None) };
-    let part = |n| t.varint(n).and_then(|v| u8::try_from(v).ok());
-    let date_time = lightcraft_meta::DateTime {
-        year: u16::try_from(t.varint(1)?).ok()?,
-        month: part(2)?,
-        day: part(3)?,
-        hour: part(4)?,
-        minute: part(5)?,
-        second: part(6)?,
-        millis: 0,
-        offset_minutes: None,
-    };
-    Ok(lightcraft_meta::DateTime::parse_exif(&date_time.to_exif()))
+    let date_time = (|| {
+        let part = |n| t.varint(n).and_then(|v| u8::try_from(v).ok());
+        let date_time = lightcraft_meta::DateTime {
+            year: u16::try_from(t.varint(1)?).ok()?,
+            month: part(2)?,
+            day: part(3)?,
+            hour: part(4)?,
+            minute: part(5)?,
+            second: part(6)?,
+            millis: 0,
+            offset_minutes: None,
+        };
+        lightcraft_meta::DateTime::parse_exif(&date_time.to_exif())
+    })();
+    Ok(date_time)
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
