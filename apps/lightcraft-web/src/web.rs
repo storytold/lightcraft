@@ -600,7 +600,6 @@ impl WebApp {
         let (control_tx, control_rx) = std::sync::mpsc::channel();
         CONTROL.with(|c| *c.borrow_mut() = Some(control_tx));
         app = app.with_control(control_rx);
-        app.renderer.keep_pixels = false;
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
@@ -844,15 +843,20 @@ pub fn command(id: String, params: String) -> js_sys::Promise {
 /// same calls, so one agent or host app can drive them all.
 #[wasm_bindgen]
 pub fn request(method: String, params: JsValue) -> js_sys::Promise {
+    // Params that have no JSON (a cyclic object, a function, a throwing `toJSON`) reject: as `{}` they
+    // would run the method with its defaults.
     let text = if params.is_undefined() || params.is_null() {
-        String::new()
+        Ok(String::new())
     } else if let Some(s) = params.as_string() {
-        s
+        Ok(s)
     } else {
-        js_sys::JSON::stringify(&params).ok().and_then(|s| s.as_string()).unwrap_or_default()
+        js_sys::JSON::stringify(&params)
+            .ok()
+            .and_then(|s| s.as_string())
+            .ok_or_else(|| "params are not JSON (a cyclic object or a function?)".to_string())
     };
     js_sys::Promise::new(&mut |resolve, reject| {
-        let sent = crate::automation::params(&text).map_err(|e| format!("{method}: {e}")).and_then(|params| {
+        let sent = text.clone().and_then(|text| crate::automation::params(&text)).map_err(|e| format!("{method}: {e}")).and_then(|params| {
             let (req, rx) = ControlRequest::new(method.clone(), params);
             let sent = CONTROL.with(|c| c.borrow().as_ref().is_some_and(|tx| tx.send(req).is_ok()));
             if sent { Ok(rx) } else { Err("LightCraft is not running yet".to_string()) }
@@ -943,6 +947,8 @@ impl eframe::App for WebApp {
             w.set_budget(self.app.session.cache_bytes());
         }
         self.app.logic(ctx);
+        // Replies the app sent just now (its control requests run in `logic`).
+        settle_requests();
         self.save();
         if let Some(b) = &self.bridge {
             b.report_dirty(self.dirty_for_host());
