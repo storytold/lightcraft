@@ -1980,8 +1980,8 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the MovePhotos dialog.
 fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::MovePhotos { ids, name, dont_ask, .. } = dlg else { return };
-    let n = ids.len();
+    let Dialog::MovePhotos { name, files, dont_ask, .. } = dlg else { return };
+    let n = *files;
     ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);

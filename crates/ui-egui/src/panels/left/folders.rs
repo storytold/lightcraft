@@ -436,7 +436,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         // said not to; the menu's Move Selected Photos Here is asked for by name and goes at once
         if app.ui.settings.ask_before_move {
             let library = app.session.library_generation();
-            app.ui.dialog = Some(crate::state::Dialog::MovePhotos { ids, folder: n.path.clone(), name, dont_ask: false, library });
+            app.ui.dialog = Some(crate::state::Dialog::MovePhotos { ids, folder: n.path.clone(), name, files: count, dont_ask: false, library });
         } else {
             move_photos_here(app, ui.ctx(), Some(&ids), &n.path, &name);
         }
