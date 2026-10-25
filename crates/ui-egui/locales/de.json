@@ -3511,5 +3511,7 @@
   "No photo in this folder is in the library yet": "Kein Foto in diesem Ordner ist bisher in der Bibliothek",
   "Select the photos to move in the grid first": "Wähle zuerst im Raster die Fotos aus, die du verschieben willst",
   "This place is kept in Local already": "Dieser Ort wird bereits in „Lokal“ behalten",
-  "Only a place at the top of Local can be removed from it": "Nur ein Ort ganz oben in „Lokal“ kann daraus entfernt werden"
+  "Only a place at the top of Local can be removed from it": "Nur ein Ort ganz oben in „Lokal“ kann daraus entfernt werden",
+  "Copy Path": "Pfad kopieren",
+  "Path copied": "Pfad kopiert"
 }

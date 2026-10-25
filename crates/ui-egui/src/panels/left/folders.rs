@@ -604,6 +604,7 @@ enum FolderItem {
     MovePhotosHere,
     ColorLabel,
     Reveal,
+    CopyPath,
     KeepInLocal,
     RemoveFromLocal,
     RemoveFromLibrary,
@@ -618,11 +619,21 @@ fn folder_menu_groups(row: FolderRow) -> &'static [&'static [FolderItem]] {
     use FolderItem::*;
     match row {
         FolderRow::Library => {
-            &[&[Synchronize, LocateMissing], &[NewFolder, Rename, Move, MovePhotosHere], &[ColorLabel], &[Reveal], &[RemoveFromLibrary]]
+            &[&[Synchronize, LocateMissing], &[NewFolder, Rename, Move, MovePhotosHere], &[ColorLabel], &[Reveal, CopyPath], &[RemoveFromLibrary]]
         }
-        FolderRow::Disk => &[&[Synchronize, LocateMissing], &[ColorLabel], &[RemoveDisk]],
-        FolderRow::Local { .. } => &[&[Synchronize], &[Rename, Move], &[Reveal], &[KeepInLocal, RemoveFromLocal]],
+        FolderRow::Disk => &[&[Synchronize, LocateMissing], &[NewFolder], &[ColorLabel], &[Reveal, CopyPath], &[RemoveDisk]],
+        FolderRow::Local { .. } => &[&[Synchronize], &[NewFolder, Rename, Move], &[Reveal, CopyPath], &[KeepInLocal, RemoveFromLocal]],
     }
+}
+
+/// `path` as the OS spells it: its separators native (a path may carry `/` on Windows), and a
+/// bare drive (`D:`, a disk's row) as the drive's root.
+pub(crate) fn native_path(path: &str, sep: char) -> String {
+    let mut spelled: String = path.chars().map(|c| if c == '/' { sep } else { c }).collect();
+    if matches!(spelled.as_bytes(), [d, b':'] if d.is_ascii_alphabetic()) {
+        spelled.push(sep);
+    }
+    spelled
 }
 
 /// The context menu of the folder at `path`, laid out by [`folder_menu_groups`]. `node`: its
@@ -683,6 +694,11 @@ fn folder_item(
     names: (&str, &str),
 ) {
     let (name, label) = names;
+    // a disk is called by its own name, as in Synchronize and Remove Disk
+    let label = match (row, node) {
+        (FolderRow::Disk, Some(n)) => n.name.as_str(),
+        _ => label,
+    };
     match item {
         FolderItem::Synchronize => match (row, node) {
             (FolderRow::Disk, Some(n)) => synchronize_item(app, ui, Some((n, &n.name))),
@@ -754,6 +770,15 @@ fn folder_item(
                 if let Some(Err(e)) = app.services.reveal.as_mut().map(|f| f(path)) {
                     app.toast(ui.ctx(), e);
                 }
+                ui.close();
+            }
+        }
+        FolderItem::CopyPath => {
+            let r = ui.button(crate::i18n::tr("Copy Path"));
+            register(ui, "folderCopyPath", r.rect);
+            if r.clicked() {
+                ui.ctx().copy_text(native_path(path, std::path::MAIN_SEPARATOR));
+                app.toast(ui.ctx(), crate::i18n::tr("Path copied"));
                 ui.close();
             }
         }

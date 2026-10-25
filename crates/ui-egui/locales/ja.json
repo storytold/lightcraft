@@ -2428,5 +2428,7 @@
   "No photo in this folder is in the library yet": "このフォルダの写真はまだライブラリにありません",
   "Select the photos to move in the grid first": "先にグリッドで移動する写真を選択してください",
   "This place is kept in Local already": "この場所はすでにローカルに残されています",
-  "Only a place at the top of Local can be removed from it": "ローカルから除けるのは、ローカルの最上位にある場所だけです"
+  "Only a place at the top of Local can be removed from it": "ローカルから除けるのは、ローカルの最上位にある場所だけです",
+  "Copy Path": "パスをコピー",
+  "Path copied": "パスをコピーしました"
 }

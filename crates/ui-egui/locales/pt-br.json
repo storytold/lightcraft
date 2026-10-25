@@ -2274,5 +2274,7 @@
   "No photo in this folder is in the library yet": "Nenhuma foto desta pasta está na biblioteca ainda",
   "Select the photos to move in the grid first": "Primeiro selecione na grade as fotos que quer mover",
   "This place is kept in Local already": "Este lugar já é mantido em Local",
-  "Only a place at the top of Local can be removed from it": "Só um lugar no nível superior de Local pode ser removido de Local"
+  "Only a place at the top of Local can be removed from it": "Só um lugar no nível superior de Local pode ser removido de Local",
+  "Copy Path": "Copiar caminho",
+  "Path copied": "Caminho copiado"
 }

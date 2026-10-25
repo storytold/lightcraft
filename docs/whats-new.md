@@ -319,6 +319,12 @@
 - Show in Finder on a folder, and Keep in Local, now say why when they fail.
 - Rename Folder… in Local starts from the folder's own name on disk, as in Folders.
 
+### Every folder menu can copy the folder's path and make a folder on disk
+- Copy Path, right after Show in Finder, is in every folder menu (Folders, a disk's row, Local): it puts the folder's
+  path on the clipboard, as your system spells it, and a toast says so.
+- A disk's row now offers Show in Finder and New Folder on Disk…, and a folder in Local offers New Folder on Disk…,
+  whose new folder is listed in Local.
+
 
 ## 2026-10-25
 
