@@ -80,8 +80,12 @@ fn varint(b: &[u8], pos: &mut usize) -> Result<u64> {
     let mut v = 0u64;
     for shift in (0..64).step_by(7) {
         let c = *b.get(*pos).ok_or_else(|| corrupt("truncated varint"))?;
+        let payload = u64::from(c & 0x7f);
+        if shift == 63 && payload > 1 {
+            return Err(corrupt("varint overflow"));
+        }
         *pos += 1;
-        v |= u64::from(c & 0x7f) << shift;
+        v |= payload << shift;
         if c < 0x80 {
             return Ok(v);
         }
@@ -205,6 +209,10 @@ struct Module<'a> {
 }
 
 fn module<'a>(block: &'a [u8], m: &Msg<'a>) -> Option<Module<'a>> {
+    let id = m.varint(2)?;
+    if id > 15 {
+        return None;
+    }
     let surface = m.sub(9)?;
     let size = surface.sub(2)?;
     let (width, height) = (usize::try_from(size.varint(1)?).ok()?, usize::try_from(size.varint(2)?).ok()?);
@@ -221,7 +229,7 @@ fn module<'a>(block: &'a [u8], m: &Msg<'a>) -> Option<Module<'a>> {
         (x @ 0..=1, y @ 0..=1) => Some((x as usize, y as usize)),
         _ => None,
     });
-    Some(Module { id: m.varint(2)?, width, height, stride, data, red, exposure_ns: m.varint(8), lens_position: m.varint(4).unwrap_or(0) })
+    Some(Module { id, width, height, stride, data, red, exposure_ns: m.varint(8), lens_position: m.varint(4).unwrap_or(0) })
 }
 
 /// A Bayer cell with red at (`x`, `y`): blue on the opposite corner, green on the other two.
@@ -304,7 +312,7 @@ fn as_shot_neutral(blocks: &[Block]) -> Option<[f64; 3]> {
 fn capture_time(m: &Msg) -> Option<lightcraft_meta::DateTime> {
     let t = m.sub(3)?;
     let part = |n| t.varint(n).and_then(|v| u8::try_from(v).ok());
-    Some(lightcraft_meta::DateTime {
+    let date_time = lightcraft_meta::DateTime {
         year: u16::try_from(t.varint(1)?).ok()?,
         month: part(2)?,
         day: part(3)?,
@@ -313,7 +321,8 @@ fn capture_time(m: &Msg) -> Option<lightcraft_meta::DateTime> {
         second: part(6)?,
         millis: 0,
         offset_minutes: None,
-    })
+    };
+    lightcraft_meta::DateTime::parse_exif(&date_time.to_exif())
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
@@ -540,6 +549,15 @@ mod tests {
         let gain = |i: usize| n.data[i] / plain(i);
         let (a, b) = (2 * 16 + 7, 3 * 16 + 8);
         assert!((gain(a) - gain(b)).abs() < 1e-5 && (1.0..1.2).contains(&gain(a)), "{} {}", gain(a), gain(b));
+    }
+
+    #[test]
+    fn varint_rejects_overflowing_tenth_byte() {
+        let mut bytes = vec![0x80; 9];
+        bytes.push(0x02);
+        let mut pos = 0;
+        assert!(matches!(varint(&bytes, &mut pos), Err(RawError::Corrupt(_))));
+        assert_eq!(pos, 9, "the overflowing byte is not consumed");
     }
 
     #[test]
