@@ -4848,17 +4848,28 @@ mod tests {
         for _ in 0..4 {
             h.step();
         }
-        // Performance: the thumbnail cache size goes to the library preferences
+        // Performance: the thumbnail cache size goes to the library preferences. The GPU status
+        // line at the top of this tab reads process-wide GPU state that tests running alongside
+        // change (app.gpu off, a device failure); when its text rewraps between the frame that
+        // placed a button and the click, everything below shifts and the click misses. These
+        // choices are idempotent, so click again until the setting takes.
+        fn click_until(h: &mut Headless, id: &str, done: impl Fn(&Headless) -> bool) {
+            for _ in 0..5 {
+                let r = h.request("ui.clickWidget", json!({"id": id}), Duration::from_secs(10));
+                assert_eq!(r["ok"], true, "{id}: {r}");
+                if done(h) {
+                    return;
+                }
+            }
+            panic!("clicking {id} never took effect");
+        }
         h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
-        h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
-        assert_eq!(h.app.session.cache_mb, 512);
-        h.request("ui.clickWidget", json!({"id": "button:settingsPreview-3"}), t);
-        assert_eq!(h.app.ui.settings.preview_limit, 3840);
-        h.request("ui.clickWidget", json!({"id": "button:settingsMemory-2"}), t);
-        assert_eq!(h.app.ui.settings.memory_mb, 1024);
+        click_until(&mut h, "button:settingsCache-0", |h| h.app.session.cache_mb == 512);
+        click_until(&mut h, "button:settingsPreview-3", |h| h.app.ui.settings.preview_limit == 3840);
+        click_until(&mut h, "button:settingsMemory-2", |h| h.app.ui.settings.memory_mb == 1024);
         h.step();
         assert_eq!(lightcraft_engine::memory::budget(), 1024 << 20, "applied through app.memoryBudget");
-        h.request("ui.clickWidget", json!({"id": "button:settingsMemory-0"}), t);
+        click_until(&mut h, "button:settingsMemory-0", |h| h.app.ui.settings.memory_mb == 0);
         h.step();
         assert_eq!(lightcraft_engine::memory::budget(), lightcraft_engine::memory::default_budget(), "back to automatic");
         // Import: per-camera defaults
