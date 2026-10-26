@@ -53,6 +53,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -417,6 +418,8 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// The map's tile source (persisted in prefs.json), tile cache folder and tile service.
+    pub map: map::MapState,
     /// Adds exported files to Apple Photos ([`apple_photos`]): `/usr/bin/osascript`, installed by
     /// [`Session::with_fs`] on macOS; `None` elsewhere and in sessions without a file system. Tests
     /// put a fake here.
@@ -538,6 +541,7 @@ impl Session {
             slide_backdrop: Default::default(),
             smart_previews_dir: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            map: map::MapState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             apple_photos: None,
             #[cfg(not(target_arch = "wasm32"))]

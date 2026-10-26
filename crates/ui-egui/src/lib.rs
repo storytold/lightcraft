@@ -146,6 +146,8 @@ mod tests_lightroom_destination;
 #[cfg(test)]
 mod tests_lights_out;
 #[cfg(test)]
+mod tests_map;
+#[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_masking;
@@ -596,6 +598,8 @@ pub struct LightcraftApp {
     pub recent_checks: panels::library_problem::RecentChecks,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// The Map view's centre and zoom, tile textures and photo pins (for the session).
+    pub map: panels::map::MapView,
 }
 
 impl LightcraftApp {
@@ -705,6 +709,7 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
+            map: Default::default(),
             model_setup: Default::default(),
         }
     }
@@ -1779,9 +1784,12 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
+        self.map.shadow_pass = true;
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
+        self.map.shadow_pass = false;
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
+            tex.extend(panels::map::cpu_textures(self));
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
                 tex.insert(t.id(), crate::softpaint::CpuTexture::linear(px.clone()));
             }
@@ -2471,6 +2479,7 @@ impl LightcraftApp {
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        panels::map::end_pass(self, ctx);
         if self.ui.frame_rate {
             frame_rate::show(ctx, self);
         } else {
