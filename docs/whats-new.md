@@ -2,6 +2,10 @@
 
 ## 2026-11-04
 
+### Remote SAM worker recovers from accept errors
+- A transient connection-accept error is logged and retried after a short pause, so one failed accept no longer
+  stops the remote Metal worker (#2574). Startup validation and bind failures still report an error.
+
 ### Reference View's empty state paints on every platform
 - Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
 
