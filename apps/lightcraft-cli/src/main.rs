@@ -280,6 +280,17 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     // `--pairs` alone only exports: no profile is fitted into the folder LightCraft reads
     let fit = pairs_out.is_none() || out.is_some();
     let dir = if fit { Some(out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?) } else { None };
+    // pairs files first, so a bad one fails before any raw file is decoded (the pool's order doesn't matter)
+    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+    for path in &pairs_in {
+        let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+        if size > lightcraft_engine::camera_pairs::MAX_FILE {
+            return Err(format!("{}: {size} bytes is too large for a pairs file", path.display()));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let n = pool.add_pairs_file(&bytes, &path.display().to_string())?;
+        eprintln!("calibrate: {}: {n} photo(s) from a pairs file", path.display());
+    }
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
@@ -303,18 +314,8 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
-    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
     for p in pools {
         pool.merge(p);
-    }
-    for path in &pairs_in {
-        let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
-        if size > lightcraft_engine::camera_pairs::MAX_FILE {
-            return Err(format!("{}: {size} bytes is too large for a pairs file", path.display()));
-        }
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let n = pool.add_pairs_file(&bytes, &path.display().to_string())?;
-        eprintln!("calibrate: {}: {n} photo(s) from a pairs file", path.display());
     }
     if let Some(path) = &pairs_out {
         let bytes = pool.pairs_file()?;

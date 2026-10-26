@@ -27,11 +27,18 @@ use serde::{Deserialize, Serialize};
 const FORMAT: &str = "lightcraft-colour-pairs";
 const VERSION: u32 = 1;
 const LAYOUT: &str = "per photo, `pairs` x 6 little-endian f32 (white-balanced camera RGB, then the camera JPEG's linear Rec.2020 RGB), split into 4 byte planes, zlib, base64";
-/// Largest pairs file read.
-pub const MAX_FILE: u64 = 1 << 30;
+/// Most photos read from one pairs file: several full `calibrate` runs (300 photos each by default).
+/// Each decodes to at most [`PAIRS_PER_FILE`] pairs (about 190 KB in memory), so a file costs at most
+/// about 380 MB however well its data compresses.
+pub const MAX_PHOTOS: usize = 2000;
+const PAIR_BYTES: usize = 24;
+/// Longest JSON entry a real photo needs: its most pairs as bytes, base64 of a zlib stream that could
+/// not shrink them (a few bytes of headers per 64 KB block) and room for its other fields.
+const MAX_PHOTO_JSON: u64 = (PAIRS_PER_FILE * PAIR_BYTES + 1024).div_ceil(3) as u64 * 4 + 1024;
+/// Largest pairs file read: [`MAX_PHOTOS`] photos at their largest.
+pub const MAX_FILE: u64 = MAX_PHOTOS as u64 * MAX_PHOTO_JSON + 4096;
 /// Longest model name kept.
 const MAX_MODEL: usize = 64;
-const PAIR_BYTES: usize = 24;
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -62,14 +69,21 @@ pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
 }
 
 /// Read and validate a pairs file (`origin` names it in errors). A damaged or hostile file is an error, never a panic
-/// or a huge allocation.
+/// or a huge allocation: files over [`MAX_FILE`] bytes or [`MAX_PHOTOS`] photos are refused before any photo's data
+/// is decoded, and each photo decodes to at most [`PAIRS_PER_FILE`] pairs.
 pub fn read(bytes: &[u8], origin: &str) -> Result<Vec<PhotoPairs>, String> {
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(format!("{origin}: {} bytes is too large for a pairs file", bytes.len()));
+    }
     let file: File = serde_json::from_slice(bytes).map_err(|e| format!("{origin}: not a pairs file: {e}"))?;
     if file.format != FORMAT {
         return Err(format!("{origin}: not a pairs file (format {:?})", file.format));
     }
     if file.version != VERSION {
         return Err(format!("{origin}: pairs file version {} is not supported (this build reads version {VERSION})", file.version));
+    }
+    if file.photos.len() > MAX_PHOTOS {
+        return Err(format!("{origin}: {} photos is more than a pairs file may hold ({MAX_PHOTOS})", file.photos.len()));
     }
     file.photos
         .into_iter()
@@ -226,5 +240,23 @@ mod tests {
         let mut p = photo("ILCE-7CR", ID, 4);
         p.pairs[1].0[0] = f64::NAN;
         assert!(read(&write(&[&p]).unwrap(), "t").is_err());
+    }
+
+    /// Tiny zlib streams of zeros inflate about 700×, so the photo count is capped before any data is decoded.
+    #[test]
+    fn too_many_photos_are_refused_before_decoding() {
+        let one = write(&[&photo("ILCE-7CR", ID, 0)]).unwrap();
+        let w: serde_json::Value = serde_json::from_slice(&one).unwrap();
+        let mut many = w.clone();
+        many["photos"] = serde_json::Value::Array(vec![w["photos"][0].clone(); MAX_PHOTOS + 1]);
+        let bytes = serde_json::to_vec(&many).unwrap();
+        assert!((bytes.len() as u64) < MAX_FILE);
+        let err = read(&bytes, "t").unwrap_err();
+        assert!(err.contains("photos is more than"), "{err}");
+        many["photos"] = serde_json::Value::Array(vec![w["photos"][0].clone(); MAX_PHOTOS]);
+        assert_eq!(read(&serde_json::to_vec(&many).unwrap(), "t").unwrap().len(), MAX_PHOTOS);
+        // a real photo at its most pairs fits the per-photo budget behind MAX_FILE
+        let full = write(&[&photo("ILCE-7CR", ID, PAIRS_PER_FILE)]).unwrap();
+        assert!((full.len() as u64) < MAX_PHOTO_JSON + 4096);
     }
 }
