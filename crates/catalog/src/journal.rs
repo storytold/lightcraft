@@ -228,7 +228,9 @@ pub struct Journal {
     behind: Option<u32>,
     /// What the library was at open while `behind` is set: the `seq` its files held and the
     /// length of its log. Appends only add to the log after that, so the first `log_len` bytes
-    /// and the snapshot are what an older build left, whatever is appended meanwhile.
+    /// and the snapshot are the library as this session opened it, whatever is appended
+    /// meanwhile (an earlier session of this build may have appended already, while the library
+    /// stayed in its old format: that is in them, and an older build may refuse it).
     behind_at: (u64, u64),
     /// The files [`Journal::keep_before_upgrade`] kept for a snapshot that is not written yet,
     /// and, once that snapshot is, the names for [`Journal::take_kept`].
@@ -732,9 +734,12 @@ impl Journal {
     /// they were then, before a snapshot upgrades it: the snapshot as it is (nothing writes it
     /// until the upgrade) and the log up to its length at open (what was appended since is this
     /// build's, which an older build may refuse). The names are those the open would have kept
-    /// them under, so they are written again as they are when a snapshot failed and is tried
-    /// again, and files kept for an upgrade that did not land are never left behind under other
-    /// names. An error means they could not be kept (or read): the snapshot is not written, so
+    /// them under, so files kept for an upgrade that did not land are never left behind under
+    /// other names. Kept once: when a snapshot failed and is tried again, they stay as they are
+    /// (the failed one may have landed all the same, and the snapshot is then no longer what
+    /// could be kept). A snapshot that is already in this build's format (that landed after its
+    /// files were kept, or before them, reporting a failure) is the upgrade done, with nothing
+    /// to keep. An error means they could not be kept (or read): the snapshot is not written, so
     /// the library stays as it was, with its way back.
     fn keep_before_upgrade(&mut self) -> Result<()> {
         let Some(from) = self.behind else { return Ok(()) };
@@ -742,12 +747,16 @@ impl Journal {
             return Ok(());
         }
         let snap = self.store.read(SNAPSHOT).map_err(io)?;
-        // (a write of the snapshot that failed after it landed leaves one that is not what was
-        // to be kept under this name)
-        if let Some(bytes) = snap.as_deref()
-            && serde_json::from_slice::<SnapHeader>(bytes).ok().map(|h| h.version) != Some(from)
-        {
-            return Err(CatalogError::Io(format!("the snapshot is no longer in format v{from}, and can't be kept as it was")));
+        if let Some(bytes) = snap.as_deref() {
+            match serde_json::from_slice::<SnapHeader>(bytes).ok().map(|h| h.version) {
+                Some(v) if v == from => {}
+                // the upgrade is written already: the snapshot after it is a plain one
+                Some(VERSION) => {
+                    self.upgraded_later();
+                    return Ok(());
+                }
+                _ => return Err(CatalogError::Io(format!("the snapshot is no longer in format v{from}, and can't be kept as it was"))),
+            }
         }
         let mut log = self.store.read(LOG).map_err(io)?.unwrap_or_default();
         let (seq, log_len) = self.behind_at;
