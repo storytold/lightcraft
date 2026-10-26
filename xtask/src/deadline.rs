@@ -22,22 +22,31 @@
 //! and the report names the binary, the tests still running and the tests that never reported a
 //! result (from `--list`, itself bounded in time and size).
 //!
-//! Containment: every process xtask watches gets an environment variable of its own
-//! ([`Marker`], `LIGHTCRAFT_XTASK_RUN_<pid>_<n>=1`) that everything it starts inherits, so on Unix
-//! the kill finds them all, including those that outlived their parent and were reparented, from
-//! `/proc/*/environ` on Linux or `ps eww` elsewhere, besides the binary's current descendants. They
-//! are frozen with SIGSTOP until no new one turns up, then killed with SIGKILL; the report says how
-//! many and names any still alive. Only a process that clears its environment escapes. On Windows
-//! `taskkill /T /F` ends the process tree. The child stays in xtask's process group rather than one
-//! of its own, so Ctrl-C in the terminal still reaches the test binaries as before.
+//! Containment, and never a process xtask didn't start: every process xtask watches gets an
+//! environment variable of its own ([`Marker`], `LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`, the
+//! nonce random per xtask process so an earlier xtask with the same pid had another) that
+//! everything it starts inherits. On timeout the binary (while unreaped, so its pid is its own) and
+//! its process tree are frozen with SIGSTOP level by level, a process only once its parent is
+//! stopped and so can't reap it and free its pid; on Linux also every process of this user whose
+//! `/proc/<pid>/environ` holds the exact entry, which finds those that outlived their parent. Once
+//! no new one turns up they are killed with SIGKILL; the report says how many, names any still
+//! alive, and says when the OS doesn't allow looking for the reparented ones (Unix other than
+//! Linux: only the tree; Windows: `taskkill /T /F`). Only a process that clears its environment
+//! escapes. The child stays in xtask's process group rather than one of its own, so Ctrl-C in the
+//! terminal still reaches the test binaries as before.
+//!
+//! A timeout also turns off the optional probes after it in the same run ([`any_timed_out`]): the
+//! GPU probe, which runs bounded too ([`capture_cargo`], [`probe_limit`]), and the translation
+//! gaps report.
 
 use std::collections::BTreeSet;
+use std::hash::{BuildHasher, Hasher};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The limit, in minutes, on each test binary's run.
 pub const TEST_BINARY_TIMEOUT_ENV: &str = "LIGHTCRAFT_TEST_BINARY_TIMEOUT";
@@ -374,23 +383,58 @@ pub enum Clock {
 }
 
 /// The environment variable that marks every process one watched run starts (see the module
-/// docs): its name is unique to this xtask process and run, so nested runs keep each other's.
+/// docs). Its name holds xtask's pid, a random number drawn once per xtask process and a run
+/// counter, so it is this run's alone: nested runs keep each other's, and the leftovers of an
+/// earlier xtask that had the same pid carry a different one.
 pub struct Marker {
     key: String,
+}
+
+/// The value every marker has; a process is marked only by the exact entry `KEY=1`.
+const MARK_VALUE: &str = "1";
+
+/// A number drawn once per xtask process: std's randomly seeded hasher, fed the pid and the time.
+fn process_nonce() -> u64 {
+    static NONCE: OnceLock<u64> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u32(std::process::id());
+        h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        h.finish()
+    })
 }
 
 impl Marker {
     fn new() -> Self {
         static RUNS: AtomicU64 = AtomicU64::new(0);
-        Self { key: format!("LIGHTCRAFT_XTASK_RUN_{}_{}", std::process::id(), RUNS.fetch_add(1, Ordering::Relaxed)) }
+        Self::with(std::process::id(), process_nonce(), RUNS.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn with(pid: u32, nonce: u64, run: u64) -> Self {
+        Self { key: format!("LIGHTCRAFT_XTASK_RUN_{pid}_{nonce:016x}_{run}") }
+    }
+
+    /// The exact environment entry that marks the run's processes.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    fn entry(&self) -> String {
+        format!("{}={MARK_VALUE}", self.key)
     }
 }
 
 /// Spawn `cmd` with a fresh [`Marker`].
 fn spawn_marked(cmd: &mut Command) -> std::io::Result<(Child, Marker)> {
     let marker = Marker::new();
-    cmd.env(&marker.key, "1");
+    cmd.env(&marker.key, MARK_VALUE);
     Ok((cmd.spawn()?, marker))
+}
+
+/// Set when a watched run runs out of time: the optional probes after it (the GPU probe, the
+/// translation gaps report) are skipped, as what hung the tests would hang them too.
+static TIMED_OUT: AtomicBool = AtomicBool::new(false);
+
+/// Whether a watched run in this xtask process ran out of time.
+pub fn any_timed_out() -> bool {
+    TIMED_OUT.load(Ordering::Relaxed)
 }
 
 /// How a watched run ended.
@@ -401,18 +445,47 @@ pub enum Ended {
     TimedOut(Box<Progress>, String),
 }
 
+/// Where a watched run's output goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Output {
+    /// Through to xtask's stdout and stderr, as it arrives.
+    Stream,
+    /// Kept: stdout up to [`CAPTURE_MAX`] bytes, the last [`STDERR_TAIL`] lines of stderr.
+    Capture,
+}
+
+/// The most stdout a captured run keeps.
+const CAPTURE_MAX: usize = 1 << 20;
+/// How many of the last stderr lines a captured run keeps.
+const STDERR_TAIL: usize = 20;
+
+/// A watched run: how it ended and, when captured, its output.
+#[derive(Debug)]
+pub struct Watched {
+    pub ended: Ended,
+    pub stdout: String,
+    pub stderr_tail: Vec<String>,
+}
+
 struct Watch {
     progress: Progress,
     /// When the current limit started, `None` while it doesn't run.
     since: Option<Instant>,
+    stdout: Vec<u8>,
+    stderr_tail: std::collections::VecDeque<String>,
 }
 
-/// Run `cmd` with its output streamed through and read for libtest's lines, until it exits or
-/// `limit` runs out (timed as `clock` says); then kill it and every process it started.
-pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, String> {
+/// Run `cmd` with its output streamed through (or captured) and read for libtest's lines, until it
+/// exits or `limit` runs out (timed as `clock` says); then kill it and every process it started.
+pub fn watch(mut cmd: Command, limit: Duration, clock: Clock, output: Output) -> Result<Watched, String> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let (mut child, marker) = spawn_marked(&mut cmd).map_err(|e| format!("failed to start: {e}"))?;
-    let state = Arc::new(Mutex::new(Watch { progress: Progress::default(), since: (clock == Clock::Start).then(Instant::now) }));
+    let state = Arc::new(Mutex::new(Watch {
+        progress: Progress::default(),
+        since: (clock == Clock::Start).then(Instant::now),
+        stdout: Vec::new(),
+        stderr_tail: std::collections::VecDeque::new(),
+    }));
     let (done_tx, done_rx) = mpsc::channel();
     let mut readers = 0;
     let pipes: [(Option<Box<dyn Read + Send>>, bool); 2] = [
@@ -423,11 +496,11 @@ pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, S
         let Some(pipe) = pipe else { continue };
         let (state, done) = (Arc::clone(&state), done_tx.clone());
         let spawned = std::thread::Builder::new().name("xtask-output".into()).spawn(move || {
-            pump(pipe, is_stdout, clock, &state);
+            pump(pipe, is_stdout, clock, output, &state);
             let _ = done.send(());
         });
         if let Err(e) = spawned {
-            kill_marked(&mut child, &marker);
+            kill_run(Some(&mut child), &marker);
             return Err(format!("could not start a thread to read its output: {e}"));
         }
         readers += 1;
@@ -441,29 +514,38 @@ pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, S
             }
         }
     };
+    let finish = |ended: Ended| {
+        let mut w = lock(&state);
+        let stdout = String::from_utf8_lossy(&std::mem::take(&mut w.stdout)).into_owned();
+        Watched { ended, stdout, stderr_tail: w.stderr_tail.drain(..).collect() }
+    };
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 drain(readers);
-                return Ok(Ended::Exited(status));
+                return Ok(finish(Ended::Exited(status)));
             }
             Ok(None) => {}
             Err(e) => {
-                kill_marked(&mut child, &marker);
+                kill_run(Some(&mut child), &marker);
                 return Err(format!("waiting for it failed: {e}"));
             }
         }
         if lock(&state).since.is_some_and(|since| since.elapsed() >= limit) {
-            let killed = kill_marked(&mut child, &marker);
+            TIMED_OUT.store(true, Ordering::Relaxed);
+            // not reaped yet (try_wait said it runs): its pid is still its own
+            let killed = kill_run(Some(&mut child), &marker);
             drain(readers);
-            return Ok(Ended::TimedOut(Box::new(lock(&state).progress.clone()), killed));
+            let progress = Box::new(lock(&state).progress.clone());
+            return Ok(finish(Ended::TimedOut(progress, killed)));
         }
         std::thread::sleep(TICK);
     }
 }
 
-/// Copy `pipe` to xtask's stdout or stderr as it arrives, feeding whole lines to the progress.
-fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, state: &Mutex<Watch>) {
+/// Copy `pipe` to xtask's stdout or stderr as it arrives (or keep it, bounded), feeding whole lines
+/// to the progress.
+fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: Output, state: &Mutex<Watch>) {
     let mut buf = [0u8; 8192];
     let mut lines = Lines::default();
     loop {
@@ -474,18 +556,32 @@ fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, state: &M
             Err(_) => break,
         };
         let chunk = buf.get(..n).unwrap_or_default();
-        if is_stdout {
-            let mut out = std::io::stdout().lock();
-            let _ = out.write_all(chunk).and_then(|()| out.flush());
-        } else {
-            let mut err = std::io::stderr().lock();
-            let _ = err.write_all(chunk).and_then(|()| err.flush());
-        }
         let mut watch = lock(state);
+        match (output, is_stdout) {
+            (Output::Stream, true) => {
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(chunk).and_then(|()| out.flush());
+            }
+            (Output::Stream, false) => {
+                let mut err = std::io::stderr().lock();
+                let _ = err.write_all(chunk).and_then(|()| err.flush());
+            }
+            (Output::Capture, true) => {
+                let room = CAPTURE_MAX.saturating_sub(watch.stdout.len());
+                watch.stdout.extend_from_slice(chunk.get(..room.min(chunk.len())).unwrap_or_default());
+            }
+            (Output::Capture, false) => {}
+        }
         lines.feed(chunk, |line| {
             let event = watch.progress.line(line);
             if clock == Clock::EachBinary && event != Event::Other {
                 watch.since = Some(Instant::now());
+            }
+            if output == Output::Capture && !is_stdout {
+                if watch.stderr_tail.len() >= STDERR_TAIL {
+                    watch.stderr_tail.pop_front();
+                }
+                watch.stderr_tail.push_back(line.trim_end().to_owned());
             }
         });
         if is_stdout {
@@ -494,55 +590,82 @@ fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, state: &M
     }
 }
 
-/// Kill `child`, every process it started and every process carrying its `marker`, reap it, and
-/// say what was done.
-pub fn kill_marked(child: &mut Child, marker: &Marker) -> String {
-    let note = kill_all(child, marker);
-    let _ = child.kill();
-    let _ = child.wait();
+/// Kill everything a run started, reap its direct child, and say what was done.
+///
+/// `child` is the run's direct child while it hasn't been reaped (so its pid is still its own):
+/// it and its process tree are signalled, plus every process carrying the run's `marker`. `None`
+/// once it has been reaped: then only processes carrying the marker are, never the old pid, which
+/// may belong to another process by now.
+fn kill_run(child: Option<&mut Child>, marker: &Marker) -> String {
+    let root = child.as_ref().map(|c| c.id());
+    let note = kill_all(root, marker);
+    if let Some(child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     note
 }
 
+/// Whether this OS lets xtask find a run's processes by their marker (Linux: `/proc/*/environ`).
+#[cfg_attr(not(unix), allow(dead_code))]
+fn can_find_marked() -> bool {
+    cfg!(target_os = "linux") && Path::new("/proc/self/environ").exists()
+}
+
+/// Freeze and kill `root` (unreaped) and what it started (see [`kill_run`]); what was done.
+///
+/// Only processes xtask started are signalled. One found through the process tree is signalled only
+/// once its parent is stopped: a stopped parent can't reap it, so its pid can't pass to another
+/// process meanwhile. One found by its marker carries this run's exact entry, which nothing else
+/// has. Everything found is frozen with SIGSTOP until no new one turns up, then killed with
+/// SIGKILL, the last found first.
 #[cfg(unix)]
-fn kill_all(child: &Child, marker: &Marker) -> String {
+fn kill_all(root: Option<u32>, marker: &Marker) -> String {
     let me = std::process::id();
-    // freeze everything found so nothing forks while the rest is collected, then kill it all
-    let mut seen: BTreeSet<u32> = BTreeSet::from([child.id()]);
-    let mut fresh: Vec<u32> = vec![child.id()];
-    let mut marker_seen = true;
-    for _ in 0..16 {
+    let entry = marker.entry();
+    let by_marker = can_find_marked();
+    let mut order: Vec<u32> = Vec::new();
+    let mut stopped: BTreeSet<u32> = BTreeSet::new();
+    let mut fresh: Vec<u32> = root.into_iter().collect();
+    for _ in 0..64 {
         signal("STOP", &fresh);
-        let mut found = descendants(child.id());
-        match marked(&marker.key) {
-            Some(pids) => found.extend(pids),
-            None => marker_seen = false,
+        stopped.extend(&fresh);
+        order.extend(&fresh);
+        let mut found = children_of(&process_table(), &stopped);
+        if by_marker {
+            found.extend(marked(&entry));
         }
-        fresh = found.into_iter().filter(|p| *p != me && !seen.contains(p)).collect::<BTreeSet<_>>().into_iter().collect();
-        if fresh.is_empty() {
+        found.retain(|p| *p != me && !stopped.contains(p));
+        if found.is_empty() {
             break;
         }
-        seen.extend(&fresh);
+        fresh = found.into_iter().collect();
     }
-    signal("KILL", &seen.iter().copied().collect::<Vec<_>>());
-    let others = seen.len().saturating_sub(1);
-    if !marker_seen {
-        return format!(
-            "killed it and {others} process(es) it started that were still its descendants; ones that outlived their parent \
-             could not be looked for (no /proc or ps eww) and may still run"
-        );
+    signal("KILL", &order.iter().rev().copied().collect::<Vec<_>>());
+    let started = order.len().saturating_sub(usize::from(root.is_some()));
+    if !by_marker {
+        return match root {
+            Some(_) => format!(
+                "killed it and the {started} process(es) it started that were still its descendants; on this OS processes that \
+                 outlived their parent can't be found, and may still run"
+            ),
+            None => "on this OS the processes it started that outlived it can't be found, and may still run".to_owned(),
+        };
     }
-    // a killed process leaves the list once its parent (or init) reaps it
+    // a killed process loses its environment as it dies, before it is reaped
     let until = Instant::now() + Duration::from_secs(2);
-    let mut alive = marked(&marker.key).unwrap_or_default();
+    let mut alive = marked(&entry);
     while !alive.is_empty() && Instant::now() < until {
         std::thread::sleep(TICK);
-        alive = marked(&marker.key).unwrap_or_default();
+        alive = marked(&entry);
     }
-    alive.retain(|p| *p != me && *p != child.id());
-    let mut note = if others == 0 {
-        "killed it; it had started no other process (looked for by the run's environment marker)".to_owned()
-    } else {
-        format!("killed it and the {others} process(es) it started (found by the run's environment marker, reparented ones too)")
+    let mut note = match (root, started) {
+        (Some(_), 0) => "killed it; it had started no other process (looked for in its process tree and by the run's environment marker)".to_owned(),
+        (Some(_), n) => format!(
+            "killed it and the {n} process(es) it started (found in its process tree and by the run's environment marker, so reparented ones too)"
+        ),
+        (None, 0) => "no process it started was left (looked for by the run's environment marker)".to_owned(),
+        (None, n) => format!("killed the {n} process(es) it started that outlived it (found by the run's environment marker)"),
     };
     if !alive.is_empty() {
         let pids: Vec<String> = alive.iter().map(u32::to_string).collect();
@@ -552,13 +675,16 @@ fn kill_all(child: &Child, marker: &Marker) -> String {
 }
 
 #[cfg(windows)]
-fn kill_all(child: &Child, _marker: &Marker) -> String {
-    let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+fn kill_all(root: Option<u32>, _marker: &Marker) -> String {
+    let Some(root) = root else {
+        return "on this OS the processes it started that outlived it can't be found, and may still run".to_owned();
+    };
+    let _ = Command::new("taskkill").args(["/PID", &root.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     "killed it and its process tree (taskkill /T); processes that outlived their parent may still run".to_owned()
 }
 
 #[cfg(not(any(unix, windows)))]
-fn kill_all(_child: &Child, _marker: &Marker) -> String {
+fn kill_all(_root: Option<u32>, _marker: &Marker) -> String {
     "killed it; processes it started may still run".to_owned()
 }
 
@@ -570,68 +696,58 @@ fn signal(name: &str, pids: &[u32]) {
     let _ = Command::new("kill").arg(format!("-{name}")).args(pids.iter().map(u32::to_string)).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
-/// The processes descended from `root`, from `ps`'s pid / parent pid table (empty if `ps` fails).
+/// Every process's pid and parent pid, from `ps` (empty if it fails).
 #[cfg(unix)]
-fn descendants(root: u32) -> Vec<u32> {
+fn process_table() -> Vec<(u32, u32)> {
     let Ok(out) = Command::new("ps").args(["-A", "-o", "pid=", "-o", "ppid="]).stderr(Stdio::null()).output() else {
         return Vec::new();
     };
-    descendants_in(&String::from_utf8_lossy(&out.stdout), root)
+    parse_process_table(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// The descendants of `root` in a `pid ppid` table, one process per line.
+/// The `pid ppid` pairs of a process table, one process per line.
 #[cfg_attr(not(unix), allow(dead_code))]
-fn descendants_in(table: &str, root: u32) -> Vec<u32> {
-    let pairs: Vec<(u32, u32)> = table
+fn parse_process_table(table: &str) -> Vec<(u32, u32)> {
+    table
         .lines()
         .filter_map(|l| {
             let mut w = l.split_whitespace();
             Some((w.next()?.parse().ok()?, w.next()?.parse().ok()?))
         })
-        .collect();
-    let mut found: BTreeSet<u32> = BTreeSet::new();
-    let mut frontier = vec![root];
-    while let Some(parent) = frontier.pop() {
-        for (pid, _) in pairs.iter().filter(|(pid, ppid)| *ppid == parent && *pid != root) {
-            if found.insert(*pid) {
-                frontier.push(*pid);
-            }
-        }
-    }
-    found.into_iter().collect()
+        .collect()
 }
 
-/// The processes whose environment holds `key` (this user's; zombies have none), or `None` when
-/// they can't be looked for.
-#[cfg(unix)]
-fn marked(key: &str) -> Option<Vec<u32>> {
-    let entry = format!("{key}=");
-    if let Ok(dir) = std::fs::read_dir("/proc")
-        && Path::new("/proc/self/environ").exists()
-    {
-        let pids = dir
-            .filter_map(Result::ok)
-            .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-            .filter(|pid| {
-                // another user's process can't be read: it isn't ours
-                std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| env.split(|b| *b == 0).any(|var| var.starts_with(entry.as_bytes())))
-            })
-            .collect();
-        return Some(pids);
-    }
-    // macOS, BSD: `ps eww` appends each process's environment to its command line
-    let out = Command::new("ps").args(["eww", "-A", "-o", "pid=", "-o", "command="]).stderr(Stdio::null()).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(marked_in(&String::from_utf8_lossy(&out.stdout), key))
-}
-
-/// The pids in `ps eww -o pid= -o command=` output whose environment holds `key`.
+/// The direct children of `parents` in a process table.
 #[cfg_attr(not(unix), allow(dead_code))]
-fn marked_in(table: &str, key: &str) -> Vec<u32> {
-    let entry = format!(" {key}=");
-    table.lines().filter(|l| l.contains(&entry)).filter_map(|l| l.split_whitespace().next()?.parse().ok()).collect()
+fn children_of(table: &[(u32, u32)], parents: &BTreeSet<u32>) -> BTreeSet<u32> {
+    table.iter().filter(|(pid, ppid)| parents.contains(ppid) && !parents.contains(pid)).map(|(pid, _)| *pid).collect()
+}
+
+/// Whether a NUL-separated environment block holds exactly `entry` (`KEY=VALUE`), not as part of
+/// another variable's name or value.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn has_entry(environ: &[u8], entry: &str) -> bool {
+    environ.split(|b| *b == 0).any(|var| var == entry.as_bytes())
+}
+
+/// This user's processes whose environment holds exactly `entry` (`/proc/<pid>/environ`; a
+/// process that can't be read is skipped, and zombies have no environment).
+#[cfg(target_os = "linux")]
+fn marked(entry: &str) -> Vec<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(me), Ok(dir)) = (std::fs::metadata("/proc/self"), std::fs::read_dir("/proc")) else {
+        return Vec::new();
+    };
+    dir.filter_map(Result::ok)
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| std::fs::metadata(format!("/proc/{pid}")).is_ok_and(|m| m.uid() == me.uid()))
+        .filter(|pid| std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| has_entry(&env, entry)))
+        .collect()
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn marked(_entry: &str) -> Vec<u32> {
+    Vec::new()
 }
 
 /// A copy of `cmd`: its program, arguments, directory and environment changes.
@@ -659,14 +775,16 @@ pub struct Listed {
 }
 
 /// The tests a test binary would run, from `c` (the binary with its arguments) plus `--list`;
-/// `None` when that fails or takes over `limit` from start to exit (then it is killed, with what
-/// it started). At most `max_bytes` of its output are read.
-fn list_tests(mut c: Command, limit: Duration, max_bytes: usize) -> Option<Listed> {
+/// `None` when that fails or takes over `limit` from start to exit. At most `max_bytes` of its
+/// output are read. Whatever it started is killed when it is done, early or not, including
+/// processes that outlived it and hold its output open.
+fn list_tests(c: Command, limit: Duration, max_bytes: usize) -> Option<Listed> {
+    let mut c = c;
     c.arg("--list").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     let until = Instant::now() + limit;
     let (mut child, marker) = spawn_marked(&mut c).ok()?;
     let Some(mut stdout) = child.stdout.take() else {
-        kill_marked(&mut child, &marker);
+        kill_run(Some(&mut child), &marker);
         return None;
     };
     let (tx, rx) = mpsc::channel();
@@ -697,44 +815,42 @@ fn list_tests(mut c: Command, limit: Duration, max_bytes: usize) -> Option<Liste
         let _ = tx.send(Listed { names, cut });
     });
     if reader.is_err() {
-        kill_marked(&mut child, &marker);
+        kill_run(Some(&mut child), &marker);
         return None;
     }
     let (mut status, mut listed) = (None, None);
-    loop {
+    let result = loop {
         if status.is_none() {
             match child.try_wait() {
                 Ok(s) => status = s,
-                Err(_) => break,
+                Err(_) => break None,
             }
         }
         if listed.is_none() {
             match rx.try_recv() {
                 Ok(l) => listed = Some(l),
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break None,
             }
         }
         match (status, listed.as_ref()) {
             // read as much as it may: whatever more it writes (or how the cut pipe ends it) doesn't matter
-            (status, Some(l)) if l.cut => {
-                if status.is_none() {
-                    kill_marked(&mut child, &marker);
-                }
-                return listed;
-            }
-            (Some(s), Some(_)) => return listed.filter(|_| s.success()),
+            (_, Some(l)) if l.cut => break listed,
+            (Some(s), Some(_)) => break listed.filter(|_| s.success()),
             _ => {}
         }
         if Instant::now() >= until {
-            break;
+            break None;
         }
         std::thread::sleep(TICK);
-    }
+    };
+    // its pid is signalled only while it is unreaped; after that, only the marked processes
     if status.is_none() {
-        kill_marked(&mut child, &marker);
+        kill_run(Some(&mut child), &marker);
+    } else {
+        kill_run(None, &marker);
     }
-    None
+    result
 }
 
 /// What to tell about a test binary that ran out of `limit`: the lines to print and the one-line
@@ -811,7 +927,7 @@ fn test_binary(mut cmd: Command, label: &str, limit: Option<Duration>, shown: &m
     if std::io::stdout().is_terminal() && !sets_color(&cmd) {
         cmd.args(["--color", "always"]);
     }
-    match watch(cmd, limit, Clock::Start)? {
+    match watch(cmd, limit, Clock::Start, Output::Stream)?.ended {
         Ended::Exited(status) if status.success() => Ok(()),
         Ended::Exited(status) => Err(crate::test::describe(status)),
         Ended::TimedOut(progress, killed) => {
@@ -872,7 +988,7 @@ fn cargo_tests(cmd: Command, limit: Option<Duration>, shown: &mut Vec<String>) -
         cmd.env("CARGO_TERM_COLOR", "always");
     }
     let dir = cmd.get_current_dir().map(Path::to_path_buf);
-    match watch(cmd, limit, Clock::EachBinary)? {
+    match watch(cmd, limit, Clock::EachBinary, Output::Stream)?.ended {
         Ended::Exited(status) if status.success() => Ok(()),
         Ended::Exited(status) => Err(format!("exited with {status}")),
         Ended::TimedOut(progress, killed) => {
@@ -889,6 +1005,37 @@ fn cargo_tests(cmd: Command, limit: Option<Duration>, shown: &mut Vec<String>) -
             Err(format!("{error}: {binary}"))
         }
     }
+}
+
+/// The longest a probe of the machine (the GPU probe) may run, per test binary it starts.
+const PROBE_LIMIT: Duration = Duration::from_secs(5 * 60);
+
+/// The limit of a probe: [`PROBE_LIMIT`], or the test binaries' limit when that is shorter. A
+/// probe is optional, so it keeps its own limit when the tests have none.
+pub fn probe_limit(test_limit: Option<Duration>) -> Duration {
+    test_limit.map_or(PROBE_LIMIT, |l| l.min(PROBE_LIMIT))
+}
+
+/// A captured cargo run: how it ended (`Err`: out of time, and what was killed) and its output.
+#[derive(Debug)]
+pub struct Captured {
+    pub status: Result<ExitStatus, String>,
+    pub stdout: String,
+    pub stderr_tail: Vec<String>,
+}
+
+/// Run `cmd`, a cargo command that runs test binaries, with its output kept rather than shown
+/// ([`Output::Capture`]) and each test binary it starts under `limit`, as [`run_cargo_tests`] does.
+pub fn capture_cargo(cmd: &Command, limit: Duration) -> Result<Captured, String> {
+    let watched = watch(loud(cmd), limit, Clock::EachBinary, Output::Capture)?;
+    let status = match watched.ended {
+        Ended::Exited(status) => Ok(status),
+        Ended::TimedOut(progress, killed) => {
+            let binary = progress.binary.clone().unwrap_or_else(|| "a test binary".to_owned());
+            Err(format!("timed out after {}: {binary} ({killed})", show(limit)))
+        }
+    };
+    Ok(Captured { status, stdout: watched.stdout, stderr_tail: watched.stderr_tail })
 }
 
 #[cfg(test)]
@@ -1000,18 +1147,65 @@ mod tests {
     }
 
     #[test]
-    fn finds_every_descendant_in_a_process_table() {
-        let table = "  1 0\n 10 1\n 11 10\n 12 11\n 13 10\n 20 1\n 21 20\n junk\n 14 12";
-        assert_eq!(descendants_in(table, 10), [11, 12, 13, 14]);
-        assert!(descendants_in(table, 99).is_empty());
-        assert_eq!(descendants_in("5 6\n6 5", 5), [6], "a cycle ends");
+    fn finds_the_children_of_stopped_processes_in_a_process_table() {
+        let table = parse_process_table("  1 0\n 10 1\n 11 10\n 12 11\n 13 10\n 20 1\n 21 20\n junk\n 14 12");
+        assert_eq!(table.len(), 8);
+        assert_eq!(children_of(&table, &BTreeSet::from([10])), BTreeSet::from([11, 13]), "only direct children: their parent is stopped");
+        assert_eq!(children_of(&table, &BTreeSet::from([10, 11, 13])), BTreeSet::from([12]));
+        assert!(children_of(&table, &BTreeSet::from([99])).is_empty());
+        assert!(children_of(&parse_process_table("5 6\n6 5"), &BTreeSet::from([5, 6])).is_empty(), "a cycle ends");
     }
 
     #[test]
-    fn finds_marked_processes_in_ps_eww_output() {
-        let table = " 10 /bin/sleep 600 HOME=/h LIGHTCRAFT_XTASK_RUN_7_1=1 PATH=/bin\n 11 sh -c x LIGHTCRAFT_XTASK_RUN_7_10=1\n\
-                     12 vim LIGHTCRAFT_XTASK_RUN_7_1=1\n bad LIGHTCRAFT_XTASK_RUN_7_1=1";
-        assert_eq!(marked_in(table, "LIGHTCRAFT_XTASK_RUN_7_1"), [10, 12]);
+    fn a_marker_is_an_exact_environment_entry_of_this_process_and_run() {
+        let m = Marker::with(42, 0xabc, 3);
+        assert_eq!(m.entry(), "LIGHTCRAFT_XTASK_RUN_42_0000000000000abc_3=1");
+        let env = |vars: &[&str]| vars.join("\0").into_bytes();
+        assert!(has_entry(&env(&["HOME=/h", &m.entry(), "PATH=/bin"]), &m.entry()));
+        assert!(!has_entry(&env(&[&format!("OTHER={}", m.entry())]), &m.entry()), "another variable's value");
+        assert!(!has_entry(&env(&[&format!("X{}", m.entry())]), &m.entry()), "another variable's name");
+        assert!(!has_entry(&env(&[&format!("{}0", m.entry())]), &m.entry()), "another value");
+        assert!(!has_entry(&env(&[&Marker::with(42, 0xabd, 3).entry()]), &m.entry()), "the same pid and run of another xtask");
+        let (a, b) = (Marker::new(), Marker::new());
+        assert_ne!(a.entry(), b.entry(), "each run its own");
+        assert!(a.key.starts_with(&format!("LIGHTCRAFT_XTASK_RUN_{}_{:016x}_", std::process::id(), process_nonce())));
+    }
+
+    /// Only a process carrying the exact entry is found: not one with the text in an argument, in
+    /// another variable, or with an earlier xtask's marker of the same pid.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_processes_with_the_exact_marker_are_found() {
+        let marker = Marker::new();
+        let stale = Marker::with(std::process::id(), process_nonce() ^ 1, 0);
+        let spawn = |args: &[&str], env: Option<(&str, &str)>| {
+            let mut c = Command::new("/bin/sh");
+            // `read` is a builtin: the shell itself waits, with these arguments and environment
+            c.args(["-c", "read x"]).args(args).stdin(Stdio::piped()).stdout(Stdio::null());
+            if let Some((k, v)) = env {
+                c.env(k, v);
+            }
+            c.spawn().unwrap()
+        };
+        let mut ours = spawn(&[], Some((&marker.key, MARK_VALUE)));
+        let other_value = format!("x {}", marker.entry());
+        let mut decoys = [
+            spawn(&["sh", &marker.entry()], None),
+            spawn(&[], Some(("OTHER", &other_value))),
+            spawn(&[], Some((&stale.key, MARK_VALUE))),
+            spawn(&[], Some((&marker.key, "2"))),
+        ];
+        let until = Instant::now() + Duration::from_secs(10);
+        while marked(&marker.entry()).is_empty() && Instant::now() < until {
+            std::thread::sleep(TICK);
+        }
+        // give the decoys time to start too, then look again
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(marked(&marker.entry()), [ours.id()]);
+        for c in decoys.iter_mut().chain([&mut ours]) {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 
     #[test]
@@ -1140,7 +1334,7 @@ mod tests {
         assert!(test_binary(sh(script), "fake", Some(Duration::from_millis(500)), &mut shown).is_err());
         assert_eq!(
             shown.get(1).map(String::as_str),
-            Some("  killed it; it had started no other process (looked for by the run's environment marker)")
+            Some("  killed it; it had started no other process (looked for in its process tree and by the run's environment marker)")
         );
     }
 
@@ -1157,6 +1351,51 @@ mod tests {
         let pid = std::fs::read_to_string(&pidfile).unwrap();
         assert!(wait_gone(pid.trim()), "what it started was killed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `--list` run that exits but leaves a process holding its output: past the deadline that
+    /// process is killed by its marker (the exited run's own pid is not signalled).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_an_exited_list_run_left_behind_is_killed() {
+        let dir = scratch("list-left");
+        let (hung, cut) = (dir.join("hung.pid"), dir.join("cut.pid"));
+        let script = format!("sleep 300 & echo $! > '{}'; exit 0", hung.display());
+        let t = Instant::now();
+        assert!(list_tests(sh(&script), Duration::from_secs(1), LIST_MAX_BYTES).is_none(), "its output never ended");
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        let pid = std::fs::read_to_string(&hung).unwrap();
+        assert!(wait_gone(pid.trim()), "the sleep holding its output was killed");
+        // the same when the output is cut short
+        let script =
+            format!("sleep 300 & echo $! > '{}'; i=0; while [ $i -lt 1000 ]; do echo \"t$i: test\"; i=$((i+1)); done; exit 0", cut.display());
+        assert!(list_tests(sh(&script), MIN, 1000).is_some_and(|l| l.cut));
+        let pid = std::fs::read_to_string(&cut).unwrap();
+        assert!(wait_gone(pid.trim()), "the sleep of a cut list was killed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_captured_cargo_run_is_bounded_and_keeps_its_output() {
+        let ok = capture_cargo(&sh("echo 'gpu_probe: {}'; echo warn >&2; echo last >&2"), MIN).unwrap();
+        assert!(ok.status.as_ref().is_ok_and(ExitStatus::success));
+        assert_eq!((ok.stdout.as_str(), ok.stderr_tail.as_slice()), ("gpu_probe: {}\n", ["warn".to_owned(), "last".to_owned()].as_slice()));
+        // a probe whose GPU never answers: the binary cargo started hangs
+        let script = "echo '     Running tests/it/main.rs (target/debug/deps/it-2)' >&2; i=0; \
+            while [ $i -lt 30 ]; do echo \"line $i\" >&2; i=$((i+1)); done; head -c 3000000 /dev/zero; sleep 300";
+        let t = Instant::now();
+        let hung = capture_cargo(&sh(script), Duration::from_secs(1)).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        let err = hung.status.unwrap_err();
+        assert!(err.starts_with("timed out after 1 s: tests/it/main.rs (target/debug/deps/it-2) (killed it"), "{err}");
+        assert_eq!(hung.stdout.len(), CAPTURE_MAX, "stdout is kept up to its cap");
+        assert_eq!(hung.stderr_tail.len(), STDERR_TAIL);
+        assert_eq!(hung.stderr_tail.last().map(String::as_str), Some("line 29"));
+        assert!(any_timed_out(), "the optional probes after it are skipped");
+        assert_eq!(probe_limit(None), PROBE_LIMIT);
+        assert_eq!(probe_limit(Some(MIN)), MIN);
+        assert_eq!(probe_limit(Some(MIN * 60)), PROBE_LIMIT);
     }
 
     #[cfg(unix)]

@@ -88,11 +88,13 @@ for none): timed from its start when xtask runs it (`test::run_binary`), and fro
 full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
 `CARGO_TERM_QUIET=false` and without `-q` so it prints those lines). The output streams through and is
 read for libtest's lines, keeping a bounded amount. On timeout the binary and every process it started
-are killed: each watched process gets an environment variable of its own
-(`LIGHTCRAFT_XTASK_RUN_<pid>_<n>`) that its descendants inherit, so the kill also finds those that
-outlived their parent (`/proc/*/environ` on Linux, `ps eww` elsewhere, plus the current process tree),
-freezes them with SIGSTOP and then kills them (`taskkill /T` on Windows). The child stays in xtask's
-process group, so Ctrl-C still reaches it. The run reports `timed out after N min: <binary>`, what
+are killed, and no process xtask didn't start: the binary and its process tree (a process only once
+its parent is frozen, so its pid can't be reused meanwhile), and on Linux every process whose
+`/proc/<pid>/environ` holds the run's exact marker entry (`LIGHTCRAFT_XTASK_RUN_<pid>_<nonce>_<n>=1`,
+inherited by all it starts; the nonce is random per xtask process), which finds those that outlived
+their parent. They are frozen with SIGSTOP, then killed (`taskkill /T` on Windows; elsewhere the
+report says reparented ones can't be found). The child stays in xtask's process group, so Ctrl-C
+still reaches it. The run reports `timed out after N min: <binary>`, what
 the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
 or the test a single-threaded run started) and those that never reported a result (`--list`, itself
 bounded in time and size). Under nextest, `.config/nextest.toml`'s `slow-timeout` kills a test
@@ -109,7 +111,8 @@ explicit `RUST_TEST_THREADS=4` can't be told apart from the default, so `ci` and
 lower it to their RAM-aware value (never raise it).
 
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
-`gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
+`gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build, each
+test binary it starts bounded by 5 minutes, and skipped once a test binary timed out; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
 that need what is missing call `lightcraft_testkit::skip!(need, reason)`, which appends a JSON line to
 the file `LIGHTCRAFT_SKIP_LOG` names. The run ends with the machine and the skips by need and reason,
