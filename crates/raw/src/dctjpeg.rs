@@ -138,6 +138,7 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
         return Err(err("missing SOI"));
     }
     let mut quant = [[0u16; 64]; 4];
+    let mut quant_defined = [false; 4];
     let mut dc_tab: [Option<Huffman>; 4] = [None, None, None, None];
     let mut ac_tab: [Option<Huffman>; 4] = [None, None, None, None];
     let (mut precision, mut width, mut height) = (0u8, 0usize, 0usize);
@@ -199,6 +200,7 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                     let step = if pq == 0 { 1 } else { 2 };
                     let body = seg.get(j..j + 64 * step).ok_or_else(|| err("truncated DQT"))?;
                     if tq < 4 {
+                        quant_defined[tq] = true;
                         for k in 0..64 {
                             quant[tq][ZIGZAG[k]] = if pq == 0 { body[k] as u16 } else { u16::from_be_bytes([body[2 * k], body[2 * k + 1]]) };
                         }
@@ -240,6 +242,10 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                 for k in 0..ns {
                     let (cid, tabs) = (seg[1 + 2 * k], seg[2 + 2 * k]);
                     let ci = comps.iter().position(|c| c.0 == cid).ok_or_else(|| err("scan component not in frame"))?;
+                    // T.81 B.2.2: the frame's table must be installed before its scan; a zero table would decode flat
+                    if !quant_defined[comps[ci].1] {
+                        return Err(err("undefined quantisation table"));
+                    }
                     v.push(Comp { q: comps[ci].1, dc: (tabs >> 4) as usize & 3, ac: (tabs & 15) as usize & 3 });
                 }
                 scan = v;
@@ -261,6 +267,10 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
     let shift = f64::from(1i32 << (precision - 1));
     let t = basis();
     let mut out = vec![0u16; samples];
+    // a tile cut off inside its last blocks would otherwise decode from zero bits: its EOI must be there
+    if !d[data_start..].windows(2).any(|w| w == [0xff, 0xd9]) {
+        return Err(err("no EOI after the scan"));
+    }
     let mut br = BitReader::new(&d[data_start..]);
     let mut pred = vec![0i32; nc];
     for mcu in 0..bw * bh {
@@ -501,6 +511,26 @@ mod tests {
         let _ = decode(&jpg[..jpg.len() / 2], 1 << 20);
         assert!(decode(&jpg[..40], 1 << 20).is_err());
     }
+    #[test]
+    fn undefined_quantisation_table_is_corrupt() {
+        let px = vec![2048; 8 * 8];
+        let mut jpg = encode(&px, 8, 8, 12, 1, 0);
+        // the encoder's only DQT installs table 0; install it as table 1 instead, leaving the frame's table 0 undefined
+        let dqt = jpg.windows(2).position(|b| b == [0xff, 0xdb]).unwrap();
+        jpg[dqt + 4] = 1;
+        assert!(matches!(decode(&jpg, 64), Err(RawError::Corrupt(m)) if m.contains("quantisation")));
+    }
+
+    #[test]
+    fn missing_eoi_is_corrupt() {
+        let px = image(32, 32, 4095);
+        let mut jpg = encode(&px, 32, 32, 12, 1, 0);
+        assert!(decode(&jpg, 1 << 20).is_ok());
+        assert_eq!(jpg[jpg.len() - 2..], [0xff, 0xd9]);
+        jpg.truncate(jpg.len() - 2);
+        assert!(matches!(decode(&jpg, 1 << 20), Err(RawError::Corrupt(m)) if m.contains("EOI")));
+    }
+
     #[test]
     fn missing_required_restart_is_corrupt() {
         let px = vec![2048; 16 * 8];
