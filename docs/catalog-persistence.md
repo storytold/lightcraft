@@ -12,8 +12,8 @@ Opening a library with a newer LightCraft rewrites it in that version's format, 
 library was, byte for byte, beside it:
 
 - `catalog.snap.v<format>-<seq>` and `catalog.log.v<format>-<seq>`, where `<format>` is the format they are in and
-  `<seq>` the number of the last change the library held when it was upgraded (a library that had no log, or only a
-  log, has only the one file). `Journal::open` reports their names (`LoadReport::kept`) and logs them.
+  `<seq>` the number of the last change the library held when it was upgraded (or, where the upgrade was left for a
+  later snapshot, when the library was opened; a library that had no log, or only a log, has only the one file). `Journal::open` reports their names (`LoadReport::kept`) and logs them.
 - The kept files stay unless the library is known to be in its old format still: once the upgrade is written,
   nothing that fails after it takes them away.
 - A library whose files can't be kept, or whose upgrade can't be written (a full disk, a folder that can't be written
@@ -21,10 +21,12 @@ library was, byte for byte, beside it:
   disk after a failed write can't be read back to say whether the upgrade was written, the library is refused instead
   (its way back stays). A library left like that is upgraded by its next snapshot, during the session or when it is
   closed, and that snapshot keeps the files first too (and is not written when they can't be kept). When a snapshot
-  during the session does that, LightCraft tells where the files are kept, as it does at open (a snapshot at close
-  has no one left to tell: the files are in the folder, named as above). The files kept are the library as it was
-  when it opened (the snapshot, and the log up to where it ended then): what was changed since is in the files that
-  replace them, and never in the kept ones, so an older version opens them whatever was changed. Until then, changes
+  during the session does that, LightCraft tells where the files are kept, as it does at open (a snapshot when the
+  library is closed, or switched away from in Settings, has no one left to tell: the files are in the folder, named
+  as above). The files kept are the library as it was when it opened (the snapshot, and the log up to where it ended
+  then): what was changed since is in the files that replace them, not in the kept ones. (An earlier session of this
+  version may have added changes while the library stayed in its old format: they are in the log it opened with, and
+  an older version may refuse them.) Until then, changes
   go on being appended to the library as it is, so that they can be saved at all where there is no room for a copy of
   its files. (If the session ends without that snapshot, the next open keeps the log as it is then, which holds
   those changes, and tells so; the files kept earlier stay beside it.)
@@ -37,5 +39,6 @@ library was, byte for byte, beside it:
   wanted. The browser build keeps none (it always runs the newest version).
 
 **To go back**, with LightCraft closed: move `catalog.snap` and `catalog.log` away, then rename the kept pair to
-`catalog.snap` and `catalog.log`. The older version opens the library as it was when it was upgraded; changes made
-since, in the newer version, are in the files that were moved away and are not carried back.
+`catalog.snap` and `catalog.log`. The older version opens the library as it was when it was upgraded (where the upgrade came
+from a later snapshot: as it was when it was opened, so the changes made between that and the upgrade are not carried
+back either); changes made since, in the newer version, are in the files that were moved away.

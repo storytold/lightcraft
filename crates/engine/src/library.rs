@@ -768,8 +768,6 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
-        // (a compaction that wrote its snapshot at once, where there is no worker thread)
-        note_upgrade_kept(lib);
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
