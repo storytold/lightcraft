@@ -74,14 +74,14 @@ const MAX_FOLLOWED: usize = 4096;
 /// or another source, filter or sort) — so an unchanged frame neither copies nor hashes the ids.
 /// A develop edit keeps the list of a view that reads no develop state, but photo shapes (crop,
 /// orientation) are develop state: the photos it touched have their shapes read again, and the
-/// justified layout follows (`shapes`, [`GridCache::reshape`]).
+/// justified layout is made again only when one of them changed (`shapes`, [`GridCache::reshape`]).
 #[derive(Default)]
 pub struct GridCache {
     runs: Option<(RunsKey, Arc<Vec<DateRun>>)>,
     /// Layout by (runs key, width, thumbnail size, square, `shapes`).
     layout: Option<((RunsKey, u32, u32, bool, u64), Arc<GridLayout>)>,
-    /// Moves on when the cells' shapes of a kept list were read again ([`GridCache::reshape`]): the justified
-    /// layout is keyed on it.
+    /// Moves on when a cell's shape in a kept list changed ([`GridCache::reshape`]): the justified layout is keyed
+    /// on it, so an exposure tick, which changes no shape, doesn't lay the grid out again.
     shapes: u64,
     /// Stack index by generation.
     stacks: Option<(u64, Arc<StackIndex>)>,
@@ -273,11 +273,19 @@ impl GridCache {
     /// to nothing the view reads (a slider tick, a crop, a rotation) leaves the list and its generation as they
     /// were, but a crop or a rotation changes a cell's shape. The photos the edit touched are read again (all of
     /// them when the catalog can't say which); returns [`GridCache::shapes`], what the justified layout is
-    /// keyed on.
+    /// keyed on, moved on only when one of the shapes read is not what it was.
     fn reshape(&mut self, stats: &mut GridStats, cat: &Catalog) -> u64 {
         let Some(read) = self.read.as_mut().filter(|r| r.revision != cat.revision) else { return self.shapes };
         if let Some(shapes) = read.shapes.as_mut() {
             // (the list was kept, so only develop state changed: the groups read stay right)
+            let reread = |shape: &mut f32, cat: &Catalog, id: PhotoId| {
+                let now = shape_of(cat, id);
+                // (bit for bit: a shape that can't be told apart from what it was is no change)
+                let changed = now.to_bits() != shape.to_bits();
+                *shape = now;
+                changed
+            };
+            let mut moved = false;
             let touched = cat.touched_since(read.revision).filter(|t| t.len() <= MAX_FOLLOWED);
             match touched {
                 Some(touched) => {
@@ -286,19 +294,21 @@ impl GridCache {
                     for id in touched {
                         // (a photo folded into a stack, or not in this view, has no cell)
                         if let Some(shape) = places.get(&id).and_then(|i| shapes.get_mut(*i)) {
-                            *shape = shape_of(cat, id);
+                            moved |= reread(shape, cat, id);
                             stats.photos_read += 1;
                         }
                     }
                 }
                 None => {
                     for (shape, id) in shapes.iter_mut().zip(read.ids.iter()) {
-                        *shape = shape_of(cat, *id);
+                        moved |= reread(shape, cat, *id);
                     }
                     stats.photos_read += read.ids.len() as u64;
                 }
             }
-            self.shapes = self.shapes.wrapping_add(1);
+            if moved {
+                self.shapes = self.shapes.wrapping_add(1);
+            }
         }
         read.revision = cat.revision;
         self.shapes
