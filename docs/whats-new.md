@@ -347,8 +347,8 @@
 - In the Keyword List (right panel, Keywords) the same clicks pick several keywords. Picking does not change the grid.
 - With several albums shown, Remove from Album is not offered and the Delete key is the photos' Delete (it asks first
   while Settings ▸ Confirm before moving photos to Recently Deleted is on), because there is no telling which album is meant.
-- Menus, dragging, the Keyword List's − button and Delete still act on one row; choosing several rows for those
-  comes in a later change.
+- Menus, dragging and the Keyword List's − button still act on one row; choosing several rows for those comes in a
+  later change. When several albums are shown, Delete stays the photos' Delete, as above.
 
 ## 2026-10-24
 
