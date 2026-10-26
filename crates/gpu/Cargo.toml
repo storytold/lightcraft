@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 lightcraft-denoise = { workspace = true, optional = true }
+lightcraft-vision = { workspace = true, optional = true }
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
@@ -28,9 +29,16 @@ bytemuck = { workspace = true }
 [features]
 default = []
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
+# the content models' transformers (SigLIP 2, CLIP) on the GPU
+vision = ["dep:lightcraft-vision"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-raw = { workspace = true }
+serde_json = { workspace = true }
+
+[[test]]
+name = "vision_towers"
+required-features = ["vision"]

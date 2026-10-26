@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::state::SearchMode;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
@@ -83,34 +84,84 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 Stroke::new(1.0, if focused { t.accent } else { t.field_border }),
                 StrokeKind::Inside,
             );
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().max_rect(sr.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            let contents_mode = app.ui.search_mode == SearchMode::Contents;
+            // the magnifier at the field's left picks what is searched: Text or Contents
+            let mr = Rect::from_min_size(pos2(sr.left() + 4.0, sr.center().y - 10.0), vec2(26.0, 20.0));
+            let mresp = ui.interact(mr, egui::Id::unique("search-mode"), Sense::click());
+            register(ui, "search:mode", mr);
+            let mcol = if contents_mode {
+                t.accent
+            } else if mresp.hovered() {
+                t.text
+            } else {
+                t.text_dim
+            };
+            paint(ui.painter(), Rect::from_min_size(pos2(mr.left() + 2.0, mr.center().y - 7.0), vec2(14.0, 14.0)), Icon::Search, mcol);
+            // the caret says there is a menu
+            let c = pos2(mr.right() - 5.0, mr.center().y + 1.0);
+            ui.painter().add(egui::Shape::convex_polygon(vec![c + vec2(-3.0, -2.0), c + vec2(3.0, -2.0), c + vec2(0.0, 2.0)], mcol, Stroke::NONE));
+            let mresp = mresp.on_hover_text(crate::i18n::tr("Search Text or Contents"));
+            egui::Popup::menu(&mresp).show(|ui| {
+                for (mode, label, id) in
+                    [(SearchMode::Text, "Search Text", "menu:searchText"), (SearchMode::Contents, "Search Contents", "menu:searchContents")]
+                {
+                    let r = ui.selectable_label(app.ui.search_mode == mode, crate::i18n::tr(label));
+                    register(ui, id, r.rect);
+                    if r.clicked() {
+                        set_search_mode(app, mode);
+                        ui.close();
+                    }
+                }
+            });
+            // the text keeps as much room on the right as the mode button takes on the left, so the field stays centred
+            // on the window (#2365)
+            let inset = mr.right() + 2.0 - sr.left();
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(Rect::from_min_max(pos2(sr.left() + inset, sr.top() + 4.0), pos2(sr.right() - inset, sr.bottom() - 4.0)))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
             let empty = app.ui.search.is_empty();
             if empty && !focused {
-                let g = child.painter().layout_no_wrap(crate::i18n::tr("Search Photos").into(), t.font(13.5), t.text_dim);
-                let w = g.size().x + 24.0;
-                let x0 = sr.center().x - w / 2.0;
-                paint(child.painter(), Rect::from_min_size(pos2(x0, sr.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
-                child.painter().galley(pos2(x0 + 24.0, sr.center().y - g.size().y / 2.0), g, t.text_dim);
+                let hint = if contents_mode { "Search photo contents (e.g. beach at sunset)" } else { "Search Photos" };
+                let g = child.painter().layout_no_wrap(crate::i18n::tr(hint).into(), t.font(13.5), t.text_dim);
+                let x0 = if contents_mode { mr.right() + 6.0 } else { sr.center().x - g.size().x / 2.0 };
+                child.painter().galley(pos2(x0, sr.center().y - g.size().y / 2.0), g, t.text_dim);
             }
-            let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
+            let field = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
                 .label(crate::i18n::tr("Search Photos"))
                 .frame(false)
-                .width(sr.width() - 20.0)
+                .width(sr.width() - 2.0 * inset)
                 .font(t.font(13.5))
                 .text_color(t.text)
-                .show(&mut child)
-                .response;
-            if resp.changed() {
+                .show(&mut child);
+            let now = ui.input(|i| i.time);
+            if field.response.changed() {
                 let q = app.ui.search.clone();
-                let _ = app.run("library.filter", json!({"text": q}));
+                if contents_mode {
+                    // a search by contents waits for a pause in the typing
+                    app.ui.search_due = Some(now + SEARCH_DEBOUNCE);
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SEARCH_DEBOUNCE));
+                } else {
+                    let _ = app.run("library.filter", json!({"text": q, "wait": false}));
+                }
+            }
+            if contents_mode && (field.committed() || app.ui.search_due.is_some_and(|due| now >= due)) {
+                app.ui.search_due = None;
+                let q = app.ui.search.clone();
+                let _ = app.run("library.filter", json!({"contents": q, "wait": false}));
+            } else if !contents_mode {
+                // (a pause that was waited for in Contents mode means nothing in Text mode)
+                app.ui.search_due = None;
+            } else if let Some(due) = app.ui.search_due {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - now).max(0.01)));
             }
             // filter icon right of the search field
             let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
             let fresp = ui.interact(fr, egui::Id::unique("filter-btn"), Sense::click());
             crate::widgets::announce(&fresp, crate::i18n::tr("Filters"));
             register(ui, "icon:filter", fr);
-            let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
+            let filtering = app.session.filter != Default::default() || app.ui.filter_bar || app.session.content_ask().is_some();
             paint(
                 ui.painter(),
                 fr.shrink(6.0),
@@ -230,6 +281,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             });
             let _ = Align2::CENTER_CENTER;
         });
+}
+
+/// Seconds a search by contents waits after the last key typed.
+pub const SEARCH_DEBOUNCE: f64 = 0.25;
+
+/// Switch the search field between Text and Contents, taking what is typed along: the text search becomes a search by
+/// contents or the other way round. Choosing Contents starts loading the search model, so the first search does not
+/// wait for it.
+pub fn set_search_mode(app: &mut LightcraftApp, mode: SearchMode) {
+    if app.ui.search_mode == mode {
+        return;
+    }
+    app.ui.search_mode = mode;
+    app.ui.search_due = None;
+    let q = app.ui.search.trim().to_string();
+    match mode {
+        SearchMode::Contents => {
+            let _ = app.run("content.prepare", json!({}));
+            if !q.is_empty() {
+                let _ = app.run("library.filter", json!({"text": "", "contents": q, "wait": false}));
+            }
+        }
+        SearchMode::Text => {
+            let _ = app.run("library.filter", json!({"contents": null, "text": q, "wait": false}));
+        }
+    }
 }
 
 /// The appearance button's icon and the mode's name for its tooltip.
