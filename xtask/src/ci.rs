@@ -1,7 +1,9 @@
 use super::layers::cmd_layers;
 use super::raw_samples::RAW_SAMPLES;
 use super::wasm::{cmd_wasm, cmd_wasm_for};
-use super::{Command, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, roots, run, test, use_ci_caps};
+use super::{
+    Command, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, deadline, metadata, parity, root, roots, run, run_tests, test, use_ci_caps,
+};
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
 /// is unknown. With line-table debuginfo, 4 jobs measured about 3 GB of RAM in use and 2 jobs
@@ -114,7 +116,7 @@ const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
 /// Print the translation gaps report into the log: [`TRANSLATION_GAPS_TEST`] of lightcraft-ui-egui,
 /// run from the test binary the test step built (found with `--no-run` and the step's own
 /// arguments, so nothing rebuilds). A report that can't run is a note, never a failed step.
-fn translation_gaps() {
+fn translation_gaps(limit: Option<std::time::Duration>) {
     eprintln!("\n=== ci: translation gaps ===");
     let mut c = cargo();
     c.args(["test", "--no-run", "--message-format=json"]).args(with_test_targets(&["--workspace"]));
@@ -134,7 +136,9 @@ fn translation_gaps() {
     let ran = binary.and_then(|binary| {
         let mut c = Command::new(&binary);
         c.args(["--exact", TRANSLATION_GAPS_TEST, "--nocapture", "--quiet"]);
-        run(c, &format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display()))
+        let what = format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display());
+        eprintln!("$ {what}");
+        deadline::run_test_binary(c, "lightcraft-ui-egui (translation gaps)", limit).map_err(|e| format!("{what}: {e}"))
     });
     if let Err(e) = ran {
         eprintln!("note: the translation gaps report did not run: {e}");
@@ -157,6 +161,8 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     if base.is_some() && !quick {
         return Err("ci: --base only applies to --quick".into());
     }
+    // each test binary's time limit (deadline.rs); a bad value fails before the run waits for its slot
+    let limit = deadline::test_binary_timeout()?;
     let root = root();
     let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until ci returns: one run at a time per machine (ci_lock.rs)
@@ -182,7 +188,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     // target/ci/skips-<step>.jsonl: a file, so it works the same under nextest and cargo test
     let test = |(mut c, what): (Command, String), step: &str| {
         c.env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, step));
-        run(c, &what)
+        run_tests(c, &what, limit)
     };
     let gpu = std::cell::RefCell::new(serde_json::Value::Null);
     let hardware_runs = std::cell::RefCell::new(Vec::new());
@@ -241,7 +247,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         (
             "test",
             Box::new(|| match &plan {
-                Some(p) if !p.workspace_wide => test::selected(&root, &p.packages, &ci_report::skip_log(&root, "test")),
+                Some(p) if !p.workspace_wide => test::selected(&root, &p.packages, &ci_report::skip_log(&root, "test"), limit),
                 _ => test(tests(&with_test_targets(&["--workspace"])), "test").and_then(|()| test(doctests(), "test")),
             }),
         ),
@@ -263,7 +269,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                     let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
                     c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok();
+                    let ok = run_tests(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}"), limit).is_ok();
                     hardware_runs.borrow_mut().push(serde_json::json!({
                         "backend": backend,
                         "adapter": adapter,
@@ -302,7 +308,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         if *name == "test" && plan.is_none() {
             // right after the workspace tests, before parity and wasm build other feature sets
             probe();
-            translation_gaps();
+            translation_gaps(limit);
         }
         if let Err(e) = r {
             failure = Some((*name, e));

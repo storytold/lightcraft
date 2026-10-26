@@ -10,6 +10,7 @@ mod bench;
 mod ci_lock;
 mod ci_quick;
 mod ci_report;
+mod deadline;
 mod ico;
 mod layers;
 mod parity;
@@ -63,7 +64,10 @@ commands:
                   --quick: only what the changes since the merge base with origin/main (or REF) can
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
-                  LIGHTCRAFT_CI_LOCK=off to skip the lock)
+                  LIGHTCRAFT_CI_LOCK=off to skip the lock) for up to LIGHTCRAFT_CI_LOCK_WAIT minutes
+                  (default 120; 0: no limit). Each test binary may run LIGHTCRAFT_TEST_BINARY_TIMEOUT
+                  minutes (default 30; 0: no limit); one that runs longer is killed with the processes
+                  it started and reported with the tests still running
   test [-p PKG]... [--keep-going] [--doc] [-- ARGS]
                   the workspace's tests (or PKG's) with ci's caps (build jobs by free RAM, at most 4 test
                   threads, line-table debuginfo; a CARGO_BUILD_JOBS or RUST_TEST_THREADS you set wins,
@@ -73,7 +77,8 @@ commands:
                   --exact, --skip, --nocapture); stops at the first failing binary unless --keep-going
                   (alias --no-fail-fast), which runs them all and names each that failed; --doc runs the
                   doctests after them. LIGHTCRAFT_NEXTEST=1 runs the tests under cargo nextest
-                  (--test-threads N and --nocapture become its options; ARGS are its filters)
+                  (--test-threads N and --nocapture become its options; ARGS are its filters).
+                  Same slot wait and per-binary time limit as ci
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -228,6 +233,13 @@ fn apply_ci_caps(c: &mut Command) {
     if CI_CAPS.load(std::sync::atomic::Ordering::Relaxed) {
         c.envs(caps_to_set(ci_caps(), caller_sets));
     }
+}
+
+/// [`run`] for a command that runs test binaries (`cargo test`, `cargo nextest run`): each test
+/// binary it starts may run for `limit` ([`deadline::run_cargo_tests`]; `None`: no limit).
+pub fn run_tests(cmd: Command, what: &str, limit: Option<std::time::Duration>) -> Result<(), String> {
+    eprintln!("$ {what}");
+    deadline::run_cargo_tests(cmd, limit).map_err(|e| format!("{what}: {e}"))
 }
 
 pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
