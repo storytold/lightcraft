@@ -72,6 +72,8 @@ pub struct XmpData {
     /// item order, language alternatives put `x-default` first. Foreign namespaces that reuse a recognized
     /// prefix use `Q{hex-encoded namespace URI}local` instead, so they cannot impersonate known properties.
     pub properties: BTreeMap<String, Vec<String>>,
+    /// True when flattened properties were omitted after reaching the cumulative key-size limit.
+    pub properties_truncated: bool,
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
@@ -339,14 +341,23 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_description(
+    d: &Node,
+    prefix: &str,
+    props: &mut BTreeMap<String, Vec<String>>,
+    budget: &mut usize,
+    truncated: &mut bool,
+) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
-            props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
+        if !is_rdf_meta_attr(k) {
+            let key = format!("{prefix}{k}");
+            if take_property_key(&key, budget, truncated) {
+                props.entry(key).or_default().push(v.clone());
+            }
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props, budget);
+        collect_property(c, prefix, props, budget, truncated);
     }
 }
 
@@ -361,7 +372,13 @@ fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
     true
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn take_property_key(key: &str, budget: &mut usize, truncated: &mut bool) -> bool {
+    let keep = take_key_bytes(key, budget);
+    *truncated |= !keep;
+    keep
+}
+
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -375,7 +392,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        if take_key_bytes(&key, budget) {
+        if take_property_key(&key, budget, truncated) {
             props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
         }
         return;
@@ -383,26 +400,26 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
+            collect_property(c, &struct_prefix, props, budget, truncated);
         }
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props, budget);
+        collect_description(d, &struct_prefix, props, budget, truncated);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
             let full = format!("{struct_prefix}{k}");
-            if take_key_bytes(&full, budget) {
+            if take_property_key(&full, budget, truncated) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    if take_key_bytes(&key, budget) {
+    if take_property_key(&key, budget, truncated) {
         props.entry(key).or_default().push(v);
     }
 }
@@ -522,10 +539,11 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    let mut properties_truncated = false;
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
     for d in descs {
-        collect_description(d, "", &mut props, &mut key_budget);
+        collect_description(d, "", &mut props, &mut key_budget, &mut properties_truncated);
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
         }
@@ -606,7 +624,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok(XmpData { metadata: m, lc_settings, properties: props, properties_truncated, values })
 }
 
 fn frac(v: f64) -> String {

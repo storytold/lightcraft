@@ -541,6 +541,7 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
     assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
     assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
+    assert!(d.properties_truncated, "omitted flattened keys are reported to callers");
 }
 
 #[test]

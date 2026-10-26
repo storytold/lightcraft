@@ -22,16 +22,23 @@ pub struct Exported {
 /// malformed and therefore cannot be projected into `Metadata`. Parse canonical properties from
 /// the source packet; don't infer metadata from XML substrings. A packet that can't be inspected
 /// fails closed, like the existing extraction guard above.
-fn original_embeds_xmp_gps(bytes: &[u8], label: &str) -> Result<bool, String> {
+pub(super) fn original_embeds_xmp_gps(bytes: &[u8], label: &str) -> Result<bool, String> {
     if bytes.starts_with(b"8BPS") {
         return Ok(false);
     }
-    let Some(packet) = lightcraft_meta::embedded(bytes).xmp else { return Ok(false) };
-    let xmp = lightcraft_meta::parse_xmp(&packet)
-        .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
-    Ok(["exif:GPSLatitude", "exif:GPSLongitude"]
-        .into_iter()
-        .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|value| !value.trim().is_empty()))))
+    let embedded = lightcraft_meta::embedded(bytes);
+    let mut found_gps = false;
+    for packet in [embedded.xmp.as_deref(), embedded.xmp_extended.as_deref()].into_iter().flatten() {
+        let xmp = lightcraft_meta::parse_xmp(packet)
+            .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
+        if xmp.properties_truncated {
+            return Err(format!("{label}: can't verify location metadata in this original file: embedded XMP property limit was exceeded"));
+        }
+        found_gps |= ["exif:GPSLatitude", "exif:GPSLongitude"]
+            .into_iter()
+            .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|value| !value.trim().is_empty())));
+    }
+    Ok(found_gps)
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
