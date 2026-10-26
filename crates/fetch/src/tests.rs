@@ -408,3 +408,49 @@ fn hostile_file_specs_are_rejected_before_touching_disk() {
         assert!(!dir.exists());
     }
 }
+
+#[test]
+fn copies_from_a_local_folder_mirror_and_checks_the_hash() {
+    let src = tmp("local-src");
+    let dst = tmp("local-dst");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("model.bin"), payload()).unwrap();
+    // a bare absolute path and a file:// URL are both mirrors
+    let m = mirrors(Some(src.to_str().unwrap()), None, &[]);
+    assert_eq!(m, vec![format!("file://{}", src.display())]);
+    let (r, prog) = run(&[pinned()], &m, &dst, &AtomicBool::new(false));
+    r.unwrap();
+    assert_eq!(std::fs::read(dst.join("model.bin")).unwrap(), payload());
+    assert!(prog.last().is_some_and(|p| p.done == p.total));
+
+    // a damaged local copy is rejected and never moved into place
+    let bad = tmp("local-bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    let mut damaged = payload();
+    damaged[7] ^= 1;
+    std::fs::write(bad.join("model.bin"), damaged).unwrap();
+    let dst2 = tmp("local-dst2");
+    let (r, _) = run(&[pinned()], &[format!("file://{}", bad.display())], &dst2, &AtomicBool::new(false));
+    assert!(matches!(r, Err(DownloadError::AllMirrorsFailed { .. })), "{r:?}");
+    assert!(!dst2.join("model.bin").exists() && !dst2.join("model.bin.part").exists());
+
+    // a missing folder, a relative path and a directory in place of a file are errors, not panics
+    let (r, _) = run(&[pinned()], &["file:///nonexistent/model-mirror".to_string()], &dst2, &AtomicBool::new(false));
+    assert!(r.is_err());
+    assert!(mirrors(Some("file://relative/dir"), None, &[]).is_empty());
+    std::fs::create_dir_all(src.join("dir.bin")).unwrap();
+    let dir_spec = FileSpec { name: "dir.bin", size: None, sha256: None, max: 10 };
+    let (r, _) = run(&[dir_spec], &[format!("file://{}", src.display())], &dst2, &AtomicBool::new(false));
+    assert!(r.is_err());
+}
+
+#[test]
+fn file_urls_are_percent_decoded_but_bare_paths_keep_their_percent_signs() {
+    let bare = mirrors(Some("/models/50%20off"), None, &[]);
+    assert_eq!(bare.len(), 1);
+    assert_eq!(local_path(&bare[0]), Some(std::path::PathBuf::from("/models/50%20off")));
+    assert_eq!(local_path("file:///models/my%20sam3"), Some(std::path::PathBuf::from("/models/my sam3")));
+    for hostile in ["file:///x%", "file:///x%2", "file:///x%zz", "file:///x%ff", "file:///x%0a"] {
+        assert_eq!(local_path(hostile), None, "{hostile}");
+    }
+}

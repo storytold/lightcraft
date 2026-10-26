@@ -11,14 +11,21 @@ use std::path::Path;
 
 /// The `facebook/sam3` checkpoint files [`crate::Sam3::load`] needs.
 ///
-/// `model.safetensors` is pinned to the official checkpoint (Hugging Face LFS SHA-256). The two
-/// tokenizer files are small text files without a pinned hash yet: they are only parsed by the
-/// tokenizer (never executed) and capped in size.
-// TODO(maintainer): pin `vocab.json` and `merges.txt` (size + SHA-256) when the files are
-// uploaded to LightCraft's CDN.
+/// All three are pinned (exact size + SHA-256) to the official `facebook/sam3` checkpoint files,
+/// checked against a copy of them on 2026-10-13.
 pub const SAM3_FILES: &[FileSpec] = &[
-    FileSpec { name: "vocab.json", size: None, sha256: None, max: 16 << 20 },
-    FileSpec { name: "merges.txt", size: None, sha256: None, max: 16 << 20 },
+    FileSpec {
+        name: "vocab.json",
+        size: Some(862_328),
+        sha256: Some("5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363"),
+        max: 16 << 20,
+    },
+    FileSpec {
+        name: "merges.txt",
+        size: Some(524_619),
+        sha256: Some("9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"),
+        max: 16 << 20,
+    },
     FileSpec {
         name: crate::WEIGHTS_FILE,
         size: Some(SAM3_WEIGHTS_SIZE),
