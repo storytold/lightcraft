@@ -4,6 +4,12 @@ use lightcraft_raster::Rgba8;
 
 use super::*;
 
+/// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: for a job held past the pool's fixed
+/// 2 s drop wait, and for bounds above a fixed lower one.
+fn stretched(d: std::time::Duration) -> std::time::Duration {
+    lightcraft_testkit::scaled(d).max(d)
+}
+
 #[test]
 fn cleared_generation_cannot_read_or_repopulate_memory_or_disk() {
     let dir = std::env::temp_dir().join(format!("lc-thumbnail-generation-{}-{}", std::process::id(), next_tick()));
@@ -234,7 +240,7 @@ fn pool_with_a_running_job() -> (JobPool<u8, ()>, std::sync::mpsc::Sender<()>) {
         1,
         Box::new(move || {
             let _ = started.send(());
-            let _ = released.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(60)));
+            let _ = released.recv_timeout(stretched(std::time::Duration::from_secs(60)));
         }),
     );
     lightcraft_testkit::recv_within(&has_started, std::time::Duration::from_secs(30), "the job starts");
@@ -274,7 +280,7 @@ fn pool_shutdown_reports_workers_and_drop_does_not_wait_again() {
     let t0 = std::time::Instant::now();
     assert!(!p.shutdown(std::time::Duration::from_millis(100)), "the job is still running");
     let waited = t0.elapsed();
-    assert!(waited >= std::time::Duration::from_millis(100) && waited < lightcraft_testkit::scaled(std::time::Duration::from_secs(30)), "{waited:?}");
+    assert!(waited >= std::time::Duration::from_millis(100) && waited < stretched(std::time::Duration::from_secs(30)), "{waited:?}");
     assert_eq!(p.live_workers(), 1);
     // stopped: nothing new is queued, and the job that ends is noticed
     p.submit(2, 0, 1, Box::new(|| ()));
@@ -285,10 +291,11 @@ fn pool_shutdown_reports_workers_and_drop_does_not_wait_again() {
 
     let (mut p, _release) = pool_with_a_running_job();
     assert!(!p.shutdown(std::time::Duration::ZERO));
-    let t0 = std::time::Instant::now();
+    let waits = p.stop_waits();
+    let before = waits.load(std::sync::atomic::Ordering::SeqCst);
     drop(p);
-    // a second wait would take DROP_WAIT (the job runs until `_release` goes)
-    assert!(t0.elapsed() < crate::pool::DROP_WAIT, "dropped after a shutdown: no second wait ({:?})", t0.elapsed());
+    // (the job runs until `_release` goes: a second wait would have had something to wait for)
+    assert_eq!(waits.load(std::sync::atomic::Ordering::SeqCst), before, "dropped after a shutdown: no second wait");
 }
 
 #[test]
@@ -298,7 +305,7 @@ fn pool_drop_is_bounded_when_a_job_never_ends() {
     let t0 = std::time::Instant::now();
     drop(p);
     let waited = t0.elapsed();
-    assert!(waited >= std::time::Duration::from_secs(1) && waited < lightcraft_testkit::scaled(std::time::Duration::from_secs(30)), "{waited:?}");
+    assert!(waited >= std::time::Duration::from_secs(1) && waited < stretched(std::time::Duration::from_secs(30)), "{waited:?}");
 }
 
 #[test]
@@ -313,6 +320,7 @@ fn pool_stops_after_a_job_panicked_and_when_dropped_by_its_own_job() {
     let slot: Arc<std::sync::Mutex<Option<JobPool<u8, ()>>>> = Arc::new(std::sync::Mutex::new(None));
     let (dropped, has_dropped) = std::sync::mpsc::channel();
     let mut p: JobPool<u8, ()> = JobPool::new(1);
+    let waits = p.stop_waits();
     let s = slot.clone();
     p.submit(
         1,
@@ -325,15 +333,14 @@ fn pool_stops_after_a_job_panicked_and_when_dropped_by_its_own_job() {
                 }
                 std::thread::yield_now();
             };
-            let t0 = std::time::Instant::now();
             drop(own);
-            let _ = dropped.send(t0.elapsed());
+            let _ = dropped.send(());
         }),
     );
     *slot.lock().unwrap() = Some(p);
-    let waited = lightcraft_testkit::recv_within(&has_dropped, std::time::Duration::from_secs(30), "the job drops its own pool");
-    // waiting for itself would take DROP_WAIT (a running job can't end while it waits)
-    assert!(waited < crate::pool::DROP_WAIT, "{waited:?}");
+    lightcraft_testkit::recv_within(&has_dropped, std::time::Duration::from_secs(30), "the job drops its own pool");
+    // the dropping job is the only one running: any wait would be for itself
+    assert_eq!(waits.load(std::sync::atomic::Ordering::SeqCst), 0, "the job's drop waited for itself");
 }
 
 #[test]
@@ -719,7 +726,7 @@ fn a_slot_runs_one_job_at_a_time() {
             most.fetch_max(now, Ordering::SeqCst);
             let _ = started.send(n);
             if let Some(w) = wait {
-                let _ = w.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(30)));
+                let _ = w.recv_timeout(stretched(std::time::Duration::from_secs(30)));
             }
             running.fetch_sub(1, Ordering::SeqCst);
             n
