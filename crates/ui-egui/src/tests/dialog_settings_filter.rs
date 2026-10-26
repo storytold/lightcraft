@@ -318,3 +318,29 @@ fn esc_on_a_result_empties_the_filter_and_leaves_settings_open() {
     key(&mut h, "Escape");
     assert!(h.app.ui.dialog.is_none());
 }
+
+/// A section's heading goes in by its English name and is translated once: View Options' General
+/// heading used to be passed already translated, so in another language it was translated again
+/// and registered under the translated name, where the filter and scripts look for the English one.
+#[test]
+fn the_general_heading_of_view_options_is_translated_once_and_registered_by_its_english_name() {
+    use crate::i18n::Locale;
+    struct Restore(Locale);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::i18n::set_language(self.0);
+        }
+    }
+    let _restore = Restore(crate::i18n::language());
+    let mut h = demo([1000.0, 800.0]);
+    h.app.ui.language = Locale::De;
+    crate::i18n::set_language(Locale::De);
+    h.app.ui.dialog = Some(Dialog::ViewOptions);
+    steps(&mut h);
+    let shown = Locale::De.tr("General");
+    assert_ne!(shown, "General", "the German catalog translates the heading");
+    let headings: Vec<&str> = h.app.widgets.iter().filter_map(|(id, _)| id.strip_prefix("heading:")).collect();
+    assert!(headings.contains(&"General"), "registered by its English name: {headings:?}");
+    assert!(!headings.contains(&shown), "not by the translated one: {headings:?}");
+    assert!(h.painted_text().iter().any(|text| text == shown), "and drawn translated: {shown}");
+}

@@ -159,7 +159,7 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
             app.ui.settings.loupe_info.briefly = if briefly { info } else { I::Off };
         }
     }
-    heading(ui, t, crate::i18n::tr("General"));
+    heading(ui, t, "General");
     check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
 }
 
