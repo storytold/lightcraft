@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (`cargo xtask test`: the tests alone, with `ci`'s caps and slot) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (plain `cargo test` runs at most 4 tests at once; `ci` still sizes its threads by RAM) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -81,6 +81,14 @@ runs each test binary, or the `-p` packages' binaries, itself (`test::run_binary
 uses too); `--keep-going` runs every binary and names each that failed instead of stopping at the
 first.
 
+Outside `ci`, `.cargo/config.toml`'s `[env]` limits plain `cargo test` to 4 tests at once per test
+binary (`RUST_TEST_THREADS = { value = "4", force = false }`, so a value already in the environment
+wins), and `.config/nextest.toml` sets `test-threads = 4` for `cargo nextest run`. `cargo xtask` runs
+under that config too, so `[env]` also sets a marker, `LIGHTCRAFT_TEST_THREADS_DEFAULT`, to the same
+value: a `RUST_TEST_THREADS` equal to it counts as unset (`caller_sets` in `xtask/src/main.rs`) and the
+caps replace it with the RAM-aware value, while any other value is the caller's and wins. A caller who
+sets 4 explicitly looks like the default; the caps only ever lower it.
+
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
@@ -95,6 +103,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |
 | 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |

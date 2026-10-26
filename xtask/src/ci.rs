@@ -420,4 +420,47 @@ mod ci_jobs_tests {
         assert_eq!(set.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"]);
         assert!(crate::caps_to_set(caps, |_| true).is_empty());
     }
+
+    /// An environment of `vars` for [`crate::set_by_caller`].
+    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+        let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
+        move |key| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
+    }
+
+    #[test]
+    fn the_config_test_threads_default_is_not_a_callers_setting() {
+        use crate::set_by_caller;
+        const MARKER: &str = crate::TEST_THREADS_DEFAULT_MARKER;
+        let threads = "RUST_TEST_THREADS";
+        assert!(!set_by_caller(threads, env(&[])), "unset, outside cargo");
+        assert!(!set_by_caller(threads, env(&[(MARKER, "4")])), "unset (no RUST_TEST_THREADS at all)");
+        assert!(!set_by_caller(threads, env(&[(threads, "4"), (MARKER, "4")])), "the config default: ci sizes it by RAM");
+        assert!(set_by_caller(threads, env(&[(threads, "9"), (MARKER, "4")])), "RUST_TEST_THREADS=9 cargo xtask ci");
+        assert!(set_by_caller(threads, env(&[(threads, "2"), (MARKER, "4")])), "a lower explicit value wins too");
+        assert!(set_by_caller(threads, env(&[(threads, "4")])), "no marker: xtask run outside cargo, the value is the caller's");
+        assert!(set_by_caller(threads, env(&[(threads, "")])), "set, even if empty");
+        // the marker only speaks for RUST_TEST_THREADS
+        assert!(set_by_caller("NEXTEST_TEST_THREADS", env(&[("NEXTEST_TEST_THREADS", "4"), (MARKER, "4")])));
+        assert!(set_by_caller("CARGO_BUILD_JOBS", env(&[("CARGO_BUILD_JOBS", "4"), (MARKER, "4")])));
+        assert!(!set_by_caller("CARGO_BUILD_JOBS", env(&[(MARKER, "4")])));
+    }
+
+    /// The quoted `value` of the `key = { value = "…", … }` line in `.cargo/config.toml`'s `[env]`.
+    fn config_env(config: &str, key: &str) -> Option<(String, String)> {
+        let line = config.lines().find(|l| l.split('=').next().is_some_and(|k| k.trim() == key))?;
+        let value = line.split("value = \"").nth(1)?.split('"').next()?.to_owned();
+        Some((value, line.to_owned()))
+    }
+
+    #[test]
+    fn the_cargo_config_sets_the_test_threads_default_and_its_marker_to_one_value() {
+        let config = std::fs::read_to_string(super::root().join(".cargo/config.toml")).unwrap();
+        let (threads, line) = config_env(&config, "RUST_TEST_THREADS").expect("RUST_TEST_THREADS in [env]");
+        assert!(line.contains("force = false"), "an explicit RUST_TEST_THREADS must win: {line}");
+        let (marker, _) = config_env(&config, crate::TEST_THREADS_DEFAULT_MARKER).expect("the marker in [env]");
+        assert_eq!(threads, marker, "xtask tells the default apart by this marker");
+        let n: usize = threads.parse().unwrap();
+        assert!((1..=4).contains(&n), "{n}");
+        assert!(config.contains("[env]"));
+    }
 }

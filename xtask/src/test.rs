@@ -1,8 +1,9 @@
 //! `cargo xtask test [-p PKG]… [--keep-going] [--doc] [-- ARGS]`: the workspace tests, or some
 //! packages' tests, under the same caps as `ci` and in its machine-wide slot.
 //!
-//! Plain `cargo test --workspace` runs one test per CPU in every test binary and takes no CI slot:
-//! on a 16-core machine the ui-egui tests alone then run out of memory (#3057). This runs them the
+//! Plain `cargo test --workspace` takes no CI slot and gets only `.cargo/config.toml`'s 4 test
+//! threads per binary (libtest's own default, one per CPU, ran the ui-egui tests alone out of memory
+//! on a 16-core machine, #3057, #3059), not `ci`'s RAM-aware caps. This runs them the
 //! way `ci` does: build jobs by available RAM, at most 4 test threads, line-table debuginfo
 //! ([`super::use_ci_caps`]), one run per machine ([`ci_lock`]).
 //!
@@ -155,7 +156,8 @@ fn names<'a>(packages: impl Iterator<Item = &'a Package>) -> String {
     packages.map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
 }
 
-/// The resource limits a test binary run directly gets, where the environment doesn't set them.
+/// The resource limits a test binary run directly gets, where the caller doesn't set them
+/// ([`super::caller_sets`]: `.cargo/config.toml`'s `RUST_TEST_THREADS` default doesn't count).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Caps {
     /// `cargo xtask test`: all of CI's caps ([`super::apply_ci_caps`]), so `RUST_TEST_THREADS` is
@@ -179,7 +181,7 @@ pub fn run_binary(root: &Path, binary: &Binary, args: &[&str], skip_log: Option<
     match caps {
         Caps::Ci => super::apply_ci_caps(&mut c),
         Caps::QuickCi => {
-            if std::env::var_os("RUST_TEST_THREADS").is_none() {
+            if !super::caller_sets("RUST_TEST_THREADS") {
                 // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
                 c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
             }
