@@ -84,13 +84,18 @@ first.
 Nothing these runs wait on is unbounded (`xtask/src/deadline.rs`, #3060). Stable libtest has no
 per-test timeout, so each test binary gets `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30; `0`
 for none): timed from its start when xtask runs it (`test::run_binary`), and from cargo's `Running` /
-`Doc-tests` line for it when `cargo test` runs it (the full `ci`'s test and HEIF steps; the build
-before isn't bounded). The output streams through and is read for libtest's lines; on timeout the
-binary and every process it started are killed (frozen, then SIGKILL, by walking the process tree:
-the child stays in xtask's process group so Ctrl-C still reaches it; `taskkill /T` on Windows), and
-the run reports `timed out after N min: <binary>` with the tests still running (libtest's "has been
-running for over 60 seconds" warnings, or the test a single-threaded run started) and those that
-never reported a result (`--list`). Under nextest, `.config/nextest.toml`'s `slow-timeout` kills a test
+`Doc-tests` line for it, and again from its own `running N tests` line, when `cargo test` runs it (the
+full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
+`CARGO_TERM_QUIET=false` and without `-q` so it prints those lines). The output streams through and is
+read for libtest's lines, keeping a bounded amount. On timeout the binary and every process it started
+are killed: each watched process gets an environment variable of its own
+(`LIGHTCRAFT_XTASK_RUN_<pid>_<n>`) that its descendants inherit, so the kill also finds those that
+outlived their parent (`/proc/*/environ` on Linux, `ps eww` elsewhere, plus the current process tree),
+freezes them with SIGSTOP and then kills them (`taskkill /T` on Windows). The child stays in xtask's
+process group, so Ctrl-C still reaches it. The run reports `timed out after N min: <binary>`, what
+the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
+or the test a single-threaded run started) and those that never reported a result (`--list`, itself
+bounded in time and size). Under nextest, `.config/nextest.toml`'s `slow-timeout` kills a test
 after 30 minutes instead. The wait for the CI slot gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes
 (default 120, several full runs; `0` for no limit) with an error naming the run that holds it.
 
