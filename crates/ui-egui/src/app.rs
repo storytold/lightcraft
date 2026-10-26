@@ -403,6 +403,13 @@ impl LightcraftApp {
         panels::slideshow::tick(self, ctx, now);
     }
 
+    /// A task waiting in line whose lane freed while nothing was asked starts now (commands start them too); then the
+    /// run in progress is looked at, so that one started here is polled for its end from this frame on.
+    fn tick_preview_builds(&mut self, ctx: &egui::Context) {
+        self.session.start_waiting();
+        self.preview_build_status(ctx);
+    }
+
     /// Announce the end of a Build Previews run, and of those a build waiting in line replaced before it was announced
     /// (in one toast, oldest first). A build is announced once: its `reported` flag says so, not where it lives.
     fn preview_build_status(&mut self, ctx: &egui::Context) {

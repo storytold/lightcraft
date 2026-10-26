@@ -652,3 +652,31 @@ fn a_build_replaced_by_the_one_waiting_behind_it_is_still_announced() {
     assert!(toast.contains("Previews ready for 2 photos"), "{toast}");
     assert!(h.app.session.take_unreported_builds().is_empty());
 }
+
+/// Given a build that ended and a build waiting behind it, when the frame starts the waiting one, then the same frame
+/// asks to be drawn again to see how it goes: nothing else repaints an idle window (the list is closed, or Full Screen
+/// Preview hides it).
+#[test]
+fn the_frame_that_starts_a_waiting_build_asks_for_the_next_one() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    let ctx = egui::Context::default();
+    // (a few empty passes let the context's own first-frame requests go by)
+    for _ in 0..4 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "an idle context asks for nothing");
+    h.app.tick_preview_builds(&ctx);
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build started");
+    assert!(ctx.has_requested_repaint(), "and the frame asked to look at it again");
+}
