@@ -337,6 +337,19 @@
   1200–1500-point-wide window on a Retina display.
 
 
+## 2026-10-26
+
+### Choose several albums, folders, keywords or dates in the sidebars
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one, except rows
+  inside a folder that is closed. The grid shows the photos of any of them, each once, and the title says how many
+  albums or folders are shown. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel, Keywords) the same clicks pick several keywords. Picking does not change the grid.
+- With several albums shown, Remove from Album is not offered and the Delete key is the photos' Delete (it asks first
+  while Settings ▸ Confirm before moving photos to Recently Deleted is on), because there is no telling which album is meant.
+- Menus, dragging, the Keyword List's − button and Delete still act on one row; choosing several rows for those
+  comes in a later change.
+
 ## 2026-10-24
 
 ### AI Denoise follows the photo's real noise
