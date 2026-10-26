@@ -30,7 +30,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets").clicked() {
                     let _ = app.run("panel.presets", json!({}));
                 }
                 for (id, icon, panel, tip) in [

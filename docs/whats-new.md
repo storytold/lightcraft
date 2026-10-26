@@ -2,6 +2,12 @@
 
 ## 2026-10-24
 
+### Shift+P picks and advances everywhere
+- `Shift+P` now flags a photo as a Pick and moves to the next one in Detail, Compare and Survey too, not only in the
+  grids, as in Lightroom Classic (issue #1707). `Shift+X`, `Shift+U`, `Shift+0–5` and `Shift+6–9` already did. The
+  Presets panel loses its `Shift+P` key: open it from Window ▸ Presets or the edit strip, or give it a key in
+  Help ▸ Keyboard Shortcuts. Photo ▸ Auto Advance makes the plain keys advance too.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
