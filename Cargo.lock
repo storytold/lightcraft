@@ -4112,6 +4112,7 @@ dependencies = [
 name = "lightcraft-fetch"
 version = "0.21.1"
 dependencies = [
+ "lightcraft-testkit",
  "log",
  "rustls",
  "rustls-rustcrypto",
