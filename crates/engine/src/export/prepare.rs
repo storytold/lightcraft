@@ -38,6 +38,9 @@ pub(super) fn original_embeds_xmp_gps(bytes: &[u8], label: &str) -> Result<bool,
             .into_iter()
             .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|value| !value.trim().is_empty())));
     }
+    if embedded.chunk_walk_incomplete {
+        return Err(format!("{label}: can't verify location metadata in this original file: embedded PNG/WebP chunk stream is incomplete"));
+    }
     Ok(found_gps)
 }
 
@@ -428,4 +431,155 @@ pub fn export_batch(
 ) -> Result<Vec<serde_json::Value>, String> {
     let items = prepare_batch(session, ids, o)?;
     run_batch(items, o, to, write, exists, true, &mut |_, _| true)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::export::{Destination, run_batch};
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta};
+    use lightcraft_raster::Rgba8;
+    use serde_json::json;
+
+    fn image() -> Rgba8 {
+        Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255])
+    }
+
+    fn png_with_truncated_chunk_after_xmp() -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let packet = lightcraft_meta::write_xmp(&Metadata::default(), None);
+        let mut itxt = b"XML:com.adobe.xmp\0\0\0\0\0".to_vec();
+        itxt.extend_from_slice(packet.as_bytes());
+        png.extend_from_slice(&(itxt.len() as u32).to_be_bytes());
+        png.extend_from_slice(b"iTXt");
+        png.extend_from_slice(&itxt);
+        png.extend_from_slice(&[0; 4]);
+        png.extend_from_slice(&16u32.to_be_bytes());
+        png.extend_from_slice(b"tEXtpartial");
+        png
+    }
+
+    fn webp_with_truncated_chunk_after_xmp() -> Vec<u8> {
+        let mut webp = b"RIFF\0\0\0\0WEBP".to_vec();
+        let packet = lightcraft_meta::write_xmp(&Metadata::default(), None);
+        webp.extend_from_slice(b"XMP ");
+        webp.extend_from_slice(&(packet.len() as u32).to_le_bytes());
+        webp.extend_from_slice(packet.as_bytes());
+        if !packet.len().is_multiple_of(2) {
+            webp.push(0);
+        }
+        webp.extend_from_slice(b"JUNK");
+        webp.extend_from_slice(&16u32.to_le_bytes());
+        webp.extend_from_slice(b"partial");
+        let declared_size = webp.len().saturating_sub(8).saturating_add(16 - b"partial".len());
+        webp[4..8].copy_from_slice(&(declared_size as u32).to_le_bytes());
+        webp
+    }
+
+    fn png_with_truncated_xmp_chunk() -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut data = b"XML:com.adobe.xmp\0\0\0\0\0".to_vec();
+        data.extend_from_slice(b"<x:xmpmeta>");
+        png.extend_from_slice(&(data.len().saturating_add(64) as u32).to_be_bytes());
+        png.extend_from_slice(b"iTXt");
+        png.extend_from_slice(&data);
+        png
+    }
+
+    fn png_with_truncated_chunk_after_iend() -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&0u32.to_be_bytes());
+        png.extend_from_slice(b"IEND");
+        png.extend_from_slice(&[0; 4]);
+        png.extend_from_slice(&16u32.to_be_bytes());
+        png.extend_from_slice(b"tEXtpartial");
+        png
+    }
+
+    fn webp_with_truncated_xmp_chunk() -> Vec<u8> {
+        let mut webp = b"RIFF\0\0\0\0WEBP".to_vec();
+        let data = b"<x:xmpmeta>";
+        let declared_len = data.len().saturating_add(64);
+        webp.extend_from_slice(b"XMP ");
+        webp.extend_from_slice(&(declared_len as u32).to_le_bytes());
+        webp.extend_from_slice(data);
+        let declared_size = 4usize.saturating_add(8).saturating_add(declared_len).saturating_add(declared_len & 1);
+        webp[4..8].copy_from_slice(&(declared_size as u32).to_le_bytes());
+        webp
+    }
+
+    fn prepared_original(bytes: Vec<u8>, file_name: &str, remove_location: bool) -> PreparedExport {
+        let bytes = std::sync::Arc::new(bytes);
+        let read: crate::merge::ByteReader = std::sync::Arc::new(move |_| Ok(bytes.as_ref().clone()));
+        PreparedExport {
+            photo: lightcraft_catalog::PhotoId(1),
+            file_name: file_name.into(),
+            source_dir: None,
+            work: Work::File {
+                path: file_name.into(),
+                read: Some(read),
+                packet: String::new(),
+                dng: None,
+                quality: 90,
+                lossy_edge: None,
+                remove_location,
+                label: file_name.into(),
+                size: (1, 1),
+            },
+            guard: std::sync::Arc::new(crate::originals::OriginalGuard::default()),
+            weight: 1,
+        }
+    }
+
+    #[test]
+    fn original_xmp_gps_guard_rejects_truncated_png_chunks() {
+        let bytes = png_with_truncated_chunk_after_xmp();
+        assert!(lightcraft_meta::embedded(&bytes).xmp.is_some());
+        assert!(original_embeds_xmp_gps(&bytes, "test.png").is_err());
+    }
+
+    #[test]
+    fn original_xmp_gps_guard_rejects_truncated_webp_chunks() {
+        let bytes = webp_with_truncated_chunk_after_xmp();
+        assert!(lightcraft_meta::embedded(&bytes).xmp.is_some());
+        assert!(original_embeds_xmp_gps(&bytes, "test.webp").is_err());
+    }
+
+    #[test]
+    fn original_xmp_gps_guard_rejects_xmp_chunks_truncated_before_extraction() {
+        for (name, bytes) in [("test.png", png_with_truncated_xmp_chunk()), ("test.webp", webp_with_truncated_xmp_chunk())] {
+            assert!(lightcraft_meta::embedded(&bytes).xmp.is_none(), "{name}: truncated packet should not be extracted");
+            assert!(original_embeds_xmp_gps(&bytes, name).is_err(), "{name}: incomplete extraction must fail closed");
+        }
+    }
+
+    #[test]
+    fn original_xmp_gps_guard_rejects_trailing_data_after_png_iend() {
+        let bytes = png_with_truncated_chunk_after_iend();
+        assert!(lightcraft_meta::embedded(&bytes).chunk_walk_incomplete);
+        assert!(original_embeds_xmp_gps(&bytes, "test.png").is_err());
+    }
+
+    #[test]
+    fn original_copy_refuses_incomplete_chunk_stream_without_writing() {
+        let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+        let copy_options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": false}));
+        let destination = Destination { dir: "unused-output".into(), exact: None };
+        for (name, bytes) in [("truncated.png", png_with_truncated_chunk_after_xmp()), ("truncated.webp", webp_with_truncated_chunk_after_xmp())] {
+            let item = prepared_original(bytes.clone(), name, true);
+            let mut writes = Vec::new();
+            let mut write = |path: &str, _bytes: &[u8]| { writes.push(path.to_owned()); Ok(()) };
+            let results = run_batch(vec![item], &options, &destination, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
+            assert!(results[0]["error"].as_str().is_some_and(|e| e.contains("chunk stream is incomplete")), "{name}: {results:?}");
+            assert!(writes.is_empty(), "{name}: incomplete Original must not write bytes or a sidecar");
+
+            let item = prepared_original(bytes, name, false);
+            let mut copied = Vec::new();
+            let mut write = |path: &str, bytes: &[u8]| { copied.push((path.to_owned(), bytes.to_vec())); Ok(()) };
+            let results = run_batch(vec![item], &copy_options, &destination, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
+            assert!(results[0]["error"].is_null(), "{name}: location removal is disabled: {results:?}");
+            assert_eq!(copied.len(), 2, "{name}: copy Original and sidecar");
+        }
+    }
 }
