@@ -305,5 +305,19 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Delete the saved location “{name}”?": "Excluir o local salvo “{name}”?",
+  "In the private location “{name}”: its map is hidden.": "No local privado “{name}”: o mapa está oculto.",
+  "within {d} of {lat}, {lon}": "a até {d} de {lat}, {lon}",
+  "All Tracks ({n})": "Todas as trilhas ({n})",
+  "Track {n}": "Trilha {n}",
+  "camera time, UTC{o}": "hora da câmera, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Definir deslocamento de fuso… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Geomarcar {n} fotos selecionadas",
+  "{m} of them fall within the track's time range": "{m} delas estão no intervalo de tempo da trilha",
+  "{n} more tracks": "mais {n} trilhas",
+  "Deleted {n} map tiles": "{n} blocos do mapa excluídos",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB em {n} blocos (limite de {cap} MB)",
+  "Map tiles from {id}": "Blocos do mapa de {id}",
+  "In use: {url} (up to zoom {zoom})": "Em uso: {url} (até o zoom {zoom})"
 }

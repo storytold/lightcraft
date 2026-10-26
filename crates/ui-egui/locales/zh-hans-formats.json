@@ -305,5 +305,19 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Delete the saved location “{name}”?": "删除已存储的位置“{name}”？",
+  "In the private location “{name}”: its map is hidden.": "位于私人位置“{name}”中：其地图已隐藏。",
+  "within {d} of {lat}, {lon}": "距 {lat}, {lon} {d} 以内",
+  "All Tracks ({n})": "全部轨迹 ({n})",
+  "Track {n}": "轨迹 {n}",
+  "camera time, UTC{o}": "相机时间，UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "设置时区偏移… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "自动为所选的 {n} 张照片添加位置",
+  "{m} of them fall within the track's time range": "其中 {m} 张在轨迹的时间范围内",
+  "{n} more tracks": "另有 {n} 条轨迹",
+  "Deleted {n} map tiles": "已删除 {n} 个地图图块",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB,{n} 个图块(上限 {cap} MB)",
+  "Map tiles from {id}": "地图图块来自 {id}",
+  "In use: {url} (up to zoom {zoom})": "使用中:{url}(最大缩放 {zoom})"
 }

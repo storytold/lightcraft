@@ -305,5 +305,19 @@
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "Delete the saved location “{name}”?": "Den gespeicherten Ort „{name}“ löschen?",
+  "In the private location “{name}”: its map is hidden.": "Im privaten Ort „{name}“: Die Karte ist ausgeblendet.",
+  "within {d} of {lat}, {lon}": "im Umkreis von {d} um {lat}, {lon}",
+  "All Tracks ({n})": "Alle Tracks ({n})",
+  "Track {n}": "Track {n}",
+  "camera time, UTC{o}": "Kamerazeit, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Zeitzonenversatz festlegen… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "{n} ausgewählte Fotos automatisch verorten",
+  "{m} of them fall within the track's time range": "{m} davon liegen im Zeitbereich des Tracks",
+  "{n} more tracks": "{n} weitere Tracks",
+  "Deleted {n} map tiles": "{n} Kartenkacheln gelöscht",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB in {n} Kacheln (Grenze {cap} MB)",
+  "Map tiles from {id}": "Kartenkacheln von {id}",
+  "In use: {url} (up to zoom {zoom})": "In Verwendung: {url} (bis Zoomstufe {zoom})"
 }

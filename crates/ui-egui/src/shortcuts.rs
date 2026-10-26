@@ -85,8 +85,33 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
 
 /// Engine commands that intentionally share a key and are disambiguated by context in [`handle`]:
 /// the X pair by the Crop panel, A by whether it is open (Visualize Spots everywhere, the aspect
-/// lock under the Crop panel).
-pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
+/// lock under the Crop panel); in the Map view H, `\`, O, ⌘K, `=` and `-` are the map's
+/// ([`MAP_ONLY`]); `=` / `-` size the grid thumbnails in the grids, ⌘K is Add Keywords elsewhere.
+pub const CONTEXTUAL: &[(&str, &str)] = &[
+    ("photo.reject", "crop.rotateAspect"),
+    ("view.visualizeSpots", "crop.lockAspect"),
+    ("panel.remove", "map.showPins"),
+    ("view.showOriginal", "map.filterBar"),
+    ("view.maskOverlay", "map.showLocations"),
+    ("view.thumbSizeUp", "map.zoomIn"),
+    ("view.thumbSizeDown", "map.zoomOut"),
+    ("panel.addKeywords", "map.lockMarkers"),
+];
+
+/// Commands whose keys work in the Map view only (Lightroom Classic's Map module keys, plus H to
+/// hide pins). There a map key wins over another command on the same key (H is Remove, `\` Show
+/// Original, O the mask overlay and ⌘K Add Keywords elsewhere); outside it a map key does nothing.
+pub const MAP_ONLY: &[&str] = &[
+    "map.showPins",
+    "map.lockMarkers",
+    "map.filterBar",
+    "map.showLocations",
+    "map.zoomIn",
+    "map.zoomOut",
+    "map.fit",
+    "map.location.new",
+    "map.settings",
+];
 
 /// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
 pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
@@ -387,6 +412,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let mut fire: Vec<String> = Vec::new();
+    // the key each command in `fire` came from (the Map view's keys win over others on theirs)
+    let mut fired_keys: Vec<(&'static str, (Modifiers, Key))> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
@@ -422,6 +449,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 fire.push(id.to_string());
+                fired_keys.push((b.id, (m, k)));
             }
         }
         for (sc, id, params) in ALIASES {
@@ -462,6 +490,20 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
         }
     });
+    // the Map view's keys: there they take their key from any other command; elsewhere they don't fire
+    let in_map = app.ui.view == crate::state::ViewMode::Map;
+    let map_keys: Vec<(Modifiers, Key)> = fired_keys.iter().filter(|(id, _)| MAP_ONLY.contains(id)).map(|(_, k)| *k).collect();
+    fire.retain(|f| {
+        if MAP_ONLY.contains(&f.as_str()) { in_map } else { !(in_map && fired_keys.iter().any(|(id, k)| *id == f.as_str() && map_keys.contains(k))) }
+    });
+    // `+` (keypad, Shift+=) sizes the grid thumbnails like `=`; in the Map view it zooms like `=`
+    if in_map {
+        for (id, _) in aliased.iter_mut() {
+            if *id == "view.thumbSizeUp" {
+                *id = "map.zoomIn";
+            }
+        }
+    }
     use crate::panels::compare;
     // rating/flag/label keys: in Compare/Survey they act on the active photo only; Shift+key or
     // Auto Advance then moves on (next candidate in Compare, next photo elsewhere)
