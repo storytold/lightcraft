@@ -6,7 +6,8 @@
 //! - [`decode`] returns the frame as interleaved samples in raster order, the same [`Frame`] shape as
 //!   [`crate::ljpeg::decode`], so callers re-tile it the same way.
 //! - [`is_dct`] tells which frame type a stream carries, to pick between this and the lossless decoder.
-//! - The inverse DCT is a separable float transform; the result is rounded and clamped to the sample range.
+//! - Dequantised coefficients and the separable inverse DCT are kept in `f64`, so every `i32 x u16` coefficient
+//!   product is exact; the result is rounded and clamped to the sample range.
 
 use crate::RawError;
 use crate::ljpeg::{BitReader, Frame, Huffman};
@@ -94,25 +95,25 @@ struct Comp {
 }
 
 /// `t[x][u]` = C(u)/2 * cos((2x+1)u*pi/16): the 1-D inverse DCT basis.
-fn basis() -> [[f32; 8]; 8] {
-    let mut t = [[0f32; 8]; 8];
+fn basis() -> [[f64; 8]; 8] {
+    let mut t = [[0f64; 8]; 8];
     for (x, row) in t.iter_mut().enumerate() {
         for (u, v) in row.iter_mut().enumerate() {
             let c = if u == 0 { std::f64::consts::FRAC_1_SQRT_2 } else { 1.0 };
-            *v = (c / 2.0 * ((2 * x + 1) as f64 * u as f64 * std::f64::consts::PI / 16.0).cos()) as f32;
+            *v = c / 2.0 * ((2 * x + 1) as f64 * u as f64 * std::f64::consts::PI / 16.0).cos();
         }
     }
     t
 }
 
-fn idct(coef: &[f32; 64], t: &[[f32; 8]; 8]) -> [f32; 64] {
-    let mut tmp = [0f32; 64];
+fn idct(coef: &[f64; 64], t: &[[f64; 8]; 8]) -> [f64; 64] {
+    let mut tmp = [0f64; 64];
     for v in 0..8 {
         for x in 0..8 {
             tmp[v * 8 + x] = (0..8).map(|u| t[x][u] * coef[v * 8 + u]).sum();
         }
     }
-    let mut out = [0f32; 64];
+    let mut out = [0f64; 64];
     for x in 0..8 {
         for y in 0..8 {
             out[y * 8 + x] = (0..8).map(|v| t[y][v] * tmp[v * 8 + x]).sum();
@@ -257,7 +258,7 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
     }
     let (bw, bh) = (width.div_ceil(8), height.div_ceil(8));
     let maxv = (1i32 << precision) - 1;
-    let shift = (1i32 << (precision - 1)) as f32;
+    let shift = f64::from(1i32 << (precision - 1));
     let t = basis();
     let mut out = vec![0u16; samples];
     let mut br = BitReader::new(&d[data_start..]);
@@ -277,7 +278,7 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
             let dct = dc_tab[c.dc].as_ref().ok_or_else(|| err("missing DC table"))?;
             let act = ac_tab[c.ac].as_ref().ok_or_else(|| err("missing AC table"))?;
             let q = &quant[c.q];
-            let mut coef = [0f32; 64];
+            let mut coef = [0f64; 64];
             let s = dct.decode(&mut br)?;
             if s > 15 {
                 return Err(err("bad DC category"));
@@ -299,7 +300,7 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                     return Err(err("AC run past block end"));
                 }
                 let n = ZIGZAG[z];
-                coef[n] = (extend(&mut br, s) * q[n] as i32) as f32;
+                coef[n] = f64::from(extend(&mut br, s)) * f64::from(q[n]);
                 z += 1;
             }
             let px = idct(&coef, &t);
@@ -321,10 +322,10 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
     Ok(Frame { width, height, components: nc, precision, predictor: 0, point_transform: 0, data: out })
 }
 
-/// Accumulate hostile DC differences without integer overflow, then dequantise in floating point.
-fn dc_coefficient(predictor: &mut i32, difference: i32, quantiser: u16) -> Result<f32, RawError> {
+/// Accumulate hostile DC differences without integer overflow, then dequantise exactly in `f64`.
+fn dc_coefficient(predictor: &mut i32, difference: i32, quantiser: u16) -> Result<f64, RawError> {
     *predictor = predictor.checked_add(difference).ok_or_else(|| err("DC predictor overflow"))?;
-    Ok(*predictor as f32 * f32::from(quantiser))
+    Ok(f64::from(*predictor) * f64::from(quantiser))
 }
 
 #[cfg(test)]
@@ -515,10 +516,18 @@ mod tests {
         let mut predictor = 32767;
         let value = dc_coefficient(&mut predictor, 32767, u16::MAX).unwrap();
         assert_eq!(predictor, 65534);
-        assert_eq!(value, 65534.0 * 65535.0);
+        assert_eq!(value, 4_294_770_690.0);
         for (mut predictor, difference) in [(i32::MAX, 1), (i32::MIN, -1)] {
             assert!(matches!(dc_coefficient(&mut predictor, difference, u16::MAX), Err(RawError::Corrupt(_))));
         }
+    }
+
+    #[test]
+    fn large_coefficients_reconstruct_without_rounding() {
+        // 8 * (2^24 + 1) is past f32's exact-integer range; a DC-only block must come back as exactly 2^24 + 1.
+        let mut coef = [0f64; 64];
+        coef[0] = dc_coefficient(&mut 16_777_217, 0, 8).unwrap();
+        assert!(idct(&coef, &basis()).iter().all(|v| (v - 16_777_217.0).abs() < 1e-6));
     }
 
     #[test]
