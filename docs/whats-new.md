@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### Invalid XMP GPS subdivisions are ignored
+- XMP coordinates with minutes or seconds of 60 or more no longer turn into a plausible but incorrect location.
+  The original GPS properties remain available in All Metadata, and invalid XMP no longer overrides a valid EXIF
+  location. Original export with Remove Location Info still refuses source files that contain those raw GPS fields.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

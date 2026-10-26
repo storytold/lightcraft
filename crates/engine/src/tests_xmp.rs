@@ -654,12 +654,84 @@ fn jpeg_xmp_packet(rating: i8, title: &str) -> String {
 }
 
 fn write_jpeg_xmp(path: &Path, packet: &str) -> Vec<u8> {
+    write_jpeg_xmp_with_exif(path, packet, None)
+}
+
+fn write_jpeg_xmp_with_exif(path: &Path, packet: &str, exif: Option<&lightcraft_meta::Metadata>) -> Vec<u8> {
     let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
-    let meta = lightcraft_codecs::EncodeMeta { xmp: Some(packet), ..Default::default() };
+    let exif = exif.map(lightcraft_meta::write_exif);
+    let meta = lightcraft_codecs::EncodeMeta { exif: exif.as_deref(), xmp: Some(packet), ..Default::default() };
     let bytes = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
     assert_eq!(lightcraft_meta::embedded(&bytes).xmp.as_deref(), Some(packet), "the procedural JPEG carries the requested packet");
     std::fs::write(path, &bytes).unwrap();
     bytes
+}
+
+#[test]
+fn xmp_gps_component_bounds_do_not_invent_or_override_imported_gps() {
+    let src = temp_dir("gps-component-bounds");
+    let xmp = |lat: &str, lon: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="{lat}" exif:GPSLongitude="{lon}"/>
+            </rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let invalid_only_path = src.join("invalid-only.jpg");
+    let invalid_only_packet = xmp("45,60N", "7,15E");
+    let invalid_only_bytes = write_jpeg_xmp_with_exif(&invalid_only_path, &invalid_only_packet, None);
+
+    let fallback_path = src.join("exif-fallback.jpg");
+    let fallback_packet = xmp("45,0,60N", "7,15E");
+    let fallback_gps = lightcraft_meta::Gps { latitude: 48.85, longitude: 2.35, altitude: None };
+    let exif = lightcraft_meta::Metadata { gps: Some(fallback_gps), ..Default::default() };
+    let fallback_bytes = write_jpeg_xmp_with_exif(&fallback_path, &fallback_packet, Some(&exif));
+
+    let valid_xmp_path = src.join("valid-xmp.jpg");
+    let valid_xmp_packet = xmp("45,30N", "7,15E");
+    let valid_xmp_bytes = write_jpeg_xmp_with_exif(&valid_xmp_path, &valid_xmp_packet, Some(&exif));
+
+    let mut session = Session::new().with_fs();
+    let imported = session
+        .execute(
+            "library.import",
+            &json!({"paths": [invalid_only_path.to_string_lossy(), fallback_path.to_string_lossy(), valid_xmp_path.to_string_lossy()]}),
+        )
+        .unwrap();
+    assert_eq!(imported["imported"].as_array().unwrap().len(), 3, "{imported}");
+    let id_for = |name: &str| session.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let invalid_id = id_for("invalid-only.jpg");
+    let fallback_id = id_for("exif-fallback.jpg");
+    let valid_xmp_id = id_for("valid-xmp.jpg");
+    assert_eq!(session.catalog.photo(invalid_id).unwrap().meta.gps, None, "invalid embedded XMP cannot invent a location");
+    assert_eq!(
+        session.catalog.photo(fallback_id).unwrap().meta.gps,
+        Some((fallback_gps.latitude, fallback_gps.longitude)),
+        "valid EXIF remains the fallback"
+    );
+    assert_eq!(session.catalog.photo(valid_xmp_id).unwrap().meta.gps, Some((45.5, 7.25)), "valid XMP continues to override EXIF");
+
+    for (id, raw_lat, raw_lon) in [(invalid_id, "45,60N", "7,15E"), (fallback_id, "45,0,60N", "7,15E")] {
+        let all = session.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+        let properties = all["xmp"].as_array().unwrap();
+        assert!(properties.iter().any(|p| p["name"] == "exif:GPSLatitude" && p["value"] == raw_lat), "raw latitude remains visible: {all}");
+        assert!(properties.iter().any(|p| p["name"] == "exif:GPSLongitude" && p["value"] == raw_lon), "raw longitude remains visible: {all}");
+
+        session.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        session.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+        let path = if id == invalid_id { src.join("invalid-only.xmp") } else { src.join("exif-fallback.xmp") };
+        let saved = lightcraft_meta::parse_xmp(&std::fs::read_to_string(path).unwrap()).unwrap().metadata;
+        if id == invalid_id {
+            assert_eq!(saved.gps, None, "invalid raw fields are not canonicalized into the sidecar");
+        } else {
+            assert_eq!(saved.gps, Some(fallback_gps), "the valid EXIF fallback is saved");
+        }
+    }
+
+    assert_eq!(std::fs::read(&invalid_only_path).unwrap(), invalid_only_bytes, "import and metadata save leave original bytes unchanged");
+    assert_eq!(std::fs::read(&fallback_path).unwrap(), fallback_bytes, "import and metadata save leave original bytes unchanged");
+    assert_eq!(std::fs::read(&valid_xmp_path).unwrap(), valid_xmp_bytes, "import leaves the valid XMP source unchanged");
+    let _ = std::fs::remove_dir_all(&src);
 }
 
 #[test]

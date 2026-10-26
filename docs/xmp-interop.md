@@ -28,6 +28,12 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Location | `lc:location` |
 | Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop and the rendering process; settings without `process` are V1, see [process-versions.md](process-versions.md)) |
 
+When reading XMP GPS, each optional minute or second component must be in `[0, 60)` before the
+coordinate is combined, and the final latitude / longitude must remain within its axis range.
+Out-of-range values stay visible in All Metadata as raw XMP properties but do not become a catalog
+location or override a valid EXIF location. Original export with Remove Location Info also checks
+recognized nonblank GPS latitude / longitude properties in the source XMP before copying its bytes.
+
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
 
 Reading merges into the catalog with the **sidecar winning** for every field it states; fields it doesn't state are

@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (gap 30: the Info panel shows the selected photos' shared metadata and marks mixed fields; gap 28: ⌘⌥⇧C / ⌘⌥⇧V copy and paste metadata; gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** patch (XMP GPS subdivision validation; no ranked gap or readiness accounting changed)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -84,6 +84,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | patch | XMP GPS minute / second components outside `[0, 60)` no longer project into metadata; malformed values remain raw, valid EXIF fallback is preserved, and Original export Remove Location Info checks source XMP; no ranked gap or readiness change |
 | 2026-10-24 | minor | Gap 28: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata; no key leaves the entry; hours unchanged |
 | 2026-10-24 | minor | Gap 30 shrinks: the Info panel's Show Metadata For (Target Photo / Selected Photos, `view.infoSelectedPhotos`) shows the selected photos' shared values and marks fields that differ as Mixed; the All Metadata dialog remains; 1–3 h (was 4–8) |
 | 2026-10-23 | minor | Gap 13: before a Lightroom catalog import the app asks whether it merges into the open library or goes into a new one (opt-out in Settings, #2672); hours unchanged |

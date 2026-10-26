@@ -72,6 +72,8 @@ pub struct XmpData {
     /// item order, language alternatives put `x-default` first. Foreign namespaces that reuse a recognized
     /// prefix use `Q{hex-encoded namespace URI}local` instead, so they cannot impersonate known properties.
     pub properties: BTreeMap<String, Vec<String>>,
+    /// True when the flattened property map omitted entries after reaching its cumulative key-size limit.
+    pub properties_truncated: bool,
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
@@ -337,14 +339,17 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
-            props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
+        if !is_rdf_meta_attr(k) {
+            let key = format!("{prefix}{k}");
+            if take_property_key(&key, budget, truncated) {
+                props.entry(key).or_default().push(v.clone());
+            }
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props, budget);
+        collect_property(c, prefix, props, budget, truncated);
     }
 }
 
@@ -359,7 +364,13 @@ fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
     true
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn take_property_key(key: &str, budget: &mut usize, truncated: &mut bool) -> bool {
+    let keep = take_key_bytes(key, budget);
+    *truncated |= !keep;
+    keep
+}
+
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -373,7 +384,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        if take_key_bytes(&key, budget) {
+        if take_property_key(&key, budget, truncated) {
             props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
         }
         return;
@@ -381,26 +392,26 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
+            collect_property(c, &struct_prefix, props, budget, truncated);
         }
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props, budget);
+        collect_description(d, &struct_prefix, props, budget, truncated);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
             let full = format!("{struct_prefix}{k}");
-            if take_key_bytes(&full, budget) {
+            if take_property_key(&full, budget, truncated) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    if take_key_bytes(&key, budget) {
+    if take_property_key(&key, budget, truncated) {
         props.entry(key).or_default().push(v);
     }
 }
@@ -423,8 +434,8 @@ fn parse_gps_coord(s: &str) -> Option<f64> {
     let parts: Vec<f64> = body.split(',').map(|p| p.trim().parse::<f64>().ok()).collect::<Option<_>>()?;
     let v = match parts.as_slice() {
         [d] => *d,
-        [d, m] => d + m / 60.0,
-        [d, m, sec] => d + m / 60.0 + sec / 3600.0,
+        [d, m] if (0.0..60.0).contains(m) => d + m / 60.0,
+        [d, m, sec] if (0.0..60.0).contains(m) && (0.0..60.0).contains(sec) => d + m / 60.0 + sec / 3600.0,
         _ => return None,
     };
     let v = match dir.to_ascii_uppercase() {
@@ -520,10 +531,11 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
+    let mut properties_truncated = false;
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
     for d in descs {
-        collect_description(d, "", &mut props, &mut key_budget);
+        collect_description(d, "", &mut props, &mut key_budget, &mut properties_truncated);
         if let XmpValue::Struct(m) = node_struct(d) {
             values.extend(m);
         }
@@ -604,7 +616,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok(XmpData { metadata: m, lc_settings, properties: props, properties_truncated, values })
 }
 
 fn frac(v: f64) -> String {
@@ -977,6 +989,49 @@ mod tests {
         assert_eq!(gps("90,0S", "180,0W"), Some(Gps { latitude: -90.0, longitude: -180.0, altitude: None }));
     }
 
+    #[test]
+    fn xmp_gps_component_bounds() {
+        let parse = |lat: &str, lon: &str| {
+            let x = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:e="http://ns.adobe.com/exif/1.0/" e:GPSLatitude="{lat}" e:GPSLongitude="{lon}"/>"#
+            );
+            parse_xmp(&x).unwrap()
+        };
+
+        for (lat, lon) in [
+            ("45,60N", "7,15E"),
+            ("45,99N", "7,15E"),
+            ("45,0,60N", "7,15E"),
+            ("45,0,99N", "7,15E"),
+            ("45,15N", "7,60E"),
+            ("45,15N", "7,99E"),
+            ("45,15N", "7,0,60E"),
+            ("45,15N", "7,0,99E"),
+        ] {
+            let xmp = parse(lat, lon);
+            assert_eq!(xmp.metadata.gps, None, "{lat}, {lon}");
+            assert_eq!(xmp.properties.get("exif:GPSLatitude").and_then(|v| v.first()).map(String::as_str), Some(lat));
+            assert_eq!(xmp.properties.get("exif:GPSLongitude").and_then(|v| v.first()).map(String::as_str), Some(lon));
+        }
+
+        for (lat, lon, expected) in [
+            ("45,59.5N", "7,59.5E", (45.0 + 59.5 / 60.0, 7.0 + 59.5 / 60.0)),
+            ("45,59,59S", "7,59,59W", (-(45.0 + 59.0 / 60.0 + 59.0 / 3600.0), -(7.0 + 59.0 / 60.0 + 59.0 / 3600.0))),
+            ("0,0N", "0,0E", (0.0, 0.0)),
+            ("90,0N", "180,0W", (90.0, -180.0)),
+            (" 45,30n ", " 7,15e ", (45.5, 7.25)),
+        ] {
+            let xmp = parse(lat, lon);
+            let gps = xmp.metadata.gps.expect("valid XMP GPS components");
+            assert!((gps.latitude - expected.0).abs() < 1e-9, "{lat}: {}", gps.latitude);
+            assert!((gps.longitude - expected.1).abs() < 1e-9, "{lon}: {}", gps.longitude);
+        }
+
+        assert_eq!(parse("95,0N", "7,0E").metadata.gps, None, "combined latitude range remains checked");
+        assert_eq!(parse("45,0N", "200,0E").metadata.gps, None, "combined longitude range remains checked");
+    }
+
     /// MWG Region Guidelines v2.0, element form (`rdf:parseType="Resource"`, self-closing `Area`) — how
     /// Lightroom typically writes it. One named face, one untyped/unnamed region (still usable), one
     /// region with a description. `AppliedToDimensions` is present but irrelevant: normalized areas
@@ -1221,6 +1276,7 @@ mod tests {
         let d = parse_xmp(&doc).unwrap();
         let total: usize = d.properties.keys().map(String::len).sum();
         assert!(total <= MAX_KEY_BYTES, "flattened-key text {total} is over the {MAX_KEY_BYTES} budget");
+        assert!(d.properties_truncated, "omitted flattened keys are reported to callers");
         assert!(d.properties.len() < 3000, "keys stop being added once the budget is spent");
         assert!(!d.properties.is_empty(), "properties parsed before the budget are kept");
     }

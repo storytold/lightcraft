@@ -698,6 +698,67 @@ fn remove_location_refuses_a_psd_that_embeds_gps() {
 }
 
 #[test]
+fn remove_location_refuses_original_with_unprojected_xmp_gps_without_writing() {
+    use crate::export::{Destination, prepare_batch, run_batch};
+
+    let dir = temp_dir("export-noloc-invalid-xmp-gps");
+    let image = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    let mut session = Session::new().with_fs();
+    let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+    let cases = [
+        ("latitude-minute", "45,60N", "7,15E"),
+        ("latitude-second", "45,0,60N", "7,15E"),
+        ("longitude-minute", "45,15N", "7,60E"),
+        ("longitude-second", "45,15N", "7,0,60E"),
+    ];
+    for (name, latitude, longitude) in cases {
+        let source = dir.join(format!("{name}.jpg"));
+        let packet = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="{latitude}" exif:GPSLongitude="{longitude}"/>
+            </rdf:RDF></x:xmpmeta>"#
+        );
+        let meta = lightcraft_codecs::EncodeMeta { xmp: Some(&packet), ..Default::default() };
+        let original = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&image), 90, Default::default(), &meta).unwrap();
+        assert_eq!(lightcraft_meta::embedded(&original).xmp.as_deref(), Some(packet.as_str()));
+        std::fs::write(&source, &original).unwrap();
+
+        session.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+        let id = session.catalog.photos().find(|p| p.file_name == format!("{name}.jpg")).unwrap().id;
+        assert_eq!(session.catalog.photo(id).unwrap().meta.gps, None, "{name} is not projected");
+        // The source remains authoritative even if catalog metadata has already been cleared.
+        session.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+        assert_eq!(session.catalog.photo(id).unwrap().meta.gps, None);
+
+        let items = prepare_batch(&mut session, &[id], &options).unwrap();
+        let mut writes = Vec::new();
+        let mut write = |path: &str, _bytes: &[u8]| {
+            writes.push(path.to_string());
+            Ok(())
+        };
+        let exists = |_path: &str| false;
+        let mut progress = |_done: usize, _name: &str| true;
+        let output = dir.join("out").join(name);
+        let results = run_batch(
+            items,
+            &options,
+            &Destination { dir: output.to_string_lossy().into_owned(), exact: None },
+            &mut write,
+            &exists,
+            false,
+            &mut progress,
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert!(results[0]["error"].as_str().is_some_and(|e| e.contains("can't remove the location")), "{results:?}");
+        assert!(writes.is_empty(), "neither the original nor its sidecar may be written: {writes:?}");
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(!output.exists());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn remove_location_refuses_a_psd_with_unreadable_xmp() {
     let dir = temp_dir("export-noloc-psd-xmp");
     let path = dir.join("Unreadable.psd");
