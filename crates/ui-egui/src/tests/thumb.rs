@@ -230,6 +230,11 @@ fn the_preview_pill_keeps_its_word_on_a_short_photo_with_no_marks() {
         preview_checked: "0.5.0".into(),
     };
     h.app.session.catalog.apply(op).unwrap();
+    // Let every render already under way finish first. The photo's thumbnail was requested on the
+    // job pool before the gate below, and a pool job keeps its request: while it is pending the
+    // grid asks for nothing new, so it lands whenever the worker is done and draws the picture
+    // (on a loaded runner after any fixed number of frames).
+    assert!(h.settle(SETTLE), "the renders started before the gate finish");
     // no thumbnail: the photo is its placeholder, 16:9. A thumbnail the demo already rendered
     // would be drawn at the picture's own shape instead (a portrait one leaves the pill no room).
     h.app.renderer.set_offload(Box::new(RenderGate::new(Rc::new(Cell::new(false)))));
@@ -237,15 +242,8 @@ fn the_preview_pill_keeps_its_word_on_a_short_photo_with_no_marks() {
     h.app.renderer.textures.remove(&Slot::ThumbQuick(id));
     h.app.ui.view = ViewMode::SquareGrid;
     h.app.ui.thumb_size = 90.0;
-    for round in 0..2 {
-        for _ in 0..10 {
-            h.step();
-        }
-        // (a render already under way before the gate lands in the first round: drop it too)
-        if round == 0 {
-            h.app.renderer.textures.remove(&Slot::Thumb(id));
-            h.app.renderer.textures.remove(&Slot::ThumbQuick(id));
-        }
+    for _ in 0..10 {
+        h.step();
     }
     assert!(h.app.renderer.thumb(id).is_none(), "the photo is still its placeholder");
     let pill = widget(&h, &format!("badge:previewOnly:{}", id.0)).expect("the pill is drawn");
