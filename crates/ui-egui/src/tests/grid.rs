@@ -167,6 +167,24 @@ fn develop_edits_keep_the_grid_view() {
     }
 }
 
+/// The sidebar's Missing Photos count is kept through develop edits (which files the library expects is no develop
+/// state), and what it was counted at moves on with them, as for the other caches: the change record it asks next
+/// stays short.
+#[test]
+fn develop_edits_move_the_missing_count_on() {
+    let mut h = grid(ViewMode::PhotoGrid);
+    h.app.ui.left_panel = true;
+    h.settle(SETTLE);
+    let id = h.app.session.visible()[10];
+    select(&mut h, id);
+    for v in [0.5, 1.0, 1.5] {
+        let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": v}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(crate::panels::left::missing_counted_at(&h.view.ctx), Some(h.app.session.catalog.revision), "after exposure {v}");
+    }
+}
+
 /// Selected photos whose thumbnails have not loaded (or can't) are still marked selected in the
 /// justified grid (issue #298), in a light theme too (a white ring vanished on the light grid):
 /// the ring of the active photo is heavier than the others' and both are the theme's colours, not
