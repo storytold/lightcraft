@@ -314,6 +314,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     // the album(s) shown are what the grid shows: albums in the filter would be ignored
                     if matches!(s.source, LibrarySource::Album(_)) {
                         f.albums.clear();
+                        f.album = None;
                     }
                     s.filter = f;
                 }

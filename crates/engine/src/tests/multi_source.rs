@@ -476,6 +476,22 @@ fn albums_in_a_filter_put_aside_do_not_come_back_beside_an_album_source() {
 }
 
 #[test]
+fn a_single_album_in_a_filter_put_aside_does_not_come_back_beside_an_album_source() {
+    let mut s = Session::new();
+    let (ids, a, b) = two_albums(&mut s);
+    // Given the single `album` of the filter, put aside by Enable Filters, and an album then shown as the source
+    s.execute("library.filter", &json!({"album": b})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": a})).unwrap();
+    // When the filter is brought back
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    // Then it stays out, as it does for a filter set while an album is shown: no chip that limits nothing
+    assert_eq!(s.filter.album, None);
+    assert_eq!(shown(&mut s), vec![ids[0], ids[1]]);
+    assert!(filter_chips(&s.filter, &s.catalog).is_empty());
+}
+
+#[test]
 fn a_view_of_several_albums_with_a_smart_one_says_why_it_cannot_be_saved() {
     let mut s = Session::new();
     let (_, a, b) = two_albums(&mut s);
