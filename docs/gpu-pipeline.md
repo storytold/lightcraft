@@ -67,6 +67,9 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
   otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
   without a GPU (below); the app never sets it.
+- `LIGHTCRAFT_GPU_INIT_TIMEOUT=<seconds>` (whole seconds, 1–3600; default 30): how long creating a
+  compute device (rendering, AI Denoise, faces) and compiling its kernels may take. See *Device
+  creation time limit* below.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -90,6 +93,20 @@ leaves them apart. The transposed convolution's merged store ran right on that c
 up (`gpu::warm_up` from the first frame's settings), and never while GPU rendering is off: with
 Settings ▸ Performance ▸ *Use the GPU for rendering* unchecked (applied before the window opens),
 `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off`, no GPU driver is loaded for rendering at all.
+
+**Device creation time limit (issue #3068).** Creating the wgpu instance, adapter and device calls
+into the driver, which on Linux may first talk to the display server; with one that accepts the
+connection and never answers (a crash-looping WSLg compositor, a stale `WAYLAND_DISPLAY` socket) those
+calls never returned, and every render waiting for the device, and every test that creates one, hung
+for good. wgpu's native calls are synchronous, so each compute device (rendering, denoise, faces) is
+now created, kernels included, on a thread of its own (`lc-gpu-device`, `crates/gpu/src/init.rs`), and
+the caller waits at most `LIGHTCRAFT_GPU_INIT_TIMEOUT` seconds (default 30: a first run that compiles
+every kernel with FXC takes seconds). Past it that device is unavailable for the process, with the
+reason `GPU device creation did not finish in 30 s (LIGHTCRAFT_GPU_INIT_TIMEOUT): …` reported like any
+other creation failure (`perf.gpuReason`, the no-GPU notice, the log), and the blocked thread is left
+behind. While it is, creating another kind of device fails at once with the same reason rather than
+leave a second thread behind; if the driver ever answers, its late device is leaked, not dropped, and
+later creations are tried again. The desktop window's own device is not covered (#410).
 
 **Quitting.** The devices are never dropped, and renders run on worker threads: a render still inside
 the driver while the process exits crashes there (a SIGSEGV in the NVIDIA Vulkan driver on Linux,
