@@ -184,9 +184,9 @@ fn minutes(d: Duration) -> String {
     format!("{whole}m {:.1}s", secs - whole * 60.0)
 }
 
-/// The names of the live registered tests (for the tests).
-#[cfg(test)]
-fn running() -> Vec<String> {
+/// The names of the watched tests still running, as the watchdog would list them (a test can
+/// check that it is watched).
+pub fn watched() -> Vec<String> {
     let watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
     watched.iter().filter(|e| e.thread.strong_count() > 0).map(|e| e.test.clone()).collect()
 }
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn a_watch_registers_the_test_until_it_ends() {
         let me = std::thread::current().name().unwrap_or("<unnamed thread>").to_owned();
-        let count = || running().iter().filter(|t| **t == me).count();
+        let count = || watched().iter().filter(|t| **t == me).count();
         let before = count();
         let w = watch();
         assert_eq!(count(), before + 1);
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn a_test_that_panics_or_leaks_its_watch_is_unregistered() {
-        let named = |name: &str| running().iter().filter(|t| *t == name).count();
+        let named = |name: &str| watched().iter().filter(|t| *t == name).count();
         let panicked = std::thread::Builder::new()
             .name("testkit::panicking_test".into())
             .spawn(|| {
