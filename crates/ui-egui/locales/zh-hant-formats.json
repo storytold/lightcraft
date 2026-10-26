@@ -305,5 +305,15 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Delete the saved location “{name}”?": "刪除已儲存的位置「{name}」？",
+  "In the private location “{name}”: its map is hidden.": "位於私人位置「{name}」中：其地圖已隱藏。",
+  "within {d} of {lat}, {lon}": "距 {lat}, {lon} {d} 以內",
+  "All Tracks ({n})": "全部軌跡 ({n})",
+  "Track {n}": "軌跡 {n}",
+  "camera time, UTC{o}": "相機時間，UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "設定時區偏移… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "自動為所選的 {n} 張照片加上位置",
+  "{m} of them fall within the track's time range": "其中 {m} 張在軌跡的時間範圍內",
+  "{n} more tracks": "另有 {n} 條軌跡"
 }

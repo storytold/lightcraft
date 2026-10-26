@@ -305,5 +305,15 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Delete the saved location “{name}”?": "წაიშალოს შენახული მდებარეობა „{name}“?",
+  "In the private location “{name}”: its map is hidden.": "პირად მდებარეობაში „{name}“: მისი რუკა დამალულია.",
+  "within {d} of {lat}, {lon}": "{lat}, {lon}-დან {d}-ის ფარგლებში",
+  "All Tracks ({n})": "ყველა მარშრუტი ({n})",
+  "Track {n}": "მარშრუტი {n}",
+  "camera time, UTC{o}": "კამერის დრო, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "სასაათო სარტყლის წანაცვლების დაყენება… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "მდებარეობის მინიჭება მონიშნული ფოტოებისთვის: {n}",
+  "{m} of them fall within the track's time range": "მათგან {m} მარშრუტის დროის შუალედში ხვდება",
+  "{n} more tracks": "კიდევ {n} მარშრუტი"
 }

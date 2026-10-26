@@ -305,5 +305,15 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Delete the saved location “{name}”?": "Supprimer le lieu enregistré « {name} » ?",
+  "In the private location “{name}”: its map is hidden.": "Dans le lieu privé « {name} » : sa carte est masquée.",
+  "within {d} of {lat}, {lon}": "à moins de {d} de {lat}, {lon}",
+  "All Tracks ({n})": "Tous les tracés ({n})",
+  "Track {n}": "Tracé {n}",
+  "camera time, UTC{o}": "heure de l'appareil, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Définir le décalage horaire… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Géolocaliser les {n} photos sélectionnées",
+  "{m} of them fall within the track's time range": "{m} d'entre elles tombent dans la plage horaire du tracé",
+  "{n} more tracks": "{n} autres tracés"
 }

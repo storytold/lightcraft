@@ -305,5 +305,15 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Delete the saved location “{name}”?": "Видалити збережене місце «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "У приватному місці «{name}»: мапу приховано.",
+  "within {d} of {lat}, {lon}": "у межах {d} від {lat}, {lon}",
+  "All Tracks ({n})": "Усі треки ({n})",
+  "Track {n}": "Трек {n}",
+  "camera time, UTC{o}": "час камери, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Задати зміщення часового поясу… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Прив'язати вибрані фото ({n})",
+  "{m} of them fall within the track's time range": "{m} з них потрапляють у час треку",
+  "{n} more tracks": "ще треків: {n}"
 }

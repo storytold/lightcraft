@@ -2930,8 +2930,14 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let cell_w = 120.0;
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
-        let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, why, t.font(12.5), t.text_dim);
+        let why = if app.session.narrow.is_some() && app.ui.view == crate::state::ViewMode::Map {
+            "No photos match the location filter"
+        } else if app.session.filter != Default::default() {
+            "No photos match the filters (View → Clear Filters)"
+        } else {
+            "No photos"
+        };
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, crate::i18n::tr(why), t.font(12.5), t.text_dim);
         return;
     }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(0.0, 4.0))));
@@ -2958,7 +2964,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
                 continue;
             }
-            let resp = ui.interact(cr, egui::Id::unique(("film", id.0)), Sense::click());
+            // a drag takes the selection along (to an album, a keyword, or the Map view to geotag it)
+            let resp = ui.interact(cr, egui::Id::unique(("film", id.0)), Sense::click_and_drag());
             let failed = app.renderer.thumb(*id).is_none() && app.renderer.failure(Slot::Thumb(*id)).is_some();
             crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
             register(ui, format!("film:{}", id.0), cr);
@@ -3051,6 +3058,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 if compare && let Err(e) = r {
                     app.toast(ui.ctx(), e);
                 }
+            }
+            if resp.drag_started() {
+                super::grid::start_photo_drag(app, *id);
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
             crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
