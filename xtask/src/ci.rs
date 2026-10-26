@@ -117,6 +117,10 @@ const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
 /// run from the test binary the test step built (found with `--no-run` and the step's own
 /// arguments, so nothing rebuilds). A report that can't run is a note, never a failed step.
 fn translation_gaps(limit: Option<std::time::Duration>) {
+    if deadline::any_timed_out() {
+        eprintln!("\nnote: the translation gaps report is skipped: a test binary timed out in this run");
+        return;
+    }
     eprintln!("\n=== ci: translation gaps ===");
     let mut c = cargo();
     c.args(["test", "--no-run", "--message-format=json"]).args(with_test_targets(&["--workspace"]));
@@ -195,10 +199,14 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     // What this machine offers the GPU tests, once, after the workspace tests (whose build the
     // probe reuses). Never fails the run: the report says what went wrong.
     let probe = || {
+        if gpu.borrow().is_null() && deadline::any_timed_out() {
+            eprintln!("\nnote: the GPU probe is skipped: a test binary timed out, and what hung it would hang the probe too");
+            *gpu.borrow_mut() = serde_json::json!({"error": "not probed: a test binary timed out in this run"});
+        }
         if gpu.borrow().is_null() {
             eprintln!("\n=== ci: GPU probe ===");
             let t = std::time::Instant::now();
-            let mut found = ci_report::gpu(probe_gpu, hardware);
+            let mut found = ci_report::gpu(|backend| probe_gpu(backend, limit), hardware);
             found["seconds"] = serde_json::json!(t.elapsed().as_secs_f64());
             *gpu.borrow_mut() = found;
         }
@@ -378,22 +386,27 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
 /// backend's adapters. `--workspace`, like the test step, so its build is reused (every crate's `it`
 /// binary starts; only lightcraft-gpu's has the test). Its stdout, or why
 /// it failed (a driver that crashes while it is enumerated, issue #136, ends up here, not in xtask).
-fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
+/// Run the GPU probe test (on `backend`, or the pipeline's choice) and return its output. Each
+/// test binary it starts may run for [`deadline::probe_limit`] of the test binaries' `limit`: the
+/// probe initialises the GPU, which is what hangs when a display server stops answering. Not run
+/// once a test binary has timed out in this xtask run.
+fn probe_gpu(backend: Option<&str>, limit: Option<std::time::Duration>) -> Result<String, String> {
+    let name = format!("gpu_probe {}", backend.map(|b| format!("{b} ")).unwrap_or_default());
+    if deadline::any_timed_out() {
+        return Err(format!("{name}not run: a test binary timed out earlier in this run"));
+    }
     let mut c = cargo();
     c.args(["test", "-q", "--workspace", "--test", "it", "--", "--ignored", "--exact", "gpu_probe::gpu_probe", "--nocapture"]);
     c.env("LIGHTCRAFT_GPU_PROBE", backend.unwrap_or(""));
-    let out = c.output().map_err(|e| format!("gpu_probe: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let tail: Vec<&str> = err.lines().rev().filter(|l| !l.trim().is_empty()).take(3).collect();
-        return Err(format!(
-            "gpu_probe {}exited with {}: {}",
-            backend.map(|b| format!("{b} ")).unwrap_or_default(),
-            out.status,
-            tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
-        ));
+    let out = deadline::capture_cargo(&c, deadline::probe_limit(limit)).map_err(|e| format!("gpu_probe: {e}"))?;
+    match out.status {
+        Ok(status) if status.success() => Ok(out.stdout),
+        Ok(status) => {
+            let tail: Vec<&str> = out.stderr_tail.iter().map(String::as_str).filter(|l| !l.trim().is_empty()).rev().take(3).collect();
+            Err(format!("{name}exited with {status}: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" / ")))
+        }
+        Err(timed_out) => Err(format!("{name}{timed_out}")),
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
