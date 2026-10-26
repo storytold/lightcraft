@@ -240,3 +240,41 @@ fn an_upgraded_library_says_where_what_it_was_is_kept() {
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Given an older library that could not keep its files at open, when a later compaction upgrades
+/// it (the files can be kept now), then the person is told once where the library as it was is
+/// kept, as when the open upgrades it.
+#[test]
+fn a_later_upgrade_says_where_what_it_was_is_kept() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-kept-later-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("catalog.snap.v6-8")).unwrap();
+    std::fs::write(dir.join("catalog.snap.v6-8").join("in the way"), b"x").unwrap();
+    std::fs::write(dir.join("catalog.snap"), include_str!("../../../catalog/src/fixtures/v6-catalog.snap.json")).unwrap();
+    std::fs::write(dir.join("catalog.log"), include_str!("../../../catalog/src/fixtures/v6-catalog.log.jsonl")).unwrap();
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    assert!(s.take_library_warnings().iter().all(|w| !w.contains("upgraded")), "not upgraded at open");
+    assert!(s.compact_library().is_err(), "its files can't be kept yet");
+    std::fs::remove_dir_all(dir.join("catalog.snap.v6-8")).unwrap();
+    s.compact_library().unwrap();
+    let on_disk = |prefix: &str| {
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .filter(|e| e.path().is_file())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(prefix) && !n.ends_with(".tmp"))
+            .collect();
+        names.sort();
+        names
+    };
+    let (snap, log) = (on_disk("catalog.snap.v6-"), on_disk("catalog.log.v6-"));
+    assert_eq!((snap.len(), log.len()), (1, 1), "the files as they were are kept");
+    let told = s.take_library_warnings();
+    assert!(told.iter().any(|w| w.contains(&snap[0]) && w.contains(&log[0]) && w.contains("delete")), "{told:?}");
+    let info = s.execute("library.info", &serde_json::json!({})).unwrap();
+    assert!(info["settingsWarnings"].to_string().contains(&snap[0]), "{info}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

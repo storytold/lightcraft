@@ -20,7 +20,14 @@ library was, byte for byte, beside it:
   to), is not upgraded: it opens as it is, with no copy left lying about, and the next open tries again. If what is on
   disk after a failed write can't be read back to say whether the upgrade was written, the library is refused instead
   (its way back stays). A library left like that is upgraded by its next snapshot, during the session or when it is
-  closed, and that snapshot keeps the files first too (and is not written when they can't be kept).
+  closed, and that snapshot keeps the files first too (and is not written when they can't be kept). When a snapshot
+  during the session does that, LightCraft tells where the files are kept, as it does at open (a snapshot at close
+  has no one left to tell: the files are in the folder, named as above). The files kept are the library as it was
+  when it opened (the snapshot, and the log up to where it ended then): what was changed since is in the files that
+  replace them, and never in the kept ones, so an older version opens them whatever was changed. Until then, changes
+  go on being appended to the library as it is, so that they can be saved at all where there is no room for a copy of
+  its files. (If the session ends without that snapshot, the next open keeps the log as it is then, which holds
+  those changes, and tells so; the files kept earlier stay beside it.)
 - A library whose log was damaged is upgraded like any other. What it was is then its snapshot, kept under the name
   above, and its log, kept as `catalog.log.damaged-<seq>`: the snapshot alone is the library without the changes
   that log held. If the snapshot can't be kept, or the damaged log can't be replaced, the library is refused and left
