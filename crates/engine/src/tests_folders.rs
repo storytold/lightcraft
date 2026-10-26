@@ -16,6 +16,7 @@
 
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
+use std::path::Path;
 
 use crate::{LibrarySource, Session, filter_chips};
 
@@ -700,4 +701,30 @@ fn a_destination_without_write_permission_reports_an_error_and_keeps_everything(
         assert!(s.execute("folder.create", &json!({"parent": dir.path("ro"), "name": "x"})).is_err());
     }
     std::fs::set_permissions(dir.0.join("ro"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn a_date_folder_inside_the_library_can_be_renamed_but_the_librarys_own_folders_cannot() {
+    let dir = Scratch::new("in-library");
+    let lib = dir.0.join("lib");
+    let mut s = Session::new();
+    s.open_library(&lib, false).unwrap();
+    let day = lib.join("Originals").join("2026-10-16");
+    std::fs::create_dir_all(&day).unwrap();
+    add(&mut s, &day.join("a.jpg").to_string_lossy());
+    let day = day.to_string_lossy().to_string();
+    s.execute("folder.rename", &json!({"path": day, "name": "Beach"})).unwrap();
+    assert!(lib.join("Originals/Beach").is_dir(), "the imported date folder is renamed");
+    assert!(!Path::new(&day).exists());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(Path::new(&day).is_dir(), "undo names it back");
+    for own in ["Originals", "thumbs"] {
+        std::fs::create_dir_all(lib.join(own)).unwrap();
+        let path = lib.join(own).to_string_lossy().to_string();
+        assert!(s.execute("folder.rename", &json!({"path": path, "name": "x"})).is_err(), "{own} stays put");
+    }
+    assert!(s.execute("folder.rename", &json!({"path": lib.to_string_lossy(), "name": "x"})).is_err(), "and so does the library");
+    let alias = lib.join("Originals").join("..").join("Originals").to_string_lossy().to_string();
+    assert!(s.execute("folder.rename", &json!({"path": alias, "name": "x"})).is_err(), "even named through '..'");
+    assert!(lib.join("Originals").is_dir());
 }
