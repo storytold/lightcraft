@@ -2073,7 +2073,7 @@
   "Purge Unused Keywords": "Eliminar palabras clave no usadas",
   "Delete Keyword…": "Eliminar palabra clave…",
   "Drop here for the top level": "Soltar aquí para el nivel superior",
-  "Their photos and the keywords below them come together under one keyword.": "Sus fotos y las palabras clave que contienen quedan bajo una sola palabra clave.",
+  "Their photos and the keywords below them come together under one keyword.": "Sus fotos y las palabras clave que están debajo de ellas quedan bajo una sola palabra clave.",
   "Select photos to give them keywords.": "Seleccionar fotos para darles palabras clave.",
   "Add to All Selected Photos": "Añadir a todas las fotos seleccionadas",
   "Will Export": "Se exportará",
@@ -2438,10 +2438,10 @@
   "Delete Folder": "Eliminar carpeta",
   "Delete Keywords": "Eliminar palabras clave",
   "Moves the photos imported from these folders to Recently Deleted; no file is touched": "Mueve las fotos importadas desde estas carpetas a Eliminadas recientemente; no se toca ningún archivo",
-  "No photo has them; the keywords below them go too.": "Ninguna foto las tiene; las palabras clave que contienen también se eliminan.",
+  "No photo has them; the keywords below them go too.": "Ninguna foto las tiene; también se eliminan las palabras clave que están debajo de ellas.",
   "One of them is a whole disk: remove a disk by itself": "Una de ellas es un disco entero: quita un disco por separado",
   "Remove Folders from Library": "Quitar carpetas de la biblioteca",
-  "That includes the photos in the folders inside them.": "Esto incluye las fotos de las carpetas que contienen.",
+  "That includes the photos in the folders inside them.": "Esto incluye las fotos de las carpetas que están dentro de ellas.",
   "The photos stay in All Photos. Undo brings the albums back.": "Las fotos se quedan en Todas las fotos. Deshacer recupera los álbumes.",
   "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "Las fotos se quedan en Todas las fotos. Al eliminar una carpeta también se eliminan sus álbumes. Puedes deshacerlo."
 }

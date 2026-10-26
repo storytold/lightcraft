@@ -353,7 +353,7 @@
   photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
   Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
 - Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
-  beside; placing by hand among its neighbors stays one album's).
+  beside; placing an album by hand among its neighbors moves only that album).
 - Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
   or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
   click on an album it always was.
