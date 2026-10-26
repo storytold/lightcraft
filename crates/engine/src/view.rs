@@ -193,20 +193,35 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(e) = f.edited {
         add(if e { "Edited".into() } else { "Unedited".into() }, json!({"edited": Null}));
     }
-    for (name, key, val) in
-        [("Camera", "camera", &f.camera), ("Lens", "lens", &f.lens), ("Keyword", "keyword", &f.keyword), ("Person", "person", &f.person)]
-    {
+    for (name, key, val) in [("Camera", "camera", &f.camera), ("Lens", "lens", &f.lens)] {
         if let Some(x) = val {
             add(format!("{name}: {x}"), json!({key: Null}));
         }
     }
-    if let Some(d) = &f.date {
-        add(format!("Date: {}", date_label(d)), json!({"date": Null}));
+    // albums in the filter itself (an agent's; the albums of the source are not a filter)
+    let albums = f.albums_wanted();
+    if !albums.is_empty() {
+        let names: Vec<String> = albums.iter().map(|a| cat.album(*a).map_or_else(|| format!("album {}", a.0), |a| a.name.clone())).collect();
+        add(format!("Album: {}", names.join(" or ")), json!({"album": Null, "albums": []}));
     }
-    if let Some(d) = f.library_folder.as_deref().filter(|d| !d.trim().is_empty()) {
+    // several of a kind (chosen together in the sidebar) are one chip: clearing it clears them all
+    let keywords = f.keywords_wanted();
+    if !keywords.is_empty() {
+        add(format!("Keyword: {}", keywords.join(" or ")), json!({"keyword": Null, "keywords": []}));
+    }
+    if let Some(x) = &f.person {
+        add(format!("Person: {x}"), json!({"person": Null}));
+    }
+    let dates = f.dates_wanted();
+    if !dates.is_empty() {
+        let names: Vec<String> = dates.iter().map(|d| date_label(d)).collect();
+        add(format!("Date: {}", names.join(" or ")), json!({"date": Null, "dates": []}));
+    }
+    let folders = f.library_folders_wanted();
+    if !folders.is_empty() {
         // the last two names, so two folders called "Pictures" are told apart
-        let name = lightcraft_catalog::folders::folder_label(d);
-        add(format!("Folder: {name}"), json!({"libraryFolder": Null}));
+        let names: Vec<String> = folders.iter().map(|d| lightcraft_catalog::folders::folder_label(d)).collect();
+        add(format!("Folder: {}", names.join(" or ")), json!({"libraryFolder": Null, "libraryFolders": []}));
     }
     if let Some(d) = &f.imported {
         add(format!("Imported: {}", date_label(d)), json!({"imported": Null}));

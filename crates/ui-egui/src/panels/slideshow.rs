@@ -76,7 +76,8 @@ pub fn start(app: &mut LightcraftApp, p: &Value, now: f64) -> Result<Value, Stri
     let play = play.with_titles(intro, ending);
     let first = play.current_photo().or_else(|| play.upcoming(1).first().and_then(|i| i.photo()));
     if let Some(first) = first.filter(|f| app.session.active() != Some(*f)) {
-        let _ = app.run("library.select", json!({"ids": [first.0]}));
+        // refusal expected: the slideshow moving on by itself: nobody asked, so nobody is told
+        app.quiet("library.select", json!({"ids": [first.0]}));
     }
     let (_, slides) = play.position();
     let out = json!({"slides": slides, "seed": seed, "settings": play.settings().to_json()});
@@ -137,7 +138,8 @@ pub fn state(play: &Playback, now: f64) -> Value {
 fn after(app: &mut LightcraftApp, t: Tick) {
     match t {
         Tick::Advanced(Item::Photo(id)) if app.session.active() != Some(id) => {
-            let _ = app.run("library.select", json!({"ids": [id.0]}));
+            // refusal expected: the slideshow moving on by itself: nobody asked, so nobody is told
+            app.quiet("library.select", json!({"ids": [id.0]}));
         }
         Tick::Ended => end(app),
         _ => {}
@@ -424,7 +426,7 @@ fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, now: f64) 
         fire = Some("slideshow.end");
     }
     if let Some(id) = fire {
-        let _ = app.run(id, json!({}));
+        app.act(id, json!({}));
     }
 }
 

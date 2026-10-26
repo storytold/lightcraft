@@ -252,6 +252,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         Dialog::KeywordTag { editing: None, .. } => "Create Keyword Tag",
         Dialog::KeywordTag { .. } => "Edit Keyword Tag",
         Dialog::DeleteKeyword { .. } => "Delete Keyword",
+        Dialog::Several(s) => super::side_select::several_title(s),
         Dialog::MoveKeyword { .. } => "Merge Keywords",
         Dialog::KeywordSet { .. } => "Edit Keyword Set",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
@@ -286,6 +287,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
         Dialog::SynchronizeFolder { .. } => "Synchronize Folder",
+        Dialog::SynchronizeFolders { .. } => "Synchronize Folders",
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
@@ -1262,6 +1264,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     };
                     ui.label(egui::RichText::new(crate::i18n::tr("Their photos and the keywords below them come together under one keyword.")).color(t.text_dim));
                 }
+                Dialog::Several(s) => super::side_select::several_body(ui, s),
                 Dialog::DeleteKeyword { keyword, count } => {
                     let name = keyword.replace('|', " › ");
                     ui.label(crate::i18n::tr_format!("Delete the keyword “{name}”?", name = name));
@@ -1309,6 +1312,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     c.on_hover_text(crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on"));
                 }
                 d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
+                d @ Dialog::SynchronizeFolders { .. } => crate::sync::many_body(app, ui, d),
                 Dialog::LightroomCatalog { folder, catalog } => {
                     ui.label(crate::i18n::tr("This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?"));
                     ui.label(egui::RichText::new(catalog.as_deref().unwrap_or(folder.as_str())).color(t.text_dim));
@@ -1439,10 +1443,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     Dialog::KeywordTag { editing: None, .. } => "Create",
                     Dialog::KeywordTag { .. } => "Save",
                     Dialog::RemoveFolder { .. } => "Remove",
+                    Dialog::Several(s) => super::side_select::several_button(s),
                     Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
                     d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
-                    Dialog::SynchronizeFolder { .. } if informational => "Close",
-                    Dialog::SynchronizeFolder { .. } => "Synchronize",
+                    Dialog::SynchronizeFolder { .. } | Dialog::SynchronizeFolders { .. } if informational => "Close",
+                    Dialog::SynchronizeFolder { .. } | Dialog::SynchronizeFolders { .. } => "Synchronize",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
@@ -1466,6 +1471,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                             &dlg,
                             Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
                         )
+                            // the folders' Synchronize waits for every folder's scan
+                            && (!matches!(&dlg, Dialog::SynchronizeFolders { .. }) || crate::sync::many_scanned(&dlg))
                             // smart-album rules that can't mean anything wait to be fixed
                             && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty()));
                 let primary = !informational && can_confirm && confirm_style(&dlg) == ConfirmStyle::Primary;
@@ -1556,12 +1563,16 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                         | Dialog::KeywordTag { .. }
                         | Dialog::KeywordSet { .. }
                         | Dialog::SynchronizeFolder { .. }
+                        | Dialog::SynchronizeFolders { .. }
                         | Dialog::SaveEffect { .. }
                         | Dialog::CaptureTime { .. }
                 ) =>
             {
                 app.toast(ctx, e)
             }
+            // several rows: one that can't be deleted or removed refuses them all; `several_run`
+            // already toasted the reason, which says which
+            Err(_) if matches!(dlg, Dialog::Several(_)) => close = true,
             // the SAM 3 dialog stays open to show the download (or why it can't start)
             Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
@@ -2028,6 +2039,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
         }
         Dialog::DeleteKeyword { keyword, .. } => app.run("keyword.delete", json!({"keyword": keyword})),
+        Dialog::Several(s) => super::side_select::several_run(app, s),
         Dialog::KeywordSet { replaces, name, slots, as_new } => {
             use lightcraft_catalog::keywords::same;
             let name = name.trim();
@@ -2128,6 +2140,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
+        d @ Dialog::SynchronizeFolders { .. } => crate::sync::confirm_many(app, d),
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } | Dialog::ViewOptions => {
             Ok(serde_json::Value::Null)
         }
@@ -2497,7 +2510,9 @@ pub enum ConfirmStyle {
 
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. } => {
+        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. }
+        // (every several-rows action deletes or removes)
+        | Dialog::Several(_) => {
             ConfirmStyle::Plain
         }
         _ if only_shows(dlg) => ConfirmStyle::Plain,
@@ -2519,6 +2534,7 @@ fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::ManageEffects { .. }
             | Dialog::ViewOptions
     ) || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.up_to_date())
+        || matches!(dlg, Dialog::SynchronizeFolders { folders, .. } if crate::sync::all_up_to_date(folders))
 }
 
 #[cfg(test)]

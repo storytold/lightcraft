@@ -39,16 +39,29 @@ pub struct Filter {
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
     pub album: Option<AlbumId>,
+    /// More albums beside [`Filter::album`] (several albums chosen in the sidebar): a photo in any
+    /// of them matches; empty = no more.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub albums: Vec<AlbumId>,
     /// Show "Recently Deleted" instead of the library.
     pub deleted: bool,
     /// Capture date prefix (`2026`, `2026-04`, `2026-04-12`).
     pub date: Option<String>,
+    /// More capture date prefixes beside [`Filter::date`]: a photo of any of them matches.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dates: Vec<String>,
     /// A folder the library's photos were imported from: those photos and the ones imported from
     /// the folders inside it (see [`crate::folders`]). Photos only browsed in Local are never part
     /// of it, unlike [`Filter::folder`].
     pub library_folder: Option<String>,
+    /// More folders beside [`Filter::library_folder`]: a photo of any of them matches.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub library_folders: Vec<String>,
     /// A keyword; hierarchical keywords match their children too (`travel` finds `travel|italy`).
     pub keyword: Option<String>,
+    /// More keywords beside [`Filter::keyword`]: a photo with any of them matches.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
     /// A person: photos with a named face region of this name (case-insensitive), as read from XMP.
     pub person: Option<String>,
     pub camera: Option<String>,
@@ -141,7 +154,8 @@ fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
 
 /// What [`Filter::prepare`] works out once for a pass over many photos.
 pub(crate) struct Prepared {
-    root: Option<String>,
+    /// The library folders' identities ([`Filter::library_roots`]): a photo in any of them.
+    roots: Vec<String>,
     only: Option<std::collections::HashSet<PhotoId>>,
 }
 
@@ -286,13 +300,16 @@ impl Filter {
         if let Some(e) = self.edited {
             v.push(if e { "edited".into() } else { "unedited".into() });
         }
+        let (keywords, dates, folders) = (self.keywords_wanted().join(" or "), self.dates_wanted().join(" or "), self.library_folders_wanted());
+        let folders = folders.join(" or ");
+        let some = |s: String| (!s.is_empty()).then_some(s);
         for (name, val) in [
-            ("keyword", &self.keyword),
+            ("keyword", &some(keywords)),
             ("person", &self.person),
             ("camera", &self.camera),
             ("lens", &self.lens),
-            ("date", &self.date),
-            ("folder", &self.library_folder),
+            ("date", &some(dates)),
+            ("folder", &some(folders)),
             ("imported", &self.imported),
         ] {
             if let Some(x) = val {
@@ -316,7 +333,7 @@ impl Filter {
 
     /// The albums this filter tests: its album field and its rules' Album rules.
     pub fn albums_tested(&self) -> Vec<crate::AlbumId> {
-        let mut out: Vec<crate::AlbumId> = self.album.into_iter().collect();
+        let mut out: Vec<crate::AlbumId> = self.albums_wanted();
         out.extend(self.rule_set.as_ref().map(crate::RuleSet::albums_tested).unwrap_or_default());
         out
     }
@@ -332,20 +349,79 @@ impl Filter {
 
     /// [`Filter::prepare`] for testing one photo (the `only` ids are looked through, not hashed).
     pub(crate) fn prepare_one(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: None }
+        Prepared { roots: self.library_roots(), only: None }
     }
 
     /// What [`Filter::matches_in`] needs worked out once for a pass over many photos rather than
     /// once per photo: the library folder's identity and the `only` ids as a set.
     pub(crate) fn prepare(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
+        Prepared { roots: self.library_roots(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
     }
 
-    /// [`Filter::library_folder`] as a folder identity ([`folder_key`]); `None` without a choice.
-    fn library_root(&self) -> Option<String> {
+    /// The albums a photo may be in: [`Filter::album`] and [`Filter::albums`], each once (in that
+    /// order); empty = no constraint.
+    pub fn albums_wanted(&self) -> Vec<AlbumId> {
+        let mut out: Vec<AlbumId> = Vec::new();
+        for a in self.album.iter().chain(&self.albums) {
+            if !out.contains(a) {
+                out.push(*a);
+            }
+        }
+        out
+    }
+
+    /// The keywords a photo may have: [`Filter::keyword`] and [`Filter::keywords`], each once
+    /// (whatever its case).
+    pub fn keywords_wanted(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for k in self.keyword.iter().chain(&self.keywords) {
+            if !out.iter().any(|o| crate::keywords::same(o, k)) {
+                out.push(k.clone());
+            }
+        }
+        out
+    }
+
+    /// The capture date prefixes a photo may have: [`Filter::date`] and [`Filter::dates`], each once.
+    pub fn dates_wanted(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for d in self.date.iter().chain(&self.dates) {
+            if !out.contains(d) {
+                out.push(d.clone());
+            }
+        }
+        out
+    }
+
+    /// The folders a photo may be in: [`Filter::library_folder`] and [`Filter::library_folders`],
+    /// as given, each once (by folder identity). A blank one is no folder.
+    pub fn library_folders_wanted(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut keys: Vec<String> = Vec::new();
         // as given: a folder may be named with spaces at its edge, and trimming would make it
         // another folder
-        self.library_folder.as_deref().filter(|d| !d.trim().is_empty()).map(folder_key)
+        for d in self.library_folder.iter().chain(&self.library_folders).filter(|d| !d.trim().is_empty()) {
+            let key = folder_key(d);
+            if !keys.contains(&key) {
+                keys.push(key);
+                out.push(d.clone());
+            }
+        }
+        out
+    }
+
+    /// The folders wanted ([`Filter::library_folders_wanted`]) as folder identities
+    /// ([`folder_key`]); empty without a choice.
+    fn library_roots(&self) -> Vec<String> {
+        // (each folder's identity is worked out once: this runs per photo for a smart album)
+        let mut roots: Vec<String> = Vec::new();
+        for d in self.library_folder.iter().chain(&self.library_folders).filter(|d| !d.trim().is_empty()) {
+            let key = folder_key(d);
+            if !roots.contains(&key) {
+                roots.push(key);
+            }
+        }
+        roots
     }
 
     /// [`Filter::matches`] with what [`Filter::prepare`] works out done already, so a query over a
@@ -401,9 +477,7 @@ impl Filter {
                 _ => return false,
             }
         }
-        if let Some(a) = self.album
-            && !cat.album_contains(a, p)
-        {
+        if (self.album.is_some() || !self.albums.is_empty()) && !self.album.iter().chain(&self.albums).any(|a| cat.album_contains(*a, p)) {
             return false;
         }
         if let Some(from) = &self.date_from
@@ -427,14 +501,12 @@ impl Filter {
         {
             return false;
         }
-        if let Some(d) = &self.date
-            && !p.captured.as_deref().is_some_and(|c| c.starts_with(d.as_str()))
+        if (self.date.is_some() || !self.dates.is_empty())
+            && !p.captured.as_deref().is_some_and(|c| self.date.iter().chain(&self.dates).any(|d| c.starts_with(d.as_str())))
         {
             return false;
         }
-        if let Some(root) = prepared.root.as_deref()
-            && !photo_in_root(p, root)
-        {
+        if !prepared.roots.is_empty() && !prepared.roots.iter().any(|root| photo_in_root(p, root)) {
             return false;
         }
         if let Some(d) = &self.imported
@@ -447,8 +519,8 @@ impl Filter {
         {
             return false;
         }
-        if let Some(k) = &self.keyword
-            && !p.meta.keywords.iter().any(|x| crate::keywords::is_under(x, k))
+        if (self.keyword.is_some() || !self.keywords.is_empty())
+            && !p.meta.keywords.iter().any(|x| self.keyword.iter().chain(&self.keywords).any(|k| crate::keywords::is_under(x, k)))
         {
             return false;
         }
@@ -700,6 +772,60 @@ pub fn folder_rest(path: &str, root: &str) -> Option<Vec<String>> {
     }
     let depth = split_path(root, false).parts.len();
     Some(split_path(path, false).parts.into_iter().skip(depth).collect())
+}
+
+impl Catalog {
+    /// For each of `folders`, whether the library holds a photo imported from it or from a folder
+    /// inside it (one pass over the library, however many folders).
+    pub fn folders_holding(&self, folders: &[String]) -> Vec<bool> {
+        let roots: Vec<String> = folders.iter().map(|d| folder_key(d)).collect();
+        let mut holds = vec![false; roots.len()];
+        let mut left = roots.len();
+        for p in self.photos().filter(|p| !p.deleted) {
+            for (h, root) in holds.iter_mut().zip(&roots) {
+                if !*h && photo_in_root(p, root) {
+                    *h = true;
+                    left -= 1;
+                }
+            }
+            if left == 0 {
+                break;
+            }
+        }
+        holds
+    }
+
+    /// For each of `folders`: whether the library holds a photo imported from it (or from a
+    /// folder inside it), and whether some of those photos are on a disk (not the startup disk)
+    /// the folder does not lie in, which makes it a way to several disks (`/Volumes`, `/mnt`…)
+    /// and not a folder of one. One pass over the library, however many folders.
+    pub fn folders_scan(&self, folders: &[String]) -> Vec<FolderScan> {
+        let roots: Vec<String> = folders.iter().map(|d| folder_key(d)).collect();
+        let mut out = vec![FolderScan::default(); roots.len()];
+        for p in self.photos().filter(|p| !p.deleted) {
+            let mut volume: Option<Option<String>> = None;
+            for (scan, root) in out.iter_mut().zip(&roots) {
+                if (scan.holds && scan.other_disks) || !photo_in_root(p, root) {
+                    continue;
+                }
+                scan.holds = true;
+                let v = volume.get_or_insert_with(|| crate::folders::volume_of(p));
+                if v.as_deref().is_some_and(|v| v != "/" && !key_within(root, v)) {
+                    scan.other_disks = true;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// What [`Catalog::folders_scan`] finds for one folder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FolderScan {
+    /// The library holds a photo imported from it or from a folder inside it.
+    pub holds: bool,
+    /// Some of its photos are on another disk than the one the folder lies in.
+    pub other_disks: bool,
 }
 
 /// Whether a library photo (not one only browsed in Local) lies in the folder whose

@@ -309,7 +309,7 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
 
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
 /// (and its selected spot's) or the Masking brush's.
-fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
+fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Result<Value, String> {
     if app.ui.right == RightPanel::Remove {
         app.ui.remove_size = (app.ui.remove_size * k).clamp(0.001, 0.25);
         app.ui.remove_feather = (app.ui.remove_feather + df).clamp(0.0, 100.0);
@@ -321,13 +321,14 @@ fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
             if df != 0.0 {
                 p["feather"] = json!(app.ui.remove_feather);
             }
-            let _ = app.run("spot.update", p);
+            // refused (the spot is gone): the caller says why, once
+            app.run("spot.update", p)?;
         }
-        json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather})
+        Ok(json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather}))
     } else {
         app.ui.brush_size = (app.ui.brush_size * k).clamp(0.002, 0.5);
         app.ui.brush_feather = (app.ui.brush_feather + df).clamp(0.0, 100.0);
-        json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather})
+        Ok(json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather}))
     }
 }
 
@@ -626,6 +627,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 && let Some(i) = vis.iter().position(|x| x.0 == r)
                 && let Some(next) = vis.get(i + 1).or(i.checked_sub(1).and_then(|j| vis.get(j)))
             {
+                // refusal expected: a step of view.reference, already inside `run`, which answers for the whole command
                 let _ = app.session.execute("library.select", &json!({"ids": [next.0]}));
             }
             app.ui.view = ViewMode::Reference;
@@ -1138,7 +1140,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 "brush.featherLess" => (1.0, -10.0),
                 _ => (1.0, 10.0),
             };
-            Ok(adjust_brush(app, k, df))
+            adjust_brush(app, k, df)
         }
         "view.maskPins" => {
             app.ui.mask_pins = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_pins);
@@ -1453,6 +1455,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "dialog.newSmartAlbum" => {
+            // (several albums with a smart one among them can't be saved: say why, as the engine does)
+            if let Some(why) = app.session.view_save_refusal() {
+                return Some(Err(why));
+            }
             app.ui.dialog = Some(Dialog::NewSmartAlbum { name: p.get("name").and_then(Value::as_str).unwrap_or("").into(), parent: parent_param(p) });
             Ok(Value::Null)
         }
@@ -2287,6 +2293,7 @@ fn thumb_size_view(app: &LightcraftApp) -> bool {
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
+        "dialog.newSmartAlbum" => app.session.view_save_refusal().is_none(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
         "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()

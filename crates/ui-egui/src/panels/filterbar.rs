@@ -19,7 +19,7 @@ const WIDE: f32 = 1240.0;
 pub use crate::theme::label_color;
 
 fn filter(app: &mut LightcraftApp, patch: Value) {
-    let _ = app.run("library.filter", patch);
+    app.act("library.filter", patch);
 }
 
 /// A small label before a group of controls.
@@ -252,16 +252,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // save / clear
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
-    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
+    let why_not = app.session.view_save_refusal();
+    let save = ui.add_enabled(
+        filtering && why_not.is_none(),
+        egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))),
+    );
     register(ui, "button:filterSave", save.rect);
+    let save = match why_not {
+        Some(why) => save.on_disabled_hover_text(why),
+        None => save,
+    };
     if save.clicked() {
-        let _ = app.run("dialog.newSmartAlbum", json!({}));
+        app.act("dialog.newSmartAlbum", json!({}));
     }
     let clear = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Clear")).font(t.font(12.5))));
     register(ui, "button:filterClear", clear.rect);
     if clear.clicked() {
         app.ui.search.clear();
-        let _ = app.run("library.clearFilter", json!({}));
+        app.act("library.clearFilter", json!({}));
     }
     // filter presets: apply one, save the current filter, delete
     let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
@@ -271,11 +279,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         for n in &names {
             let r = ui.button(n);
             if r.clicked() {
-                let _ = app.run("filter.applyPreset", json!({"name": n}));
+                app.act("filter.applyPreset", json!({"name": n}));
             }
             crate::widgets::context_menu(&r, |ui| {
                 if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
-                    let _ = app.run("filter.deletePreset", json!({"name": n}));
+                    app.act("filter.deletePreset", json!({"name": n}));
                 }
             });
         }

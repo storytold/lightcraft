@@ -62,6 +62,13 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 - **Pure Rust** in the product. No C/C++ dependencies.
 - **Layering** (`plan/architecture.md` §3, enforced by `cargo xtask layers`): nothing below L5 depends on egui/eframe/winit/rfd.
 - **Everything is a command** (`crates/engine`): id, label, menu path, shortcut, params, enabled(), run(). UI, CLI, control channel and MCP all dispatch by id. Every slider is a `develop` control spec.
+- **A refused command says why.** In the interface, run a command for the person (a click, a drop, a slider, a key)
+  with `app.act(id, params)`: a refusal shows its reason in a toast. It returns `None` then: say a success of your own
+  only on `Some`, or it writes over the reason. `app.quiet(…)` is for the few calls where a refusal is expected (say
+  why at the call); `app.run(…)` hands the `Result` back for code that deals with it (and for agents). Never
+  `let _ = app.run(…)`, nor `let _ = app.session.execute(…)` round it. A dropped `session.execute` that is meant
+  (not a person's action, or already inside `run`) says so on its line or the one above:
+  `// refusal expected: <reason>`. Better still, don't offer what would be refused.
 - **Long-running work shows in the activity stack** ([`docs/background-tasks.md`](docs/background-tasks.md)): anything
   that runs off the UI thread and can take more than a moment holds a `TaskGuard` from `session.activity.start(kind,
   label, cancel)` for its whole run. It adopts the cancel flag the job already checks (`Cancel::Flag`), or uses

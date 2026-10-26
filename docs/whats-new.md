@@ -2,6 +2,41 @@
 
 ## 2026-10-24
 
+### Cut, Copy and Paste for albums and keywords
+- In the menus of albums and keywords in the left panel and the Keyword List, Cut and Copy take the rows (one or
+  several chosen) and Paste puts them down: cut albums move into the folder where you choose Paste (the Albums +
+  menu pastes at the top level), copied albums are duplicated there with their photos, a copied smart album keeps its
+  rules and a copied folder everything inside it; cut keywords are nested inside the keyword where you choose Paste;
+  copied keywords are text you can paste in a keyword box. Paste is not offered where it would be refused, such as a
+  folder inside itself, and one Edit ▸ Undo takes back a paste.
+- For agents: the new `album.duplicate` takes `id` or `ids` and an optional `parent` (null: the top level).
+
+### Synchronize several folders at once
+- Choose several folders in the Folders list (Cmd/Ctrl+click, Shift+click) and right-click: Synchronize N Folders…
+  opens one dialog. It looks at the folders one after another and says, for each, what changed (new, moved, missing,
+  with changed sidecars) or that it is up to date; the choices below count them all.
+- Synchronize then brings the library up to date with each folder in turn, in the order the sidebar lists them, under
+  the bell. Each one removes or relinks only the photos its scan found, and a folder that is up to date, isn't there (moved,
+  renamed, or on a disk that isn't connected) or is a whole disk is passed over, and the dialog says why.
+- A folder inside another chosen one is taken in with it, not done twice. Cancel leaves nothing behind under the bell;
+  the rows waiting in line name their folder.
+
+### Imports and Synchronize Folder wait for each other
+- An import confirmed (or photos dropped on the window) while a Synchronize Folder runs, or a Synchronize Folder
+  confirmed while an import runs, now waits in line and starts by itself when the other ends, with a message that it
+  was queued. Before, it was refused ("Wait for the import to finish", "A folder is being synchronized").
+- Photos dropped on the window, or an import review confirmed, while another import runs also wait in line instead of
+  being refused with "An import is running"; a drop is still refused while a folder is being scanned for the review or
+  read for the Local view, or while a finished scan's review waits behind another dialog.
+- A task waiting in line shows in the activity stack at once: its name, "Starts next" or "Starts after N more", and ✕
+  to take it out of the line, so a mistaken one can be withdrawn. This holds for a waiting preview build too.
+- A waiting import checks for duplicates against the library as it is when its turn comes, so nothing is added twice.
+- A waiting Synchronize Folder looks at its folder again when its turn comes. It removes, relinks or reads sidecars of
+  only the photos its dialog showed: one that went missing, moved or got a sidecar update while it waited is left
+  alone, and the message at the end says how many ("Left alone: 1 (synchronize again to review them)").
+- Nothing waits across another library: a Synchronize Folder that is still scanning when another library opens does
+  nothing.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
@@ -156,6 +191,24 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Several albums, folders, keywords or dates shown at once (agents)
+- `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
+  browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
+  `libraryFolders` and `albums`. The single fields stay and count as one
+  more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click use
+  this (see the entry below). When the albums shown include a smart album, New Smart Album from Filter… is grayed out
+  and says why, as `album.createSmart` does.
+- `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
+  it), so editing a smart album saved from a view of several albums no longer loses them.
+
+### Refused commands say why
+- When something you click, drop, drag a slider for, choose from a menu or press a key for can't be done, a message
+  at the bottom of the photo says why ("No photos selected", "Nothing copied: use Copy Metadata first") and stays long enough to read. Before, most such clicks did nothing and said nothing; only a few places,
+  such as an export that couldn't start, explained themselves.
+- Nothing claims a success that didn't happen: pressing 3 with no photo selected no longer says "Rated ★★★", ⌘Z with
+  nothing to undo no longer says "Undo", and Auto, a preset or Paste Settings that couldn't be applied say why
+  instead of "applied".
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
@@ -811,6 +864,28 @@
 - With several photos selected, the Keywords panel says how many photos its keywords belong to. The × on a keyword
   is a larger target that lights up on its own, and taking a keyword off several photos at once now says which
   keyword left how many photos, and that Edit ▸ Undo puts it back.
+
+### Several albums, folders, keywords or dates at once
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one. The grid
+  shows the photos of any of them, each once. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel ▸ Keywords) the same clicks pick several keywords.
+- Right-click one of several rows chosen to act on them all, as one step to undo: move albums into a folder, export
+  them, or delete them; give folders a colour label or remove them from the library; give keywords to the selected
+  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
+  Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
+- Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
+  beside; placing by hand among its neighbours stays one album's).
+- Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
+  or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
+  click on an album it always was.
+- Cut, Copy and Paste in the albums' and keywords' menus: cut albums move into the folder where you choose Paste
+  (the Albums + menu pastes at the top level), copied albums are duplicated there with their photos; cut keywords
+  are nested inside the keyword where you choose Paste; copied keywords are text you can paste in a keyword box.
+- For agents: `library.source` takes `ids` (albums) or `paths` (folders), `library.filter` takes `keywords` and
+  `dates`; `album.delete`, `album.move` and the new `album.duplicate` take `ids`, `keyword.delete` and
+  `keyword.move` take `keywords`, `library.removeFolder` and `folder.label` take `paths`. `library.state` lists
+  `albums` and `libraryFolders`.
 
 ### HDR and panorama merges of CR2 keep their colour
 - Photo Merge of Canon CR2 (and other raws whose colour LightCraft fits from the camera's own JPEG, such as NEF and

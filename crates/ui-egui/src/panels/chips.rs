@@ -67,9 +67,17 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         let value = if matches!(prefix, "Flag" | "Type") {
             tr(value).to_string()
         } else if prefix == "Date" {
-            filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+            // every date of the chip, as the engine's label lists them
+            let dates = filter.dates_wanted();
+            if dates.is_empty() {
+                value.to_string()
+            } else {
+                dates.iter().map(|date| date_group_label(date, false)).collect::<Vec<_>>().join(&format!(" {} ", tr("or")))
+            }
         } else if prefix == "Imported" {
             filter.imported.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+        } else if let Some(names) = several_names(prefix, filter, catalog) {
+            names.join(&format!(" {} ", tr("or")))
         } else {
             value.to_string()
         };
@@ -79,6 +87,18 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{} {value}", tr("Rating"));
     }
     tr(&chip.label).to_string()
+}
+
+/// The names a Keyword, Album or Folder chip lists, as the engine's `filter_chips` builds them, so
+/// the caller can join them with the language's own "or". `None` for any other chip.
+fn several_names(prefix: &str, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> Option<Vec<String>> {
+    let names: Vec<String> = match prefix {
+        "Keyword" => filter.keywords_wanted(),
+        "Folder" => filter.library_folders_wanted().iter().map(|d| lightcraft_catalog::folders::folder_label(d)).collect(),
+        "Album" => filter.albums_wanted().iter().map(|a| catalog.album(*a).map_or_else(|| format!("album {}", a.0), |a| a.name.clone())).collect(),
+        _ => return None,
+    };
+    (!names.is_empty()).then_some(names)
 }
 
 /// Draws the strip; does nothing without chips.
@@ -116,7 +136,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         ui.painter().line_segment([a, b], Stroke::new(1.3, col));
         ui.painter().line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], Stroke::new(1.3, col));
         if resp.clicked() {
-            let _ = app.run("library.filter", c.clear.clone());
+            app.act("library.filter", c.clear.clone());
             if c.clear.get("text").is_some() {
                 app.ui.search.clear();
             }
@@ -140,7 +160,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
                     .on_hover_text(crate::i18n::tr("Remove this filter"))
                     .clicked()
                 {
-                    let _ = app.run("library.filter", c.clear.clone());
+                    app.act("library.filter", c.clear.clone());
                     if c.clear.get("text").is_some() {
                         app.ui.search.clear();
                     }
@@ -150,7 +170,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     }
     if crate::widgets::text_button(&mut child, "chipsClearAll", crate::i18n::tr("Clear all"), false).clicked() {
         app.ui.search.clear();
-        let _ = app.run("library.clearFilter", json!({}));
+        app.act("library.clearFilter", json!({}));
     }
 }
 
