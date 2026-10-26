@@ -318,6 +318,30 @@
   read; reload the page to try again.
 ## 2026-10-14
 
+### Map view
+- View ▸ Map (or the map pin in the bottom bar) shows the photos in view on a map, with the filmstrip below. Nearby
+  photos gather in a numbered cluster that splits as you zoom in; click a pin to select its photos, double-click to
+  open one, rest the pointer on it to see the photo.
+- Drag to pan; the mouse wheel or a pinch zooms where the pointer is; Fit to Photos frames every photo with a location.
+  The count of photos without GPS is shown bottom left.
+- The map uses OpenStreetMap's tiles (credited on the map) or a tile server you choose, only fetches the visible tiles
+  and at most one ring around them, and can be switched off (`map.tileSource {offline: true}`); see [Map](map.md) for
+  what is sent where.
+- The Info panel shows a small map of the photo's place under its location fields (the active photo's, with several
+  selected). Click it to open the Map view there; **Open in Browser** (formerly Show on Map) still opens
+  OpenStreetMap's site.
+- Put photos on the map: drag them from the filmstrip onto the Map view and let go where they were taken (a pin follows
+  the pointer); they all get that position in one undo step, replacing any they had. Drag a photo's pin to move it;
+  **Lock Markers** in the map's toolbar keeps pins in place. Photo ▸ **Remove GPS Coordinates** (or right-click a pin)
+  clears the position. Positions are written to XMP sidecars like the Info panel's. Agents: `photo.setGps`,
+  `photo.removeGps`, `map.lockMarkers`.
+- The filmstrip's photos can be dragged now, in every view: onto the map, onto an album or a keyword, as from the grid.
+- The location filter bar above the map, as in Lightroom Classic: **Visible on Map** (the photos where the map is
+  looking; it follows as you pan and zoom), **Tagged**, **Untagged** and **None**, each with its count. It narrows the
+  filmstrip on top of your library filter and goes away when you leave the Map view. Smart albums and filters gain
+  **GPS Area** (a south / west / north / east box) next to Has GPS. Agents: `map.locationFilter {mode}`, and the
+  `gpsArea` rule field.
+
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time
