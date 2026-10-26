@@ -211,6 +211,47 @@ fn find_missing_matches_renamed_files_by_content() {
     );
     assert_eq!(r["missing"], 1);
     assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
+    assert!(found.iter().all(|f| f["sameBytes"] == true), "a content match is the same file: {r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A renamed file with the same bytes keeps its film recipe. A same-name file whose bytes differ
+/// does not: that match is only a guess, and the Info panel must not show the previous recipe.
+#[test]
+fn find_missing_keeps_a_recipe_only_when_the_bytes_match() {
+    let dir = temp_dir("fuji-missing");
+    let old = dir.join("old");
+    let moved = dir.join("moved");
+    write_png(&old.join("same.png"), 1);
+    write_png(&old.join("guess.png"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [old.to_string_lossy()]})).unwrap();
+    let recipe = lightcraft_meta::FujiRecipe {
+        rows: vec![lightcraft_meta::FujiRow { tag: 0x1401, label: "Film simulation".into(), value: "Classic Chrome".into() }],
+    };
+    for name in ["same.png", "guess.png"] {
+        let id = s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.fuji_recipe = Some(recipe.clone());
+        meta.fuji_recipe_known = true;
+        s.catalog.apply(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    }
+    std::fs::create_dir_all(&moved).unwrap();
+    std::fs::rename(old.join("same.png"), moved.join("renamed.png")).unwrap();
+    let mut other = std::fs::read(old.join("guess.png")).unwrap();
+    let n = other.len();
+    other[n - 20] ^= 0xff;
+    std::fs::write(moved.join("guess.png"), &other).unwrap();
+    std::fs::remove_file(old.join("guess.png")).unwrap();
+
+    let r = s.execute("library.findMissing", &json!({"folder": moved.to_string_lossy()})).unwrap();
+    let same = s.catalog.photos().find(|p| p.file_name == "renamed.png").unwrap();
+    assert_eq!(same.meta.fuji_recipe.as_ref().map(|r| r.rows[0].value.as_str()), Some("Classic Chrome"));
+    assert!(same.meta.fuji_recipe_known);
+    let guess = s.catalog.photos().find(|p| p.file_name == "guess.png").unwrap();
+    assert!(guess.meta.fuji_recipe.is_none() && !guess.meta.fuji_recipe_known, "a guessed file is read again");
+    let guessed = r["found"].as_array().unwrap().iter().find(|f| f["to"].as_str().unwrap().ends_with("guess.png")).unwrap();
+    assert_eq!(guessed["sameBytes"], false, "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

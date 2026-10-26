@@ -204,6 +204,15 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+    /// In-camera Fujifilm film settings, learned when the file was imported or reloaded.
+    /// Not written to XMP. Left out of the catalog JSON when the file had none, so older
+    /// catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuji_recipe: Option<lightcraft_meta::FujiRecipe>,
+    /// Import or reload has already looked for a film recipe, including looking and finding none.
+    /// Older catalogs leave this false, and the Info panel may then read the file off the UI thread.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fuji_recipe_known: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
