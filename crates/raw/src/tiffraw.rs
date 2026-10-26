@@ -219,6 +219,15 @@ fn chunk_samples(c: &Chunk, ccpp: usize) -> usize {
     (c.width as usize).saturating_mul(c.height as usize).saturating_mul(ccpp)
 }
 
+/// Whether a DCT frame's samples, copied in raster order, fill whole rows of a `cw`-wide tile with `cpp` samples
+/// per pixel and cover `vh..=ch` of its rows. Blackmagic codes each frame row as several tile rows side by side
+/// (a 1032 x 2176 tile as a 2064 x 1088 frame), so the frame width may be a whole multiple of the tile width.
+fn dct_frame_fits(fw: usize, fh: usize, fc: usize, cw: usize, vh: usize, ch: usize, cpp: usize) -> bool {
+    let rows_per_frame_row = if cw == 0 || !fw.is_multiple_of(cw) { 0 } else { fw / cw };
+    let rows = fh.saturating_mul(rows_per_frame_row);
+    fc == cpp && rows_per_frame_row > 0 && rows >= vh && rows <= ch
+}
+
 #[allow(clippy::too_many_arguments)]
 fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, packing: Packing, cpp: usize, bits: u32, float: bool) -> Result<ChunkPx> {
     let src = chunk_bytes(data, c).ok_or_else(|| RawError::Corrupt("chunk offset past end of file".into()))?;
@@ -242,10 +251,9 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             let limit = n.saturating_mul(2).max(1 << 16);
             let f = if dctjpeg::is_dct(src) {
                 let f = dctjpeg::decode(src, limit)?;
-                // the DCT frame must have the tile's shape before its samples are copied into the tile
-                if f.components != cpp || f.width != cw || f.height < vh || f.height > ch {
+                if !dct_frame_fits(f.width, f.height, f.components, cw, vh, ch, cpp) {
                     return Err(RawError::Corrupt(format!(
-                        "DCT JPEG tile is {}x{}x{}, expected {cw}x{vh}..{ch}x{cpp}",
+                        "DCT JPEG tile is {}x{}x{}, expected rows of {cw}x{cpp} samples, {vh}..{ch} of them",
                         f.width, f.height, f.components
                     )));
                 }
@@ -735,5 +743,20 @@ mod lossy_tests {
         // refused as truncated rather than filled with the predictor's padding
         let zlib = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0u8; 500 * 1000], 6);
         assert!(matches!(read_image(&zlib, &info(zlib.len() as u64), ByteOrder::Little, Packing::Msb), Err(RawError::Corrupt(_))));
+    }
+
+    #[test]
+    fn dct_frames_fit_whole_tile_rows() {
+        // (frame w, h, components) against a 1032-wide tile, 2176 rows, all visible, one sample per pixel
+        let fits = |w, h, c| dct_frame_fits(w, h, c, 1032, 2176, 2176, 1);
+        assert!(fits(1032, 2176, 1));
+        assert!(fits(2064, 1088, 1), "Blackmagic: two tile rows per frame row");
+        assert!(!fits(2064, 1000, 1), "too few rows");
+        assert!(!fits(2064, 1100, 1), "more rows than the tile");
+        assert!(!fits(1000, 2176, 1), "partial rows");
+        assert!(!fits(1032, 2176, 3), "components");
+        assert!(!fits(0, 2176, 1));
+        // an edge tile may stop after its visible rows
+        assert!(dct_frame_fits(2064, 600, 1, 1032, 1200, 2176, 1));
     }
 }
