@@ -1619,6 +1619,7 @@ impl Session {
             display: None,
             slide: None,
             preview_cut: None,
+            texture: false,
             display_fit: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {

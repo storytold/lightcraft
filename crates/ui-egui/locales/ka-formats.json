@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "გრაფიკულმა დრაივერმა შეწყვიტა პასუხი, ამიტომ LightCraft-ს აღარ შეუძლია თავისი ფანჯრის დახატვა, ხოლო ბიბლიოთეკის შენახვა ვერ მოხერხდა: {e}\n\nშეუნახავი ცვლილებები: {n}. თუ ახლა გახვალთ, ისინი დაიკარგება. გაათავისუფლეთ ადგილი დისკზე ან ხელახლა მიაერთეთ ბიბლიოთეკის დისკი და სცადეთ ხელახლა."
 }

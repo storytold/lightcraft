@@ -2408,5 +2408,8 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "LightCraft lost its graphics device": "LightCraft ztratil grafické zařízení",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Grafický ovladač přestal odpovídat, takže LightCraft už nemůže vykreslovat své okno. Vaše knihovna a úpravy jsou uloženy.\n\nPro pokračování LightCraft restartujte.",
+  "Restart": "Restartovat"
 }

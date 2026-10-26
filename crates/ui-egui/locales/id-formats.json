@@ -305,5 +305,6 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Driver grafis berhenti merespons, sehingga LightCraft tidak dapat lagi menggambar jendelanya, dan penyimpanan pustaka gagal: {e}\n\nPerubahan yang belum disimpan: {n}. Jika Anda keluar sekarang, perubahan itu akan hilang. Kosongkan ruang disk atau sambungkan kembali drive pustaka, lalu coba lagi."
 }

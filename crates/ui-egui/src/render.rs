@@ -66,10 +66,62 @@ pub enum Slot {
     HdrHistogram,
 }
 
+/// The window's renderer, for renders that stay on the GPU (issue #1228): renders on the window's
+/// device ([`lightcraft_engine::gpu::share_window_device`]) are drawn from their own texture,
+/// with no copy of the pixels through the CPU. The desktop app gives it (egui-wgpu); without it
+/// every render is an egui texture made from its pixels.
+pub trait NativeTextures: Send + Sync {
+    /// Make `texture` drawable by egui; `None` when it can't be (the caller drops the render).
+    fn register(&self, texture: &lightcraft_engine::gpu::GpuTexture) -> Option<egui::TextureId>;
+    /// Forget a texture [`Self::register`] returned.
+    fn free(&self, id: egui::TextureId);
+}
+
+/// A texture egui draws: one it made from pixels, or a render that stayed on the GPU.
+pub enum TexImage {
+    Managed(egui::TextureHandle),
+    Native(NativeTex),
+}
+
+/// A render's texture on the window's device, registered with egui until dropped.
+pub struct NativeTex {
+    id: egui::TextureId,
+    size: [usize; 2],
+    owner: Arc<dyn NativeTextures>,
+    /// Kept alive while egui may draw it (and read back for headless screenshots).
+    texture: lightcraft_engine::gpu::GpuTexture,
+}
+
+impl Drop for NativeTex {
+    fn drop(&mut self) {
+        self.owner.free(self.id);
+    }
+}
+
+impl TexImage {
+    pub fn id(&self) -> egui::TextureId {
+        match self {
+            TexImage::Managed(t) => t.id(),
+            TexImage::Native(t) => t.id,
+        }
+    }
+
+    pub fn size(&self) -> [usize; 2] {
+        match self {
+            TexImage::Managed(t) => t.size(),
+            TexImage::Native(t) => t.size,
+        }
+    }
+
+    pub fn is_native(&self) -> bool {
+        matches!(self, TexImage::Native(_))
+    }
+}
+
 pub struct Tex {
     pub key: u64,
     pub photo: PhotoId,
-    pub tex: egui::TextureHandle,
+    pub tex: TexImage,
     pub size: [usize; 2],
     pub histogram: Option<Histogram>,
     pub ms: f64,
@@ -250,6 +302,8 @@ pub struct Renderer {
     pub(crate) stage_budget_override: Option<usize>,
     /// The monitor profile textures are made for (`app.displayProfile`; `None`: sRGB).
     display: Option<Arc<lightcraft_engine::display::Display>>,
+    /// The window's renderer, for renders handed over as textures on its device (issue #1228).
+    native: Option<Arc<dyn NativeTextures>>,
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
@@ -314,6 +368,7 @@ impl Renderer {
             #[cfg(test)]
             stage_budget_override: None,
             display: None,
+            native: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
         }
@@ -441,8 +496,21 @@ impl Renderer {
         if let Some(d) = display {
             lightcraft_engine::display::present(&mut r, d);
         }
-        let color = r.rendered.as_ref().ok().map(|x| Arc::new(color_image(&x.image)));
+        // (a render that stayed on the GPU has no pixels to convert)
+        let color = r.rendered.as_ref().ok().filter(|_| r.texture.is_none()).map(|x| Arc::new(color_image(&x.image)));
         Finished { result: r, color }
+    }
+
+    /// Draw renders that stay on the GPU through the window's renderer from now on (issue #1228).
+    pub fn set_native_textures(&mut self, native: Arc<dyn NativeTextures>) {
+        self.native = Some(native);
+    }
+
+    /// Whether a view's render may come back as a texture on the window's device rather than as
+    /// pixels: the window's renderer takes them. (A headless screenshot reads such a texture back
+    /// when it is taken: [`Self::cpu_textures`].)
+    pub fn takes_textures(&self) -> bool {
+        self.native.is_some() && lightcraft_engine::gpu::shares_window_device()
     }
 
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
@@ -869,6 +937,10 @@ impl Renderer {
             if slot.is_view() {
                 self.shown_ids.insert(slot, r.request_id);
             }
+            // a render that stayed on the GPU can't be converted here: made for another profile, it is obsolete
+            if r.texture.is_some() && r.display != self.display_id() {
+                continue;
+            }
             // (results from an offload, which doesn't know the display profile: converted here)
             if let Some(d) = &self.display {
                 let before = r.display;
@@ -918,13 +990,36 @@ impl Renderer {
             if let Slot::Thumb(id) = slot {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
+            // a render that stayed on the GPU: drawn from its own texture (issue #1228)
+            if let Some(gt) = r.texture {
+                let size = [gt.width, gt.height];
+                let Some(id) = self.native.as_ref().and_then(|n| n.register(&gt)) else {
+                    // (no window renderer to take it: asked for only when there is one)
+                    log::warn!("render {slot:?}: the window's renderer did not take a GPU texture");
+                    continue;
+                };
+                let Some(owner) = self.native.clone() else { continue };
+                let tex = TexImage::Native(NativeTex { id, size, owner, texture: gt });
+                // (no histogram: only the whole frame's is shown)
+                let t = Tex { key: r.key, photo: r.photo, tex, size, histogram: None, ms, quick: r.quick, pixels: None };
+                self.textures.insert(slot, t);
+                if slot == Slot::Main {
+                    self.last_main_ms = ms;
+                }
+                changed = true;
+                continue;
+            }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {
-                    t.tex.set(color, egui::TextureOptions::LINEAR);
+                    match &mut t.tex {
+                        TexImage::Managed(h) => h.set(color, egui::TextureOptions::LINEAR),
+                        // (the native texture is freed when replaced)
+                        TexImage::Native(_) => t.tex = TexImage::Managed(ctx.load_texture(name, color, egui::TextureOptions::LINEAR)),
+                    }
                     t.pixels = pixels;
                     t.key = r.key;
                     t.photo = r.photo;
@@ -934,7 +1029,7 @@ impl Renderer {
                     t.quick = r.quick;
                 }
                 None => {
-                    let tex = ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
+                    let tex = TexImage::Managed(ctx.load_texture(name, color, egui::TextureOptions::LINEAR));
                     self.textures.insert(
                         slot,
                         Tex {
@@ -1011,13 +1106,24 @@ impl Renderer {
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
-            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies, "native": self.textures.values().filter(|t| t.tex.is_native()).count()},
         })
     }
 
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .values()
+            .filter_map(|t| {
+                let pixels = match (&t.pixels, &t.tex) {
+                    (Some(p), _) => p.clone(),
+                    // a render that stayed on the GPU: read back now (screenshots only)
+                    (None, TexImage::Native(n)) if self.keep_pixels => Arc::new(color_image(&lightcraft_engine::gpu::read_texture(&n.texture)?)),
+                    _ => return None,
+                };
+                Some((t.tex.id(), crate::softpaint::CpuTexture::linear(pixels)))
+            })
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -1860,7 +1966,10 @@ mod stage_budget_tests {
         let ctx = egui::Context::default();
         let mut r = Renderer::default();
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
-        r.textures.insert(Slot::Region, Tex { key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None });
+        r.textures.insert(
+            Slot::Region,
+            Tex { key: 1, photo: PhotoId(1), tex: TexImage::Managed(tex), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+        );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
@@ -1991,6 +2100,7 @@ mod color_image_tests {
             loaded: None,
             quick: None,
             display: None,
+            texture: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);

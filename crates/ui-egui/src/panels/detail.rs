@@ -470,7 +470,8 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     // the After window is proofed like the whole-frame render under it; the Before side is
     // never proofed (its whole-frame render isn't either)
     let proof = app.ui.soft_proof.then_some(app.ui.proof);
-    let job = job.with_overlay(overlay).with_proof(if v.before { None } else { proof });
+    // only drawn: stays on the GPU when it renders there (issue #1228)
+    let job = job.with_overlay(overlay).with_proof(if v.before { None } else { proof }).to_texture(app.renderer.takes_textures());
     // keyed as the renderer keys the texture (a display profile changes the key)
     let job = app.renderer.job_for(v.slot, job);
     // The overlay and the proof are part of the tile's identity too, so changing mask view/colour

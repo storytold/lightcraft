@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Grafický ovladač přestal odpovídat, takže LightCraft už nemůže vykreslovat své okno, a knihovnu se nepodařilo uložit: {e}\n\nNeuložené změny: {n}. Pokud nyní aplikaci ukončíte, budou ztraceny. Uvolněte místo na disku nebo znovu připojte disk s knihovnou a zkuste to znovu."
 }

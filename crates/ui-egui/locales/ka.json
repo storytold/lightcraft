@@ -2734,5 +2734,8 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "LightCraft lost its graphics device": "LightCraft-მა დაკარგა გრაფიკული მოწყობილობა",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "გრაფიკულმა დრაივერმა შეწყვიტა პასუხი, ამიტომ LightCraft-ს აღარ შეუძლია თავისი ფანჯრის დახატვა. თქვენი ბიბლიოთეკა და რედაქტირებები შენახულია.\n\nგასაგრძელებლად გადატვირთეთ LightCraft.",
+  "Restart": "გადატვირთვა"
 }

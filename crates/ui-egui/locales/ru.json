@@ -2349,5 +2349,8 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "LightCraft lost its graphics device": "LightCraft потерял графическое устройство",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Графический драйвер перестал отвечать, поэтому LightCraft больше не может отрисовывать окно. Ваша библиотека и правки сохранены.\n\nПерезапустите LightCraft, чтобы продолжить.",
+  "Restart": "Перезапустить"
 }

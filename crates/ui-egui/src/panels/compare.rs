@@ -431,7 +431,7 @@ fn request_window(app: &mut LightcraftApp, v: &TileView) -> Option<crate::region
     app.compare_tiles.retain(|(p, _), t| *p != v.pane || t.is_current(v.id, (fw, fh), look, false));
     app.compare_tiles.insert((v.pane, job.key), view);
     // after both panes' whole-frame renders (60): those are what a step to the next photo shows first
-    app.renderer.request(Slot::CompareRegion(v.pane), job, 58);
+    app.renderer.request(Slot::CompareRegion(v.pane), job.to_texture(app.renderer.takes_textures()), 58);
     Some(view)
 }
 

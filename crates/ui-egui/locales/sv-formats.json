@@ -305,5 +305,6 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Grafikdrivrutinen slutade svara, så LightCraft kan inte längre rita sitt fönster, och det gick inte att spara biblioteket: {e}\n\nOsparade ändringar: {n}. Om du avslutar nu går de förlorade. Frigör diskutrymme eller anslut bibliotekets enhet igen och försök sedan igen."
 }

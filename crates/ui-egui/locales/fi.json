@@ -2327,5 +2327,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "LightCraft lost its graphics device": "LightCraft menetti grafiikkalaitteensa",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Näytönohjaimen ajuri lakkasi vastaamasta, joten LightCraft ei voi enää piirtää ikkunaansa. Kirjastosi ja muokkauksesi on tallennettu.\n\nJatka käynnistämällä LightCraft uudelleen.",
+  "Restart": "Käynnistä uudelleen"
 }

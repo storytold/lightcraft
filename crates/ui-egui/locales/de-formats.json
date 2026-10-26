@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Der Grafiktreiber reagiert nicht mehr, daher kann LightCraft sein Fenster nicht mehr zeichnen, und die Bibliothek konnte nicht gespeichert werden: {e}\n\nNicht gespeicherte Änderungen: {n}. Wenn Sie jetzt beenden, gehen sie verloren. Schaffen Sie Speicherplatz oder schließen Sie das Laufwerk der Bibliothek wieder an und versuchen Sie es dann erneut."
 }

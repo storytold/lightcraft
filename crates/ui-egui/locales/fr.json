@@ -2390,5 +2390,8 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "LightCraft lost its graphics device": "LightCraft a perdu son périphérique graphique",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Le pilote graphique ne répond plus : LightCraft ne peut plus dessiner sa fenêtre. Votre bibliothèque et vos retouches sont enregistrées.\n\nRedémarrez LightCraft pour continuer.",
+  "Restart": "Redémarrer"
 }

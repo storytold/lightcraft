@@ -305,5 +305,6 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Trình điều khiển đồ họa đã ngừng phản hồi nên LightCraft không thể vẽ cửa sổ của mình nữa, và việc lưu thư viện đã thất bại: {e}\n\nSố thay đổi chưa lưu: {n}. Nếu bạn thoát bây giờ, chúng sẽ bị mất. Hãy giải phóng dung lượng đĩa hoặc kết nối lại ổ đĩa của thư viện, rồi thử lại."
 }

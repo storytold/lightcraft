@@ -2356,5 +2356,8 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "LightCraft lost its graphics device": "LightCraft がグラフィックスデバイスを失いました",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "グラフィックスドライバーが応答しなくなったため、LightCraft はウインドウを描画できなくなりました。ライブラリと編集内容は保存されています。\n\n続けるには LightCraft を再起動してください。",
+  "Restart": "再起動"
 }

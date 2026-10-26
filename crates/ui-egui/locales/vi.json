@@ -2235,5 +2235,8 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "LightCraft lost its graphics device": "LightCraft đã mất thiết bị đồ họa",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Trình điều khiển đồ họa đã ngừng phản hồi nên LightCraft không thể vẽ cửa sổ của mình nữa. Thư viện và các chỉnh sửa của bạn đã được lưu.\n\nHãy khởi động lại LightCraft để tiếp tục.",
+  "Restart": "Khởi động lại"
 }

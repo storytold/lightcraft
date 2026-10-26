@@ -2429,5 +2429,8 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "LightCraft lost its graphics device": "LightCraft förlorade sin grafikenhet",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Grafikdrivrutinen slutade svara, så LightCraft kan inte längre rita sitt fönster. Ditt bibliotek och dina redigeringar är sparade.\n\nStarta om LightCraft för att fortsätta.",
+  "Restart": "Starta om"
 }

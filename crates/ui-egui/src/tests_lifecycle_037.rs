@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::headless::Headless;
-use crate::render::{Slot, Tex};
+use crate::render::{Slot, Tex, TexImage};
 use crate::{ControlResponse, LightcraftApp, MAX_PENDING_SHOTS, MAX_SHOT_BYTES, PendingShot, Services, ShotGeometry};
 use lightcraft_engine::slideshow::Item;
 
@@ -559,9 +559,10 @@ fn hidden_slideshow_pauses_and_keeps_its_remaining_time() {
     // Every slide is "ready": without the hidden gate, 10 hidden seconds would advance the show.
     for id in app.session.visible_cloned() {
         let tex = ctx.load_texture(format!("slide-{}", id.0), egui::ColorImage::filled([2, 2], egui::Color32::WHITE), Default::default());
-        app.renderer
-            .textures
-            .insert(Slot::Slide(Item::Photo(id)), Tex { key: 0, photo: id, tex, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None });
+        app.renderer.textures.insert(
+            Slot::Slide(Item::Photo(id)),
+            Tex { key: 0, photo: id, tex: TexImage::Managed(tex), size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
+        );
     }
     let first = app.ui.slideshow.as_ref().unwrap().play.current();
     let selection = app.session.active();

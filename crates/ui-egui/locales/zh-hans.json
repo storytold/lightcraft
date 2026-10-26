@@ -2200,5 +2200,8 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "LightCraft lost its graphics device": "LightCraft 丢失了图形设备",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "图形驱动程序已停止响应，LightCraft 无法再绘制窗口。您的图库和编辑已保存。\n\n请重新启动 LightCraft 以继续。",
+  "Restart": "重新启动"
 }

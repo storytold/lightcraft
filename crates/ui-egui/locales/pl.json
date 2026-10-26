@@ -2283,5 +2283,8 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "LightCraft lost its graphics device": "LightCraft utracił urządzenie graficzne",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Sterownik grafiki przestał odpowiadać, więc LightCraft nie może już rysować swojego okna. Twoja biblioteka i zmiany są zapisane.\n\nUruchom ponownie LightCraft, aby kontynuować.",
+  "Restart": "Uruchom ponownie"
 }

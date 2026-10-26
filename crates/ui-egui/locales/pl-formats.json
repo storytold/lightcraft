@@ -305,5 +305,6 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Sterownik grafiki przestał odpowiadać, więc LightCraft nie może już rysować swojego okna, a zapisanie biblioteki się nie powiodło: {e}\n\nNiezapisane zmiany: {n}. Jeśli zakończysz teraz, zostaną utracone. Zwolnij miejsce na dysku lub podłącz ponownie dysk z biblioteką, a potem spróbuj ponownie."
 }

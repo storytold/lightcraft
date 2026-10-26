@@ -2339,5 +2339,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "LightCraft lost its graphics device": "LightCraft kehilangan perangkat grafisnya",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Driver grafis berhenti merespons, sehingga LightCraft tidak dapat lagi menggambar jendelanya. Pustaka dan suntingan Anda sudah disimpan.\n\nMulai ulang LightCraft untuk melanjutkan.",
+  "Restart": "Mulai Ulang"
 }

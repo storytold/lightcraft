@@ -305,5 +305,6 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Näytönohjaimen ajuri lakkasi vastaamasta, joten LightCraft ei voi enää piirtää ikkunaansa, ja kirjaston tallentaminen epäonnistui: {e}\n\nTallentamattomia muutoksia: {n}. Jos lopetat nyt, ne menetetään. Vapauta levytilaa tai liitä kirjaston asema uudelleen ja yritä sitten uudelleen."
 }
