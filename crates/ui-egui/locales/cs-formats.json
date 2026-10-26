@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Nepodařilo se přesunout fotky ({count}{:.0}) do {bin}: {error}",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Smazat z disku přesune soubory a jejich soubory XMP do {bin} a odebere fotografie z knihovny. Zpět to soubory neobnoví: obnovte je z {bin}.",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Smazat {count} zamítnutých fotografií z disku, nebo je jen odebrat z knihovny?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Smazat {count} vybraných fotografií z disku, nebo je jen odebrat z knihovny?",
+  "Moved {n} file{} to the {bin}": "Do {bin} přesunuto souborů: {n}{:.0}"
 }

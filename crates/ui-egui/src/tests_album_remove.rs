@@ -107,7 +107,7 @@ fn the_photo_menu_in_an_album_has_remove_from_album_on_the_delete_key() {
     let other = h.app.session.visible_cloned()[0];
     exec(&mut h, "library.select", json!({"ids": [other.0]}));
     crate::menubar::run_item(&mut h.app, "photo.delete", json!({})).unwrap();
-    assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1 }));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1, .. })));
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.session.catalog.photo(other).unwrap().deleted, "Delete Photo removes it from the library");

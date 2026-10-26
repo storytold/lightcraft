@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "{count} ფოტოს{:.0} გადატანა ვერ მოხერხდა (დანიშნულება: {bin}): {error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "წავშალოთ {count} უარყოფილი ფოტო დისკიდან, თუ მხოლოდ ბიბლიოთეკიდან ამოვშალოთ?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "წავშალოთ {count} მონიშნული ფოტო დისკიდან, თუ მხოლოდ ბიბლიოთეკიდან ამოვშალოთ?",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "„დისკიდან წაშლა“ ფაილებს და მათ XMP-ფაილებს გადაიტანს აქ: {bin}, ხოლო ფოტოებს ბიბლიოთეკიდან ამოშლის. დაბრუნება ფაილებს ვერ აღადგენს: აღადგინეთ ისინი აქედან: {bin}.",
+  "Moved {n} file{} to the {bin}": "{n} ფაილი{:.0} გადატანილია აქ: {bin}"
 }

@@ -305,5 +305,10 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Nie udało się przenieść zdjęć ({count}{:.0}) do {bin}: {error}",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Usuń z dysku przenosi pliki i ich pliki XMP do {bin} i usuwa zdjęcia z biblioteki. Cofnięcie nie przywróci plików: przywróć je z {bin}.",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Usunąć {count} odrzuconych zdjęć z dysku, czy tylko usunąć je z biblioteki?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Usunąć {count} zaznaczonych zdjęć z dysku, czy tylko usunąć je z biblioteki?",
+  "Moved {n} file{} to the {bin}": "Do {bin} przeniesiono plików: {n}{:.0}"
 }

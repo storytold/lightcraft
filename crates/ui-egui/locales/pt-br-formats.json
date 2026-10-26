@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Não foi possível mover {count} foto{} para a {bin}: {error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Excluir as {count} fotos rejeitadas do disco ou apenas removê-las da biblioteca?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Excluir as {count} fotos selecionadas do disco ou apenas removê-las da biblioteca?",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Excluir do disco move os arquivos e seus arquivos XMP associados para a {bin} e remove as fotos da biblioteca. Desfazer não traz os arquivos de volta: restaure-os da {bin}.",
+  "Moved {n} file{} to the {bin}": "{n} arquivo{0} movido{0} para a {bin}"
 }

@@ -284,6 +284,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "album.removePhotos",
             "photo.delete",
+            "dialog.deleteFromDisk",
+            "dialog.deleteRejected",
             "photo.restore",
             "photo.deletePermanently",
         ],

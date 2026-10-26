@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "无法将 {count} 张照片{:.0}移到{bin}：{error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "要从磁盘删除这 {count} 张被排除的照片，还是仅从图库中移去？",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "要从磁盘删除所选的 {count} 张照片，还是仅从图库中移去？",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "“从磁盘删除”会将文件及其 XMP 附属文件移到{bin}，并将照片移出图库。撤销无法找回文件：请从{bin}中恢复。",
+  "Moved {n} file{} to the {bin}": "已将 {n} 个文件{:.0}移到{bin}"
 }
