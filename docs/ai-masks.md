@@ -71,6 +71,8 @@ stay in the local library, so later adjustments and exports work without the con
 
 The worker requires Metal and accepts one editing connection at a time. It loads weights
 on demand and releases them when the client disconnects or remains idle for ten minutes.
+If the listener reports an accept error, the worker logs it, waits 100 ms, and retries; startup
+validation and bind errors still stop the worker.
 Both endpoints require loopback addresses: SSH provides authentication and encryption.
 The listener has no independent authentication; do not expose it through a public proxy. Any
 process of any user on the worker Mac can connect to it, and on the editing computer a local
