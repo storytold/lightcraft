@@ -2,6 +2,14 @@
 
 ## 2026-10-24
 
+### Auto Import looks in subfolders
+- Settings ▸ Import ▸ Auto Import has an **Include subfolders** box (issue #1109): photos that arrive anywhere
+  inside the watched folder, e.g. a tethering or sync app's dated folders, are added too. Off by default, so the
+  watched folder's top level only, as before. Hidden folders, links to folders and the library's own folder (where
+  copied photos go) are never looked in; the scan goes 16 folder levels deep and stops after 200,000 files and
+  folders, and says so. A subfolder LightCraft can't read is skipped with a warning. Agents: `subfolders` on
+  `library.autoImport`.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

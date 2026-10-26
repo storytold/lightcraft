@@ -920,6 +920,9 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// The last auto-import listing's warnings, shown once until they change.
+    #[serde(skip)]
+    pub auto_import_warned: Vec<String>,
     /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
     /// many were waiting then.
     #[serde(skip)]
@@ -1549,6 +1552,7 @@ impl Default for UiState {
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            auto_import_warned: Vec::new(),
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,
