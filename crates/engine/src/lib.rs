@@ -48,6 +48,7 @@ mod import_move;
 pub mod lens_profiles;
 pub mod library;
 mod lightroom_archive;
+pub mod lightroom_backup;
 pub mod lightroom_catalog;
 pub mod lightroom_folder;
 pub mod lightroom_job;
