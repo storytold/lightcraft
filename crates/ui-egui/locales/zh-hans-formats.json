@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Delete the saved location “{name}”?": "删除已存储的位置“{name}”？",
+  "In the private location “{name}”: its map is hidden.": "位于私人位置“{name}”中：其地图已隐藏。",
+  "within {d} of {lat}, {lon}": "距 {lat}, {lon} {d} 以内"
 }
