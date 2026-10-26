@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Model in use: {name}": "Používaný model: {name}",
+  "Works · {ms} ms per photo": "Funguje · {ms} ms na fotografii",
+  "{got} of {total} from {host}": "{got} z {total} z {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Jednou stáhne {size} z {host}. Každý soubor se porovná se zaznamenaným kontrolním součtem; pak jej LightCraft začne používat."
 }

@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Model in use: {name}": "正在使用的模型：{name}",
+  "Works · {ms} ms per photo": "可用 · 每張照片 {ms} 毫秒",
+  "{got} of {total} from {host}": "從 {host} 下載 {got} / {total}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "從 {host} 下載 {size}，只需一次。每個檔案都會與記錄的檢查碼核對，然後 LightCraft 開始使用它。"
 }

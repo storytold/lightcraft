@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "ერთხელ ჩამოტვირთავს {size}-ს {host}-დან. თითოეული ფაილი მოწმდება ჩაწერილი საკონტროლო ჯამით; შემდეგ LightCraft დაიწყებს მის გამოყენებას.",
+  "Model in use: {name}": "გამოყენებული მოდელი: {name}",
+  "Works · {ms} ms per photo": "მუშაობს · {ms} ms ფოტოზე",
+  "{got} of {total} from {host}": "{got} / {total} — {host}-დან"
 }

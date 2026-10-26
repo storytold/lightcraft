@@ -305,5 +305,9 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Model in use: {name}": "Używany model: {name}",
+  "Works · {ms} ms per photo": "Działa · {ms} ms na zdjęcie",
+  "{got} of {total} from {host}": "{got} z {total} z {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Pobiera {size} z {host}, jednorazowo. Każdy plik jest porównywany z zapisaną sumą kontrolną; potem LightCraft zaczyna go używać."
 }

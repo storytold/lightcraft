@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Model in use: {name}": "Используемая модель: {name}",
+  "Works · {ms} ms per photo": "Работает · {ms} мс на фото",
+  "{got} of {total} from {host}": "{got} из {total} с {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Однократно загружает {size} с {host}. Каждый файл сверяется с записанной контрольной суммой, затем LightCraft начинает использовать модель."
 }

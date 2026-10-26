@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Model in use: {name}": "使用中のモデル：{name}",
+  "Works · {ms} ms per photo": "動作します · 1 枚あたり {ms} ms",
+  "{got} of {total} from {host}": "{host} から {got} / {total}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "{host} から {size} を一度だけダウンロードします。各ファイルは記録済みのチェックサムで確認され、その後 LightCraft が使用を開始します。"
 }

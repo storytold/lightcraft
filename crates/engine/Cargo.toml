@@ -28,6 +28,7 @@ lightcraft-denoise = { workspace = true, optional = true }
 lightcraft-meta = { workspace = true }
 lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
+lightcraft-vision = { workspace = true }
 miniz_oxide = { workspace = true }
 lightcraft-merge = { workspace = true }
 lightcraft-geocode = { workspace = true }
