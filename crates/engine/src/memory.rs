@@ -337,9 +337,11 @@ mod tests {
         let info = std::fs::read_to_string("/proc/meminfo").unwrap();
         let physical = lightcraft_sysmem::limits::meminfo_bytes(&info, "MemTotal").unwrap();
         assert!(ram as u64 <= physical);
-        if let Some(limit) = lightcraft_sysmem::limits::cgroup_memory().limit {
-            assert!(ram as u64 <= limit, "total_ram {ram} above the cgroup limit {limit}");
-        }
+        let Some(limit) = lightcraft_sysmem::limits::cgroup_memory().limit else {
+            lightcraft_testkit::skip!(System, "no cgroup memory limit on this process (run it under `systemd-run --user --scope -p MemoryMax=2G`)");
+            return;
+        };
+        assert!(ram as u64 <= limit, "total_ram {ram} above the cgroup limit {limit}");
     }
 
     /// Prints what the budget is sized from; run by hand inside and outside a limited scope.
