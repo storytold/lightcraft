@@ -145,16 +145,21 @@ fn pef(compression: u16) -> Vec<u8> {
 
 /// A Canon CR2: three placeholder IFDs and IFD3 with a 2-component lossless JPEG frame.
 fn cr2() -> Vec<u8> {
+    cr2_with_slices(Value::Short(vec![1, 16, 16]), false)
+}
+
+/// The same CR2 with its slice-width tag (0xc640) replaced, optionally in a BigTIFF (for 64-bit widths).
+fn cr2_with_slices(slices: Value, bigtiff: bool) -> Vec<u8> {
     let img: Vec<u16> = (0..(W * H) as usize).map(|i| 1024 + (i * 7919 % 12000) as u16).collect();
     let enc = lightcraft_raw::ljpeg::encode(&img, W as usize / 2, H as usize, 2, 14, 1, 0);
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::MAKE, Value::Ascii("Canon".into()));
     let mut ifd3 = IfdBuilder::new();
     ifd3.set(t::COMPRESSION, Value::Short(vec![6]));
-    ifd3.set(0xc640, Value::Short(vec![1, 16, 16]));
+    ifd3.set(0xc640, slices);
     ifd3.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![enc] });
     let blank = || IfdBuilder::new().with(1, Value::Short(vec![0]));
-    TiffWriter::new(ByteOrder::Little, false).write(&[ifd0, blank(), blank(), ifd3]).unwrap()
+    TiffWriter::new(ByteOrder::Little, bigtiff).write(&[ifd0, blank(), blank(), ifd3]).unwrap()
 }
 
 /// A Fujifilm RAF: header, records, raw block (LE TIFF whose IFD0 points to a 0xf000 raw IFD).
@@ -241,6 +246,8 @@ fn samples() -> Vec<Vec<u8>> {
         rw2(),
         cr2(),
         raf(),
+        cr2_with_slices(Value::Long8(vec![64, u64::MAX, u64::MAX]), true),
+        cr2_with_slices(Value::Long8(vec![1, 1 << 40, 16]), true),
     ]
     .into_iter()
     .chain(rw2_formats())
@@ -283,7 +290,7 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
 
     #[test]
-    fn mutated_vendor_files_never_panic(kind in 0usize..18, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
+    fn mutated_vendor_files_never_panic(kind in 0usize..20, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
         let mut data = samples().swap_remove(kind);
         let n = data.len();
         for (i, v) in flips {
@@ -300,5 +307,14 @@ fn rw2_samples_decode_unmutated() {
     for s in &rw2_formats() {
         let r = lightcraft_raw::decode(s).unwrap();
         assert_eq!((r.width, r.height), (W as usize, H as usize));
+    }
+}
+
+/// Slice widths come from the file: widths whose sum overflows (or exceeds the frame) are an error, not a
+/// wrapped width that indexes outside the frame.
+#[test]
+fn cr2_slice_widths_that_overflow_are_an_error() {
+    for slices in [vec![64, u64::MAX, u64::MAX], vec![1, 1 << 40, 16], vec![2, u64::MAX, 1]] {
+        assert!(lightcraft_raw::decode(&cr2_with_slices(Value::Long8(slices.clone()), true)).is_err(), "{slices:?}");
     }
 }
