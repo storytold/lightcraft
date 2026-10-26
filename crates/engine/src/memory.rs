@@ -21,7 +21,8 @@ use serde::Serialize;
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
 /// batch may, in addition, hold up to twice the budget in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
-/// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
+/// a quarter of the machine's RAM ([`total_ram`]: a container's or cgroup's memory limit when
+/// smaller), at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
     if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
@@ -33,13 +34,13 @@ pub fn default_budget() -> usize {
     }
 }
 
-/// Physical memory (bytes), when the platform tells us without native calls.
+/// Memory the process may use (bytes), when the platform tells us without native calls: physical
+/// RAM, held on Linux to the memory limit of the process's cgroup (a container, a Flatpak, a
+/// systemd scope with `MemoryMax`, a CI runner) when that is smaller.
 pub(crate) fn total_ram() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
-        let s = std::fs::read_to_string("/proc/meminfo").ok()?;
-        let kb: usize = s.lines().find(|l| l.starts_with("MemTotal:"))?.split_whitespace().nth(1)?.parse().ok()?;
-        Some(kb * 1024)
+        lightcraft_sysmem::effective_total().map(|b| usize::try_from(b).unwrap_or(usize::MAX))
     }
     #[cfg(target_os = "macos")]
     {
@@ -320,5 +321,31 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Inside a container or a systemd scope with `MemoryMax`, the budget is sized from the limit,
+    /// not the machine's RAM (#3072).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn total_ram_honours_the_cgroup_limit() {
+        let ram = total_ram().unwrap();
+        let info = std::fs::read_to_string("/proc/meminfo").unwrap();
+        let physical = lightcraft_sysmem::limits::meminfo_bytes(&info, "MemTotal").unwrap();
+        assert!(ram as u64 <= physical);
+        if let Some(limit) = lightcraft_sysmem::limits::cgroup_memory().limit {
+            assert!(ram as u64 <= limit, "total_ram {ram} above the cgroup limit {limit}");
+        }
+    }
+
+    /// Prints what the budget is sized from; run by hand inside and outside a limited scope.
+    #[test]
+    #[ignore = "diagnostic: prints the RAM and default budget this process sees"]
+    fn prints_the_default_budget() {
+        println!("total_ram {:?} MiB, default_budget {} MiB", total_ram().map(|b| b >> 20), default_budget() >> 20);
     }
 }
