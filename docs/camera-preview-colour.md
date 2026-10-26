@@ -133,7 +133,8 @@ An accepted DNG tone fit may then add colour terms on top of the file's own matr
 and profile tables: a hue/saturation table, luminance-band chroma matrices, a hue-chroma gain and
 rotation, and bounded offsets. Each term is kept only if it lowers the median displayed CIE76 error
 on the other spatial half and on a finer proxy (up to 768 px) by at least 3%, and the combined look
-is applied through the render's own colour model to confirm it clips no more than the plain render.
+is applied through the render's own colour model to confirm its near-white share stays within the larger of
+the plain render's and the camera preview's (plus a small tolerance).
 These checks measure agreement with the camera preview, not calibrated colour.
 
 ## Embedded vignetting correction (Fujifilm RAF)
