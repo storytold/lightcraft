@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Reference View's empty state paints on every platform
+- Its instruction now uses the supported menu arrow symbol, avoiding a missing-glyph panic while the view is drawn.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
