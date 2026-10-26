@@ -44,7 +44,7 @@ pub fn effective_total() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
-        smaller(meminfo_bytes(&meminfo, "MemTotal"), cgroup_memory().limit)
+        smaller(meminfo_bytes(&meminfo, "MemTotal"), cgroup_limit())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -79,6 +79,20 @@ pub fn cgroup_memory() -> CgroupMemory {
     #[cfg(not(target_os = "linux"))]
     {
         CgroupMemory::default()
+    }
+}
+
+/// This process's cgroup memory limit alone (Linux; nothing elsewhere): [`cgroup_memory`]
+/// without reading usage, for callers that ask often (a settings page showing the budget).
+pub fn cgroup_limit() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let own = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+        walk(Path::new(CGROUP_ROOT), &own, false).limit
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
     }
 }
 
@@ -126,6 +140,11 @@ pub fn stat_value(stat: &str, key: &str) -> Option<u64> {
 /// → `root/path/memory.max`) and a v1 `memory` controller (`N:memory:/path` →
 /// `root/memory/path/memory.limit_in_bytes`), each walked up to its root.
 pub fn cgroup_memory_at(root: &Path, own: &str) -> CgroupMemory {
+    walk(root, own, true)
+}
+
+/// [`cgroup_memory_at`]; `usage: false` reads the limits only and leaves the headroom `None`.
+fn walk(root: &Path, own: &str, usage: bool) -> CgroupMemory {
     let mut out = CgroupMemory::default();
     for line in own.lines() {
         let mut fields = line.trim().splitn(3, ':');
@@ -144,6 +163,9 @@ pub fn cgroup_memory_at(root: &Path, own: &str) -> CgroupMemory {
                 continue;
             };
             out.limit = smaller(out.limit, Some(limit));
+            if !usage {
+                continue;
+            }
             if let Some(used) = read(&dir.join(usage_file)).as_deref().and_then(parse_usage) {
                 let stat = read(&dir.join("memory.stat")).unwrap_or_default();
                 let used = used.saturating_sub(stat_value(&stat, inactive_key).unwrap_or(0));
@@ -318,6 +340,16 @@ mod tests {
     }
 
     #[test]
+    fn the_limit_only_walk_skips_usage() {
+        let s = Scratch::new("v2-limit-only");
+        s.write("a/memory.max", &(4 * GIB).to_string());
+        s.write("a/memory.current", &GIB.to_string());
+        s.write("a/b/memory.max", &(2 * GIB).to_string());
+        assert_eq!(walk(&s.0, "0::/a/b\n", false), CgroupMemory { limit: Some(2 * GIB), headroom: None });
+        assert_eq!(walk(&s.0, "0::/a/b\n", true), CgroupMemory { limit: Some(2 * GIB), headroom: Some(3 * GIB) });
+    }
+
+    #[test]
     fn no_limit_anywhere_or_missing_files_mean_no_limit() {
         let s = Scratch::new("v2-none");
         s.write("u/memory.max", "max\n");
@@ -405,6 +437,7 @@ mod tests {
         println!("MemTotal      {:?} MiB", mib(meminfo_bytes(&info, "MemTotal")));
         println!("MemAvailable  {:?} MiB", mib(meminfo_bytes(&info, "MemAvailable")));
         let cg = cgroup_memory();
+        assert_eq!(cgroup_limit(), cg.limit);
         println!("cgroup limit  {:?} MiB, headroom {:?} MiB", mib(cg.limit), mib(cg.headroom));
         println!("effective_total {:?} MiB", mib(effective_total()));
         println!("available       {:?} MiB", mib(available()));

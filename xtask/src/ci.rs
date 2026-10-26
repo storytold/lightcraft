@@ -463,11 +463,14 @@ mod ci_jobs_tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn ram_honours_the_cgroup_limit() {
-        let Some(limit) = lightcraft_sysmem::limits::cgroup_memory().limit else {
-            return;
-        };
+        let info = std::fs::read_to_string("/proc/meminfo").unwrap();
+        let physical = lightcraft_sysmem::limits::meminfo_bytes(&info, "MemTotal").unwrap();
+        // the bound total_ram_gb's rounding can't exceed: the cgroup limit when there is one
+        let bound = lightcraft_sysmem::limits::cgroup_memory().limit.map_or(physical, |limit| limit.min(physical));
         let gb = super::total_ram_gb().unwrap();
-        assert!(gb <= (limit + (1 << 29)) >> 30, "{gb} GB above the cgroup limit {limit}");
+        assert!(gb <= (bound + (1 << 29)) >> 30, "{gb} GB above the {bound} bytes this process may use");
+        let available = lightcraft_sysmem::available().unwrap();
+        assert!(available <= bound, "available {available} above the {bound} bytes this process may use");
     }
 
     /// What CI would size itself from here; run by hand inside and outside a limited scope.
