@@ -261,6 +261,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         Dialog::DenoiseModel { .. } => "AI Denoise Model",
         Dialog::FaceModel { info, .. } if info["download"].is_string() => "Download Face Model",
         Dialog::FaceModel { .. } => "Add Face Model",
+        Dialog::ContentModel { info, .. } => crate::panels::content::dialog_title(info),
         Dialog::WhatsNew => "What's New",
         Dialog::Cull { .. } => "Assisted Culling",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
@@ -333,7 +334,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
-            Dialog::FaceModel { .. } => 460.0,
+            Dialog::FaceModel { .. } | Dialog::ContentModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
@@ -423,6 +424,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 }
                 Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, &t, info, accepted),
                 Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, &t, info, accepted),
+                Dialog::ContentModel { info, accepted } => crate::panels::content::model_dialog(app, ui, &t, info, accepted),
                 Dialog::LightroomResult { summary, library, details, .. } => {
                     ui.label(summary.as_str());
                     ui.add_space(8.0);
@@ -502,6 +504,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     let folder = id.and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id))).and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
                     // problems, count and albums: cached until the catalog or the rules change (not per frame)
                     let now = (app.session.clock)();
+                    // contents rules ask the content index: their texts are read before the count is made
+                    let asked = rules.contents_asked();
+                    app.session.content_rules_ask(asked.clone());
+                    if !asked.is_empty() {
+                        app.session.content_rules_refresh();
+                    }
                     let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
                     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
                     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
@@ -516,6 +524,18 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                         );
                     } else {
                         ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
+                    }
+                    if !asked.is_empty() && !app.session.content_rules_usable() {
+                        let r = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::i18n::tr(
+                                    "Contents rules match nothing until photos are indexed: turn on Index photo contents in Settings → Search.",
+                                ))
+                                .color(t.caution),
+                            )
+                            .wrap(),
+                        );
+                        crate::widgets::register(ui, "label:contentsRuleNote", r.rect);
                     }
                 }
                 Dialog::NewSmartAlbum { name, .. } => {
@@ -1430,6 +1450,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     Dialog::DenoiseModel { .. } => "Install",
                     Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
                     Dialog::FaceModel { .. } if !informational => "Install",
+                    Dialog::ContentModel { info, .. } => crate::panels::content::ok_label(info),
                     Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
                     Dialog::SaveEffect { .. } => "Create",
                     Dialog::MovePhotos { .. } => "Move",
@@ -1464,7 +1485,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     && (informational
                         || !matches!(
                             &dlg,
-                            Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
+                            Dialog::DenoiseModel { accepted: false, .. }
+                                | Dialog::FaceModel { accepted: false, .. }
+                                | Dialog::ContentModel { accepted: false, .. }
+                                | Dialog::SynchronizeFolder { counts: None, .. }
                         )
                             // smart-album rules that can't mean anything wait to be fixed
                             && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty()));
@@ -1558,6 +1582,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                         | Dialog::SynchronizeFolder { .. }
                         | Dialog::SaveEffect { .. }
                         | Dialog::CaptureTime { .. }
+                        | Dialog::ContentModel { .. }
                 ) =>
             {
                 app.toast(ctx, e)
@@ -1606,13 +1631,28 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     }
     // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
     if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
+        forget_rules_asks(app, &dlg);
         return;
     }
     if !close && !blocked {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique(BACKDROP_SHOWN), frame));
     }
-    app.ui.dialog = if close { None } else { Some(dlg) };
+    if close {
+        app.ui.dialog = None;
+        forget_rules_asks(app, &dlg);
+    } else {
+        app.ui.dialog = Some(dlg);
+    }
+}
+
+/// The Smart Rules editor gives the session the contents its unsaved rules ask about (so its match count is right);
+/// once it is gone, nothing asks them any more: no text is embedded and no rules context kept for them.
+fn forget_rules_asks(app: &mut LightcraftApp, closed: &Dialog) {
+    if matches!(closed, Dialog::SmartRules { .. }) && !matches!(app.ui.dialog, Some(Dialog::SmartRules { .. })) {
+        app.session.content_rules_ask(Vec::new());
+        app.session.content_rules_refresh();
+    }
 }
 
 /// The last frame a dialog was drawn and stayed open, for [`clicked_backdrop`].
@@ -2064,6 +2104,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
+        Dialog::ContentModel { info, accepted } => crate::panels::content::confirm(app, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
         Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));

@@ -1284,6 +1284,8 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             });
         }
+        ui.add_space(6.0);
+        super::keywording::content_suggestions(app, ui);
     });
 }
 

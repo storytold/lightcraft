@@ -370,6 +370,16 @@ impl LightsOut {
 /// How many libraries File ▸ Open Recent Library remembers.
 pub const RECENT_LIBRARIES: usize = 8;
 
+/// What the search field searches: the photos' text (file names, keywords, metadata, fielded words) or what they show
+/// (Contents: the content index, Settings ▸ Search).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchMode {
+    #[default]
+    Text,
+    Contents,
+}
+
 /// Whether the interface uses the dark or the light theme (Settings ▸ Interface ▸ Appearance).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -934,6 +944,13 @@ pub struct UiState {
     #[serde(skip)]
     pub dragging_control: Option<String>,
     pub search: String,
+    /// Text or Contents (the search field's magnifier menu). Saved only so that [`Self::sanitized`] knows what
+    /// `search` holds: a search by contents is not kept between runs, so its text isn't either.
+    #[serde(default, deserialize_with = "lenient")]
+    pub search_mode: SearchMode,
+    /// When the Contents text typed last is searched for (egui time): typing waits for a pause.
+    #[serde(skip)]
+    pub search_due: Option<f64>,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
@@ -1294,6 +1311,12 @@ pub enum Dialog {
         info: serde_json::Value,
         accepted: bool,
     },
+    /// A content (search) model to download or use: its licence terms and the "I accept" box.
+    ContentModel {
+        /// The model's row from `content.models.list`.
+        info: serde_json::Value,
+        accepted: bool,
+    },
     SystemInfo {
         rows: Vec<(String, String)>,
     },
@@ -1553,6 +1576,8 @@ impl Default for UiState {
             sidecars_waiting: 0,
             known_cards: None,
             search: String::new(),
+            search_mode: SearchMode::Text,
+            search_due: None,
             focus_search: false,
             focus_keywords: None,
             renaming_mask: None,
@@ -1703,6 +1728,11 @@ impl UiState {
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
         self.dialog = None;
         self.fullscreen = false;
+        // a search by contents ends with the run: its text must not come back as a search of the photos' text
+        if self.search_mode == SearchMode::Contents {
+            self.search.clear();
+            self.search_mode = SearchMode::Text;
+        }
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
             self.settings.preview_limit = AppSettings::default().preview_limit;
         }

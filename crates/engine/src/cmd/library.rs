@@ -434,9 +434,23 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, contents?: text | null, contentTag?: auto-tag | null, wait?: bool (true)} → {count, contents?} — `contentTag` shows the photos auto-tagged with it (`animal|bird`, its levels below included; content.tagCounts lists them);  `contents` (the search bar's Contents mode) and `contents:` / `shows:` words in `text` (`contents:\"red car\" rating:>=3`) search photos by what they show, with the content index (Settings ▸ Search): the photos that match, ANDed with the rest of the filter, sorted by Relevance until another sort is chosen; `contents` in the answer says how it went (state ready | preparing | problem, matches, bestMatches, hint). `wait: false` answers at once while the search model loads (the app); otherwise it waits for the ranking",
             always,
             |s, p| {
+                let mut p = p.clone();
+                let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
+                // (applied once the rest of the filter is accepted)
+                let mut contents: Option<Option<String>> = None;
+                if let Some(o) = p.as_object_mut() {
+                    o.remove("wait");
+                    match o.remove("contents") {
+                        None => {}
+                        Some(Value::Null) => contents = Some(None),
+                        Some(Value::String(t)) => contents = Some(crate::content_query::clean_query(&t)),
+                        Some(_) => return Err(bad("library.filter", "`contents` must be a text or null")),
+                    }
+                }
+                let p = &p;
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
                 lightcraft_develop::presets::deep_merge(&mut v, p);
                 let f: Filter = serde_json::from_value(v).map_err(|e| bad("library.filter", e.to_string()))?;
@@ -456,9 +470,29 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(problems) = f.rule_set.as_ref().filter(|_| sets_rules).map(|rs| rs.check(&s.catalog)).filter(|p| !p.is_empty()) {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
                 }
+                let asks_by_words = p.get("text").is_some() && lightcraft_catalog::query::split_contents(&f.text).0.is_some();
                 s.filter = f;
                 s.shelved_filter = None;
-                Ok(json!({"count": s.visible().len()}))
+                if asks_by_words {
+                    s.content_query.similar = None;
+                }
+                // (only a call that asks something new waits for its answer: clearing another filter never does)
+                let asks = asks_by_words || contents.as_ref().is_some_and(Option::is_some);
+                if let Some(c) = contents {
+                    // a new question by text replaces Find Similar Contents
+                    if c.is_some() {
+                        s.content_query.similar = None;
+                    }
+                    s.content_query.contents = c;
+                }
+                if wait && asks {
+                    s.content_wait(std::time::Duration::from_secs(120));
+                }
+                let count = s.visible().len();
+                Ok(match s.content_view() {
+                    Some(c) => json!({"count": count, "contents": c.to_json()}),
+                    None => json!({"count": count}),
+                })
             }
         ),
         cmd!(
@@ -549,8 +583,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"path": path, "label": label}))
             }
         ),
-        cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{}", always, |s, _| {
+        cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{} — also ends a search by contents", always, |s, _| {
             s.filter = Default::default();
+            s.clear_content_query();
             s.shelved_filter = None;
             Ok(json!({"count": s.visible().len()}))
         }),
@@ -580,7 +615,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|relevance (a search by contents: best match first), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -1167,10 +1202,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.catalog.alloc_album_id();
                 let album = Album { parent, smart: Some(Box::new(rules)), ..Album::new(id, name) };
                 s.commit("New Smart Album", Op::AddAlbum { album })?;
+                // contents rules read what the index says through the rules context: bring it up to the new rules
+                s.content_rules_refresh();
                 Ok(json!({"id": id.0, "count": s.catalog.album_count(id)}))
             }
         ),
-        cmd!(query "album.ruleFields", "Smart Album Rule Fields", [], None, "{} → [{field, label, kind (text|keywords|number|date|choice|bool|album: an album id), group (field-menu submenu, null at the top level), ops: [{op, label}], choices? (ids), choiceLabels? ({id: label})}] for ruleSet rules, in menu order", always, |_, _| {
+        cmd!(query "album.ruleFields", "Smart Album Rule Fields", [], None, "{} → [{field, label, kind (text|keywords|number|date|choice|bool|album: an album id|contents: a text the photo shows, or an auto-tag; `{text, min}` sets the score needed), group (field-menu submenu, null at the top level), ops: [{op, label}], choices? (ids), choiceLabels? ({id: label})}] for ruleSet rules, in menu order", always, |_, _| {
             use lightcraft_catalog::rules::{FIELDS, Kind, field_group, ops_for};
             Ok(json!(FIELDS
                 .iter()
@@ -1183,6 +1220,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         Kind::Date => "date",
                         Kind::Choice(_) => "choice",
                         Kind::Bool => "bool",
+                        Kind::Contents => "contents",
                     };
                     let mut v = json!({"field": id, "label": label, "kind": k, "group": field_group(id), "ops": ops_for(*kind).iter().map(|(o, l)| json!({"op": o, "label": l})).collect::<Vec<_>>()});
                     if let Kind::Choice(c) = kind {
@@ -1240,6 +1278,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(name) => s.commit("Edit Smart Album", Op::Batch { ops: vec![Op::RenameAlbum { id, name: name.to_string() }, set] })?,
                     None => s.commit("Edit Smart Album", set)?,
                 };
+                s.content_rules_refresh();
                 Ok(json!({"count": s.catalog.album_count(id)}))
             }
         ),
