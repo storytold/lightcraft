@@ -317,6 +317,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     super::chips::show(app, ui, &chips);
+    super::filterbar::missing_banner(app, ui);
     if app.ui.filter_bar {
         super::filterbar::show(app, ui);
     }
@@ -341,7 +342,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             super::empty_message(ui, ui.max_rect(), "No photos in this folder", "Turn on Include subfolders, or pick another folder under Local");
         } else if super::empty_library::shown(&app.session) {
             super::empty_library::show(app, ui, ui.max_rect());
-        } else {
+        } else if !super::grid_touch::empty_library(app, ui) {
             super::empty_message(ui, ui.max_rect(), "No photos", "Import photos with File → Import Photos… (Cmd+Shift+I), or drop them here");
         }
         return;
@@ -907,6 +908,8 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
+    super::grid_touch::missing_badge(app, ui, p, &t, img_rect, &photo, id);
+    super::grid_touch::select_circle(app, ui, p, &t, img_rect, id, selected);
     // interaction
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
@@ -924,7 +927,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         let m = ui.input(|i| i.modifiers);
         let mode = if m.shift {
             "range"
-        } else if m.command {
+        } else if m.command || (app.ui.multi_select && crate::theme::touch_ui(ui.ctx())) {
             "toggle"
         } else {
             "replace"

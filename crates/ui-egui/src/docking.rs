@@ -357,6 +357,11 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     app.ui.docking = Some(workspace.clone());
     let mut style = DockStyle::from_ui(ui);
     style.min_pane = 96.0;
+    if crate::glass::active(ui.ctx()) {
+        // panels float with a gap around them, on the same glass material as the bars
+        style.gap = 10.0;
+        style.tab_height = 34.0;
+    }
     // Free docking: a panel dropped at an empty window edge makes a dock, and the photo takes
     // drops on all four sides.
     style.new_dock_zones = true;

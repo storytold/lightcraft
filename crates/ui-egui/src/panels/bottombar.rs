@@ -20,6 +20,10 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
 ];
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    // the iPad's glass bar is its own layout (bottombar_touch.rs); everything below is the desktop's, untouched
+    if crate::theme::touch_ui(ui.ctx()) {
+        return super::bottombar_touch::show(app, ui);
+    }
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("bottom_bar")
         .exact_size(t.bottom_bar_h)

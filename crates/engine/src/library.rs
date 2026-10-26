@@ -861,6 +861,10 @@ impl Session {
 /// file system can't lock `catalog.lock` (some network shares). It opens anyway, as documented —
 /// refusing would lock the user out — but the user must learn that a second program could open it.
 fn unlocked_warning(lock: Option<&LibraryLock>) -> Option<String> {
+    // iOS never locks (a held lock gets a suspended app killed) and its library is private to the app
+    if cfg!(target_os = "ios") {
+        return None;
+    }
     lock.filter(|l| !l.held()).map(|_| {
         "This library could not be locked (its catalog.lock file can't be locked where it is stored, e.g. on some network \
          shares), so it is open without protection against a second program: use it in one LightCraft app or command at \

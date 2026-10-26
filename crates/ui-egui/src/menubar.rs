@@ -1046,7 +1046,9 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     // Menus hang below the whole top bar and never grow past the window (#189): a tall menu
     // scrolls instead of egui sliding it up over the titles.
     let bar_bottom = Some(ui.max_rect().bottom());
-    if total <= max_width {
+    let touch = crate::theme::touch_ui(ui.ctx());
+    let compact = touch || total > max_width;
+    if !compact {
         let saved = ui.spacing().item_spacing.x;
         ui.spacing_mut().item_spacing.x = TITLE_GAP;
         // All titles first, then their popups, so a title the pointer moves onto can take over
@@ -1075,7 +1077,14 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         }
         ui.spacing_mut().item_spacing.x = saved;
     } else {
-        let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Menu")).font(font.clone()).color(t.text_label)).frame(false));
+        let menu_font = if touch { t.font(14.0) } else { font.clone() };
+        let menu_color = if touch { t.text } else { t.text_label };
+        let mut menu_btn = egui::Button::new(egui::RichText::new(crate::i18n::tr("Menu")).font(menu_font).color(menu_color)).frame(touch);
+        if touch {
+            // a capsule like every other iPad button, not bare text
+            menu_btn = menu_btn.min_size(egui::vec2(72.0, 38.0)).corner_radius(19.0);
+        }
+        let r = ui.add(menu_btn);
         crate::widgets::register(ui, "menu:all", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             crate::menu_level::level(ui, 1, bar_bottom, |ui| {
@@ -1166,7 +1175,8 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
             MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
                 // a gutter for check marks, like native menus
                 let mut b = egui::Button::new(format!("      {}", display_item_label(id, params, label)));
-                if let Some(sc) = shortcut {
+                // (the iPad's menu is a touch menu: the desktop's Ctrl+… labels would only mislead there)
+                if let Some(sc) = shortcut.as_ref().filter(|_| !crate::theme::touch_ui(ui.ctx())) {
                     b = b.shortcut_text(shortcut_text(sc, mac));
                 }
                 let r = ui.add_enabled(*enabled, b);

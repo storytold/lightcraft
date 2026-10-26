@@ -2,17 +2,20 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod bottombar_touch;
 pub mod chips;
 pub mod compare;
 pub mod crop_overlay;
 pub mod denoise;
 pub mod detail;
+mod detail_touch;
 pub mod dialogs;
 pub mod edit;
 pub mod empty_library;
 pub mod faces;
 pub mod filterbar;
 pub mod grid;
+mod grid_touch;
 pub mod histogram;
 pub mod keymap;
 pub mod keyword_list;
@@ -27,7 +30,9 @@ pub mod people;
 pub mod person;
 pub mod presets;
 pub mod profiles;
+pub mod quick_develop;
 pub mod right;
+mod right_touch;
 pub mod rules_editor;
 pub mod rules_move;
 pub mod second;
@@ -39,6 +44,7 @@ pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
 pub mod topbar;
+pub mod topbar_touch;
 pub mod unnamed;
 
 use egui::{Align2, Rect, pos2, vec2};

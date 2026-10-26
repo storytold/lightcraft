@@ -230,6 +230,12 @@ impl<'a> TextField<'a> {
         }
         if let Some(margin) = self.margin {
             edit = edit.margin(margin);
+        } else if crate::theme::touch_ui(ui.ctx()) && self.frame {
+            // a field a fingertip can hit (the desktop's 20pt rows are too thin on the iPad)
+            edit = edit.margin(egui::Margin::symmetric(10, 10));
+        }
+        if crate::theme::touch_ui(ui.ctx()) && self.frame && self.rows.is_none_or(|r| r <= 1) {
+            edit = edit.min_size(egui::vec2(0.0, 40.0));
         }
         if let Some(rows) = self.rows {
             edit = edit.desired_rows(rows);

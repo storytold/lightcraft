@@ -215,7 +215,7 @@ pub(super) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
 pub(super) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    let r = ui.checkbox(value, crate::i18n::tr(label));
+    let r = crate::widgets::toggle(ui, value, crate::i18n::tr(label));
     register(ui, format!("check:{id}"), r.rect);
     r.changed()
 }
@@ -254,17 +254,18 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();
+        let sandboxed = sandbox_library_root(app).is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
         register(ui, "button:settingsOpenLibrary", r.rect);
         if r.clicked() {
             let _ = app.run("app.openLibrary", json!({}));
         }
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("New Library…")));
+        let r = ui.add_enabled(can || sandboxed, egui::Button::new(crate::i18n::tr("New Library…")));
         register(ui, "button:settingsNewLibrary", r.rect);
         if r.clicked() {
             let _ = app.run("app.newLibrary", json!({}));
         }
-        if !can {
+        if !can && !sandboxed {
             hint(ui, t, crate::i18n::tr("not available here"));
         }
     });
@@ -292,6 +293,17 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             &mut app.ui.settings.lightroom_import,
         );
     });
+    // no folder dialog: the other libraries in this app's storage open from here
+    for dir in sandbox_libraries(app, ui) {
+        let name = library_name(&dir);
+        row(ui, t, "", |ui| {
+            let r = ui.button(format!("{} {name}", crate::i18n::tr("Open")));
+            register(ui, format!("button:settingsOpenSandbox:{name}"), r.rect);
+            if r.clicked() {
+                let _ = app.run("app.openLibrary", json!({"path": dir.to_string_lossy()}));
+            }
+        });
+    }
     heading(ui, t, crate::i18n::tr("Startup"));
     row(ui, t, crate::i18n::tr("Open in"), |ui| {
         choices(
@@ -563,7 +575,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
-                if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
+                if crate::widgets::toggle(ui, &mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
                     let _ = app.run("library.autoImport", json!({"copy": copy}));
                 }
             });
@@ -1388,6 +1400,35 @@ pub fn library_name(dir: &std::path::Path) -> String {
     dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.display().to_string())
 }
 
+/// Where libraries live on a host with no folder dialog (iPad: the app's sandboxed Documents):
+/// the folder holding the open on-disk library. `None` when a dialog exists or none is open.
+pub fn sandbox_library_root(app: &LightcraftApp) -> Option<std::path::PathBuf> {
+    if app.services.pick_folder.is_some() {
+        return None;
+    }
+    app.session.library.as_ref().filter(|l| l.on_disk).and_then(|l| l.dir.parent().map(std::path::Path::to_path_buf))
+}
+
+/// The other libraries beside the open one in `sandbox_library_root`, by name (listed off the UI thread, refreshed every few seconds).
+pub fn sandbox_libraries(app: &LightcraftApp, ui: &egui::Ui) -> Vec<std::path::PathBuf> {
+    let (Some(root), Some(open)) = (sandbox_library_root(app), app.session.library.as_ref().map(|l| l.dir.clone())) else {
+        return Vec::new();
+    };
+    let mut found = super::left::fs_cached(ui, "sandbox-libraries", &root.to_string_lossy(), 3.0, |root| {
+        std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|d| d.is_dir() && lightcraft_engine::library::is_library(d))
+            .collect::<Vec<std::path::PathBuf>>()
+    })
+    .unwrap_or_default();
+    found.retain(|d| *d != open);
+    found.sort();
+    found
+}
+
 /// The open library's name (`None`: in memory, nothing is saved).
 pub fn open_library_name(app: &LightcraftApp) -> Option<String> {
     app.session.library.as_ref().filter(|l| l.on_disk).map(|l| library_name(&l.dir))
@@ -1405,7 +1446,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         Some(_) => return Err("app.newLibrary: name must be a string".into()),
     };
     // from the menu: ask for the name first (default prefilled), then for the location
-    if name.is_none() && p.get("path").is_none() && app.services.pick_folder.is_some() {
+    if name.is_none() && p.get("path").is_none() && (app.services.pick_folder.is_some() || sandbox_library_root(app).is_some()) {
         crate::panels::dialogs::prompt(
             app,
             "New Library",
@@ -1417,8 +1458,11 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         );
         return Ok(Value::Null);
     }
+    let sandbox_root = sandbox_library_root(app);
     let (location, picked) = match p.get("path").and_then(Value::as_str) {
         Some(x) => (std::path::PathBuf::from(x), false),
+        // no folder dialog (iPad): libraries are folders beside the open one, in the app's sandbox
+        None if sandbox_root.is_some() && name.is_some() => (sandbox_root.unwrap_or_default(), false),
         None => {
             let req = crate::pick::PickRequest::folder(crate::i18n::tr("New Library: Choose Where to Put It"));
             match crate::pick::ask(app, "app.newLibrary", p, "path", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {

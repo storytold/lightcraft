@@ -105,14 +105,42 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     // header: Edit + Auto / B&W / HDR
     let mut reset_clicked = false;
-    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
-    ui.painter().text(pos2(hr.left() + 24.0, hr.bottom() - 10.0), Align2::LEFT_CENTER, crate::i18n::tr("Edit"), t.semibold(15.0), t.text);
+    // (the iPad's panel title row already says "Edit")
+    if !crate::theme::touch_ui(ui.ctx()) {
+        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+        ui.painter().text(pos2(hr.left() + 24.0, hr.bottom() - 10.0), Align2::LEFT_CENTER, crate::i18n::tr("Edit"), t.semibold(15.0), t.text);
+    }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        let touch = crate::theme::touch_ui(ui.ctx());
+        let chips = |ui: &mut egui::Ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
-                let _ = app.run("develop.auto", json!({}));
-                app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
+                let applied = app.run("develop.auto", json!({}));
+                // iPad: say what Auto moved, so the sliders' new positions make sense
+                let msg = match applied {
+                    Ok(a) if touch => {
+                        let part = |key: &str, label: &str, d: usize| {
+                            a.get(key).and_then(|v| v.as_f64()).map(|v| format!("{} {v:+.d$}", crate::i18n::tr(label)))
+                        };
+                        let parts: Vec<String> = [
+                            part("exposure", "Exposure", 2),
+                            part("contrast", "Contrast", 0),
+                            part("highlights", "Highlights", 0),
+                            part("shadows", "Shadows", 0),
+                            part("vibrance", "Vibrance", 0),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                        if parts.is_empty() {
+                            crate::i18n::tr("Auto settings applied").to_string()
+                        } else {
+                            format!("{}: {}", crate::i18n::tr("Auto"), parts.join(" · "))
+                        }
+                    }
+                    _ => crate::i18n::tr("Auto settings applied").to_string(),
+                };
+                app.toast(ui.ctx(), msg);
             }
             let bw = crate::is_bw(&d);
             if text_button(ui, "bw", crate::i18n::tr("B&W"), bw).clicked() {
@@ -125,15 +153,26 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             {
                 let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut reset = |ui: &mut egui::Ui| {
                 if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
                     .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
                     .clicked()
                 {
                     reset_clicked = true;
                 }
-            });
-        });
+            };
+            if touch {
+                // the chips wrap on the narrow iPad panel; Reset follows them instead of covering HDR
+                reset(ui);
+            } else {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), reset);
+            }
+        };
+        if touch {
+            ui.horizontal_wrapped(chips);
+        } else {
+            ui.horizontal(chips);
+        }
     });
     if let Some(why) = &preview_only {
         let reload = egui::Frame::NONE
@@ -171,7 +210,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
             let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
             let below = r.rect.bottom();
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
+            egui::Popup::menu(&r).show(|ui| {
+                crate::widgets::touch_menu_style(ui);
+                profile_menu(app, ui, &d, below)
+            });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(
                     ui,
@@ -241,6 +283,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
                 let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
                 egui::Popup::menu(&r).show(|ui| {
+                    crate::widgets::touch_menu_style(ui);
                     for m in WbMode::ALL {
                         if m == WbMode::Custom {
                             continue;
@@ -607,7 +650,7 @@ fn steady_hdr_histogram(ctx: &egui::Context, id: PhotoId, hdr_edit: bool, hist: 
     }
 }
 
-fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let hdr_edit = app.session.develop_of(id).is_some_and(|d| d.hdr.enabled);
@@ -1290,6 +1333,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let label = crate::i18n::builtin_label(current.as_deref().unwrap_or("Custom"), builtin);
             let r = crate::widgets::dropdown(ui, "curvePreset", label, t.font(12.0), t.text);
             egui::Popup::menu(&r).show(|ui| {
+                crate::widgets::touch_menu_style(ui);
                 ui.set_min_width(180.0);
                 let presets = all_presets(&app.session);
                 let mut user_seen = false;

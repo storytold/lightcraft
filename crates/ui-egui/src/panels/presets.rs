@@ -110,6 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(28.0, 28.0), false, true, crate::i18n::tr("More preset options"));
         egui::Popup::menu(&more).show(|ui| {
+            crate::widgets::touch_menu_style(ui);
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui, "presetMenu:thumbnails", r.rect);
             ui.separator();
@@ -160,7 +161,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let marked = AppliedByPhoto::of(ui.ctx(), &app.session, active);
         let current = active.and_then(|id| app.session.develop_of(id)).map(|d| (*d).clone());
         let thumbs = app.ui.preset_thumbs && active.is_some();
-        let row_h = if thumbs { 54.0 } else { 26.0 };
+        let row_h = if thumbs {
+            54.0
+        } else if crate::theme::touch_ui(ui.ctx()) {
+            44.0
+        } else {
+            26.0
+        };
         let groups = grouped(ui.ctx(), &app.session.presets);
         let scroll = egui::ScrollArea::vertical().id_salt("presets-scroll").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -172,7 +179,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 // the Favorites section opens and closes apart from a user group named "Favorites"
                 let open_id = egui::Id::unique(("preset-group", favorites, &g));
                 let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                let (r, resp) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), if crate::theme::touch_ui(ui.ctx()) { 40.0 } else { 32.0 }), Sense::click());
                 crate::widgets::announce(&resp, g.to_string());
                 // outside the `presetGroup:` ids, which a user group of any name can take
                 register(ui, if favorites { "presetFavorites".to_string() } else { format!("presetGroup:{g}") }, r);

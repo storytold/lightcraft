@@ -82,6 +82,18 @@ fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
     p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
+/// Where the host has its own segmenter (Apple Vision on iPad), a Subject mask is its foreground
+/// selection instead of the built-in estimate; when it finds nothing the estimate stays.
+fn platform_subject(s: &mut Session, shape: &mut MaskShape) {
+    if !matches!(shape, MaskShape::Subject) || crate::segment::platform::platform_segmenter().is_none() {
+        return;
+    }
+    let Some(id) = s.active() else { return };
+    if let Ok(Some(seg)) = s.segment_subject(id) {
+        *shape = MaskShape::Object { hint: Vec::new(), exclude: Vec::new(), seg: Some(seg), detail: Vec::new(), edge: 0.0 };
+    }
+}
+
 /// What a new AI shape still needs once it is added.
 enum Later {
     Nothing,
@@ -256,6 +268,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
                 let mut shape = shape_from(&kind, p, "mask.add")?;
+                platform_subject(s, &mut shape);
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
@@ -298,6 +311,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
                 let mut shape = shape_from(&kind, p, "mask.addComponent")?;
+                platform_subject(s, &mut shape);
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");

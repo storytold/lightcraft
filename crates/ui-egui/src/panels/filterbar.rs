@@ -70,6 +70,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     }
     let mut chosen = None;
     egui::Popup::menu(&r).show(|ui| {
+        crate::widgets::touch_menu_style(ui);
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for (label, patch, sel) in &items {
                 if ui
@@ -93,7 +94,140 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     }
 }
 
+/// Photos whose original file is known to be missing (the drive is gone, or the app was reinstalled).
+fn offline_ids(app: &LightcraftApp) -> Vec<u64> {
+    app.session
+        .catalog
+        .photos()
+        .filter(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if app.session.media.availability.is_offline(path)))
+        .map(|p| p.id.0)
+        .collect()
+}
+
+/// A slim strip above the grid when some originals are missing: how many, a way to list them, and to dismiss it.
+pub fn missing_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if !crate::theme::touch_ui(ui.ctx()) || app.ui.missing_banner_hidden || app.session.catalog.is_empty() {
+        return;
+    }
+    let missing = offline_ids(app);
+    if missing.is_empty() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let showing = !app.session.filter.only.is_empty();
+    let out = egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(70, 52, 14, 235)).inner_margin(egui::Margin::symmetric(14, 6)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let n = missing.len();
+            let text = format!("{n} original{} not found on this iPad", if n == 1 { "" } else { "s" });
+            ui.label(egui::RichText::new(text).font(t.semibold(13.0)).color(Color32::WHITE));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::widgets::text_button(ui, "missingDismiss", "Dismiss", false).clicked() {
+                    app.ui.missing_banner_hidden = true;
+                }
+                // pick the folder they are in now (Files / iCloud Drive) and relink every match by name and size
+                if crate::widgets::text_button(ui, "missingFind", "Find…", false).clicked()
+                    && let Err(e) = crate::menubar::run_item(app, "file.findMissing", json!({}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+                let label = if showing { "Show all photos" } else { "Show them" };
+                if crate::widgets::text_button(ui, "missingShow", label, showing).clicked() {
+                    filter(app, json!({"only": if showing { json!([]) } else { json!(missing) }}));
+                }
+            });
+        });
+    });
+    register(ui, "missingBanner", out.response.rect);
+}
+
+/// The iPad's filter bar: capsule chips that wrap, one tap each (rating, flag, label, edited, original missing).
+fn show_touch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let f = app.session.filter.clone();
+    let missing = offline_ids(app);
+    let filtering = app.session.filter != Default::default();
+    // (what the panel shows ends at its clip edge: the tool rail floats over the rest)
+    let width = ui.available_width().min(ui.clip_rect().right() - ui.min_rect().left());
+    let out = egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
+        ui.set_width(width - 28.0);
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("Show")).font(t.font(13.0)).color(t.text_dim));
+            for n in 1..=5u8 {
+                let label = if n == 5 { "5 stars".to_string() } else { format!("{n}+ stars") };
+                let on = f.rating == n;
+                if crate::widgets::text_button(ui, &format!("filterRating-{n}"), &label, on).clicked() {
+                    filter(app, json!({"rating": if on { 0 } else { n }, "ratingOp": if n == 5 && !on { "exactly" } else { "atLeast" }}));
+                }
+            }
+            ui.add_space(6.0);
+            for (id, label, flag) in [("pick", "Picked", Flag::Pick), ("reject", "Rejected", Flag::Reject), ("none", "Unflagged", Flag::None)] {
+                let on = f.flag == Some(flag);
+                if crate::widgets::text_button(ui, &format!("filterFlag-{id}"), label, on).clicked() {
+                    filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
+                }
+            }
+            ui.add_space(6.0);
+            for (id, label, v) in [("edited", "Edited", Some(true)), ("unedited", "Not edited", Some(false))] {
+                let on = f.edited == v;
+                if crate::widgets::text_button(ui, &format!("filter-{id}"), label, on).clicked() {
+                    filter(app, json!({"edited": if on { Value::Null } else { json!(v) }}));
+                }
+            }
+            let mut chosen: Vec<ColorLabel> = f.labels.clone();
+            if let Some(l) = f.label
+                && !chosen.contains(&l)
+            {
+                chosen.push(l);
+            }
+            ui.add_space(6.0);
+            for l in ColorLabel::ALL {
+                let on = chosen.contains(&l);
+                let name = format!("{l:?}").to_lowercase();
+                let (r, resp) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::click());
+                register(ui, format!("filter:label-{name}"), r);
+                ui.painter().circle_filled(r.center(), 19.0, if on { t.pressed } else { t.button });
+                ui.painter().circle_filled(r.center(), 8.0, label_color(l));
+                if on {
+                    ui.painter().circle_stroke(r.center(), 17.0, Stroke::new(2.0, t.accent));
+                }
+                if resp.clicked() {
+                    let mut next = chosen.clone();
+                    if on {
+                        next.retain(|x| *x != l);
+                    } else {
+                        next.push(l);
+                    }
+                    next.sort();
+                    let names: Vec<String> = next.iter().map(|x| format!("{x:?}").to_lowercase()).collect();
+                    filter(app, json!({"label": Value::Null, "labels": names}));
+                }
+            }
+            if !missing.is_empty() {
+                ui.add_space(6.0);
+                let on = !f.only.is_empty();
+                let label = format!("Original missing ({})", missing.len());
+                if crate::widgets::text_button(ui, "filterMissing", &label, on).clicked() {
+                    filter(app, json!({"only": if on { json!([]) } else { json!(missing) }}));
+                }
+            }
+            ui.add_space(6.0);
+            if filtering && crate::widgets::text_button(ui, "filterClear", "Clear", false).clicked() {
+                let _ = app.run("library.clearFilter", json!({}));
+            }
+        });
+    });
+    register(ui, "filterbar", out.response.rect);
+    ui.painter().line_segment([out.response.rect.left_bottom(), out.response.rect.right_bottom()], Stroke::new(1.0, t.divider));
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if crate::theme::touch_ui(ui.ctx()) {
+        show_touch(app, ui);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     // one row when there is room, else the metadata pickers and actions go to a second row
     let two_rows = ui.available_width() < WIDE;
@@ -267,6 +401,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
     register(ui, "button:filterPresets", presets.rect);
     egui::Popup::menu(&presets).show(|ui| {
+        crate::widgets::touch_menu_style(ui);
         let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
         for n in &names {
             let r = ui.button(n);

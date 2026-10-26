@@ -297,13 +297,22 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32,
     register(ui, format!("{salt}:{}:{}", f.photo, f.index), r);
     // the × is added after the tile, so it wins where they overlap
     let x_rect = Rect::from_min_size(pos2(r.right() - 24.0, r.top() + 4.0), vec2(20.0, 20.0));
-    let x_resp = more.then(|| ui.interact(x_rect, egui::Id::unique(("more-face-x", f.photo, f.index)), Sense::click()));
+    let touch = crate::theme::touch_ui(ui.ctx());
     let above_rect = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(24.0, 20.0));
-    let above_resp = more.then(|| ui.interact(above_rect, egui::Id::unique(("more-face-above", f.photo, f.index)), Sense::click()));
+    // on touch the small controls get 44pt targets around what is painted, so a miss does not confirm the face
+    let (x_hit, above_hit) = if touch {
+        (Rect::from_center_size(x_rect.center(), vec2(44.0, 44.0)), Rect::from_center_size(above_rect.center(), vec2(44.0, 44.0)))
+    } else {
+        (x_rect, above_rect)
+    };
+    let x_resp = more.then(|| ui.interact(x_hit, egui::Id::unique(("more-face-x", f.photo, f.index)), Sense::click()));
+    let above_resp = more.then(|| ui.interact(above_hit, egui::Id::unique(("more-face-above", f.photo, f.index)), Sense::click()));
     if more {
-        register(ui, format!("more-face-above:{}:{}", f.photo, f.index), above_rect);
+        register(ui, format!("more-face-above:{}:{}", f.photo, f.index), above_hit);
     }
-    let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
+    let pointer_over = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
+    // (touch has no hover: the confirm controls are always shown there, but the outline still follows the pointer)
+    let hovered = pointer_over || touch;
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
     if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
@@ -311,7 +320,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32,
     {
         p.image(tex.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
-    if hovered {
+    if pointer_over {
         p.rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
     }
     let mut hit = Hit::Nothing;

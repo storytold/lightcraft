@@ -19,6 +19,8 @@ mod drop_overlay;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;
+pub mod gallery;
+pub mod glass;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -32,6 +34,7 @@ pub mod menus;
 pub mod merge;
 mod model_setup;
 pub mod panels;
+pub mod pencil;
 pub mod pick;
 pub mod print_view;
 pub mod progress;
@@ -49,6 +52,7 @@ pub mod sync;
 pub mod tasks;
 pub mod text_field;
 pub mod theme;
+pub mod touch;
 pub mod updates_ui;
 pub mod widgets;
 pub mod window_place;
@@ -86,6 +90,7 @@ mod tests_curve;
 #[cfg(test)]
 mod tests_date_picker;
 #[cfg(test)]
+#[cfg(test)]
 mod tests_dialog_fit;
 #[cfg(test)]
 mod tests_dialog_primary;
@@ -98,6 +103,8 @@ mod tests_dialogs;
 #[cfg(test)]
 mod tests_drop_import;
 #[cfg(test)]
+mod tests_e2e_workflows;
+#[cfg(test)]
 mod tests_edit_layout;
 #[cfg(test)]
 mod tests_empty_library;
@@ -109,6 +116,8 @@ mod tests_filmstrip;
 mod tests_focus_point;
 #[cfg(test)]
 mod tests_folder_drop;
+#[cfg(test)]
+mod tests_gestures;
 #[cfg(test)]
 mod tests_grading;
 #[cfg(test)]
@@ -175,6 +184,8 @@ mod tests_profile_menu;
 mod tests_profiles_layout;
 #[cfg(test)]
 mod tests_progress;
+#[cfg(test)]
+mod tests_quick_develop;
 #[cfg(test)]
 mod tests_quit_unsaved;
 #[cfg(test)]
@@ -521,6 +532,7 @@ pub struct LightcraftApp {
     pub region_before_view: Option<region::RegionView>,
     /// The loupe's render sizes while a pinch or two-finger scroll runs.
     pub(crate) size_hold: region::SizeHold,
+    pub touch_tracker: touch::TouchGestureTracker,
     /// The size of a slider drag's whole-frame drafts (full size where they keep up, issue #330).
     pub(crate) drag_scale: region::DragScale,
     /// (photo, look, window frame size) a window was refused for: it reads more than one render holds.
@@ -670,6 +682,7 @@ impl LightcraftApp {
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),
+            touch_tracker: touch::TouchGestureTracker::new(),
             drag_scale: Default::default(),
             window_refused: None,
             region_tiles: Default::default(),
@@ -2132,6 +2145,27 @@ impl LightcraftApp {
         if self.fonts_ready && !updates_ui::blocks_input(self) {
             shortcuts::handle(self, ctx);
         }
+        // two- and three-finger taps are the iPad's undo / redo: a desktop touchscreen must not edit by accident
+        let touch_events = ctx.input(|i| i.raw.events.clone());
+        let now = ctx.input(|i| i.time);
+        let touch_action = if theme::touch_ui(ctx) {
+            self.touch_tracker.process_events(now, &touch_events)
+        } else {
+            self.touch_tracker = touch::TouchGestureTracker::new();
+            None
+        };
+        if let Some(action) = touch_action {
+            match action {
+                touch::TouchAction::Undo => {
+                    let _ = self.run("edit.undo", serde_json::json!({}));
+                    self.toast(ctx, crate::i18n::tr("Undo"));
+                }
+                touch::TouchAction::Redo => {
+                    let _ = self.run("edit.redo", serde_json::json!({}));
+                    self.toast(ctx, crate::i18n::tr("Redo"));
+                }
+            }
+        }
     }
 
     /// Take the host's dropped files, exactly once. The queue is filled by `raw_input_hook`, so a
@@ -2535,6 +2569,12 @@ impl LightcraftApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
+        // a portrait or Split View window leaves the photo too little room beside a 340pt tool panel
+        if theme::touch_ui(&ctx) && ctx.content_rect().width() < 900.0 && self.ui.right_width > 300.0 {
+            self.ui.right_width = 300.0;
+        }
+        icons::set_touch_glyphs(theme::touch_ui(&ctx));
+        glass::paint_backdrop(&ctx);
         if !self.fonts_ready {
             ctx.request_repaint();
             return;
@@ -2653,6 +2693,8 @@ impl LightcraftApp {
         // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
         let chrome = theme::Tokens::get(&ctx).chrome;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        panels::bottombar_touch::floating_rating(self, &ctx);
+        gallery::show(self, &ctx);
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
         if notice_blocks {

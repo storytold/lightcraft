@@ -17,6 +17,7 @@
 
 #[cfg(feature = "sam")]
 mod download;
+pub mod platform;
 #[cfg(feature = "sam")]
 mod worker;
 
@@ -169,6 +170,9 @@ impl Segmenter {
 
     /// Whether the local model files are in place.
     pub fn installed(&self) -> bool {
+        if platform::platform_segmenter().is_some() {
+            return true;
+        }
         #[cfg(feature = "sam")]
         if let Some(dir) = &self.dir {
             return lightcraft_segment::is_model_dir(dir);
@@ -254,6 +258,10 @@ impl Segmenter {
         let other = |why: &str| crate::EngineError::Other(why.into());
         if !Self::AVAILABLE {
             return Err(other("AI masks are not available in this build"));
+        }
+        // the host's own segmenter (Apple Vision on iPad) needs no files
+        if platform::platform_segmenter().is_some() {
+            return Ok(PathBuf::new());
         }
         #[cfg(feature = "sam")]
         if lightcraft_segment::remote::configured().is_some() {
@@ -483,6 +491,23 @@ impl Session {
         #[cfg(feature = "sam")]
         {
             self.segment_wait(id, worker::Kind::Clicks(Self::model_clicks(clicks)), None)?.ok_or_else(|| "nothing was selected".to_string())
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = id;
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// The whole foreground of photo `id` from the host platform's segmenter (Apple Vision on iPad);
+    /// `Ok(None)` when it finds none. An error when the host has no such segmenter.
+    pub fn segment_subject(&mut self, id: PhotoId) -> Result<Option<SegMask>, String> {
+        if platform::platform_segmenter().is_none() {
+            return Err("this device has no built-in subject selection".into());
+        }
+        #[cfg(feature = "sam")]
+        {
+            self.segment_wait(id, worker::Kind::Clicks(Vec::new()), None)
         }
         #[cfg(not(feature = "sam"))]
         {

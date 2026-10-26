@@ -457,7 +457,35 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     }))
 }
 
+/// A request answered by the host platform's segmenter instead of SAM 3.
+fn platform_job(shared: &Shared, job: &mut Job, f: super::platform::PlatformFn) -> Result<Option<SegMask>, String> {
+    // no clicks asks for the whole foreground; `Prepare` only analyzes the photo ahead of the first tap
+    let (clicks, prepare_only): (Vec<[f32; 3]>, bool) = match std::mem::replace(&mut job.kind, Kind::Prepare) {
+        // no zoomed-in pass: the platform's mask is already sharp
+        Kind::Detail { .. } => return Ok(None),
+        Kind::Text(_) => {
+            return Err("Describe is not available on this device; Sky, Subject and Background work, and Object picks by tapping".into());
+        }
+        Kind::Clicks(c) => (c.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect(), false),
+        Kind::Prepare => (Vec::new(), true),
+        #[cfg(test)]
+        Kind::Panic | Kind::FailOnGpu { .. } => return Err("test panic request".into()),
+    };
+    let input = render(job)?;
+    let _busy = Flag::raise(&shared.encoding);
+    let t = web_time::Instant::now();
+    let mask = f(&input.rgb, input.w, input.h, job.key, &clicks)?;
+    log::info!("platform segmentation {}×{} in {:?}", input.w, input.h, t.elapsed());
+    if prepare_only {
+        return Ok(None);
+    }
+    Ok(mask.map(|m| SegMask::from_logits(m.side, &m.logits)))
+}
+
 fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
+    if let Some(f) = super::platform::platform_segmenter() {
+        return platform_job(shared, job, f).map_err(Failure::Other);
+    }
     if let Some(endpoint) = remote::configured() {
         let result = remote_job(state, shared, job, &endpoint);
         if result.is_err() {

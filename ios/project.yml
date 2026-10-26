@@ -1,0 +1,80 @@
+name: LightCraftiPad
+options:
+  bundleIdPrefix: com
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  LightCraftiPad:
+    type: application
+    platform: iOS
+    sources:
+      - path: LightCraft
+    settings:
+      base:
+        PRODUCT_NAME: "LightCraft iPad (fork)"
+        PRODUCT_BUNDLE_IDENTIFIER: com.kislay.lightcraftpad
+        DEVELOPMENT_TEAM: ZW9T4T3ZDY
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "2"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        ENABLE_PREVIEWS: NO
+        ENABLE_DEBUG_DYLIB: NO
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: LightCraft/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(PROJECT_DIR)/build"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-force_load"
+          - "$(PROJECT_DIR)/build/liblightcraft_ios.a"
+          - "-framework"
+          - Metal
+          - "-framework"
+          - UIKit
+          - "-framework"
+          - Foundation
+          - "-framework"
+          - QuartzCore
+          - "-framework"
+          - CoreGraphics
+          - "-framework"
+          - CoreFoundation
+          - "-framework"
+          - ImageIO
+          - "-framework"
+          - Photos
+          - "-framework"
+          - PhotosUI
+          - "-framework"
+          - UniformTypeIdentifiers
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+    preBuildScripts:
+      - name: Build Rust static library
+        script: |
+          set -euo pipefail
+          export PATH="/Users/kislayranjanneetandon/.rustup/toolchains/stable-aarch64-apple-darwin/bin:/opt/homebrew/bin:$PATH"
+          if which rustup >/dev/null 2>&1; then
+            TOOLCHAIN_BIN="$(dirname "$(rustup which cargo)")"
+            export PATH="$TOOLCHAIN_BIN:$PATH"
+          fi
+          if [[ "$SDK_NAME" == *simulator* ]]; then
+            export RUST_TARGET=aarch64-apple-ios-sim
+          else
+            export RUST_TARGET=aarch64-apple-ios
+          fi
+          mkdir -p "${PROJECT_DIR}/build"
+          cargo build --manifest-path "${PROJECT_DIR}/lightcraft-ios/Cargo.toml" --target "$RUST_TARGET" --release
+          if [ -f "${PROJECT_DIR}/target/${RUST_TARGET}/release/liblightcraft_ios.a" ]; then
+            cp "${PROJECT_DIR}/target/${RUST_TARGET}/release/liblightcraft_ios.a" "${PROJECT_DIR}/build/liblightcraft_ios.a"
+          elif [ -f "${PROJECT_DIR}/lightcraft-ios/../../target/${RUST_TARGET}/release/liblightcraft_ios.a" ]; then
+            cp "${PROJECT_DIR}/lightcraft-ios/../../target/${RUST_TARGET}/release/liblightcraft_ios.a" "${PROJECT_DIR}/build/liblightcraft_ios.a"
+          fi

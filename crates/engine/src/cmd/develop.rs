@@ -231,10 +231,44 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
-        cmd!("develop.adjust", "Nudge Develop Value", [], None, "{control, delta}", has_active, |s, p| {
+        cmd!("develop.adjust", "Nudge Develop Value", [], None, "{control, delta, ids?}", has_active, |s, p| {
             let c = str_param(p, "control").ok_or_else(|| bad("develop.adjust", "missing control"))?.to_string();
             let spec = controls::find(&c).ok_or_else(|| bad("develop.adjust", "unknown control"))?;
             let delta = f64_req(p, "delta", "develop.adjust")?;
+            // `ids` (the iPad's Quick Develop) nudges several photos in one undo step; without it, the active photo
+            if p.get("ids").is_some_and(|v| !v.is_null()) {
+                let targets = s.targets(p)?;
+                if !(targets.len() == 1 && s.active() == Some(targets[0])) {
+                    if targets.is_empty() {
+                        return Err(bad("develop.adjust", "no photo"));
+                    }
+                    let ops: Vec<_> = targets
+                        .iter()
+                        .filter_map(|&id| {
+                            let mut d = (*s.develop_of(id)?).clone();
+                            let (info, dims) = (s.source_info(id), crop_dims(s, id));
+                            let before = d.crop.geometry;
+                            if c == "wb.temp" || c == "wb.tint" {
+                                lightcraft_pipeline::local::normalize_wb(&mut d, &info);
+                                if d.wb.mode == WbMode::AsShot {
+                                    d.wb.temp = info.as_shot_temp;
+                                    d.wb.tint = info.as_shot_tint;
+                                }
+                                d.wb.mode = WbMode::Custom;
+                            }
+                            let v = controls::get(&d, &c).unwrap_or(spec.default);
+                            controls::set(&mut d, &c, v + delta);
+                            refit_crop_angle(c == CROP_ANGLE, before, &mut d, dims);
+                            s.develop_op(id, d, spec.label)
+                        })
+                        .collect();
+                    if ops.is_empty() {
+                        return Err(bad("develop", "none of the photos could be edited"));
+                    }
+                    s.commit(spec.label, Op::Batch { ops })?;
+                    return ok();
+                }
+            }
             let id = active(s, "develop.adjust")?;
             let (info, dims) = (s.source_info(id), crop_dims(s, id));
             edit(s, "develop.adjust", spec.label, |d| {
@@ -384,7 +418,45 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"mix": m}))
             }
         ),
-        cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_active, |s, _| {
+        cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{ids?}", has_active, |s, p| {
+            // `ids` (the iPad's Quick Develop): each photo gets its own Auto, in one undo step
+            if p.get("ids").is_some_and(|v| !v.is_null()) {
+                let targets = s.targets(p)?;
+                if !(targets.len() == 1 && s.active() == Some(targets[0])) {
+                    if targets.is_empty() {
+                        return Err(bad("develop.auto", "no photo"));
+                    }
+                    let mut ops = Vec::new();
+                    let mut unreadable = 0usize;
+                    for &id in &targets {
+                        let Ok(src) = s.source_now(id, SourceLevel::Thumb) else {
+                            unreadable += 1;
+                            continue;
+                        };
+                        let info = s.source_info(id);
+                        let Some(mut d) = s.develop_of(id).map(|d| (*d).clone()) else { continue };
+                        let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
+                        d.light.exposure = a.exposure;
+                        d.light.contrast = a.contrast;
+                        d.light.highlights = a.highlights;
+                        d.light.shadows = a.shadows;
+                        d.light.whites = a.whites;
+                        d.light.blacks = a.blacks;
+                        d.color.vibrance = a.vibrance;
+                        d.color.saturation = a.saturation;
+                        ops.extend(s.develop_op(id, d, "Auto"));
+                    }
+                    if !ops.is_empty() {
+                        s.commit("Auto", Op::Batch { ops })?;
+                    }
+                    // the readable photos are edited either way; say so when some could not be
+                    return if unreadable > 0 {
+                        Err(bad("develop.auto", format!("{unreadable} photo(s) could not be read and were left as they were")))
+                    } else {
+                        ok()
+                    };
+                }
+            }
             let id = active(s, "develop.auto")?;
             let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
             let info = s.source_info(id);
@@ -408,11 +480,50 @@ pub fn specs() -> Vec<CommandSpec> {
             "White Balance",
             [],
             None,
-            "{mode: asShot|auto|daylight|cloudy|shade|tungsten|fluorescent|flash|custom, temp?, tint?}",
+            "{mode: asShot|auto|daylight|cloudy|shade|tungsten|fluorescent|flash|custom, temp?, tint?, ids?}",
             has_active,
             |s, p| {
                 let mode: WbMode =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("custom"))).map_err(|e| bad("develop.wb", e.to_string()))?;
+                // `ids` (the iPad's Quick Develop): the same white balance on several photos in one undo step
+                if p.get("ids").is_some_and(|v| !v.is_null()) {
+                    let targets = s.targets(p)?;
+                    if !(targets.len() == 1 && s.active() == Some(targets[0])) {
+                        if targets.is_empty() {
+                            return Err(bad("develop.wb", "no photo"));
+                        }
+                        let ops: Vec<_> = targets
+                            .iter()
+                            .filter_map(|&id| {
+                                let info = s.source_info(id);
+                                let (mut t, mut tint) = match mode {
+                                    WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
+                                    WbMode::Auto => {
+                                        let src = s.source_now(id, SourceLevel::Thumb).ok()?;
+                                        lightcraft_pipeline::auto::auto_wb(&src, &info)
+                                    }
+                                    m => m
+                                        .preset()
+                                        .map(|(t, ti)| if info.raw && !info.relative_wb { (t, ti) } else { (6500.0 * t / 5500.0, ti) })
+                                        .unwrap_or((info.as_shot_temp, info.as_shot_tint)),
+                                };
+                                t = f64_or(p, "temp", t);
+                                tint = f64_or(p, "tint", tint);
+                                let mut d = (*s.develop_of(id)?).clone();
+                                lightcraft_pipeline::local::normalize_wb(&mut d, &info);
+                                d.wb.mode = mode;
+                                d.wb.temp = t.clamp(2000.0, 50000.0);
+                                d.wb.tint = tint.clamp(-150.0, 150.0);
+                                s.develop_op(id, d, "White Balance")
+                            })
+                            .collect();
+                        if ops.is_empty() {
+                            return Err(bad("develop.wb", "none of the photos could be edited"));
+                        }
+                        s.commit("White Balance", Op::Batch { ops })?;
+                        return ok();
+                    }
+                }
                 let id = active(s, "develop.wb")?;
                 let info = s.source_info(id);
                 let (mut t, mut tint) = match mode {

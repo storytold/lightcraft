@@ -704,8 +704,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 "photo.pick" => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
                 "photo.reject" => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
                 "photo.unflag" => app.toast(ctx, crate::i18n::tr("Unflagged")),
-                "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
-                "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
+                "edit.undo" | "input.twoFingerTap" => app.toast(ctx, crate::i18n::tr("Undo")),
+                "edit.redo" | "input.threeFingerTap" => app.toast(ctx, crate::i18n::tr("Redo")),
                 _ => {}
             }
         }

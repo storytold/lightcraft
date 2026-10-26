@@ -156,7 +156,10 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
             if r.clicked() {
                 ui.data_mut(|d| d.insert_temp(state_id(), MenuState::default()));
             }
-            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| menu(app, ui, mask, current.as_deref()));
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                crate::widgets::touch_menu_style(ui);
+                menu(app, ui, mask, current.as_deref())
+            });
         });
     });
 }
@@ -400,6 +403,7 @@ pub fn save_body(
         let pick = ui.small_button("…").on_hover_text(crate::i18n::tr("Choose a group"));
         register(ui, "button:effectGroupPick", pick.rect);
         egui::Popup::menu(&pick).show(|ui| {
+            crate::widgets::touch_menu_style(ui);
             for (g, _) in fx::menu_order(&app.session.mask_effects) {
                 if ui.button(if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.clone() }).clicked() {
                     *group = g;
@@ -652,6 +656,7 @@ pub fn manage_body(
         let g = ui.add_enabled(n > 0, egui::Button::new(crate::i18n::tr("Move to Group…")));
         register(ui, "button:effectGroup", g.rect);
         egui::Popup::menu(&g).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            crate::widgets::touch_menu_style(ui);
             let names = selected.clone();
             for (grp, _) in fx::menu_order(&app.session.mask_effects) {
                 let label = if grp.is_empty() { crate::i18n::tr("None").to_string() } else { grp.clone() };

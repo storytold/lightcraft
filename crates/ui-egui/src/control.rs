@@ -516,6 +516,14 @@ pub const NO_EXPORT_FOLDER: &str = "Choose an export folder first.";
 /// Default export folder: `~/Pictures/LightCraft Exports` (`%USERPROFILE%\Pictures\LightCraft Exports`
 /// on Windows, where `HOME` usually isn't set). Empty when no home folder is known.
 pub fn default_export_dir() -> String {
+    #[cfg(target_os = "ios")]
+    {
+        if let Some(h) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+            let d = std::path::PathBuf::from(h).join("Documents").join("Exports");
+            let _ = std::fs::create_dir_all(&d);
+            return d.to_string_lossy().into_owned();
+        }
+    }
     let home = if cfg!(windows) { std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) } else { std::env::var_os("HOME") };
     home.filter(|h| !h.is_empty())
         .map(|h| std::path::PathBuf::from(h).join("Pictures").join("LightCraft Exports").to_string_lossy().into_owned())
@@ -565,7 +573,18 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
             last_dir.map(str::to_string).unwrap_or_else(default_export_dir)
         }
     };
+    #[cfg_attr(target_os = "ios", allow(unused_variables))]
     let own_folders = opts.destination_mode == lightcraft_engine::export::DestinationMode::SameAsOriginal;
+    #[allow(unused_mut)]
+    let mut dir = dir;
+    #[cfg(target_os = "ios")]
+    {
+        let fallback = default_export_dir();
+        if dir.is_empty() || (!std::path::Path::new(&dir).exists() && std::fs::create_dir_all(&dir).is_err()) {
+            dir = fallback;
+        }
+    }
+    #[cfg(not(target_os = "ios"))]
     if dir.is_empty() && exact.is_none() && !own_folders {
         return Err(NO_EXPORT_FOLDER.into());
     }

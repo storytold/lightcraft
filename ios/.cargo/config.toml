@@ -1,0 +1,5 @@
+[target.aarch64-apple-ios]
+rustflags = ["-C", "target-cpu=apple-a12"]
+
+[target.aarch64-apple-ios-sim]
+rustflags = ["-C", "target-cpu=apple-a12"]

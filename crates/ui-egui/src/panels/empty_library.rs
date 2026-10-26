@@ -56,6 +56,9 @@ const IMPORT_LIGHTROOM: EmptyAction =
 /// The empty library's message and buttons, centred in `rect`. A click runs the command as its
 /// menu item does; a refusal shows as a toast.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect) {
+    if super::grid_touch::empty_library_in(app, ui, rect) {
+        return;
+    }
     // the browser build can't read a Lightroom catalog from disk: only offer what works there
     let actions: &[EmptyAction] = if cfg!(target_arch = "wasm32") { &[IMPORT_PHOTOS] } else { &[IMPORT_PHOTOS, IMPORT_LIGHTROOM] };
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;

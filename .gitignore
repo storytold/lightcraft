@@ -14,3 +14,7 @@ plan/
 # model weights are never committed (SAM 3: docs/ai-masks.md)
 *.safetensors
 *.safetensors.part
+
+# iOS build output
+ios/DerivedData*/
+ios/build/

@@ -308,7 +308,11 @@ impl<'a> Button<'a> {
 
     /// How big it is drawn.
     pub fn desired_size(&self, ui: &Ui) -> Vec2 {
-        let h = self.size.height();
+        // dialog and panel buttons are finger-sized on the iPad
+        let h = match self.size {
+            Size::Medium if crate::theme::touch_ui(ui.ctx()) => 36.0,
+            other => other.height(),
+        };
         let text_w = self.galley(ui).map_or(0.0, |g| g.size().x);
         let w = match (self.icon.is_some(), text_w > 0.0) {
             // an icon alone: a square

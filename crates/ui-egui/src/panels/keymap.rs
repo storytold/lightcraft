@@ -113,14 +113,16 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     if r.clicked() {
         app.recording_shortcut = if recording { None } else { Some(b.id.to_string()) };
     }
+    // (a finger needs more than the 17pt desktop buttons; desktop keeps egui's small size)
+    let touch_min = if crate::theme::touch_ui(ui.ctx()) { egui::vec2(40.0, 34.0) } else { egui::Vec2::ZERO };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let r = ui.add_enabled(sc.is_some(), egui::Button::new("×").small()).on_hover_text(crate::i18n::tr("Remove shortcut"));
+        let r = ui.add_enabled(sc.is_some(), egui::Button::new("×").small().min_size(touch_min)).on_hover_text(crate::i18n::tr("Remove shortcut"));
         register(ui, format!("button:shortcutClear-{}", b.id), r.rect);
         if r.clicked() {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "shortcut": null}));
         }
-        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default {
+        let r = ui.add_enabled(changed, egui::Button::new("↺").small().min_size(touch_min)).on_hover_text(match b.default {
             Some(d) => crate::i18n::tr_format!("Restore {}", menu_text(d, mac)),
             None => crate::i18n::tr("Restore (no shortcut)").to_string(),
         });

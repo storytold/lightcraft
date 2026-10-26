@@ -177,12 +177,23 @@ fn cell_ui(
     painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
     // favourite star (always shown when set, on hover otherwise)
     let fav = app.session.profile_favorites.iter().any(|f| f == p_id);
-    let star = Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0));
+    let touch_ui = crate::theme::touch_ui(ui.ctx());
+    let star = if touch_ui {
+        Rect::from_center_size(pos2(thumb.right() - 22.0, thumb.top() + 22.0), vec2(44.0, 44.0))
+    } else {
+        Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0))
+    };
     register(ui, format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
-    if fav || resp.hovered() {
+    if fav || resp.hovered() || touch_ui {
+        // (the 44pt touch target stays; what is painted keeps the desktop's size)
         painter.circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
-        crate::rating::paint_star(painter, star.shrink(4.0), fav, if fav || over_star { t.star } else { Color32::WHITE });
+        crate::rating::paint_star(
+            painter,
+            if touch_ui { Rect::from_center_size(star.center(), vec2(12.0, 12.0)) } else { star.shrink(4.0) },
+            fav,
+            if fav || over_star { t.star } else { Color32::WHITE },
+        );
     }
     if resp.hovered() && !applied && !over_star {
         app.hover_preview =

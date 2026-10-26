@@ -134,6 +134,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     if !hidden.is_empty() {
         let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
         egui::Popup::menu(&more).show(|ui| {
+            crate::widgets::touch_menu_style(ui);
             for c in hidden {
                 if ui
                     .button(format!("{}  ✕", display_label(c, &app.session.filter, &app.session.catalog)))

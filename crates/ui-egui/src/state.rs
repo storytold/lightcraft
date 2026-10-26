@@ -27,6 +27,7 @@ pub enum RightPanel {
     #[default]
     None,
     Edit,
+    QuickDevelop,
     Crop,
     Remove,
     Masking,
@@ -397,6 +398,7 @@ impl AppearanceMode {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DarkTheme {
+    Glass,
     #[default]
     Charcoal,
     Midnight,
@@ -415,6 +417,7 @@ impl DarkTheme {
     pub const ALL: [DarkTheme; 2] = [DarkTheme::Charcoal, DarkTheme::Midnight];
     pub fn kind(self) -> crate::theme::ThemeKind {
         match self {
+            DarkTheme::Glass => crate::theme::ThemeKind::Glass,
             DarkTheme::Charcoal => crate::theme::ThemeKind::Charcoal,
             DarkTheme::Midnight => crate::theme::ThemeKind::Midnight,
         }
@@ -669,6 +672,7 @@ impl AppSettings {
     pub fn select_theme(&mut self, kind: crate::theme::ThemeKind) {
         use crate::theme::ThemeKind;
         match kind {
+            ThemeKind::Glass => self.dark_theme = DarkTheme::Glass,
             ThemeKind::Charcoal => self.dark_theme = DarkTheme::Charcoal,
             ThemeKind::Midnight => self.dark_theme = DarkTheme::Midnight,
             ThemeKind::Silver => self.light_theme = LightTheme::Silver,
@@ -813,6 +817,9 @@ pub struct UiState {
     /// Presets column: show a live thumbnail of the photo with each preset.
     pub preset_thumbs: bool,
     pub filmstrip: bool,
+    /// Multi-select mode (on iPad touch, single taps toggle selection and multi-action bar is visible).
+    #[serde(skip)]
+    pub multi_select: bool,
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
     pub pan: (f32, f32),
@@ -823,6 +830,24 @@ pub struct UiState {
     #[serde(skip)]
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
+    #[serde(skip)]
+    pub canvas_hold_before: bool,
+    #[serde(skip)]
+    pub canvas_press_start: Option<(f64, egui::Pos2)>,
+    /// A linear/radial mask is being created by dragging (one undo step for the drag).
+    #[serde(skip)]
+    pub mask_create_drag: bool,
+    /// The bottom bar had no room for the rating stars this frame: the canvas floats them instead.
+    #[serde(skip)]
+    pub rating_floating: bool,
+    /// The "originals not found" strip above the grid was dismissed for this session.
+    #[serde(skip)]
+    pub missing_banner_hidden: bool,
+    /// Review tool: draw the component gallery over the window (`ui.set {"gallery": true}`).
+    #[serde(skip)]
+    pub gallery: bool,
+    #[serde(skip)]
+    pub canvas_suppress_click_zoom: bool,
     pub thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
@@ -1495,6 +1520,13 @@ impl Default for UiState {
             luminance_map_restore: None,
             view: ViewMode::Detail,
             left_panel: false,
+            canvas_hold_before: false,
+            canvas_press_start: None,
+            mask_create_drag: false,
+            rating_floating: false,
+            missing_banner_hidden: false,
+            gallery: false,
+            canvas_suppress_click_zoom: false,
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
@@ -1502,6 +1534,7 @@ impl Default for UiState {
             presets: false,
             preset_thumbs: false,
             filmstrip: true,
+            multi_select: false,
             zoom: Zoom::Fit,
             pan: (0.5, 0.5),
             click_zoom: 100,

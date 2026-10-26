@@ -92,6 +92,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("compare.set", "Show in Compare", None, ""),
     ("compare.makeSelect", "Make Candidate the Select", None, "View"),
     ("view.autoAdvance", "Auto Advance", None, "Photo"),
+    ("view.multiSelect", "Select Photos", None, ""),
     ("view.filmstrip", "Filmstrip", Some("/"), "View"),
     ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "View"),
     ("view.rightPanel", "Right Panel", None, "View"),
@@ -103,6 +104,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.zoomFit", "Zoom to Fit", Some("Cmd+0"), "View"),
     ("view.zoom100", "Zoom 100%", Some("Cmd+Alt+0"), "View"),
     ("view.zoomToggle", "Toggle Zoom", Some("Z"), "View"),
+    ("input.twoFingerTap", "Undo Gesture", None, ""),
+    ("input.threeFingerTap", "Redo Gesture", None, ""),
+    ("input.pencilDoubleTap", "Apple Pencil Double-Tap", None, ""),
     // the ratio a click (and Z / Space) zooms to
     ("view.clickZoom", "Click Zoom Ratio", None, ""),
     ("view.navigate", "Set Image Zoom and Pan", None, ""),
@@ -870,6 +874,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
             }
         }
+        "view.multiSelect" => {
+            app.ui.multi_select = !app.ui.multi_select;
+            Ok(Value::Null)
+        }
         "view.filmstrip" => {
             app.ui.filmstrip = !app.ui.filmstrip;
             Ok(Value::Null)
@@ -953,6 +961,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
+        "input.twoFingerTap" => app.run("edit.undo", json!({})),
+        "input.threeFingerTap" => app.run("edit.redo", json!({})),
+        "input.pencilDoubleTap" => app.run("view.zoomToggle", json!({})),
         "view.clickZoom" => {
             // {ratio?: 1|2|3|4|8} → {ratio}
             if let Some(r) = p.get("ratio").and_then(Value::as_f64) {
@@ -1559,7 +1570,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
             let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);
-            let dir = prev.get("dir").and_then(Value::as_str).map(str::to_string).unwrap_or_else(crate::control::default_export_dir);
+            #[allow(unused_mut)]
+            let mut dir = prev.get("dir").and_then(Value::as_str).map(str::to_string).unwrap_or_else(crate::control::default_export_dir);
+            #[cfg(target_os = "ios")]
+            {
+                if dir.trim().is_empty() || (!std::path::Path::new(&dir).exists() && std::fs::create_dir_all(&dir).is_err()) {
+                    dir = crate::control::default_export_dir();
+                }
+            }
             // stored settings: a depth the format lacks (saved before #1952) opens at the format's own
             let opts = lightcraft_engine::export::ExportOptions::from_json(&lightcraft_engine::export::ExportOptions::known_keys_only(&prev));
             // no previous export: 2048 px long edge; a previous full-size export: full size
@@ -2286,6 +2304,7 @@ fn thumb_size_view(app: &LightcraftApp) -> bool {
 
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
+        "view.multiSelect" => !app.session.catalog.is_empty(),
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
         "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {

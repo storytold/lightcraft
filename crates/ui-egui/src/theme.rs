@@ -90,13 +90,14 @@ pub enum ThemeKind {
     Midnight,
     Silver,
     Paper,
+    Glass,
 }
 
 impl ThemeKind {
     pub const ALL: [ThemeKind; 4] = [ThemeKind::Charcoal, ThemeKind::Midnight, ThemeKind::Silver, ThemeKind::Paper];
 
     pub fn is_dark(self) -> bool {
-        matches!(self, ThemeKind::Charcoal | ThemeKind::Midnight)
+        matches!(self, ThemeKind::Charcoal | ThemeKind::Midnight | ThemeKind::Glass)
     }
 
     /// The theme's id (settings value and command suffix).
@@ -106,6 +107,7 @@ impl ThemeKind {
             ThemeKind::Midnight => "midnight",
             ThemeKind::Silver => "silver",
             ThemeKind::Paper => "paper",
+            ThemeKind::Glass => "glass",
         }
     }
 
@@ -116,6 +118,7 @@ impl ThemeKind {
             ThemeKind::Midnight => "Midnight",
             ThemeKind::Silver => "Silver",
             ThemeKind::Paper => "Paper",
+            ThemeKind::Glass => "Apple Glass",
         }
     }
 }
@@ -186,6 +189,37 @@ impl Tokens {
                 hover: rgb(0x2e2e2e),
                 pressed: rgb(0x343434),
                 tool_active: rgb(0x343434),
+                ..base
+            },
+            ThemeKind::Glass => Tokens {
+                chrome: Color32::from_rgba_unmultiplied(24, 24, 30, 222),
+                canvas: Color32::from_rgb(0x12, 0x12, 0x16),
+                grid_bg: Color32::from_rgb(0x0a, 0x0a, 0x0c),
+                cell: Color32::from_rgba_unmultiplied(36, 36, 44, 190),
+                cell_selected: Color32::from_rgba_unmultiplied(10, 132, 255, 75),
+                divider: Color32::from_rgba_unmultiplied(255, 255, 255, 28),
+                inset: Color32::from_rgba_unmultiplied(20, 20, 26, 215),
+                field: Color32::from_rgba_unmultiplied(42, 42, 54, 185),
+                field_border: Color32::from_rgba_unmultiplied(255, 255, 255, 38),
+                button: Color32::from_rgba_unmultiplied(52, 52, 66, 190),
+                button_border: Color32::from_rgba_unmultiplied(255, 255, 255, 48),
+                hover: Color32::from_rgba_unmultiplied(74, 74, 92, 220),
+                pressed: Color32::from_rgba_unmultiplied(98, 98, 120, 240),
+                tool_active: Color32::from_rgba_unmultiplied(10, 132, 255, 225),
+                text: Color32::from_rgb(0xf5, 0xf5, 0xf7),
+                text_label: Color32::from_rgb(0xd2, 0xd2, 0xdc),
+                text_dim: Color32::from_rgb(0x9a, 0x9a, 0xab),
+                text_disabled: Color32::from_rgb(0x60, 0x60, 0x70),
+                icon: Color32::from_rgb(0xbe, 0xbe, 0xce),
+                track: Color32::from_rgba_unmultiplied(255, 255, 255, 45),
+                thumb: Color32::from_rgb(0xe4, 0xe4, 0xec),
+                thumb_hover: Color32::WHITE,
+                accent: Color32::from_rgb(0x0a, 0x84, 0xff),
+                star: Color32::from_rgb(0xff, 0xd6, 0x0a),
+                pick: Color32::from_rgb(0x30, 0xd1, 0x58),
+                reject: Color32::from_rgb(0xff, 0x45, 0x3a),
+                caution: Color32::from_rgb(0xff, 0x9f, 0x0a),
+                mask_overlay: Color32::from_rgba_unmultiplied(0xff, 0x37, 0x5f, 130),
                 ..base
             },
             ThemeKind::Silver => Tokens {
@@ -399,6 +433,26 @@ pub fn apply(ctx: &egui::Context) {
     apply_kind(ctx, ThemeKind::default());
 }
 
+/// Enable larger controls for touch-first hosts before the first frame.
+pub fn set_touch_ui(ctx: &egui::Context, enabled: bool) {
+    ctx.data_mut(|data| data.insert_persisted(egui::Id::unique("lightcraft-touch-ui"), enabled));
+}
+
+/// Whether this host asks for touch-sized controls.
+pub fn touch_ui(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|data| data.get_persisted::<bool>(egui::Id::unique("lightcraft-touch-ui"))).unwrap_or(false)
+}
+
+/// Record host safe-area insets: [top, bottom, left, right] in points.
+pub fn set_safe_area_insets(ctx: &egui::Context, top: f32, bottom: f32, left: f32, right: f32) {
+    ctx.data_mut(|data| data.insert_persisted(egui::Id::unique("lightcraft-safe-area-insets"), [top, bottom, left, right]));
+}
+
+/// Retrieve the host safe-area insets: [top, bottom, left, right] in points.
+pub fn safe_area_insets(ctx: &egui::Context) -> [f32; 4] {
+    ctx.data_mut(|data| data.get_persisted::<[f32; 4]>(egui::Id::unique("lightcraft-safe-area-insets"))).unwrap_or([0.0, 0.0, 0.0, 0.0])
+}
+
 /// Style `ctx` with `kind`. The visuals go to both of egui's styles, so egui following the
 /// system's dark/light setting on its own never swaps in its stock look.
 pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
@@ -413,45 +467,90 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         o.input_options.scroll_zoom_speed = WHEEL_ZOOM_PER_POINT;
     });
     let t = Tokens::for_kind(kind);
+    let touch_ui = touch_ui(ctx);
     ctx.data_mut(|d| {
         d.insert_temp(egui::Id::NULL, t);
         d.insert_temp(theme_id(), kind);
     });
     let dark = kind.is_dark();
+    let is_glass = kind == ThemeKind::Glass || (touch_ui && dark);
     let mut v = if dark { Visuals::dark() } else { Visuals::light() };
-    v.panel_fill = t.chrome;
-    v.window_fill = t.chrome;
+    v.panel_fill = if is_glass { Color32::from_rgba_unmultiplied(24, 24, 30, 220) } else { t.chrome };
+    v.window_fill = if is_glass { Color32::from_rgba_unmultiplied(28, 28, 36, 230) } else { t.chrome };
     v.extreme_bg_color = t.field;
     v.faint_bg_color = t.inset;
-    v.window_stroke = Stroke::new(1.0, t.button_border);
-    v.window_corner_radius = CornerRadius::same(6);
-    v.menu_corner_radius = CornerRadius::same(6);
+    v.window_stroke = Stroke::new(
+        1.0,
+        if is_glass {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 38)
+        } else if touch_ui {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 28)
+        } else {
+            t.button_border
+        },
+    );
+    v.window_corner_radius = CornerRadius::same(if touch_ui || is_glass { 22 } else { 6 });
+    v.menu_corner_radius = CornerRadius::same(if touch_ui || is_glass { 16 } else { 6 });
     v.selection.bg_fill = t.accent.gamma_multiply(0.6);
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.override_text_color = Some(t.text_label);
-    let (popup, window) = if dark { (140, 160) } else { (50, 60) };
-    v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(popup) };
-    v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(window) };
+    if touch_ui || is_glass {
+        let (popup, window) = if dark { (160, 200) } else { (50, 60) };
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 32, spread: 1, color: Color32::from_black_alpha(popup) };
+        v.window_shadow = egui::epaint::Shadow { offset: [0, 14], blur: 48, spread: 2, color: Color32::from_black_alpha(window) };
+    } else {
+        let (popup, window) = if dark { (140, 160) } else { (50, 60) };
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(popup) };
+        v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 30, spread: 0, color: Color32::from_black_alpha(window) };
+    }
     let w = &mut v.widgets;
+    // pill-shaped on the iPad: half the height of a 36-40pt button
+    let widget_corner = CornerRadius::same(if touch_ui || is_glass { 18 } else { 4 });
     craft_ui::theme::WidgetPalette { noninteractive: t.chrome, inactive: t.button, hovered: t.hover, active: t.pressed, open: t.hover }.apply_to(
         w,
-        CornerRadius::same(4),
+        widget_corner,
         Stroke::new(1.0, t.text_label),
     );
     w.noninteractive.bg_stroke = Stroke::new(1.0, t.divider);
-    w.inactive.bg_stroke = Stroke::new(1.0, t.button_border);
+    if (touch_ui || is_glass) && dark {
+        // one button look on the iPad: soft glass fill, no outline, a little lighter when pressed
+        let glass = |a: u8| Color32::from_white_alpha(a);
+        w.inactive.bg_stroke = Stroke::NONE;
+        w.inactive.weak_bg_fill = glass(22);
+        w.inactive.bg_fill = glass(22);
+        w.hovered.bg_stroke = Stroke::NONE;
+        w.hovered.weak_bg_fill = glass(34);
+        w.hovered.bg_fill = glass(34);
+        w.active.bg_stroke = Stroke::NONE;
+        w.active.weak_bg_fill = glass(50);
+        w.active.bg_fill = glass(50);
+    } else {
+        w.inactive.bg_stroke =
+            Stroke::new(1.0, if touch_ui || is_glass { Color32::from_rgba_unmultiplied(255, 255, 255, 32) } else { t.button_border });
+    }
     ctx.set_visuals_of(egui::Theme::Dark, v.clone());
     ctx.set_visuals_of(egui::Theme::Light, v);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.all_styles_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.spacing.button_padding = egui::vec2(8.0, 3.0);
-        s.spacing.interact_size.y = 22.0;
-        s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(13.0));
-        s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(13.0));
-        s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
-        s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
-        s.animation_time = 0.08;
+        s.spacing.item_spacing = egui::vec2(if touch_ui { 8.0 } else { 6.0 }, if touch_ui { 6.0 } else { 4.0 });
+        s.spacing.button_padding = egui::vec2(if touch_ui { 14.0 } else { 8.0 }, if touch_ui { 10.0 } else { 3.0 });
+        s.spacing.interact_size.y = if touch_ui { 44.0 } else { 22.0 };
+        if touch_ui {
+            // checkbox/radio glyphs a finger can see and hit (default 14pt)
+            s.spacing.icon_width = 24.0;
+            s.spacing.icon_width_inner = 14.0;
+            s.spacing.icon_spacing = 10.0;
+            // dialog sliders: a round knob like the panel sliders, not egui's tall capsule
+            s.visuals.handle_shape = egui::style::HandleShape::Circle;
+        }
+        s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(if touch_ui { 14.0 } else { 13.0 }));
+        s.text_styles.insert(
+            egui::TextStyle::Button,
+            if touch_ui { FontId::new(14.0, FontFamily::Name(FONT_SEMIBOLD.into())) } else { FontId::proportional(13.0) },
+        );
+        s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(if touch_ui { 12.0 } else { 11.0 }));
+        s.text_styles.insert(egui::TextStyle::Heading, FontId::new(if touch_ui { 18.0 } else { 16.0 }, FontFamily::Name(FONT_SEMIBOLD.into())));
+        s.animation_time = if touch_ui { 0.12 } else { 0.08 };
     });
 }
 
@@ -464,7 +563,7 @@ mod tests {
     /// (`exp(40 / 200)`) instead of growing with the longer scroll.
     #[test]
     fn a_wheel_notch_scrolls_further_but_zooms_as_before_in_every_theme() {
-        for kind in [ThemeKind::Charcoal, ThemeKind::Midnight, ThemeKind::Silver, ThemeKind::Paper] {
+        for kind in [ThemeKind::Charcoal, ThemeKind::Midnight, ThemeKind::Silver, ThemeKind::Paper, ThemeKind::Glass] {
             let ctx = egui::Context::default();
             apply_kind(&ctx, kind);
             let (line, zoom) = ctx.options(|o| (o.input_options.line_scroll_speed, o.input_options.scroll_zoom_speed));

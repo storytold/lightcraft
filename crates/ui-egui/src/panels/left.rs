@@ -24,6 +24,11 @@ const MAX_NAME_NEED: f32 = 140.0;
 /// Height of a sidebar row.
 const ROW_HEIGHT: f32 = 29.0;
 
+/// A row's height: a finger-sized one on the iPad.
+fn row_h(ctx: &egui::Context) -> f32 {
+    if crate::theme::touch_ui(ctx) { 44.0 } else { ROW_HEIGHT }
+}
+
 /// Temp-data key of the row (its widget id after `source:`, lower-case) the sidebar scrolls to
 /// this frame: set before the sections are drawn, cleared after.
 const SCROLL_TO_ROW: &str = "left-scroll-to-row";
@@ -134,7 +139,7 @@ fn row_sensed(
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h(ui.ctx())), sense);
     if scroll_asked(ui, id) {
         ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
     }
@@ -199,7 +204,7 @@ fn row_sensed(
 /// and drawing them all every frame slows the whole app down (issue #1011). A row the sidebar is
 /// asked to scroll to is drawn. `label`, `count` and `mark` as for [`row_sensed`].
 fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, count: Option<usize>, indent: f32, mark: bool) -> bool {
-    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), ROW_HEIGHT));
+    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h(ui.ctx())));
     if ui.is_rect_visible(r) || scroll_asked(ui, id) {
         return false;
     }
@@ -347,7 +352,7 @@ fn pinned_header(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[PlacedSec
 /// `sidebarEmpty:<id>`), so the section stays where it is instead of disappearing.
 fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h(ui.ctx())), Sense::hover());
     register(ui, format!("sidebarEmpty:{}", section.id()), r);
     let text = crate::i18n::tr(section.empty_hint());
     let galley = ui.painter().layout_no_wrap(text.to_string(), t.font(12.5), t.text_dim);
@@ -554,7 +559,10 @@ fn show_header_button(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rect, 
             }
         }
         HeaderAction::Menu(items) => {
-            egui::Popup::menu(&resp).show(|ui| items(app, ui));
+            egui::Popup::menu(&resp).show(|ui| {
+                crate::widgets::touch_menu_style(ui);
+                items(app, ui)
+            });
         }
     }
 }
@@ -934,7 +942,10 @@ fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
                 let _ = app.run("local.restoreHidden", json!({"path": only}));
             }
         } else {
-            egui::Popup::menu(&resp).show(|ui| hidden_menu(app, ui, &now.hidden));
+            egui::Popup::menu(&resp).show(|ui| {
+                crate::widgets::touch_menu_style(ui);
+                hidden_menu(app, ui, &now.hidden)
+            });
         }
     }
 }

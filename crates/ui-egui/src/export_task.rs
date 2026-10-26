@@ -270,6 +270,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                         m += &apple_photos_note(photos);
                     }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
+                    #[cfg(target_os = "ios")]
+                    if ok > 0
+                        && let Some(reveal) = app.services.reveal.as_mut()
+                    {
+                        let written_paths: Vec<String> =
+                            files.iter().filter_map(|f| f.get("path").and_then(Value::as_str).map(str::to_string)).collect();
+                        if written_paths.len() == 1 {
+                            let _ = reveal(&written_paths[0]);
+                        } else if !written_paths.is_empty() {
+                            if let Ok(json_str) = serde_json::to_string(&written_paths) {
+                                let _ = reveal(&json_str);
+                            }
+                        }
+                    }
                     m
                 }
                 Err(e) => e,

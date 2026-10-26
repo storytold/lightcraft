@@ -6,6 +6,8 @@ use serde_json::json;
 fn app() -> Headless {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.ui.left_panel = true;
+    // (the Library sources are what these tests drag onto; Detail + Edit shows the Develop sidebar instead)
+    app.ui.view = crate::state::ViewMode::PhotoGrid;
     let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
     for _ in 0..5 {
         h.step();

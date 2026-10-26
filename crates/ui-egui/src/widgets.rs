@@ -53,7 +53,10 @@ pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon,
 /// Keep egui's submenu interaction and layout, using our vector chevron instead of a font glyph.
 pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
     if !egui::containers::menu::is_in_menu(ui) {
-        return ui.menu_button(atoms, contents);
+        return ui.menu_button(atoms, |ui| {
+            touch_menu_style(ui);
+            contents(ui)
+        });
     }
     let button = egui::Button::new(atoms.into_atoms()).right_text("    ");
     let (response, inner) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, contents);
@@ -68,7 +71,28 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
 /// reopened the menu at the pointer and closed it again on the same frame, a one-frame flash.
 /// The click that opens (or moves) the menu is not the one that closes it.
 pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
-    egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(add_contents)
+    egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(|ui| {
+        if crate::theme::touch_ui(ui.ctx()) {
+            touch_menu_style(ui);
+            // a long menu scrolls instead of running off the screen
+            let max = (ui.ctx().content_rect().height() - 96.0).max(200.0);
+            egui::ScrollArea::vertical().max_height(max).auto_shrink([true, true]).show(ui, add_contents);
+        } else {
+            add_contents(ui);
+        }
+    })
+}
+
+/// iPad: egui's menu style squeezes a menu's rows to 2pt of side padding; give them finger-sized room and a minimum width.
+/// Desktop menus are left as egui styles them.
+pub fn touch_menu_style(ui: &mut Ui) {
+    if !crate::theme::touch_ui(ui.ctx()) {
+        return;
+    }
+    let spacing = &mut ui.style_mut().spacing;
+    spacing.button_padding = vec2(16.0, 10.0);
+    spacing.item_spacing.y = 2.0;
+    ui.set_min_width(180.0);
 }
 
 /// How a context menu on `response` closes this frame: `default`, except on the frame of the
@@ -283,10 +307,12 @@ fn track_stops(track: &Track) -> Option<Vec<Color32>> {
     })
 }
 
-fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, ring: f32) {
+fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, origin_x: f32, ring: f32) {
     let p = ui.painter();
     let y = rect.center().y;
-    let h = 1.0;
+    let touch = crate::theme::touch_ui(ui.ctx());
+    // iPad: a thicker track, filled with the accent from the control's neutral value to the thumb
+    let h = if touch { 2.0 } else { 1.0 };
     if let Some(stops) = track_stops(track) {
         // gradient: segments between stops
         let n = stops.len().max(2) - 1;
@@ -302,9 +328,17 @@ fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, rin
         }
     } else {
         p.rect_filled(Rect::from_min_max(pos2(rect.left(), y - h), pos2(rect.right(), y + h)), 1.0, t.track);
+        if touch && (thumb_x - origin_x).abs() > 1.0 {
+            let (x0, x1) = (origin_x.min(thumb_x), origin_x.max(thumb_x));
+            p.rect_filled(Rect::from_min_max(pos2(x0, y - h), pos2(x1, y + h)), 1.0, t.accent);
+        }
     }
     // gap around the hollow thumb
-    p.rect_filled(Rect::from_center_size(pos2(thumb_x, y), vec2(ring * 2.0 + 4.0, 6.0)), 0.0, t.chrome);
+    p.rect_filled(
+        Rect::from_center_size(pos2(thumb_x, y), vec2(ring * 2.0 + 4.0, if crate::theme::touch_ui(ui.ctx()) { (ring * 1.5).max(6.0) } else { 6.0 })),
+        0.0,
+        t.chrome,
+    );
 }
 
 /// Result of a slider interaction this frame.
@@ -354,7 +388,13 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
     let id = ui.scope_id().with(spec.id);
-    let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
+    let is_touch = crate::theme::touch_ui(ui.ctx());
+    let hit_rect = if is_touch {
+        Rect::from_min_max(pos2(track_rect.left() - 12.0, label_rect.bottom() - 2.0), pos2(track_rect.right() + 12.0, row.bottom() + 4.0))
+    } else {
+        track_rect.expand2(vec2(8.0, 2.0))
+    };
+    let resp = ui.interact(hit_rect, id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     // Keyboard focus survives leaving the row; vertical wheel edits need a fresh click or drag
     // in it (at most one slider is armed: `wheel_slider_key`).
     let wheel_id = id.with("wheel-rem");
@@ -671,9 +711,9 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
-    let ring = THUMB_RING;
+    let ring = if is_touch { 10.0 } else { THUMB_RING };
     let tx = to_x(v);
-    paint_track(ui, track_rect, &spec.track, &t, tx, ring);
+    paint_track(ui, track_rect, &spec.track, &t, tx, to_x(spec.default), ring);
     let p = ui.painter();
     let ring_c = if !enabled {
         t.text_disabled
@@ -682,8 +722,14 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     } else {
         t.thumb
     };
-    p.circle_filled(pos2(tx, track_rect.center().y), ring, t.chrome);
-    p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(2.0, ring_c));
+    if is_touch {
+        // a solid glass-white thumb with a soft shadow ring: reads as something to grab
+        p.circle_filled(pos2(tx, track_rect.center().y + 1.5), ring + 1.0, Color32::from_black_alpha(70));
+        p.circle_filled(pos2(tx, track_rect.center().y), ring, ring_c);
+    } else {
+        p.circle_filled(pos2(tx, track_rect.center().y), ring, t.chrome);
+        p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(2.0, ring_c));
+    }
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
@@ -795,11 +841,16 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let t = Tokens::get(ui.ctx());
     let font = t.semibold(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
+    let touch = crate::theme::touch_ui(ui.ctx());
+    let h = if touch { 38.0 } else { 24.0 };
+    let pad_x = if touch { 24.0 } else { 18.0 };
+    let min_w = if touch { 48.0 } else { 37.0 };
+    let size = vec2((galley.size().x + pad_x).max(min_w), h);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     register(ui, format!("button:{id}"), r);
-    let fill = if active {
+    let is_down = resp.is_pointer_button_down_on();
+    let fill = if active || (touch && is_down) {
         t.pressed
     } else if resp.hovered() {
         t.hover
@@ -807,7 +858,13 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
         t.button
     };
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    p.rect(
+        r,
+        CornerRadius::same(if touch { 19 } else { 4 }),
+        fill,
+        if touch { Stroke::NONE } else { Stroke::new(1.0, t.button_border) },
+        StrokeKind::Inside,
+    );
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
 }
@@ -820,6 +877,8 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     let gap = 4.0;
     let w = ui.available_width();
     let seg_w = ((w - gap * (per_row as f32 - 1.0)) / per_row as f32).max(24.0);
+    let touch = crate::theme::touch_ui(ui.ctx());
+    let seg_h = if touch { 38.0 } else { 24.0 };
     let mut clicked = None;
     for (row_i, row) in items.chunks(per_row).enumerate() {
         ui.horizontal(|ui| {
@@ -827,19 +886,32 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
             for (j, (label, key)) in row.iter().enumerate() {
                 let label = crate::i18n::tr(label);
                 let i = row_i * per_row + j;
-                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(seg_w, seg_h), Sense::click());
                 crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
                 register(ui, format!("button:{id}-{key}"), r);
+                let is_down = resp.is_pointer_button_down_on();
+                let dark = ui.visuals().dark_mode;
                 let fill = if active == Some(i) {
-                    t.pressed
-                } else if resp.hovered() {
+                    if touch {
+                        if dark { Color32::from_rgba_unmultiplied(255, 255, 255, 45) } else { Color32::from_rgba_unmultiplied(255, 255, 255, 230) }
+                    } else {
+                        t.pressed
+                    }
+                } else if (touch && is_down) || resp.hovered() {
                     t.hover
                 } else {
                     t.button
                 };
                 let p = ui.painter();
-                p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                let radius = CornerRadius::same(if touch { 20 } else { 4 });
+                let stroke = if touch {
+                    if dark { Color32::from_rgba_unmultiplied(255, 255, 255, 24) } else { Color32::from_rgba_unmultiplied(0, 0, 0, 24) }
+                } else {
+                    t.button_border
+                };
+                p.rect(r, radius, fill, if touch { Stroke::NONE } else { Stroke::new(1.0, stroke) }, StrokeKind::Inside);
+                let text_color = if active == Some(i) && touch { if dark { Color32::WHITE } else { Color32::from_rgb(20, 20, 20) } } else { t.text };
+                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), text_color);
                 if resp.clicked() {
                     clicked = Some(i);
                 }
@@ -853,21 +925,35 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
     let tooltip = crate::i18n::tr(tooltip);
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
+    let touch = crate::theme::touch_ui(ui.ctx());
+    let grows = touch && (size.x < 40.0 || size.y < 40.0);
+    // (when the hit area grows, only that one node is clickable: an unnamed twin behind it would be a ghost stop for VoiceOver)
+    let (r, resp) = ui.allocate_exact_size(size, if enabled && !grows { Sense::click() } else { Sense::hover() });
+    // on the iPad a small icon still gets a 40pt target: the hit area grows around it, the layout does not
+    let resp = if grows {
+        let hit = Rect::from_center_size(r.center(), vec2(size.x.max(40.0), size.y.max(40.0)));
+        ui.interact(hit, resp.id.with("hit"), if enabled { Sense::click() } else { Sense::hover() })
+    } else {
+        resp
+    };
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, tooltip));
-    register(ui, format!("icon:{id}"), r);
+    register(ui, format!("icon:{id}"), if touch { r.union(resp.interact_rect) } else { r });
     let p = ui.painter();
-    let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
+    let sq_size = if touch { 36.0f32 } else { 32.0f32 };
+    let sq = Rect::from_center_size(r.center(), vec2(sq_size.min(size.x), sq_size.min(size.y)));
+    let is_down = resp.is_pointer_button_down_on();
+    let corner = if touch { 10.0 } else { 4.0 };
     if active {
-        p.rect_filled(sq, 4.0, t.tool_active);
-    } else if resp.hovered() && enabled {
-        p.rect_filled(sq, 4.0, t.hover.gamma_multiply(0.7));
+        p.rect_filled(sq, corner, t.tool_active);
+    } else if (resp.hovered() || (touch && is_down)) && enabled {
+        p.rect_filled(sq, corner, t.hover.gamma_multiply(0.7));
     }
     let c = if !enabled {
         t.text_disabled
     } else if active {
-        t.pick
-    } else if resp.hovered() {
+        // (green on the iPad's blue selection fill is too faint to read)
+        if touch { t.text } else { t.pick }
+    } else if resp.hovered() || (touch && is_down) {
         t.text
     } else {
         t.icon
@@ -888,7 +974,8 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     let t = Tokens::get(ui.ctx());
     let galley = one_line(ui.painter(), text, font, color, max - 20.0);
     let elided = galley.elided;
-    let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
+    let min_h = if crate::theme::touch_ui(ui.ctx()) { 44.0 } else { 20.0 };
+    let size = vec2(galley.size().x + 20.0, galley.size().y.max(min_h));
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
     register(ui, format!("dropdown:{id}"), r);
@@ -896,6 +983,45 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
     if elided { resp.on_hover_text(text) } else { resp }
+}
+
+/// A boolean setting: an iOS switch on the iPad (a 51 x 31pt capsule, green when on, a white thumb that
+/// slides; the whole row is the tap target), the ordinary checkbox elsewhere.
+pub fn toggle(ui: &mut Ui, value: &mut bool, label: impl Into<egui::WidgetText>) -> Response {
+    if !crate::glass::active(ui.ctx()) {
+        return ui.checkbox(value, label);
+    }
+    let galley = label.into().into_galley(ui, Some(egui::TextWrapMode::Extend), ui.available_width() - 63.0, egui::TextStyle::Body);
+    let (track_w, track_h, gap): (f32, f32, f32) = (51.0, 31.0, 12.0);
+    let natural = track_w + gap + galley.size().x;
+    // in a column the switch sits at the trailing edge of its row, like a Settings row on the iPad
+    let trailing = !ui.layout().main_dir().is_horizontal();
+    let row_w = if trailing { ui.available_width().clamp(natural, 900.0) } else { natural };
+    let size = vec2(row_w, track_h.max(galley.size().y).max(44.0));
+    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
+    if resp.clicked() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, *value, galley.text()));
+    if ui.is_rect_visible(rect) {
+        let t = Tokens::get(ui.ctx());
+        let on = ui.ctx().animate_bool_responsive(resp.id, *value);
+        let track_x = if trailing { rect.right() - track_w } else { rect.left() };
+        let track = Rect::from_min_size(pos2(track_x, rect.center().y - track_h / 2.0), vec2(track_w, track_h));
+        let off_fill = Color32::from_rgba_unmultiplied(120, 120, 128, 82);
+        let on_fill = Color32::from_rgb(52, 199, 89);
+        let p = ui.painter();
+        p.rect_filled(track, track_h / 2.0, off_fill.lerp_to_gamma(on_fill, on));
+        let r = 13.5;
+        let cx = track.left() + track_h / 2.0 + on * (track_w - track_h);
+        p.circle_filled(pos2(cx, track.center().y + 1.5), r, Color32::from_black_alpha(55));
+        p.circle_filled(pos2(cx, track.center().y), r, Color32::WHITE);
+        let colour = if resp.enabled() { t.text } else { t.text_disabled };
+        let label_x = if trailing { rect.left() } else { rect.left() + track_w + gap };
+        p.galley(pos2(label_x, rect.center().y - galley.size().y / 2.0), galley, colour);
+    }
+    resp
 }
 
 #[cfg(test)]

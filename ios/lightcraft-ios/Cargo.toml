@@ -1,0 +1,24 @@
+[package]
+name = "lightcraft-ios"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+lightcraft-engine = { path = "../../crates/engine", features = ["sam"] }
+lightcraft-segment = { path = "../../crates/segment" }
+lightcraft-ui-egui = { path = "../../crates/ui-egui" }
+lightcraft-codecs = { path = "../../crates/codecs" }
+lightcraft-raster = { path = "../../crates/raster" }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "accesskit"] }
+egui = { version = "0.37", default-features = false }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+
+[dev-dependencies]
+lightcraft-develop = { path = "../../crates/develop" }
+lightcraft-pipeline = { path = "../../crates/pipeline" }

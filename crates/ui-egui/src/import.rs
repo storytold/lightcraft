@@ -635,7 +635,13 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         })
         .collect();
     d.set_trashed(trashed);
-    d.copy = task.copy;
+    // iPad: photos picked from Files / iCloud Drive are copied into the library by default. In place they depend on
+    // folder access that iOS can withdraw between launches ("original not found"); photos already inside the app are not copied again.
+    // A USB drive or network share is the opposite case: the iPad's storage is small, so the photos stay on the drive.
+    d.copy = task.copy
+        || (crate::theme::touch_ui(ctx)
+            && task.sources.iter().any(|s| !s.contains("/Containers/Data/Application/"))
+            && !task.sources.iter().all(|s| on_external_volume(s)));
     // only an album the review offers (it may have been deleted while the scan ran)
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;
@@ -665,6 +671,12 @@ fn show_pending_review(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// Tests: a review scan that never ends while the returned value lives, so a drop meets it running.
+/// A path on a drive the iPad mounts for Files (USB storage, SD reader, SMB share): iPadOS exposes them under
+/// `.../LiveFiles/com.apple.filesystems.userfsd/`. Anywhere else (macOS, Windows, Linux) this is never true.
+fn on_external_volume(path: &str) -> bool {
+    path.contains("/LiveFiles/com.apple.filesystems.userfsd/")
+}
+
 #[cfg(test)]
 pub(crate) fn stall_scan(app: &mut LightcraftApp) -> Box<dyn std::any::Any> {
     stall_scan_of(app, false)
@@ -915,12 +927,68 @@ fn xmp_warning_text(warning: &ImportWarning) -> String {
     }
 }
 
-fn xmp_warnings_text(warnings: &[ImportWarning]) -> String {
-    crate::i18n::tr_format!(
-        "Import warnings ({n}):\n{warnings}",
-        n = warnings.len(),
-        warnings = warnings.iter().map(xmp_warning_text).collect::<Vec<_>>().join("\n"),
-    )
+fn xmp_warnings_text(warnings: &[ImportWarning], touch: bool) -> String {
+    // The iPad's toast is small: two warnings, file names instead of paths. Desktop lists every warning in full.
+    let shown: Vec<String> = if touch {
+        let mut shown: Vec<String> = warnings.iter().take(2).map(xmp_warning_text).map(|text| shorten_paths(&text)).collect();
+        if warnings.len() > 2 {
+            shown.push(crate::i18n::tr_format!("…and {n} more", n = warnings.len() - 2));
+        }
+        shown
+    } else {
+        warnings.iter().map(xmp_warning_text).collect()
+    };
+    crate::i18n::tr_format!("Import warnings ({n}):\n{warnings}", n = warnings.len(), warnings = shown.join("\n"),)
+}
+
+/// A whitespace-delimited token that is an absolute path, cut to its file name (anything else unchanged).
+fn shorten_token(token: &str) -> &str {
+    match token.rsplit_once('/') {
+        Some((_, name)) if token.starts_with('/') && !name.is_empty() => name,
+        _ => token,
+    }
+}
+
+fn shorten_paths(text: &str) -> String {
+    let mut result = String::new();
+    let mut token = String::new();
+
+    for c in text.chars() {
+        if c.is_whitespace() {
+            if !token.is_empty() {
+                result.push_str(shorten_token(&token));
+                token.clear();
+            }
+            result.push(c);
+        } else {
+            token.push(c);
+        }
+    }
+
+    if !token.is_empty() {
+        result.push_str(shorten_token(&token));
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod shorten_tests {
+    use super::*;
+
+    #[test]
+    fn test_shorten_paths_with_punctuation() {
+        let input = "Failed to load /var/mobile/Containers/Data/Application/<UUID>/Documents/TestRAWs/AMF_1134.dng: corrupted";
+        let expected = "Failed to load AMF_1134.dng: corrupted";
+        assert_eq!(shorten_paths(input), expected);
+    }
+
+    #[test]
+    fn test_shorten_paths_multiple() {
+        let input = "Found /tmp/photo1.dng; also /var/log/photo2.dng. Plain /root/photo3.raw";
+        let expected = "Found photo1.dng; also photo2.dng. Plain photo3.raw";
+        assert_eq!(shorten_paths(input), expected);
+    }
 }
 
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
@@ -938,7 +1006,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     app.session.merge_undo(steps, &label);
     if task.auto {
         if !task.warnings.is_empty() {
-            app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+            app.toast_for(ctx, xmp_warnings_text(&task.warnings, crate::theme::touch_ui(ctx)), 8.0);
         } else if task.imported > 0 {
             app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" }));
         }
@@ -946,7 +1014,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     if task.browse {
         if !task.warnings.is_empty() {
-            app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+            app.toast_for(ctx, xmp_warnings_text(&task.warnings, crate::theme::touch_ui(ctx)), 8.0);
         } else if task.failed > 0 {
             app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, if task.failed == 1 { "" } else { "s" }));
         }
@@ -1002,7 +1070,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         app.toast(ctx, msg);
     } else {
         msg.push_str("\n\n");
-        msg.push_str(&xmp_warnings_text(&task.warnings));
+        msg.push_str(&xmp_warnings_text(&task.warnings, crate::theme::touch_ui(ctx)));
         app.toast_for(ctx, msg, 8.0);
     }
 }
@@ -1190,7 +1258,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.spacing_mut().item_spacing.x = 4.0;
             let shown = if d.destination.trim().is_empty() { crate::i18n::tr("Library Originals").to_string() } else { d.destination.clone() };
             ui.label(egui::RichText::new(shown).color(Tokens::get(ui.ctx()).text_label));
-            if app.services.pick_folder.is_some()
+            // (not on the iPad: a native picker answers asynchronously, and this call would block the UI thread waiting for it)
+            if !crate::theme::touch_ui(ui.ctx())
+                && app.services.pick_folder.is_some()
                 && crate::widgets::text_button(ui, "importDest", crate::i18n::tr("Choose…"), false).clicked()
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
@@ -1803,5 +1873,17 @@ mod tests {
         d.last_clicked = Some(99);
         d.click(2, true);
         assert_eq!(d.checked, [true, true, false, false, true, true]);
+    }
+}
+
+#[cfg(test)]
+mod external_volume_tests {
+    use super::on_external_volume;
+
+    #[test]
+    fn usb_and_share_mounts_are_external_and_the_app_container_is_not() {
+        assert!(on_external_volume("/private/var/mobile/Library/LiveFiles/com.apple.filesystems.userfsd/AbCd/DCIM/100CANON"));
+        assert!(!on_external_volume("/private/var/mobile/Containers/Data/Application/UUID/Documents/Photos"));
+        assert!(!on_external_volume("/Users/me/Pictures"));
     }
 }

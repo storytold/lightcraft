@@ -104,6 +104,11 @@ impl LibraryLock {
             log::warn!("library {}: can't lock {LOCK} ({why}); opening it without protection against a second program", dir.display());
             LibraryLock { dir: dir.to_path_buf(), file: None, held: false }
         };
+        // iOS kills an app that is suspended while it holds a file lock (exception 0xDEAD10CC), and an
+        // app's library sits in its private sandbox where no second program can open it anyway.
+        if cfg!(target_os = "ios") {
+            return Ok(LibraryLock { dir: dir.to_path_buf(), file: None, held: false });
+        }
         let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join(LOCK)) {
             Ok(f) => f,
             Err(e) => return Ok(unlocked(e)),
