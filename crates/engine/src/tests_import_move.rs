@@ -15,6 +15,9 @@ fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
+/// The clock these tests run on; an undated file is pinned to it too (see `write_png`).
+const CLOCK: &str = "2026-01-14T05:58:48";
+
 fn write_png(path: &Path, seed: u8) {
     let (w, h) = (40usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
@@ -22,8 +25,10 @@ fn write_png(path: &Path, seed: u8) {
     let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
-    // undated files take the file's date: the tests' clock time (2026-01-14T05:58:48)
-    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_370_328);
+    // Undated files take the file's date, read in the host's zone (issue #2284), so the file is
+    // pinned to the instant this machine reads as the tests' clock time rather than to a fixed one.
+    let secs = crate::import::local_instant(CLOCK).and_then(|s| u64::try_from(s).ok()).unwrap_or(0);
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
