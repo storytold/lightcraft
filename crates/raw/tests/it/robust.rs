@@ -106,7 +106,7 @@ fn hostile_dimensions_are_rejected_quickly() {
     assert!(lightcraft_raw::decode(&bytes).is_err());
     // a regression guard, not a speed measurement: rejecting it takes milliseconds, reading the 7 GB
     // frame it claims would take far longer (stretched by LIGHTCRAFT_TIME_SCALE for a loaded machine)
-    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(5));
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(5)).max(std::time::Duration::from_secs(5));
     assert!(t0.elapsed() < limit, "took {:?} (limit {limit:?})", t0.elapsed());
 }
 

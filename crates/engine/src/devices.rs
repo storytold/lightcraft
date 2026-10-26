@@ -272,7 +272,7 @@ mod tests {
             move || {
                 r.fetch_add(1, Ordering::SeqCst);
                 let t = std::time::Instant::now();
-                while !g.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)) {
+                while !g.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)).max(Duration::from_secs(5)) {
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 f.fetch_add(1, Ordering::SeqCst);

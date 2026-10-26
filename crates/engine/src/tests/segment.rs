@@ -92,7 +92,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
                 line.clear();
             }
             if let Some(released) = first.take() {
-                let _ = released.recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(30)));
+                let _ = released.recv_timeout(lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30)));
             }
             let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<h1>404</h1>\n");
         }

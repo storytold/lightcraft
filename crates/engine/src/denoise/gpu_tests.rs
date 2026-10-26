@@ -289,7 +289,7 @@ fn a_set_up_that_takes_too_long_is_given_up_on() {
     let (g, f) = (gate.clone(), finished.clone());
     let slow = move || -> Result<(), String> {
         let t = web_time::Instant::now();
-        while !g.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)) {
+        while !g.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)).max(Duration::from_secs(5)) {
             std::thread::sleep(Duration::from_millis(1));
         }
         f.store(true, Ordering::SeqCst);
