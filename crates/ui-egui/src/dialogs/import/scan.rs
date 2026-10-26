@@ -480,6 +480,12 @@ pub fn can_open(app: &LightcraftApp) -> bool {
     app.scan.is_none() && app.import.is_none() && app.review_pending.is_none() && !crate::lightroom_import::is_running(app)
 }
 
+/// Whether a `file.addFolder` folder picker is up. "Import to This Folder…" asks for its folder through that
+/// command, and a second request while its picker is up is deduplicated, which would drop the new destination.
+pub fn add_folder_picker_pending(app: &LightcraftApp) -> bool {
+    app.pending_picks.iter().any(|p| p.command == "file.addFolder")
+}
+
 impl ScanTask {
     /// `{done, total}` for `ui.inspect` (total is 0 while the folders are still being listed).
     pub fn status(&self) -> Value {

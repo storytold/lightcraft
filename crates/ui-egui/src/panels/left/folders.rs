@@ -687,33 +687,8 @@ fn folder_item(
 ) {
     let (name, label) = names;
     match item {
-        FolderItem::ImportHere => {
-            let r = ui
-                .add_enabled(crate::import::can_open(app), egui::Button::new(crate::i18n::tr("Import to This Folder…")))
-                .on_hover_text(crate::i18n::tr("Copies the photos of a folder you choose into this folder; the review lets you change that"))
-                .on_disabled_hover_text(crate::i18n::tr("An import is running"));
-            register(ui, "folderImportHere", r.rect);
-            if r.clicked() {
-                // the folder picker, then the Import review copying into this folder
-                if let Err(e) = app.run("file.addFolder", json!({"destination": path})) {
-                    app.toast(ui.ctx(), e);
-                }
-                ui.close();
-            }
-        }
-        FolderItem::AddToMyPhotos => {
-            let r = ui
-                .add_enabled(crate::import::can_open(app), egui::Button::new(crate::i18n::tr("Add to My Photos…")))
-                .on_hover_text(crate::i18n::tr("Reviews the photos in this folder, then adds them to the library where they are; no file is touched"))
-                .on_disabled_hover_text(crate::i18n::tr("An import is running"));
-            register(ui, "folderAddToMyPhotos", r.rect);
-            if r.clicked() {
-                if let Err(e) = app.run("file.addFolder", json!({"path": path})) {
-                    app.toast(ui.ctx(), e);
-                }
-                ui.close();
-            }
-        }
+        FolderItem::ImportHere => import_here_item(app, ui, path),
+        FolderItem::AddToMyPhotos => add_to_my_photos_item(app, ui, path),
         FolderItem::Synchronize => match (row, node) {
             (FolderRow::Disk, Some(n)) => synchronize_item(app, ui, Some((n, &n.name))),
             (_, Some(n)) => synchronize_item(app, ui, Some((n, label))),
@@ -835,5 +810,38 @@ fn folder_item(
                 ui.close();
             }
         }
+    }
+}
+
+/// The "Import to This Folder…" row of [`folder_item`].
+fn import_here_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
+    // a folder picker already up would swallow this row's request (and its destination)
+    let picking = crate::import::add_folder_picker_pending(app);
+    let r = ui
+        .add_enabled(crate::import::can_open(app) && !picking, egui::Button::new(crate::i18n::tr("Import to This Folder…")))
+        .on_hover_text(crate::i18n::tr("Copies the photos of a folder you choose into this folder; the review lets you change that"));
+    let r = if picking && crate::import::can_open(app) { r } else { r.on_disabled_hover_text(crate::i18n::tr("An import is running")) };
+    register(ui, "folderImportHere", r.rect);
+    if r.clicked() {
+        // the folder picker, then the Import review copying into this folder
+        if let Err(e) = app.run("file.addFolder", json!({"destination": path})) {
+            app.toast(ui.ctx(), e);
+        }
+        ui.close();
+    }
+}
+
+/// The "Add to My Photos…" row of [`folder_item`].
+fn add_to_my_photos_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
+    let r = ui
+        .add_enabled(crate::import::can_open(app), egui::Button::new(crate::i18n::tr("Add to My Photos…")))
+        .on_hover_text(crate::i18n::tr("Reviews the photos in this folder, then adds them to the library where they are; no file is touched"))
+        .on_disabled_hover_text(crate::i18n::tr("An import is running"));
+    register(ui, "folderAddToMyPhotos", r.rect);
+    if r.clicked() {
+        if let Err(e) = app.run("file.addFolder", json!({"path": path})) {
+            app.toast(ui.ctx(), e);
+        }
+        ui.close();
     }
 }
