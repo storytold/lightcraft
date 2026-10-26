@@ -374,6 +374,9 @@ pub struct MediaCache {
     /// What grid thumbnails load files with (see [`ReducedLoader`]); `None`: [`Self::file_loader`].
     pub reduced_loader: Option<ReducedLoader>,
     pub file_probe: Option<FileProbe>,
+    /// [`Self::file_probe`] for browsing (Local): reads only the parts of a raw file that describe it
+    /// and leaves `content_hash` unset (see `files::light_probe`); `None` = use `file_probe`.
+    pub file_probe_light: Option<FileProbe>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.
     pub file_bytes: Option<crate::merge::ByteReader>,
@@ -450,6 +453,7 @@ impl Default for MediaCache {
             file_loader: None,
             reduced_loader: None,
             file_probe: None,
+            file_probe_light: None,
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,

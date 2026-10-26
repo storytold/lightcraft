@@ -90,78 +90,7 @@ fn stored_hash(p: &Photo) -> Option<&str> {
     p.content_hash.as_deref().map(|h| h.split(':').next().unwrap_or(h)).filter(|h| !h.is_empty())
 }
 
-/// The content hash of the file at `path` (as import computes it), if it can be read. Read in
-/// pieces: the file is whatever is on the disk, of any size.
-fn file_hash(path: &str) -> Option<String> {
-    hash_reader(std::fs::File::open(path).ok()?)
-}
-
-/// The content hash of what `r` gives, read in pieces (the hash import computes of the whole).
-fn hash_reader(mut r: impl std::io::Read) -> Option<String> {
-    let mut hasher = lightcraft_preview::Hasher128::new();
-    let mut piece = vec![0u8; 1 << 16];
-    loop {
-        match r.read(&mut piece) {
-            Ok(0) => return Some(hasher.finish().to_string()),
-            Ok(n) => {
-                hasher.update(piece.get(..n)?);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A reader that gives its bytes a few at a time, and an interruption in between.
-    struct Trickle<'a>(&'a [u8], bool);
-
-    impl std::io::Read for Trickle<'_> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.1 = !self.1;
-            if self.1 {
-                return Err(std::io::ErrorKind::Interrupted.into());
-            }
-            let n = self.0.len().min(buf.len()).min(7);
-            buf[..n].copy_from_slice(&self.0[..n]);
-            self.0 = &self.0[n..];
-            Ok(n)
-        }
-    }
-
-    #[test]
-    fn a_hash_read_in_pieces_is_the_hash_of_the_whole() {
-        // longer than one piece, so the read loop runs more than once
-        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
-        let whole = lightcraft_preview::hash_bytes(&bytes).to_string();
-        assert_eq!(hash_reader(bytes.as_slice()).as_deref(), Some(whole.as_str()));
-        assert_eq!(hash_reader(Trickle(&bytes[..1000], false)).as_deref(), Some(lightcraft_preview::hash_bytes(&bytes[..1000]).to_string().as_str()));
-        assert_eq!(hash_reader(std::io::empty()).as_deref(), Some(lightcraft_preview::hash_bytes(&[]).to_string().as_str()));
-    }
-
-    /// A scratch folder that goes away with the test, however it ends.
-    struct Scratch(std::path::PathBuf);
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn a_file_hash_is_the_import_hash_and_a_missing_file_has_none() {
-        let dir = Scratch(std::env::temp_dir().join(format!("lc-file-hash-{}", std::process::id())));
-        let _ = std::fs::remove_dir_all(&dir.0);
-        std::fs::create_dir_all(&dir.0).unwrap();
-        let f = dir.0.join("a.bin");
-        std::fs::write(&f, b"pixels").unwrap();
-        assert_eq!(file_hash(f.to_str().unwrap()), Some(lightcraft_preview::hash_bytes(b"pixels").to_string()));
-        assert_eq!(file_hash(dir.0.join("nope").to_str().unwrap()), None);
-    }
-}
+use crate::hashing::file_hash;
 
 /// An in-scope photo ([`checked_path`]) as Find Missing Photos sees it: its file, the size and
 /// content hash the library knows (0 / `None` = unknown).

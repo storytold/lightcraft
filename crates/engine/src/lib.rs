@@ -43,6 +43,7 @@ pub mod files;
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
+pub mod hashing;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
@@ -379,6 +380,11 @@ pub struct Session {
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
     /// File probes from the last import review (`library.importPreview`), reused by the import.
     pub import_probes: std::collections::HashMap<String, media::ProbeInfo>,
+    /// Photos whose content hashes are still to be worked out (see [`hashing`]).
+    unhashed: Vec<PhotoId>,
+    /// The app works out queued content hashes on a worker thread ([`Session::take_hash_jobs`]);
+    /// otherwise (CLI, MCP) the commands that queue them work them out at once.
+    pub hash_in_background: bool,
     /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
     /// (see [`Session::take_folder_changes`]).
     pub folder_changes: Option<sync::FolderChanges>,
@@ -522,6 +528,8 @@ impl Session {
             recent_keywords: Vec::new(),
             before: Default::default(),
             import_probes: Default::default(),
+            unhashed: Vec::new(),
+            hash_in_background: false,
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
@@ -779,6 +787,7 @@ impl Session {
                 return Err(err);
             }
         };
+        let joined = hashing::joined_library(&e.op);
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
@@ -788,6 +797,7 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
+        self.hash_joined(joined);
         Ok(e.label)
     }
 
@@ -804,6 +814,7 @@ impl Session {
                 return Err(err);
             }
         };
+        let joined = hashing::joined_library(&e.op);
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
@@ -813,6 +824,7 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
+        self.hash_joined(joined);
         Ok(e.label)
     }
 
@@ -1393,6 +1405,8 @@ mod tests_focus_scan;
 mod tests_folders;
 #[cfg(test)]
 mod tests_forget_local;
+#[cfg(test)]
+mod tests_hashing;
 #[cfg(test)]
 mod tests_history_cursor;
 #[cfg(test)]
