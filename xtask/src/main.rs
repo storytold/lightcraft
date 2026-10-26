@@ -194,12 +194,34 @@ fn caps_to_set<'a>(caps: &'a [(&'static str, String)], is_set: impl Fn(&str) -> 
     caps.iter().filter(|(key, _)| !is_set(key)).map(|(key, value)| (*key, value.as_str())).collect()
 }
 
+/// The variable `.cargo/config.toml` sets beside its `RUST_TEST_THREADS` default, to the same
+/// value (#3059). `cargo xtask` runs under that config, so it inherits the default like any cargo
+/// run; the marker tells it apart from a caller's own setting.
+const TEST_THREADS_DEFAULT_MARKER: &str = "LIGHTCRAFT_TEST_THREADS_DEFAULT";
+
+/// Whether the caller set `key` in the environment (`get` reads it), rather than leaving it unset
+/// or to the `RUST_TEST_THREADS` default of `.cargo/config.toml`: that one counts as unset when it
+/// equals the marker [`TEST_THREADS_DEFAULT_MARKER`] holds. A caller who sets the same value (4)
+/// can't be told apart and is treated as the default; the caps only ever lower it (`ci`'s test
+/// threads are at most 4), so they still never get more threads than they asked for.
+fn set_by_caller(key: &str, get: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let Some(value) = get(key) else {
+        return false;
+    };
+    !(key == "RUST_TEST_THREADS" && get(TEST_THREADS_DEFAULT_MARKER).is_some_and(|default| default == value))
+}
+
+/// [`set_by_caller`] for this process's environment.
+pub fn caller_sets(key: &str) -> bool {
+    set_by_caller(key, |k| std::env::var_os(k))
+}
+
 /// Give `c` CI's resource caps when this run opted in ([`use_ci_caps`]). Full Windows debuginfo
 /// plus one linker per CPU can exhaust RAM before any tests run, and one test thread per CPU
 /// can exhaust it while they run (#3057).
 fn apply_ci_caps(c: &mut Command) {
     if CI_CAPS.load(std::sync::atomic::Ordering::Relaxed) {
-        c.envs(caps_to_set(ci_caps(), |key| std::env::var_os(key).is_some()));
+        c.envs(caps_to_set(ci_caps(), caller_sets));
     }
 }
 
