@@ -45,7 +45,7 @@ struct Shared<S, R> {
 }
 
 /// How long dropping a pool waits for the jobs still running (see [`JobPool::shutdown`]).
-const DROP_WAIT: Duration = Duration::from_secs(2);
+pub(crate) const DROP_WAIT: Duration = Duration::from_secs(2);
 
 /// A finished job.
 pub struct Done<S, R> {
