@@ -9,25 +9,33 @@
 //! - A test binary xtask starts itself ([`run_test_binary`]: `cargo xtask test`, `ci --quick`) is
 //!   timed from its start.
 //! - A `cargo test` run ([`run_cargo_tests`]: the full `ci`'s test and heif steps, doctests) is timed
-//!   per test binary, from the `Running` (or `Doc-tests`) line cargo prints as it starts each one;
-//!   the build before the first one isn't bounded. Under `cargo nextest run` (no such lines) nextest's
-//!   own `slow-timeout` in `.config/nextest.toml` ends a hung test instead.
+//!   per test binary, from the `Running` (or `Doc-tests`) line cargo prints as it starts each one,
+//!   and again from the binary's own `running N tests` line; the build before the first one isn't
+//!   bounded. Cargo runs loud for this (`CARGO_TERM_QUIET=false`, no `-q`): a quiet cargo prints no
+//!   `Running` lines. Under `cargo nextest run` (no such lines) nextest's own `slow-timeout` in
+//!   `.config/nextest.toml` ends a hung test instead.
 //!
 //! The output streams through as it arrives, and is read on the way for libtest's lines: `running N
-//! tests`, `test NAME ... ok` as each test finishes, and `test NAME has been running for over 60
-//! seconds`. On timeout the binary and every process it started are killed (on Unix: frozen with
-//! SIGSTOP so nothing more forks, then SIGKILL; on Windows `taskkill /T /F`), and the report names the
-//! binary, the tests still running (those warned about and not finished, or the one a single-threaded
-//! run printed `test NAME ... ` for) and the tests that never reported a result (from `--list`).
+//! tests`, `test NAME ... ok` as each test finishes (or `test NAME ... ` as it starts, when one runs
+//! at a time), and `test NAME has been running for over 60 seconds`. What is kept of it is bounded
+//! ([`MAX_LINE`], [`NAME_BUDGET`]). On timeout the binary and every process it started are killed,
+//! and the report names the binary, the tests still running and the tests that never reported a
+//! result (from `--list`, itself bounded in time and size).
 //!
-//! The child stays in xtask's process group rather than one of its own, so Ctrl-C in the terminal
-//! still reaches the test binaries as before; that's why the kill walks the process tree (`ps`)
-//! rather than signalling a group.
+//! Containment: every process xtask watches gets an environment variable of its own
+//! ([`Marker`], `LIGHTCRAFT_XTASK_RUN_<pid>_<n>=1`) that everything it starts inherits, so on Unix
+//! the kill finds them all, including those that outlived their parent and were reparented, from
+//! `/proc/*/environ` on Linux or `ps eww` elsewhere, besides the binary's current descendants. They
+//! are frozen with SIGSTOP until no new one turns up, then killed with SIGKILL; the report says how
+//! many and names any still alive. Only a process that clears its environment escapes. On Windows
+//! `taskkill /T /F` ends the process tree. The child stays in xtask's process group rather than one
+//! of its own, so Ctrl-C in the terminal still reaches the test binaries as before.
 
 use std::collections::BTreeSet;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
@@ -38,15 +46,19 @@ pub const TEST_BINARY_TIMEOUT_ENV: &str = "LIGHTCRAFT_TEST_BINARY_TIMEOUT";
 pub const DEFAULT_TEST_BINARY_TIMEOUT_MIN: u64 = 30;
 /// The longest limit a variable may set (a week); `0` or `off` means none.
 const MAX_MINUTES: f64 = 7.0 * 24.0 * 60.0;
-/// How often the wait checks the child and the clock.
+/// How often the waits check the child and the clock.
 const TICK: Duration = Duration::from_millis(50);
 /// How long, after the child ends, to wait for its output pipes to close (a process it started
 /// that outlives it may hold them open).
 const DRAIN: Duration = Duration::from_secs(5);
-/// How long the `--list` run of a timed-out binary may take (it runs no tests: milliseconds).
+/// How long the `--list` run of a timed-out binary may take, start to exit (it runs no tests).
 const LIST_LIMIT: Duration = Duration::from_secs(15);
+/// The most `--list` output read; the rest is cut.
+const LIST_MAX_BYTES: usize = 16 << 20;
 /// The longest line of output parsed for test names; longer ones stream through unparsed.
 const MAX_LINE: usize = 64 * 1024;
+/// The bytes of test names one [`Names`] keeps (finished, slow or listed tests of one binary).
+const NAME_BUDGET: usize = 8 << 20;
 /// How many never-finished tests the timeout report names.
 const NAMED: usize = 20;
 
@@ -86,7 +98,7 @@ pub fn test_binary_timeout() -> Result<Option<Duration>, String> {
     minutes_from_env(TEST_BINARY_TIMEOUT_ENV, DEFAULT_TEST_BINARY_TIMEOUT_MIN)
 }
 
-/// `30 min`, `1.5 min`, `20 s`, `300 ms`: a limit as the reports show it.
+/// `30 min`, `1.5 min`, `20 s`, `1.2 s`, `300 ms`: a limit as the reports show it.
 pub fn show(limit: Duration) -> String {
     let secs = limit.as_secs_f64();
     let minutes = secs / 60.0;
@@ -124,6 +136,126 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
+/// Splits output into lines as it arrives, dropping (not parsing) lines over [`MAX_LINE`].
+#[derive(Default)]
+struct Lines {
+    buf: Vec<u8>,
+    overlong: bool,
+}
+
+impl Lines {
+    /// Feed `chunk`; `each` gets every whole line it completes.
+    fn feed(&mut self, chunk: &[u8], mut each: impl FnMut(&str)) {
+        for piece in chunk.split_inclusive(|b| *b == b'\n') {
+            if !self.overlong {
+                self.buf.extend_from_slice(piece);
+                if self.buf.len() > MAX_LINE {
+                    self.buf.clear();
+                    self.overlong = true;
+                }
+            }
+            if piece.ends_with(b"\n") {
+                if !self.overlong {
+                    each(&String::from_utf8_lossy(&self.buf));
+                }
+                self.buf.clear();
+                self.overlong = false;
+            }
+        }
+    }
+
+    /// The line begun and not yet ended.
+    fn rest(&self) -> String {
+        String::from_utf8_lossy(&self.buf).into_owned()
+    }
+}
+
+/// Test names in the order first seen, without repeats, up to [`NAME_BUDGET`] bytes; past that
+/// they are dropped and [`Names::cut`] says so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Names {
+    order: Vec<String>,
+    index: BTreeSet<String>,
+    bytes: usize,
+    budget: usize,
+    /// Some names were dropped for the budget.
+    pub cut: bool,
+}
+
+impl Default for Names {
+    fn default() -> Self {
+        Self::with_budget(NAME_BUDGET)
+    }
+}
+
+impl Names {
+    fn with_budget(budget: usize) -> Self {
+        Self { order: Vec::new(), index: BTreeSet::new(), bytes: 0, budget, cut: false }
+    }
+
+    fn insert(&mut self, name: &str) {
+        if self.index.contains(name) {
+            return;
+        }
+        // kept twice (order and index)
+        let cost = name.len().saturating_mul(2);
+        if self.bytes.saturating_add(cost) > self.budget {
+            self.cut = true;
+            return;
+        }
+        self.bytes += cost;
+        self.order.push(name.to_owned());
+        self.index.insert(name.to_owned());
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.index.contains(name)
+    }
+
+    fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &str> {
+        self.order.iter().map(String::as_str)
+    }
+
+    fn clear(&mut self) {
+        *self = Self::with_budget(self.budget);
+    }
+}
+
+/// Whether `result`, what follows `test NAME ... `, is one of libtest's results.
+fn is_result(result: &str) -> bool {
+    let r = result.trim();
+    matches!(r, "ok" | "FAILED" | "ignored")
+        || r.starts_with("ignored, ")
+        || r.starts_with("bench:")
+        || r.starts_with("ok <")
+        || r.starts_with("FAILED <")
+        || r.starts_with("FAILED (")
+}
+
+/// `test NAME ... REST` (REST may be empty: a test a single-threaded run just started): the name
+/// and the rest.
+fn test_line(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("test ")?;
+    if let Some((name, result)) = rest.split_once(" ... ") {
+        return Some((name, result));
+    }
+    rest.trim_end().strip_suffix(" ...").map(|name| (name, ""))
+}
+
+/// What a line of output meant for the clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// Cargo started a test binary (`Running`, `Doc-tests`).
+    Binary,
+    /// A test binary started its tests (`running N tests`).
+    Tests,
+    Other,
+}
+
 /// What a test run's output said so far: the test binary cargo started last and, from libtest's
 /// lines, how many tests it runs, which finished and which ran long.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -134,17 +266,20 @@ pub struct Progress {
     pub exe: Option<PathBuf>,
     /// `running N tests`.
     pub total: Option<usize>,
-    /// The tests that reported a result (`test NAME ... ok`, `FAILED`, `ignored`).
-    pub finished: BTreeSet<String>,
+    /// The tests that reported a result (`test NAME ... ok`, `FAILED`, `ignored`, `bench:`).
+    pub finished: Names,
     /// The tests libtest said had been running for over 60 seconds, in that order.
-    pub slow: Vec<String>,
+    pub slow: Names,
+    /// The test a single-threaded run started (`test NAME ... `) and has no result for yet; the
+    /// test's own output may come between.
+    pub active: Option<String>,
     /// The unfinished last line of stdout: `test NAME ... ` while a single-threaded run runs NAME.
     pub pending: String,
 }
 
 impl Progress {
-    /// Read one whole line of output. True when it is cargo starting a test binary.
-    pub fn line(&mut self, raw: &str) -> bool {
+    /// Read one whole line of output.
+    pub fn line(&mut self, raw: &str) -> Event {
         let clean = strip_ansi(raw);
         let line = clean.trim_end();
         let text = line.trim_start();
@@ -153,30 +288,48 @@ impl Progress {
         if let Some(rest) = text.strip_prefix("Running ").filter(|_| cargo_status) {
             let exe = rest.strip_suffix(')').and_then(|r| r.rsplit_once(" (")).map(|(_, path)| PathBuf::from(path));
             self.start_binary(rest.to_owned(), exe);
-            return true;
+            return Event::Binary;
         }
         if let Some(rest) = text.strip_prefix("Doc-tests ").filter(|_| cargo_status) {
             self.start_binary(format!("doctests of {rest}"), None);
-            return true;
+            return Event::Binary;
         }
         if let Some(rest) = text.strip_prefix("running ") {
             let mut words = rest.split_whitespace();
             if let (Some(n), Some("test" | "tests"), None) = (words.next().and_then(|n| n.parse().ok()), words.next(), words.next()) {
                 self.reset();
                 self.total = Some(n);
+                return Event::Tests;
             }
-            return false;
+            return Event::Other;
         }
-        if let Some(rest) = text.strip_prefix("test ") {
-            if let Some((name, _result)) = rest.split_once(" ... ") {
-                self.finished.insert(name.to_owned());
-            } else if let Some((name, _)) = rest.split_once(" has been running for over ")
-                && !self.slow.iter().any(|s| s == name)
-            {
-                self.slow.push(name.to_owned());
+        if let Some((name, result)) = test_line(text) {
+            if is_result(result) {
+                self.finish(name);
+            } else {
+                // started; what follows is the test's own output (single-threaded, --nocapture)
+                self.active = Some(name.to_owned());
             }
+            return Event::Other;
         }
-        false
+        if let Some((name, _)) = text.strip_prefix("test ").and_then(|r| r.split_once(" has been running for over ")) {
+            self.slow.insert(name);
+            return Event::Other;
+        }
+        // the result of the active test, after its output
+        if is_result(text)
+            && let Some(name) = self.active.take()
+        {
+            self.finished.insert(&name);
+        }
+        Event::Other
+    }
+
+    fn finish(&mut self, name: &str) {
+        self.finished.insert(name);
+        if self.active.as_deref() == Some(name) {
+            self.active = None;
+        }
     }
 
     /// Cargo started a test binary. The test lines stay until its `running N tests`: cargo's line
@@ -191,17 +344,20 @@ impl Progress {
         self.total = None;
         self.finished.clear();
         self.slow.clear();
+        self.active = None;
         self.pending.clear();
     }
 
     /// The tests still running: warned about as slow and not finished, then the one a
     /// single-threaded run started last.
     pub fn running(&self) -> Vec<String> {
-        let mut running: Vec<String> = self.slow.iter().filter(|s| !self.finished.contains(*s)).cloned().collect();
+        let mut running: Vec<String> = self.slow.iter().filter(|s| !self.finished.contains(s)).map(str::to_owned).collect();
         let pending = strip_ansi(&self.pending);
-        let started = pending.trim().strip_prefix("test ").and_then(|p| p.strip_suffix(" ...")).filter(|n| !n.contains(" ... "));
-        if let Some(name) = started.filter(|n| !self.finished.contains(*n) && !running.iter().any(|r| r == n)) {
-            running.push(name.to_owned());
+        let started = test_line(pending.trim_start()).filter(|(_, result)| !is_result(result)).map(|(name, _)| name);
+        for name in [self.active.as_deref(), started].into_iter().flatten() {
+            if !self.finished.contains(name) && !running.iter().any(|r| r == name) {
+                running.push(name.to_owned());
+            }
         }
         running
     }
@@ -212,17 +368,37 @@ impl Progress {
 pub enum Clock {
     /// When the process starts: a test binary run directly.
     Start,
-    /// At each test binary cargo starts (its `Running` / `Doc-tests` line): the limit is per binary,
-    /// and the build before the first isn't bounded.
+    /// At each test binary cargo starts (its `Running` / `Doc-tests` line, and its own `running N
+    /// tests` line): the limit is per binary, and the build before the first isn't bounded.
     EachBinary,
+}
+
+/// The environment variable that marks every process one watched run starts (see the module
+/// docs): its name is unique to this xtask process and run, so nested runs keep each other's.
+pub struct Marker {
+    key: String,
+}
+
+impl Marker {
+    fn new() -> Self {
+        static RUNS: AtomicU64 = AtomicU64::new(0);
+        Self { key: format!("LIGHTCRAFT_XTASK_RUN_{}_{}", std::process::id(), RUNS.fetch_add(1, Ordering::Relaxed)) }
+    }
+}
+
+/// Spawn `cmd` with a fresh [`Marker`].
+fn spawn_marked(cmd: &mut Command) -> std::io::Result<(Child, Marker)> {
+    let marker = Marker::new();
+    cmd.env(&marker.key, "1");
+    Ok((cmd.spawn()?, marker))
 }
 
 /// How a watched run ended.
 #[derive(Debug)]
 pub enum Ended {
     Exited(ExitStatus),
-    /// Out of time: killed, with what its output said by then.
-    TimedOut(Progress),
+    /// Out of time: killed (what the kill did), with what its output said by then.
+    TimedOut(Box<Progress>, String),
 }
 
 struct Watch {
@@ -235,7 +411,7 @@ struct Watch {
 /// `limit` runs out (timed as `clock` says); then kill it and every process it started.
 pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, String> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("failed to start: {e}"))?;
+    let (mut child, marker) = spawn_marked(&mut cmd).map_err(|e| format!("failed to start: {e}"))?;
     let state = Arc::new(Mutex::new(Watch { progress: Progress::default(), since: (clock == Clock::Start).then(Instant::now) }));
     let (done_tx, done_rx) = mpsc::channel();
     let mut readers = 0;
@@ -251,7 +427,7 @@ pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, S
             let _ = done.send(());
         });
         if let Err(e) = spawned {
-            kill_tree(&mut child);
+            kill_marked(&mut child, &marker);
             return Err(format!("could not start a thread to read its output: {e}"));
         }
         readers += 1;
@@ -273,14 +449,14 @@ pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, S
             }
             Ok(None) => {}
             Err(e) => {
-                kill_tree(&mut child);
+                kill_marked(&mut child, &marker);
                 return Err(format!("waiting for it failed: {e}"));
             }
         }
         if lock(&state).since.is_some_and(|since| since.elapsed() >= limit) {
-            kill_tree(&mut child);
+            let killed = kill_marked(&mut child, &marker);
             drain(readers);
-            return Ok(Ended::TimedOut(lock(&state).progress.clone()));
+            return Ok(Ended::TimedOut(Box::new(lock(&state).progress.clone()), killed));
         }
         std::thread::sleep(TICK);
     }
@@ -289,8 +465,7 @@ pub fn watch(mut cmd: Command, limit: Duration, clock: Clock) -> Result<Ended, S
 /// Copy `pipe` to xtask's stdout or stderr as it arrives, feeding whole lines to the progress.
 fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, state: &Mutex<Watch>) {
     let mut buf = [0u8; 8192];
-    let mut line: Vec<u8> = Vec::new();
-    let mut overlong = false;
+    let mut lines = Lines::default();
     loop {
         let n = match pipe.read(&mut buf) {
             Ok(0) => break,
@@ -307,51 +482,84 @@ fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, state: &M
             let _ = err.write_all(chunk).and_then(|()| err.flush());
         }
         let mut watch = lock(state);
-        for piece in chunk.split_inclusive(|b| *b == b'\n') {
-            if !overlong {
-                line.extend_from_slice(piece);
+        lines.feed(chunk, |line| {
+            let event = watch.progress.line(line);
+            if clock == Clock::EachBinary && event != Event::Other {
+                watch.since = Some(Instant::now());
             }
-            if line.len() > MAX_LINE {
-                line.clear();
-                overlong = true;
-            }
-            if piece.ends_with(b"\n") {
-                if !overlong && watch.progress.line(&String::from_utf8_lossy(&line)) && clock == Clock::EachBinary {
-                    watch.since = Some(Instant::now());
-                }
-                line.clear();
-                overlong = false;
-            }
-        }
+        });
         if is_stdout {
-            watch.progress.pending = String::from_utf8_lossy(&line).into_owned();
+            watch.progress.pending = lines.rest();
         }
     }
 }
 
-/// Kill `child` and every process it started, and reap it.
-pub fn kill_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        // freeze the tree first so nothing forks while it is collected, then kill it all
-        let mut seen: BTreeSet<u32> = BTreeSet::from([child.id()]);
-        let mut fresh: Vec<u32> = vec![child.id()];
-        for _ in 0..8 {
-            signal("STOP", &fresh);
-            fresh = descendants(child.id()).into_iter().filter(|p| !seen.contains(p)).collect();
-            if fresh.is_empty() {
-                break;
-            }
-            seen.extend(&fresh);
-        }
-        signal("KILL", &seen.iter().copied().collect::<Vec<_>>());
-    }
-    #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-    }
+/// Kill `child`, every process it started and every process carrying its `marker`, reap it, and
+/// say what was done.
+pub fn kill_marked(child: &mut Child, marker: &Marker) -> String {
+    let note = kill_all(child, marker);
     let _ = child.kill();
     let _ = child.wait();
+    note
+}
+
+#[cfg(unix)]
+fn kill_all(child: &Child, marker: &Marker) -> String {
+    let me = std::process::id();
+    // freeze everything found so nothing forks while the rest is collected, then kill it all
+    let mut seen: BTreeSet<u32> = BTreeSet::from([child.id()]);
+    let mut fresh: Vec<u32> = vec![child.id()];
+    let mut marker_seen = true;
+    for _ in 0..16 {
+        signal("STOP", &fresh);
+        let mut found = descendants(child.id());
+        match marked(&marker.key) {
+            Some(pids) => found.extend(pids),
+            None => marker_seen = false,
+        }
+        fresh = found.into_iter().filter(|p| *p != me && !seen.contains(p)).collect::<BTreeSet<_>>().into_iter().collect();
+        if fresh.is_empty() {
+            break;
+        }
+        seen.extend(&fresh);
+    }
+    signal("KILL", &seen.iter().copied().collect::<Vec<_>>());
+    let others = seen.len().saturating_sub(1);
+    if !marker_seen {
+        return format!(
+            "killed it and {others} process(es) it started that were still its descendants; ones that outlived their parent \
+             could not be looked for (no /proc or ps eww) and may still run"
+        );
+    }
+    // a killed process leaves the list once its parent (or init) reaps it
+    let until = Instant::now() + Duration::from_secs(2);
+    let mut alive = marked(&marker.key).unwrap_or_default();
+    while !alive.is_empty() && Instant::now() < until {
+        std::thread::sleep(TICK);
+        alive = marked(&marker.key).unwrap_or_default();
+    }
+    alive.retain(|p| *p != me && *p != child.id());
+    let mut note = if others == 0 {
+        "killed it; it had started no other process (looked for by the run's environment marker)".to_owned()
+    } else {
+        format!("killed it and the {others} process(es) it started (found by the run's environment marker, reparented ones too)")
+    };
+    if !alive.is_empty() {
+        let pids: Vec<String> = alive.iter().map(u32::to_string).collect();
+        note.push_str(&format!("; still alive after the kill: pid {} (they carry {})", pids.join(", "), marker.key));
+    }
+    note
+}
+
+#[cfg(windows)]
+fn kill_all(child: &Child, _marker: &Marker) -> String {
+    let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    "killed it and its process tree (taskkill /T); processes that outlived their parent may still run".to_owned()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_all(_child: &Child, _marker: &Marker) -> String {
+    "killed it; processes it started may still run".to_owned()
 }
 
 #[cfg(unix)]
@@ -393,6 +601,39 @@ fn descendants_in(table: &str, root: u32) -> Vec<u32> {
     found.into_iter().collect()
 }
 
+/// The processes whose environment holds `key` (this user's; zombies have none), or `None` when
+/// they can't be looked for.
+#[cfg(unix)]
+fn marked(key: &str) -> Option<Vec<u32>> {
+    let entry = format!("{key}=");
+    if let Ok(dir) = std::fs::read_dir("/proc")
+        && Path::new("/proc/self/environ").exists()
+    {
+        let pids = dir
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                // another user's process can't be read: it isn't ours
+                std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| env.split(|b| *b == 0).any(|var| var.starts_with(entry.as_bytes())))
+            })
+            .collect();
+        return Some(pids);
+    }
+    // macOS, BSD: `ps eww` appends each process's environment to its command line
+    let out = Command::new("ps").args(["eww", "-A", "-o", "pid=", "-o", "command="]).stderr(Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(marked_in(&String::from_utf8_lossy(&out.stdout), key))
+}
+
+/// The pids in `ps eww -o pid= -o command=` output whose environment holds `key`.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn marked_in(table: &str, key: &str) -> Vec<u32> {
+    let entry = format!(" {key}=");
+    table.lines().filter(|l| l.contains(&entry)).filter_map(|l| l.split_whitespace().next()?.parse().ok()).collect()
+}
+
 /// A copy of `cmd`: its program, arguments, directory and environment changes.
 fn copy_command(cmd: &Command) -> Command {
     let mut c = Command::new(cmd.get_program());
@@ -409,50 +650,114 @@ fn copy_command(cmd: &Command) -> Command {
     c
 }
 
+/// The tests a test binary would run (`--list`), as far as they were read.
+#[derive(Debug)]
+pub struct Listed {
+    pub names: Names,
+    /// The output passed [`LIST_MAX_BYTES`] or the names their budget: the list is incomplete.
+    pub cut: bool,
+}
+
 /// The tests a test binary would run, from `c` (the binary with its arguments) plus `--list`;
-/// `None` when that fails or takes over [`LIST_LIMIT`].
-fn list_tests(mut c: Command) -> Option<Vec<String>> {
+/// `None` when that fails or takes over `limit` from start to exit (then it is killed, with what
+/// it started). At most `max_bytes` of its output are read.
+fn list_tests(mut c: Command, limit: Duration, max_bytes: usize) -> Option<Listed> {
     c.arg("--list").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut child = c.spawn().ok()?;
+    let until = Instant::now() + limit;
+    let (mut child, marker) = spawn_marked(&mut c).ok()?;
     let Some(mut stdout) = child.stdout.take() else {
-        kill_tree(&mut child);
+        kill_marked(&mut child, &marker);
         return None;
     };
     let (tx, rx) = mpsc::channel();
-    let reader = std::thread::Builder::new().spawn(move || {
-        let mut text = String::new();
-        let _ = stdout.read_to_string(&mut text);
-        let _ = tx.send(text);
+    let reader = std::thread::Builder::new().name("xtask-list".into()).spawn(move || {
+        let (mut names, mut lines, mut read, mut buf) = (Names::default(), Lines::default(), 0usize, [0u8; 8192]);
+        let mut cut = false;
+        loop {
+            let n = match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            let room = max_bytes.saturating_sub(read);
+            let chunk = buf.get(..n.min(room)).unwrap_or_default();
+            read = read.saturating_add(chunk.len());
+            lines.feed(chunk, |line| {
+                if let Some(name) = line.trim_end().strip_suffix(": test") {
+                    names.insert(name);
+                }
+            });
+            if n > room {
+                cut = true;
+                break;
+            }
+        }
+        let cut = cut || names.cut;
+        let _ = tx.send(Listed { names, cut });
     });
-    let text = reader.ok().and_then(|_| rx.recv_timeout(LIST_LIMIT).ok());
-    let Some(text) = text else {
-        kill_tree(&mut child);
+    if reader.is_err() {
+        kill_marked(&mut child, &marker);
         return None;
-    };
-    let status = child.wait().ok()?;
-    status.success().then(|| text.lines().filter_map(|l| l.strip_suffix(": test")).map(str::to_owned).collect())
+    }
+    let (mut status, mut listed) = (None, None);
+    loop {
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(s) => status = s,
+                Err(_) => break,
+            }
+        }
+        if listed.is_none() {
+            match rx.try_recv() {
+                Ok(l) => listed = Some(l),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        match (status, listed.as_ref()) {
+            // read as much as it may: whatever more it writes (or how the cut pipe ends it) doesn't matter
+            (status, Some(l)) if l.cut => {
+                if status.is_none() {
+                    kill_marked(&mut child, &marker);
+                }
+                return listed;
+            }
+            (Some(s), Some(_)) => return listed.filter(|_| s.success()),
+            _ => {}
+        }
+        if Instant::now() >= until {
+            break;
+        }
+        std::thread::sleep(TICK);
+    }
+    if status.is_none() {
+        kill_marked(&mut child, &marker);
+    }
+    None
 }
 
 /// What to tell about a test binary that ran out of `limit`: the lines to print and the one-line
-/// error. `listed` is every test it would run (`--list`), when known.
-pub fn report(limit: Duration, binary: &str, progress: &Progress, listed: Option<&[String]>) -> (Vec<String>, String) {
+/// error. `listed` is every test it would run (`--list`), when known; `killed` what the kill did.
+pub fn report(limit: Duration, binary: &str, progress: &Progress, listed: Option<&Listed>, killed: &str) -> (Vec<String>, String) {
     let running = progress.running();
-    let mut lines = vec![format!("timed out after {}: {binary}; killed it and the processes it started", show(limit))];
+    let mut lines = vec![format!("timed out after {}: {binary}", show(limit)), format!("  {killed}")];
     if running.is_empty() {
         lines.push("  no test was reported as running (libtest warns about a test after 60 s)".to_owned());
     } else {
         lines.push(format!("  still running: {}", running.join(", ")));
     }
-    let never: Option<Vec<&String>> = listed.map(|all| all.iter().filter(|t| !progress.finished.contains(*t) && !running.contains(t)).collect());
+    let never: Option<Vec<&str>> =
+        listed.map(|l| l.names.iter().filter(|t| !progress.finished.contains(t) && !running.iter().any(|r| r.as_str() == *t)).collect());
     match (never, progress.total) {
         (Some(never), _) if !never.is_empty() => {
-            let shown: Vec<&str> = never.iter().take(NAMED).map(|s| s.as_str()).collect();
+            let shown: Vec<&str> = never.iter().take(NAMED).copied().collect();
             let more = never.len().saturating_sub(NAMED);
             let more = if more > 0 { format!(" and {more} more") } else { String::new() };
             lines.push(format!(
                 "  no result from {} other test(s) of {} (not started, or started less than 60 s before): {}{more}",
                 never.len(),
-                listed.map_or(0, <[String]>::len),
+                listed.map_or(0, |l| l.names.len()),
                 shown.join(", ")
             ));
         }
@@ -460,6 +765,9 @@ pub fn report(limit: Duration, binary: &str, progress: &Progress, listed: Option
             lines.push(format!("  {} of {total} test(s) had finished", progress.finished.len().min(total)));
         }
         _ => {}
+    }
+    if listed.is_some_and(|l| l.cut) || progress.finished.cut || progress.slow.cut {
+        lines.push("  (the output named more tests than xtask keeps, so these lists may be incomplete)".to_owned());
     }
     lines.push(format!("  {TEST_BINARY_TIMEOUT_ENV}=<minutes> changes the limit (0 for none)"));
     let still = if running.is_empty() { String::new() } else { format!(" (still running: {})", running.join(", ")) };
@@ -506,13 +814,40 @@ fn test_binary(mut cmd: Command, label: &str, limit: Option<Duration>, shown: &m
     match watch(cmd, limit, Clock::Start)? {
         Ended::Exited(status) if status.success() => Ok(()),
         Ended::Exited(status) => Err(crate::test::describe(status)),
-        Ended::TimedOut(progress) => {
-            let listed = list_tests(lister);
-            let (lines, error) = report(limit, label, &progress, listed.as_deref());
+        Ended::TimedOut(progress, killed) => {
+            let listed = list_tests(lister, LIST_LIMIT, LIST_MAX_BYTES);
+            let (lines, error) = report(limit, label, &progress, listed.as_ref(), &killed);
             shown.extend(lines);
             Err(error)
         }
     }
+}
+
+/// `cmd`, a cargo command, made to print the `Running` lines the per-binary clock starts from: no
+/// `-q` / `--quiet` among cargo's own arguments (those before `--`), and `CARGO_TERM_QUIET=false`
+/// over any quiet setting in the environment or cargo's config.
+fn loud(cmd: &Command) -> Command {
+    let mut c = Command::new(cmd.get_program());
+    let mut cargos = true;
+    for arg in cmd.get_args() {
+        if arg == "--" {
+            cargos = false;
+        }
+        if !(cargos && (arg == "-q" || arg == "--quiet")) {
+            c.arg(arg);
+        }
+    }
+    if let Some(dir) = cmd.get_current_dir() {
+        c.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(v) => c.env(key, v),
+            None => c.env_remove(key),
+        };
+    }
+    c.env("CARGO_TERM_QUIET", "false");
+    c
 }
 
 /// Run `cmd`, a `cargo test` (or `cargo nextest run`) command, with each test binary it starts
@@ -525,11 +860,13 @@ pub fn run_cargo_tests(cmd: Command, limit: Option<Duration>) -> Result<(), Stri
 }
 
 /// [`run_cargo_tests`], with the timeout report added to `shown` rather than printed.
-fn cargo_tests(mut cmd: Command, limit: Option<Duration>, shown: &mut Vec<String>) -> Result<(), String> {
+fn cargo_tests(cmd: Command, limit: Option<Duration>, shown: &mut Vec<String>) -> Result<(), String> {
+    let mut cmd = cmd;
     let Some(limit) = limit else {
         let status = cmd.status().map_err(|e| format!("failed to spawn: {e}"))?;
         return if status.success() { Ok(()) } else { Err(format!("exited with {status}")) };
     };
+    let mut cmd = loud(&cmd);
     // cargo's stderr is a pipe now: keep its colours when ours is a terminal
     if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
         cmd.env("CARGO_TERM_COLOR", "always");
@@ -538,16 +875,16 @@ fn cargo_tests(mut cmd: Command, limit: Option<Duration>, shown: &mut Vec<String
     match watch(cmd, limit, Clock::EachBinary)? {
         Ended::Exited(status) if status.success() => Ok(()),
         Ended::Exited(status) => Err(format!("exited with {status}")),
-        Ended::TimedOut(progress) => {
+        Ended::TimedOut(progress, killed) => {
             let listed = progress.exe.as_ref().and_then(|exe| {
                 let exe = match &dir {
                     Some(dir) if exe.is_relative() => dir.join(exe),
                     _ => exe.clone(),
                 };
-                list_tests(Command::new(exe))
+                list_tests(Command::new(exe), LIST_LIMIT, LIST_MAX_BYTES)
             });
             let binary = progress.binary.clone().unwrap_or_else(|| "a test binary".to_owned());
-            let (lines, error) = report(limit, &binary, &progress, listed.as_deref());
+            let (lines, error) = report(limit, &binary, &progress, listed.as_ref(), &killed);
             shown.extend(lines);
             Err(format!("{error}: {binary}"))
         }
@@ -592,10 +929,10 @@ mod tests {
     #[test]
     fn reads_libtest_and_cargo_lines() {
         let mut p = Progress::default();
-        assert!(p.line("     Running unittests src/lib.rs (target/debug/deps/geom-1a2b)\n"));
+        assert_eq!(p.line("     Running unittests src/lib.rs (target/debug/deps/geom-1a2b)\n"), Event::Binary);
         assert_eq!(p.binary.as_deref(), Some("unittests src/lib.rs (target/debug/deps/geom-1a2b)"));
         assert_eq!(p.exe, Some(PathBuf::from("target/debug/deps/geom-1a2b")));
-        assert!(!p.line("running 4 tests"));
+        assert_eq!(p.line("running 4 tests"), Event::Tests);
         assert_eq!(p.total, Some(4));
         p.line("test a::one ... ok");
         p.line("test a::two ... \u{1b}[31mFAILED\u{1b}[0m");
@@ -603,10 +940,10 @@ mod tests {
         p.line("test a::four has been running for over 60 seconds");
         p.line("test a::four ... ok");
         p.line("test result: FAILED. 2 passed; 1 failed");
-        p.line("Running is not cargo's when it starts the line");
-        assert_eq!(p.finished.iter().map(String::as_str).collect::<Vec<_>>(), ["a::four", "a::one", "a::two"]);
+        assert_eq!(p.line("Running is not cargo's when it starts the line"), Event::Other);
+        assert_eq!(p.finished.iter().collect::<BTreeSet<_>>(), BTreeSet::from(["a::four", "a::one", "a::two"]));
         assert_eq!(p.running(), ["a::three"], "warned about and not finished");
-        assert!(p.line("\u{1b}[1m\u{1b}[92m   Doc-tests\u{1b}[0m lightcraft_geom"), "coloured, as with CARGO_TERM_COLOR=always");
+        assert_eq!(p.line("\u{1b}[1m\u{1b}[92m   Doc-tests\u{1b}[0m lightcraft_geom"), Event::Binary, "coloured, as with CARGO_TERM_COLOR=always");
         assert_eq!(p.binary.as_deref(), Some("doctests of lightcraft_geom"));
         assert_eq!(p.exe, None);
         assert_eq!(p.total, Some(4), "the test lines stay until the new binary's own `running` line");
@@ -614,6 +951,52 @@ mod tests {
         assert_eq!((p.total, p.finished.len(), p.running().len()), (Some(1), 0, 0), "which starts afresh");
         p.pending = "test src/lib.rs - f (line 3) ... ".to_owned();
         assert_eq!(p.running(), ["src/lib.rs - f (line 3)"], "a single-threaded run prints the name as the test starts");
+    }
+
+    #[test]
+    fn only_libtest_results_finish_a_test_and_its_output_between_does_not() {
+        let mut p = Progress::default();
+        p.line("running 5 tests");
+        // single-threaded --nocapture: the test's output follows its name on the same line
+        p.line("test a::hang ... connecting to server");
+        p.line("still connecting");
+        p.line("test a::hang has been running for over 60 seconds");
+        assert!(!p.finished.contains("a::hang"));
+        assert_eq!(p.running(), ["a::hang"]);
+        // the result on a line of its own, after the output
+        p.line("ok");
+        assert!(p.finished.contains("a::hang") && p.running().is_empty());
+        p.line("test b ... ");
+        p.line("log line");
+        p.line("FAILED");
+        p.line("test c ... ignored, needs a GPU");
+        p.line("test d ... bench:      1,234 ns/iter (+/- 56)");
+        p.line("test e ... ok <0.003s>");
+        assert_eq!(p.finished.iter().collect::<Vec<_>>(), ["a::hang", "b", "c", "d", "e"]);
+        p.line("ok");
+        assert_eq!(p.finished.len(), 5, "a stray result with no test running is nobody's");
+        for not_a_result in ["okay", "ok then", "FAILED to connect", "ignoredx"] {
+            assert!(!is_result(not_a_result), "{not_a_result}");
+        }
+    }
+
+    #[test]
+    fn what_is_kept_of_the_output_is_bounded() {
+        let mut names = Names::with_budget(100);
+        for i in 0..100 {
+            names.insert(&format!("test_{i:03}"));
+        }
+        assert!(names.cut && names.len() == 6, "{} names kept (16 bytes each)", names.len());
+        names.insert("test_000");
+        assert_eq!(names.len(), 6, "no repeats");
+        let mut lines = Lines::default();
+        let mut seen = Vec::new();
+        let long = vec![b'x'; MAX_LINE + 10];
+        lines.feed(&long, |l| seen.push(l.len()));
+        assert!(lines.rest().is_empty(), "an overlong line isn't kept");
+        lines.feed(b"xx\nshort\npart", |l| seen.push(l.len()));
+        assert_eq!(seen, [6], "the overlong line is skipped to its end; `short` is read");
+        assert_eq!(lines.rest(), "part");
     }
 
     #[test]
@@ -625,24 +1008,50 @@ mod tests {
     }
 
     #[test]
+    fn finds_marked_processes_in_ps_eww_output() {
+        let table = " 10 /bin/sleep 600 HOME=/h LIGHTCRAFT_XTASK_RUN_7_1=1 PATH=/bin\n 11 sh -c x LIGHTCRAFT_XTASK_RUN_7_10=1\n\
+                     12 vim LIGHTCRAFT_XTASK_RUN_7_1=1\n bad LIGHTCRAFT_XTASK_RUN_7_1=1";
+        assert_eq!(marked_in(table, "LIGHTCRAFT_XTASK_RUN_7_1"), [10, 12]);
+    }
+
+    #[test]
     fn the_report_names_the_binary_the_running_tests_and_the_rest() {
         let mut p = Progress::default();
         for l in ["running 4 tests", "test a ... ok", "test b has been running for over 60 seconds"] {
             p.line(l);
         }
-        let listed: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
-        let (lines, error) = report(MIN * 30, "geom (geom-1)", &p, Some(&listed));
+        let mut names = Names::default();
+        for n in ["a", "b", "c", "d"] {
+            names.insert(n);
+        }
+        let listed = Listed { names, cut: false };
+        let (lines, error) = report(MIN * 30, "geom (geom-1)", &p, Some(&listed), "killed it");
         assert_eq!(error, "timed out after 30 min (still running: b)");
         let text = lines.join("\n");
-        assert!(text.starts_with("timed out after 30 min: geom (geom-1); killed it"), "{text}");
+        assert!(text.starts_with("timed out after 30 min: geom (geom-1)\n  killed it\n"), "{text}");
         assert!(text.contains("still running: b") && text.contains("no result from 2 other test(s) of 4") && text.contains(": c, d"), "{text}");
-        assert!(text.contains(TEST_BINARY_TIMEOUT_ENV), "says how to change the limit: {text}");
-        let (lines, _) = report(MIN, "x", &p, None);
+        assert!(text.contains(TEST_BINARY_TIMEOUT_ENV) && !text.contains("incomplete"), "{text}");
+        let (lines, _) = report(MIN, "x", &p, None, "");
         assert!(lines.join("\n").contains("1 of 4 test(s) had finished"), "without --list: {lines:?}");
-        let many: Vec<String> = (0..30).map(|i| format!("t{i}")).collect();
-        let (lines, _) = report(MIN, "x", &Progress::default(), Some(&many));
+        let mut names = Names::default();
+        for i in 0..30 {
+            names.insert(&format!("t{i}"));
+        }
+        let (lines, _) = report(MIN, "x", &Progress::default(), Some(&Listed { names, cut: true }), "");
         let text = lines.join("\n");
         assert!(text.contains("no test was reported as running") && text.contains("t19 and 10 more") && !text.contains("t20"), "{text}");
+        assert!(text.contains("may be incomplete"), "a cut list says so: {text}");
+    }
+
+    #[test]
+    fn loud_cargo_drops_quiet_flags_before_the_separator_and_overrides_the_config() {
+        let mut c = Command::new("cargo");
+        c.args(["test", "-q", "--workspace", "--quiet", "--", "-q", "--quiet"]).env("CARGO_TERM_QUIET", "true").env("X", "1");
+        let l = loud(&c);
+        assert_eq!(l.get_args().collect::<Vec<_>>(), ["test", "--workspace", "--", "-q", "--quiet"], "the test binaries' -q stays");
+        let envs: Vec<_> = l.get_envs().collect();
+        assert!(envs.contains(&(std::ffi::OsStr::new("CARGO_TERM_QUIET"), Some(std::ffi::OsStr::new("false")))), "{envs:?}");
+        assert!(envs.contains(&(std::ffi::OsStr::new("X"), Some(std::ffi::OsStr::new("1")))));
     }
 
     /// Whether process `pid` is gone (or a zombie no one has reaped yet).
@@ -674,6 +1083,13 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", script]);
+        c
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_hung_binary_is_killed_with_the_processes_it_started_and_named() {
         let dir = scratch("hung");
@@ -686,32 +1102,81 @@ mod tests {
              sleep 300 & echo $! > '{}'; wait",
             pidfile.display()
         );
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", &script]);
         let t = Instant::now();
         let mut shown = Vec::new();
-        let err = test_binary(cmd, "fake (sh)", Some(Duration::from_secs(2)), &mut shown).unwrap_err();
+        let err = test_binary(sh(&script), "fake (sh)", Some(Duration::from_secs(2)), &mut shown).unwrap_err();
         assert!(t.elapsed() < Duration::from_secs(14), "the limit ended it, and --list answered: {:?}", t.elapsed());
         assert_eq!(err, "timed out after 2 s (still running: b)");
         let shown = shown.join("\n");
-        assert!(shown.starts_with("timed out after 2 s: fake (sh); killed it"), "{shown}");
+        assert!(shown.starts_with("timed out after 2 s: fake (sh)\n  killed it and the 1 process(es) it started"), "{shown}");
         assert!(shown.contains("no result from 1 other test(s) of 3") && shown.ends_with("(0 for none)"), "c, from --list: {shown}");
         let grandchild = std::fs::read_to_string(&pidfile).unwrap();
         assert!(wait_gone(grandchild.trim()), "the sleep it started was killed too");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_that_outlived_its_parent_is_killed_too() {
+        let dir = scratch("orphan");
+        let pidfile = dir.join("orphan.pid");
+        // the subshell starts a sleep and exits: the sleep is reparented, no longer a descendant
+        let script = format!("case \"$0\" in --list) exit;; esac; (sleep 300 & echo $! > '{}'); sleep 300", pidfile.display());
+        let mut shown = Vec::new();
+        let err = test_binary(sh(&script), "fake (sh)", Some(Duration::from_secs(1)), &mut shown).unwrap_err();
+        assert!(err.starts_with("timed out after 1 s"), "{err}");
+        let orphan = std::fs::read_to_string(&pidfile).unwrap();
+        assert!(wait_gone(orphan.trim()), "the reparented sleep was found by its marker and killed: {shown:?}");
+        let killed = shown.get(1).cloned().unwrap_or_default();
+        assert!(killed.contains("2 process(es)") && killed.contains("reparented ones too") && !killed.contains("still alive"), "{killed}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_binary_that_started_nothing_is_reported_as_such() {
+        let mut shown = Vec::new();
+        let script = "case \"$0\" in --list) exit;; esac; exec sleep 300";
+        assert!(test_binary(sh(script), "fake", Some(Duration::from_millis(500)), &mut shown).is_err());
+        assert_eq!(
+            shown.get(1).map(String::as_str),
+            Some("  killed it; it had started no other process (looked for by the run's environment marker)")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_list_run_that_hangs_is_bounded_and_killed() {
+        let dir = scratch("list");
+        let pidfile = dir.join("list.pid");
+        // closes its stdout, so the output is done, but never exits
+        let script = format!("exec >&-; sleep 300 & echo $! > '{}'; wait", pidfile.display());
+        let t = Instant::now();
+        assert!(list_tests(sh(&script), Duration::from_secs(1), LIST_MAX_BYTES).is_none());
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        let pid = std::fs::read_to_string(&pidfile).unwrap();
+        assert!(wait_gone(pid.trim()), "what it started was killed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_list_run_is_read_only_so_far() {
+        let listed = list_tests(sh("i=0; while [ $i -lt 1000 ]; do echo \"t$i: test\"; i=$((i+1)); done"), MIN, 1000).unwrap();
+        assert!(listed.cut && listed.names.len() > 50 && listed.names.len() < 200, "{} names", listed.names.len());
+        assert_eq!(listed.names.iter().next(), Some("t0"));
+        let listed = list_tests(sh("echo 'a: test'; echo 'b: bench'; echo; echo '1 test, 1 benchmark'"), MIN, LIST_MAX_BYTES).unwrap();
+        assert_eq!((listed.names.iter().collect::<Vec<_>>(), listed.cut), (vec!["a"], false));
+        assert!(list_tests(sh("echo 'a: test'; exit 1"), MIN, LIST_MAX_BYTES).is_none(), "a failed --list lists nothing");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_binary_that_ends_in_time_passes_or_fails_as_before() {
-        let sh = |script: &str| {
-            let mut c = Command::new("/bin/sh");
-            c.args(["-c", script]);
-            run_test_binary(c, "fake (sh)", Some(MIN))
-        };
-        assert_eq!(sh("echo running 0 tests"), Ok(()));
-        assert_eq!(sh("exit 3"), Err("exit status: 3".to_owned()));
-        assert!(sh("kill -9 $$").unwrap_err().contains("SIGKILL"));
+        let run = |script: &str| run_test_binary(sh(script), "fake (sh)", Some(MIN));
+        assert_eq!(run("echo running 0 tests"), Ok(()));
+        assert_eq!(run("exit 3"), Err("exit status: 3".to_owned()));
+        assert!(run("kill -9 $$").unwrap_err().contains("SIGKILL"));
     }
 
     #[cfg(unix)]
@@ -721,9 +1186,7 @@ mod tests {
         let script = "sleep 1; \
             echo '     Running unittests src/lib.rs (target/debug/deps/a-1)' >&2; echo 'running 1 test'; echo 'test x ... ok'; \
             echo '     Running tests/it/main.rs (target/debug/deps/it-2)' >&2; echo 'running 0 tests'";
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", script]);
-        assert_eq!(run_cargo_tests(c, Some(Duration::from_millis(500))), Ok(()));
+        assert_eq!(run_cargo_tests(sh(script), Some(Duration::from_millis(500))), Ok(()));
 
         let dir = scratch("cargo");
         let pidfile = dir.join("binary.pid");
@@ -732,10 +1195,8 @@ mod tests {
              sh -c 'echo running 2 tests; printf \"test slow ... \"; sleep 300' & echo $! > '{}'; wait",
             pidfile.display()
         );
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", &script]);
         let mut shown = Vec::new();
-        let err = cargo_tests(c, Some(Duration::from_secs(2)), &mut shown).unwrap_err();
+        let err = cargo_tests(sh(&script), Some(Duration::from_secs(2)), &mut shown).unwrap_err();
         assert!(shown.first().is_some_and(|l| l.starts_with("timed out after 2 s: tests/it/main.rs")), "{shown:?}");
         assert_eq!(err, "timed out after 2 s (still running: slow): tests/it/main.rs (target/debug/deps/it-2)");
         let binary = std::fs::read_to_string(&pidfile).unwrap();
@@ -745,12 +1206,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_quiet_cargo_configuration_still_starts_the_clock() {
+        // a "cargo" that prints no Running line when quiet (-q or CARGO_TERM_QUIET=true), then
+        // starts a binary that hangs before it prints anything
+        let script = "quiet=; for a in \"$@\"; do [ \"$a\" = -q ] && quiet=1; done; [ \"$CARGO_TERM_QUIET\" = true ] && quiet=1; \
+            [ -z \"$quiet\" ] && echo '     Running tests/it/main.rs (target/debug/deps/it-2)' >&2; sleep 300";
+        let mut c = sh(script);
+        c.args(["cargo", "test", "-q"]).env("CARGO_TERM_QUIET", "true");
+        let t = Instant::now();
+        let err = cargo_tests(c, Some(Duration::from_secs(1)), &mut Vec::new()).unwrap_err();
+        assert!(t.elapsed() < Duration::from_secs(10) && err.starts_with("timed out after 1 s"), "{err} after {:?}", t.elapsed());
+
+        // and without any Running line at all, the binary's own `running N tests` starts it
+        let err = cargo_tests(sh("echo 'running 1 test'; sleep 300"), Some(Duration::from_secs(1)), &mut Vec::new()).unwrap_err();
+        assert_eq!(err, "timed out after 1 s: a test binary");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn no_limit_runs_as_before() {
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", "exit 0"]);
-        assert_eq!(run_cargo_tests(c, None), Ok(()));
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", "exit 4"]);
-        assert_eq!(run_test_binary(c, "fake", None), Err("exit status: 4".to_owned()));
+        assert_eq!(run_cargo_tests(sh("exit 0"), None), Ok(()));
+        assert_eq!(run_test_binary(sh("exit 4"), "fake", None), Err("exit status: 4".to_owned()));
     }
 }
