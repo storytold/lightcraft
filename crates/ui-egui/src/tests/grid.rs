@@ -133,8 +133,8 @@ fn grid_headers_selection_scrolling_stacks_and_shape_changes() {
 }
 
 /// A develop edit (a Quick Develop click, a slider tick) leaves the list in view as it is: the grid's date runs and
-/// stack index aren't rebuilt, and the square grid's layout neither. The justified grid lays out again, since a
-/// crop or rotation can change a photo's shape: a rotation shows in its rows without the list changing.
+/// stack index aren't rebuilt, nor the layout while no cell's shape changes. A crop or rotation can change a photo's
+/// shape: the justified grid lays out again then, and the rotation shows in its rows without the list changing.
 #[test]
 fn develop_edits_keep_the_grid_view() {
     for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
@@ -151,9 +151,8 @@ fn develop_edits_keep_the_grid_view() {
         assert_eq!(h.app.session.visible_shared().0, generation, "{view:?}: the list was kept");
         let s = &h.app.caches.grid_stats;
         assert_eq!((s.view_builds, s.stack_index_builds), (before.view_builds, before.stack_index_builds), "{view:?}");
-        if view == ViewMode::SquareGrid {
-            assert_eq!(s.layout_builds, before.layout_builds, "square cells don't depend on shapes");
-        } else {
+        assert_eq!(s.layout_builds, before.layout_builds, "{view:?}: an exposure changes no cell's shape");
+        if view == ViewMode::PhotoGrid {
             let landscape = h.app.session.visible()[12];
             let r = h.request("engine.execute", json!({"command": "photo.rotateRight", "params": {"ids": [landscape.0]}}), T);
             assert_eq!(r["ok"], true, "{r}");
@@ -162,6 +161,7 @@ fn develop_edits_keep_the_grid_view() {
             let cell = widget(&h, &format!("thumb:{}", landscape.0)).unwrap();
             assert!(cell.height() > cell.width(), "the rotated photo's cell is portrait: {cell:?}");
             assert_as_made_afresh(&mut h, "after a rotation in a kept list");
+            assert!(h.app.caches.grid_stats.layout_builds > before.layout_builds, "the rotation lays the grid out again");
         }
         assert_cheap_frames(&mut h);
     }
