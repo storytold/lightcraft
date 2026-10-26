@@ -25,6 +25,11 @@ fn corrupt(why: &str) -> RawError {
 /// Heap recursion bound: the deepest directory observed in real files is 4.
 const MAX_DEPTH: usize = 16;
 
+/// Records visited per file, across every heap level: real files hold a few dozen. Depth alone
+/// doesn't bound the walk — a sub-heap record may point back at its own parent block, and N such
+/// records per block multiply into N^MAX_DEPTH visits — so this shared budget does.
+const MAX_RECORDS: usize = 4096;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Order {
     Le,
@@ -50,8 +55,9 @@ fn u32_at(b: &[u8], at: usize, o: Order) -> Option<u32> {
 /// Walk a heap block (`start..start + len` of `bytes`) depth-first in record-table order,
 /// recording each in-heap record's tag (typeCode & 0x3fff), absolute offset and length — first
 /// occurrence wins. In-record values and reserved storage classes are skipped; dataType 5/6
-/// records are sub-heaps.
-fn walk(bytes: &[u8], start: usize, len: usize, o: Order, depth: usize, out: &mut BTreeMap<u16, (usize, usize)>) {
+/// records are sub-heaps. `budget` is the number of records the whole file may still visit;
+/// the walk stops wherever it runs out.
+fn walk(bytes: &[u8], start: usize, len: usize, o: Order, depth: usize, budget: &mut usize, out: &mut BTreeMap<u16, (usize, usize)>) {
     if depth > MAX_DEPTH || len < 6 {
         return;
     }
@@ -68,6 +74,8 @@ fn walk(bytes: &[u8], start: usize, len: usize, o: Order, depth: usize, out: &mu
         return;
     }
     for k in 0..n as usize {
+        let Some(left) = budget.checked_sub(1) else { return };
+        *budget = left;
         let at = abs_tbl + 2 + k * 10;
         let (Some(tc), Some(rl), Some(ro)) = (u16_at(bytes, at, o), u32_at(bytes, at + 2, o), u32_at(bytes, at + 6, o)) else { return };
         if tc & 0xc000 != 0 {
@@ -79,7 +87,7 @@ fn walk(bytes: &[u8], start: usize, len: usize, o: Order, depth: usize, out: &mu
         }
         let Some(abs) = start.checked_add(ro) else { continue };
         if matches!((tc >> 11) & 7, 5 | 6) {
-            walk(bytes, abs, rl, o, depth + 1, out);
+            walk(bytes, abs, rl, o, depth + 1, budget, out);
         } else {
             out.entry(tc & 0x3fff).or_insert((abs, rl));
         }
@@ -108,7 +116,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let hl = u32_at(bytes, 2, o).ok_or_else(|| corrupt("truncated header"))? as usize;
     let heap_len = bytes.len().checked_sub(hl).filter(|&l| l >= 6).ok_or_else(|| corrupt("header length beyond the file"))?;
     let mut rec = BTreeMap::new();
-    walk(bytes, hl, heap_len, o, 0, &mut rec);
+    let mut budget = MAX_RECORDS;
+    walk(bytes, hl, heap_len, o, 0, &mut budget, &mut rec);
 
     let &(so, sl) = rec.get(&SENSOR_INFO).ok_or_else(|| corrupt("no SensorInfo record"))?;
     let sensor: Vec<u16> = (0..sl / 2).map_while(|i| u16_at(bytes, so + i * 2, o)).collect();
@@ -969,6 +978,42 @@ mod tests {
         assert_eq!(img.orientation, Orientation::from_exif(8));
         let t = img.metadata.capture_time.expect("capture time");
         assert_eq!(t.unix_seconds(), 1083410638);
+    }
+
+    /// A block whose every record is a sub-heap pointing back at the block itself: depth alone
+    /// would allow N^MAX_DEPTH visits (here 64^17), the record budget ends the walk promptly.
+    #[test]
+    fn self_referencing_sub_heaps_terminate() {
+        const N: usize = 64;
+        for o in [Order::Le, Order::Be] {
+            let len = (2 + N * 10 + 4) as u32;
+            let mut f = Vec::new();
+            f.extend_from_slice(match o {
+                Order::Le => b"II",
+                Order::Be => b"MM",
+            });
+            f.extend_from_slice(&put32(26, o));
+            f.extend_from_slice(b"HEAPCCDR");
+            f.extend_from_slice(&put32(0x0001_0002, o));
+            f.extend_from_slice(&[0; 8]);
+            f.extend_from_slice(&put16(N as u16, o)); // record table at block offset 0
+            for _ in 0..N {
+                f.extend_from_slice(&put16(5 << 11 | 1, o)); // storage class 5: sub-heap
+                f.extend_from_slice(&put32(len, o)); // ... covering the whole parent block
+                f.extend_from_slice(&put32(0, o));
+            }
+            f.extend_from_slice(&put32(0, o)); // trailing offset-table pointer
+            let started = std::time::Instant::now();
+            for mode in [Mode::Header, Mode::Full] {
+                assert!(matches!(decode(&f, mode), Err(RawError::Corrupt(_))));
+            }
+            assert!(started.elapsed() < std::time::Duration::from_secs(5), "walk did not stay within budget");
+            let mut rec = BTreeMap::new();
+            let mut budget = MAX_RECORDS;
+            walk(&f, 26, len as usize, o, 0, &mut budget, &mut rec);
+            assert_eq!(budget, 0);
+            assert!(rec.is_empty());
+        }
     }
 
     #[test]
