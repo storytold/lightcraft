@@ -19,10 +19,12 @@
 //! minutes is far past anything but a test that will never finish, and `LIGHTCRAFT_TIME_SCALE`
 //! stretches it on a machine that is slower still.
 //!
-//! **How it ends the process.** `std::process::exit` with [`WATCHDOG_EXIT_CODE`], so a stuck run
-//! leaves no crash report or core dump behind. The process is stuck by definition, and an exit
-//! handler (a GPU driver's) could get stuck too: if the exit hasn't finished
-//! [`ABORT_AFTER_EXIT`] later, the watchdog aborts the process instead.
+//! **How it ends the process.** A helper thread prints the report and calls `std::process::exit`
+//! with [`WATCHDOG_EXIT_CODE`], so a stuck run normally leaves no crash report or core dump
+//! behind. The process is stuck by definition, so that can get stuck too: a stuck test may hold
+//! stderr's lock, an exit handler (a GPU driver's) may hang. The watchdog thread itself owns the
+//! hard deadline and does no I/O: it aborts the process if it still runs [`ABORT_AFTER_EXIT`]
+//! later, or at once if the helper thread can't be started.
 //!
 //! The report goes straight to the process's stderr: libtest captures the output of a test's
 //! threads (the watchdog's thread starts from the first watched test's), and a captured report
@@ -43,7 +45,7 @@ pub const DEFAULT_WATCHDOG_MINUTES: f64 = 30.0;
 /// The exit status of a test binary the watchdog ended: 124, as `timeout(1)` uses.
 pub const WATCHDOG_EXIT_CODE: i32 = 124;
 
-/// How long the exit may take before the watchdog aborts the process instead.
+/// How long printing the report and exiting may take before the watchdog aborts the process.
 pub const ABORT_AFTER_EXIT: Duration = Duration::from_secs(10);
 
 /// One registered test.
@@ -134,9 +136,7 @@ fn start(limit: Duration) {
                 std::thread::sleep(poll);
                 let report = overdue(&WATCHED.lock().unwrap_or_else(PoisonError::into_inner), Instant::now(), limit);
                 if let Some(report) = report {
-                    // straight to stderr: `eprintln!` would go to the capture of the test that started this thread
-                    let _ = writeln!(std::io::stderr(), "{report}");
-                    end_process();
+                    end_process(report);
                 }
             }
         });
@@ -146,15 +146,20 @@ fn start(limit: Duration) {
     });
 }
 
-/// Exit with [`WATCHDOG_EXIT_CODE`], or abort when an exit handler holds the exit up for
-/// [`ABORT_AFTER_EXIT`].
-fn end_process() -> ! {
-    let _ = std::thread::Builder::new().name("lightcraft-testkit-watchdog-abort".into()).spawn(|| {
-        std::thread::sleep(ABORT_AFTER_EXIT);
-        let _ = writeln!(std::io::stderr(), "lightcraft-testkit watchdog: the exit is stuck too; aborting");
-        std::process::abort();
+/// End the process for a stuck test, on the watchdog thread. A helper thread prints `report` and
+/// exits with [`WATCHDOG_EXIT_CODE`]; this thread does no I/O (stderr's lock may be held by the
+/// stuck test) and aborts the process if it is still running [`ABORT_AFTER_EXIT`] later, or at
+/// once when the helper can't be started.
+fn end_process(report: String) -> ! {
+    let reporter = std::thread::Builder::new().name("lightcraft-testkit-watchdog-exit".into()).spawn(move || {
+        // straight to stderr: `eprintln!` would go to the capture of the test that started the watchdog
+        let _ = writeln!(std::io::stderr(), "{report}");
+        std::process::exit(WATCHDOG_EXIT_CODE)
     });
-    std::process::exit(WATCHDOG_EXIT_CODE)
+    if reporter.is_ok() {
+        std::thread::sleep(ABORT_AFTER_EXIT);
+    }
+    std::process::abort()
 }
 
 /// When a live registered test has run for `limit` or longer: the report printed before the
@@ -275,8 +280,8 @@ mod tests {
         assert_eq!(named("testkit::leaking_test"), 0, "the thread ended with the test");
     }
 
-    /// Run as a child by the next test: a test stuck in a wait, under a watchdog of a fraction of a
-    /// second. Ends on its own after a minute, so a watchdog that never fires fails the parent
+    /// Run as a child by [`a_stuck_test_ends_its_binary_with_the_tests_still_running`]: a test stuck
+    /// in a wait. Ends on its own after a minute, so a watchdog that never fires fails the parent
     /// rather than hanging it.
     #[test]
     #[ignore = "a stuck test: run as a child process by a_stuck_test_ends_its_binary_with_the_tests_still_running"]
@@ -288,22 +293,66 @@ mod tests {
         std::thread::sleep(Duration::from_secs(60));
     }
 
+    /// Run as a child by [`a_stuck_test_holding_stderr_still_ends_its_binary`]: a test stuck while
+    /// it holds stderr's lock, so the report can't be printed.
+    #[test]
+    #[ignore = "a stuck test: run as a child process by a_stuck_test_holding_stderr_still_ends_its_binary"]
+    fn stuck_child_holding_stderr() {
+        if std::env::var_os(CHILD_ENV).is_none() {
+            return;
+        }
+        let _watch = watch();
+        let _stderr = std::io::stderr().lock();
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    /// Run the ignored test `name` of this binary as a child under a watchdog of 0.3 s. Returns its
+    /// exit status (`None`: it was still running after `deadline` and was killed), its stderr and
+    /// how long it ran.
+    fn run_stuck_child(name: &str, deadline: Duration) -> (Option<std::process::ExitStatus>, String, Duration) {
+        let start = Instant::now();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            // captured, as in a normal run: the report must get out anyway
+            .args(["--ignored", "--exact", name, "--test-threads", "1"])
+            .env(CHILD_ENV, "1")
+            .env(WATCHDOG_ENV, "0.005")
+            .env(crate::TIME_SCALE_ENV, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let ended = loop {
+            if child.try_wait().unwrap().is_some() {
+                break true;
+            }
+            if start.elapsed() > deadline {
+                let _ = child.kill();
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let ran = start.elapsed();
+        let out = child.wait_with_output().unwrap();
+        (ended.then_some(out.status), String::from_utf8_lossy(&out.stderr).into_owned(), ran)
+    }
+
     #[test]
     fn a_stuck_test_ends_its_binary_with_the_tests_still_running() {
-        let exe = std::env::current_exe().unwrap();
-        let start = Instant::now();
-        let out = std::process::Command::new(exe)
-            // captured, as in a normal run: the report must get out anyway
-            .args(["--ignored", "--exact", "watchdog::tests::stuck_child", "--test-threads", "1"])
-            .env(CHILD_ENV, "1")
-            .env(WATCHDOG_ENV, "0.005") // 0.3 s
-            .env(crate::TIME_SCALE_ENV, "1")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(WATCHDOG_EXIT_CODE), "the watchdog ends the run: {stderr}");
-        assert!(start.elapsed() < Duration::from_secs(50), "it ended the stuck test early: {stderr}");
+        let (status, stderr, ran) = run_stuck_child("watchdog::tests::stuck_child", crate::scaled(Duration::from_secs(45)));
+        let status = status.unwrap_or_else(|| panic!("the watchdog didn't end the stuck test in {ran:?}: {stderr}"));
+        assert_eq!(status.code(), Some(WATCHDOG_EXIT_CODE), "the watchdog ends the run: {stderr}");
         assert!(stderr.contains("lightcraft-testkit watchdog: `watchdog::tests::stuck_child` has run for"), "{stderr}");
         assert!(stderr.contains("\n    watchdog::tests::stuck_child ("), "{stderr}");
+    }
+
+    /// The report can't be printed while the stuck test holds stderr's lock: the watchdog thread
+    /// aborts the process once [`ABORT_AFTER_EXIT`] has passed instead of waiting for it.
+    #[test]
+    fn a_stuck_test_holding_stderr_still_ends_its_binary() {
+        let (status, stderr, ran) = run_stuck_child("watchdog::tests::stuck_child_holding_stderr", crate::scaled(Duration::from_secs(45)));
+        let status = status.unwrap_or_else(|| panic!("the stuck test still ran after {ran:?}: {stderr}"));
+        assert!(!status.success(), "{status:?}");
+        assert_ne!(status.code(), Some(WATCHDOG_EXIT_CODE), "it can't have printed and exited: {stderr}");
+        assert!(ran >= ABORT_AFTER_EXIT, "aborted after the grace period, not before: {ran:?}");
     }
 }
