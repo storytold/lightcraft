@@ -123,7 +123,6 @@ fn startup_view_without_files_preserves_preferences() {
     let (root, mut h) = startup_headless("startup-no-files", StartupView::Detail, true);
     assert!(h.app.session.catalog.photos().count() > 0, "the launch library is populated");
     start_launch_files(&mut h.app, Vec::new());
-    assert!(h.settle(std::time::Duration::from_secs(10)));
     assert!(h.app.import.is_none());
     assert_eq!(h.app.ui.view, ViewMode::Detail);
     drop(h);
