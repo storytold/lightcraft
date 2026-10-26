@@ -816,7 +816,9 @@ fn chains_of_smart_albums_stay_linear() {
     }
     let start = std::time::Instant::now();
     assert_eq!(c.album_count(AlbumId(26)), 20);
-    assert!(start.elapsed() < std::time::Duration::from_secs(2), "took {:?}", start.elapsed());
+    // a regression guard, not a speed measurement: linear is microseconds, 2^25 passes take minutes
+    // (stretched by LIGHTCRAFT_TIME_SCALE for a loaded machine)
+    assert!(start.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(2)), "took {:?}", start.elapsed());
 }
 
 /// A smart album's own album filter (not only its rules) counts in loops: A filtered to "in A" is
