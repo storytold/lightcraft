@@ -1447,14 +1447,13 @@ mod tests {
         }
     }
 
-    /// Issue #250: the window's device is created without wgpu's indirect-call validation pipeline,
-    /// which Intel Macs' Metal compiler fails to build (the device was lost, the window never opened).
     #[test]
-    fn window_has_no_indirect_call_validation_pipeline() {
+    fn window_preserves_configured_indirect_call_validation() {
         let eframe::egui_wgpu::WgpuSetup::CreateNew(n) = window_wgpu_options().wgpu_setup else { panic!("expected CreateNew") };
-        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
-            assert!(!n.instance_descriptor.flags.contains(eframe::wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
-        }
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(defaults) = eframe::egui_wgpu::WgpuConfiguration::default().wgpu_setup else {
+            panic!("expected CreateNew")
+        };
+        assert_eq!(n.instance_descriptor.flags, defaults.instance_descriptor.flags.with_env());
     }
 
     /// Issue #234: Windows opens links with the URL protocol handler (the default browser), not

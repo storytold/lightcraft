@@ -25,6 +25,9 @@ per-pixel decision. At 6000 × 4000 with lens warp + perspective the mask takes
 ~2.7 ms (32 threads; ~24.5 ms on one) instead of ~30 ms (~580 ms), and only
 when warped geometry rebuilds.
 
+The [shared OCLP wgpu fork proposal](oclp-wgpu-fork.md) records the pinned Metal
+compiler workarounds, organization ownership proposal and hardware checks.
+
 ## Backends, environment variables and troubleshooting (issue #136)
 wgpu loads the driver of **every** backend in an instance's set while it enumerates adapters — even
 when it then picks another one. A Vulkan driver that crashes there (issue #136: an access violation

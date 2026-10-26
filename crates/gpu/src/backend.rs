@@ -147,17 +147,12 @@ pub fn backend_options() -> wgpu::BackendOptions {
     o
 }
 
-/// wgpu's instance flags for every instance LightCraft creates, from `flags` (wgpu's defaults with its
-/// environment variables applied) without `VALIDATION_INDIRECT_CALL`, unless
-/// `WGPU_VALIDATION_INDIRECT_CALL` asks for it (any value but `0`). That validation builds an internal
-/// compute pipeline when each device is created; Intel Macs' Metal compiler fails on it ("Compiler
-/// encountered an internal error"), the device is lost and the window never opens (#250). It only
-/// guards indirect draws and dispatches, which neither LightCraft nor egui issue.
+/// Preserve configured instance flags unless the explicit indirect-validation override changes them.
 pub fn instance_flags(flags: wgpu::InstanceFlags, env: Option<&str>) -> wgpu::InstanceFlags {
-    if env.is_some_and(|v| v != "0") {
-        flags | wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
-    } else {
-        flags - wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
+    match env {
+        None => flags,
+        Some("0") => flags - wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL,
+        Some(_) => flags | wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL,
     }
 }
 
@@ -346,15 +341,16 @@ pub fn window_renderer_order(
 #[allow(clippy::unwrap_used)]
 mod tests {
 
-    /// #250: the indirect-call validation pipeline is off unless asked for; other flags are kept.
     #[test]
-    fn indirect_call_validation_is_off_unless_asked_for() {
+    fn indirect_call_validation_preserves_configuration_unless_overridden() {
         use wgpu::InstanceFlags as F;
         let base = F::VALIDATION_INDIRECT_CALL | F::DEBUG;
-        assert_eq!(instance_flags(base, None), F::DEBUG);
+        assert_eq!(instance_flags(base, None), base);
         assert_eq!(instance_flags(base, Some("0")), F::DEBUG);
         assert_eq!(instance_flags(F::empty(), Some("1")), F::VALIDATION_INDIRECT_CALL);
         assert_eq!(instance_flags(F::empty(), None), F::empty());
+        assert_eq!(instance_flags(F::DEBUG, None), F::DEBUG);
+        assert_eq!(instance_flags(F::DEBUG, Some("1")), base);
     }
     use super::*;
 
