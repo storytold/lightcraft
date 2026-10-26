@@ -84,6 +84,11 @@
 
 ## 2026-10-22
 
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically (issue #2564). It used to write the presets over whatever file
+  it was given, and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
   is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's

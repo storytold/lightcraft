@@ -275,6 +275,8 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
 
 fn preset_export_preserves_originals(command: &str, selection: serde_json::Value, tag: &str) {
     let (mut s, _, dir, src, original) = library_with_jpeg(tag);
+    // something for mask.exportEffects to write (the other commands ignore it)
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
     let sidecar = src.with_extension("xmp");
     let appended_sidecar = dir.join("IMG_1.jpg.xmp");
     std::fs::write(&sidecar, b"existing sidecar").unwrap();
@@ -341,9 +343,12 @@ fn keyword_export_preserves_the_previous_file_on_write_failure() {
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
     let mut s = Session::new();
-    for (command, selection, file) in
-        [("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"), ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve")]
-    {
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
+    for (command, selection, file) in [
+        ("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"),
+        ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve"),
+        ("mask.exportEffects", json!({"names": ["Glow"]}), "effects.lceffect"),
+    ] {
         let path = dir.join(file);
         let mut params = selection;
         params["path"] = json!(path.to_string_lossy());
@@ -356,8 +361,14 @@ fn preset_exports_preserve_previous_files_on_write_failure() {
         assert_eq!(std::fs::read(&path).unwrap(), previous, "{command} preserves the prior export");
         assert_eq!(s.execute(command, &params).unwrap()["count"], 1, "replacement still succeeds");
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "no temporary files remain");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Issue #2564: mask.exportEffects wrote anywhere, over an original or its sidecar too.
+#[test]
+fn mask_effect_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("mask.exportEffects", json!({"names": ["Glow"]}), "effect-export-guard");
 }
 
 fn disk_batch(
