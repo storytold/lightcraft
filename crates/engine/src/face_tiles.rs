@@ -38,7 +38,8 @@ const ASPECT_TOLERANCE: f64 = 0.02;
 pub struct PreviewCut {
     /// The raw file.
     pub path: String,
-    /// Reads its largest embedded preview, display-ready and upright, no larger than the edge given.
+    /// Reads its embedded preview, display-ready and upright, no larger than the edge given: the smallest that covers
+    /// that edge, else the largest (as the whole-file path chooses, `files::embedded_preview_srgb`).
     pub loader: PreviewLoader,
     /// The preview's long edge that gives the tile its own size across the face.
     pub want: usize,
