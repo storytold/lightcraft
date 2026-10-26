@@ -373,6 +373,24 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 },
             ];
         }),
+        ("masks (inverted, add and subtract)", |s| {
+            let radial = |x: f64| MaskShape::Radial { center: Point::new(x, 0.5), rx: 0.15, ry: 0.15, angle: 0.0, feather: 30.0, invert: false };
+            let comp = |op, x| MaskComponent { name: None, op, invert: false, shape: radial(x) };
+            s.masks = vec![
+                Mask {
+                    components: vec![comp(MaskOp::Add, 0.3), comp(MaskOp::Add, 0.7), comp(MaskOp::Subtract, 0.3)],
+                    adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, ..Default::default() },
+                    invert: true,
+                    ..Default::default()
+                },
+                Mask {
+                    components: vec![comp(MaskOp::Add, 0.3), comp(MaskOp::Intersect, 0.5)],
+                    adjust: lightcraft_develop::LocalAdjustments { exposure: -0.5, ..Default::default() },
+                    invert: true,
+                    ..Default::default()
+                },
+            ];
+        }),
         ("masks (local noise, moiré, defringe)", |s| {
             let radial = MaskShape::Radial { center: Point::new(0.4, 0.6), rx: 0.3, ry: 0.25, angle: 0.0, feather: 50.0, invert: false };
             let linear = MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.7) };

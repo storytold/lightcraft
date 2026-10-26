@@ -164,12 +164,17 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
             first = false;
             continue;
         }
+        // an inverted mask is inverted at the end, so combine on its visible (inverted) side:
+        // [+] adds to what the mask shows and [-] removes from it
+        let inv = m.invert;
         for (a, c) in alpha.data.iter_mut().zip(&c.data) {
-            *a = match comp.op {
-                MaskOp::Add => a.max(*c),
-                MaskOp::Subtract => *a * (1.0 - c),
-                MaskOp::Intersect => *a * c,
+            let v = if inv { 1.0 - *a } else { *a };
+            let v = match comp.op {
+                MaskOp::Add => v.max(*c),
+                MaskOp::Subtract => v * (1.0 - c),
+                MaskOp::Intersect => v * c,
             };
+            *a = if inv { 1.0 - v } else { v };
         }
         first = false;
     }
@@ -841,6 +846,30 @@ mod tests {
         ] {
             assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
         }
+    }
+
+    /// Issue #2677: on an inverted mask, [+] adds to and [-] removes from the visible area.
+    #[test]
+    fn inverted_mask_add_and_subtract_act_on_the_visible_area() {
+        let f = frame(100, 100);
+        let img = Rgb32f::new(100, 100);
+        let l = Plane::new(100, 100);
+        let radial = |x: f64| MaskShape::Radial { center: Point::new(x, 0.5), rx: 0.1, ry: 0.1, angle: 0.0, feather: 20.0, invert: false };
+        let comp = |op, x| MaskComponent { name: None, op, invert: false, shape: radial(x) };
+        let at = |ops: Vec<MaskComponent>, x, y| {
+            let m = Mask { components: ops, invert: true, ..Default::default() };
+            evaluate(&[m], &f, 100, 100, &img, &l, 0.0, None)[0].alpha.get(x, y)
+        };
+        let base = || comp(MaskOp::Add, 0.2);
+        // the inverted base shows everything but the first spot
+        assert!(at(vec![base()], 80, 50) > 0.99 && at(vec![base()], 20, 50) < 0.01);
+        // [+] at the first spot makes it visible
+        assert!(at(vec![base(), comp(MaskOp::Add, 0.2)], 20, 50) > 0.99);
+        // [-] at the other spot hides it
+        assert!(at(vec![base(), comp(MaskOp::Subtract, 0.8)], 80, 50) < 0.01);
+        // [∩] keeps only the visible part inside the shape
+        let both = vec![base(), comp(MaskOp::Intersect, 0.8)];
+        assert!(at(both.clone(), 80, 50) > 0.99 && at(both, 20, 50) < 0.01);
     }
 
     #[test]

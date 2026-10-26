@@ -1075,7 +1075,20 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
             };
             let cbuf = plane.as_ref().unwrap_or(&comp_plane);
             let k = [n as u32, 0, mi as u32, op];
+            // An inverted mask is inverted again at the end, so combine on its visible side:
+            // invert the plane, combine, invert back. Op 0 is the plain copy of the first
+            // component (see `combine` in mask.wgsl); ops 1..=3 are add, subtract, intersect.
+            // `finalize` params: [n, 0, mask index, invert = 1, amount = 1.0 (no scaling)];
+            // it reads and writes only `alpha`.
+            let flip = m.invert && op != 0;
+            let fk = [n as u32, 0, mi as u32, 1, 1f32.to_bits()];
+            if flip {
+                cx.run("finalize", &fk, &[None, None, None, None, Some(&alpha)], groups1(n));
+            }
             cx.run("combine", &k, &[None, None, None, Some(cbuf), Some(&alpha)], groups1(n));
+            if flip {
+                cx.run("finalize", &fk, &[None, None, None, None, Some(&alpha)], groups1(n));
+            }
         }
         let amt = (m.adjust.amount / 100.0) as f32;
         cx.run(
