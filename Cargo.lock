@@ -7931,6 +7931,7 @@ version = "0.21.1"
 dependencies = [
  "brotli",
  "flate2",
+ "lightcraft-sysmem",
  "serde_json",
  "sha2",
 ]
