@@ -41,7 +41,9 @@
 //! # Format versions
 //!
 //! The snapshot's `version` is the catalog format, and it covers the log beside it: the log has
-//! no header of its own, and is only ever appended to under a snapshot of this build's format.
+//! no header of its own, and is appended to under a snapshot of this build's format. (Except
+//! for a library left in an older format because its files could not be kept or its upgrade
+//! written: it goes on as it is, and its log gets this build's ops until a snapshot upgrades it.)
 //!
 //! | Version | Written by | Adds |
 //! |---|---|---|
@@ -217,6 +219,14 @@ pub struct Journal {
     /// written. A later snapshot (a compaction, or closing) writes the upgrade then,
     /// and keeps the files first ([`Journal::keep_before_upgrade`]).
     behind: Option<u32>,
+    /// What the library was at open while `behind` is set: the `seq` its files held and the
+    /// length of its log. Appends only add to the log after that, so the first `log_len` bytes
+    /// and the snapshot are what an older build left, whatever is appended meanwhile.
+    behind_at: (u64, u64),
+    /// The files [`Journal::keep_before_upgrade`] kept for a snapshot that is not written yet,
+    /// and, once that snapshot is, the names for [`Journal::take_kept`].
+    kept_pending: Option<Vec<String>>,
+    kept_written: Vec<String>,
     log_records: u64,
     log_bytes: u64,
     pub policy: SnapshotPolicy,
@@ -416,6 +426,9 @@ impl Journal {
             seq: snapshot_seq,
             snapshot_seq,
             behind: None,
+            behind_at: (0, 0),
+            kept_pending: None,
+            kept_written: Vec::new(),
             log_records: 0,
             log_bytes: 0,
             policy: SnapshotPolicy::default(),
@@ -533,12 +546,16 @@ impl Journal {
             }
         } else if let (Some(from), None) = (older, &report.damaged) {
             // The library may go on as it is when it can't be upgraded now (the next open tries
-            // again): what is appended to an older format reads the same in every build.
+            // again). Appends are not refused meanwhile: refusing them would leave a library
+            // whose files can't be copied (little room left) unable to save anything. What is
+            // appended is this build's ops; the files kept when a later snapshot upgrades it are
+            // the library as it is here (`behind_at`), which an older build reads.
             if let Some(kept) = j.upgrade(&catalog, from, snap.as_deref(), &log, Upgrade::May)? {
                 report.upgraded_from = Some(from);
                 report.kept = kept;
             } else {
                 j.behind = Some(from);
+                j.behind_at = (j.seq, j.log_bytes);
             }
         }
         catalog.revision = 0;
@@ -633,15 +650,52 @@ impl Journal {
     }
 
     /// A library that was left in an older format at open (see `behind`) keeps its files, as
-    /// they are now, before a snapshot upgrades it. An error means they could not be kept (or
-    /// read): the snapshot is not written, so the library stays as it was, with its way back.
+    /// they were then, before a snapshot upgrades it: the snapshot as it is (nothing writes it
+    /// until the upgrade) and the log up to its length at open (what was appended since is this
+    /// build's, which an older build may refuse). The names are those the open would have kept
+    /// them under, so they are written again as they are when a snapshot failed and is tried
+    /// again, and files kept for an upgrade that did not land are never left behind under other
+    /// names. An error means they could not be kept (or read): the snapshot is not written, so
+    /// the library stays as it was, with its way back.
     fn keep_before_upgrade(&mut self) -> Result<()> {
         let Some(from) = self.behind else { return Ok(()) };
+        if self.kept_pending.is_some() {
+            return Ok(());
+        }
         let snap = self.store.read(SNAPSHOT).map_err(io)?;
-        let log = self.store.read(LOG).map_err(io)?.unwrap_or_default();
-        let kept = self.keep_replaced(from, snap.as_deref(), &log).map_err(io)?;
+        // (a write of the snapshot that failed after it landed leaves one that is not what was
+        // to be kept under this name)
+        if let Some(bytes) = snap.as_deref()
+            && serde_json::from_slice::<SnapHeader>(bytes).ok().map(|h| h.version) != Some(from)
+        {
+            return Err(CatalogError::Io(format!("the snapshot is no longer in format v{from}, and can't be kept as it was")));
+        }
+        let mut log = self.store.read(LOG).map_err(io)?.unwrap_or_default();
+        let (seq, log_len) = self.behind_at;
+        log.truncate(usize::try_from(log_len).unwrap_or(usize::MAX));
+        let at = std::mem::replace(&mut self.seq, seq);
+        let kept = self.keep_replaced(from, snap.as_deref(), &log);
+        self.seq = at;
+        let kept = kept.map_err(io)?;
         log::info!("catalog: the files of format v{from} are kept as {kept:?} before the upgrade");
+        self.kept_pending = Some(kept);
         Ok(())
+    }
+
+    /// The snapshot that upgrades a library left behind is durable: the files kept for it are
+    /// now the library's way back, for [`Journal::take_kept`] to tell.
+    fn upgraded_later(&mut self) {
+        self.behind = None;
+        if let Some(kept) = self.kept_pending.take() {
+            self.kept_written.extend(kept);
+        }
+    }
+
+    /// The files a snapshot kept when it upgraded a library that was left in an older format at
+    /// open (see `behind`), once, after it was written: [`LoadReport::kept`] has only what the
+    /// open kept. Empty when there are none.
+    pub fn take_kept(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.kept_written)
     }
 
     /// Append ops (already applied to the live catalog) durably, in order.
@@ -724,7 +778,7 @@ impl Journal {
         // the snapshot is durable: it holds every op up to `seq`
         self.seq = seq;
         self.snapshot_seq = seq;
-        self.behind = None;
+        self.upgraded_later();
         let t2 = web_time::Instant::now();
         // A crash here leaves old records in the log; they are skipped by seq on load.
         self.store.write_atomic(LOG, b"").map_err(io)?;
@@ -817,7 +871,7 @@ impl Journal {
         // Keep exactly the ones appended since (a crash before this rewrite skips the stale ones).
         let t1 = web_time::Instant::now();
         self.snapshot_seq = p.seq;
-        self.behind = None;
+        self.upgraded_later();
         if let Err(e) = self.store.write_atomic(LOG, &p.tail) {
             // the log stays whole (stale records are skipped on load); compact again later
             self.retry_at_records = self.log_records + self.policy.max_records;

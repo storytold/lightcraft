@@ -519,3 +519,59 @@ fn a_damaged_older_library_whose_snapshot_cannot_be_kept_is_refused() {
     assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be kept")), "{e}");
     assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(damaged)));
 }
+
+/// Given an older library that was not upgraded at open (its files can't be kept), when a later
+/// snapshot upgrades it, then the files that snapshot kept are told once, after it is written
+/// (not before, not for a snapshot that failed, and the open's report has none).
+#[test]
+fn the_files_a_later_snapshot_keeps_are_told_once_it_is_written() {
+    static FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let (m, _, _) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT && FULL.load(std::sync::atomic::Ordering::SeqCst) };
+    let (mut j, c, r) = Journal::open(Box::new(store)).unwrap();
+    assert!(r.kept.is_empty());
+    assert!(j.snapshot(&c).is_err(), "still full");
+    assert!(j.take_kept().is_empty(), "kept for a snapshot that is not written: nothing to tell yet");
+    FULL.store(false, std::sync::atomic::Ordering::SeqCst);
+    j.snapshot(&c).unwrap();
+    assert_eq!(j.take_kept(), ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+    assert!(j.take_kept().is_empty(), "once");
+}
+
+/// Given a library left in its old format whose snapshot failed after its files were kept, when
+/// it goes on (more changes are appended, in this build's ops) and a later snapshot upgrades it,
+/// then the files kept are the library as it was at open, under the names the open would have
+/// given them: nothing piles up, and an older build can read them whatever was appended since.
+#[test]
+fn files_kept_by_a_later_snapshot_are_the_library_as_it_was_at_open() {
+    static FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let (m, snap, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT && FULL.load(std::sync::atomic::Ordering::SeqCst) };
+    let (mut j, c, _) = Journal::open(Box::new(store)).unwrap();
+    assert!(j.snapshot(&c).is_err());
+    j.append(&[Op::SetLabelName { label: ColorLabel::ALL[0], name: Some("x".into()) }]).unwrap();
+    assert!(j.snapshot(&c).is_err(), "still full");
+    FULL.store(false, std::sync::atomic::Ordering::SeqCst);
+    j.snapshot(&c).unwrap();
+    assert_eq!(j.take_kept(), ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)));
+    assert_eq!(m.files.lock().unwrap().keys().filter(|k| k.contains(".v6-")).count(), 2, "{:?}", m.files.lock().unwrap().keys());
+}
+
+/// Given a library left in its old format whose snapshot write failed after it landed (the share
+/// dropped the answer), when a later snapshot would keep its files, then the snapshot that is
+/// there is not kept under the old format's name, and nothing is deleted.
+#[test]
+fn a_snapshot_that_landed_is_not_kept_as_the_old_format() {
+    static FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let (m, _, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT && FULL.load(std::sync::atomic::Ordering::SeqCst) };
+    let (mut j, c, _) = Journal::open(Box::new(store)).unwrap();
+    // the upgrade landed after all, though the write said it failed
+    m.set(SNAPSHOT, b"{\"format\":\"lightcraft-catalog\",\"version\":99,\"seq\":8,\"catalog\":{}}\n".to_vec());
+    let e = j.snapshot(&c).unwrap_err();
+    assert!(e.to_string().contains("no longer in format"), "{e}");
+    assert!(j.take_kept().is_empty());
+    assert_eq!(m.get(LOG), Some(log));
+    assert!(!m.files.lock().unwrap().keys().any(|k| k.starts_with("catalog.snap.v")), "{:?}", m.files.lock().unwrap().keys());
+}

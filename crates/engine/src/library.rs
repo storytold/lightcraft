@@ -340,12 +340,24 @@ fn presets_json(s: &Session) -> String {
 /// Finish a background compaction that is done (cheap otherwise). A failed one lost nothing (the
 /// log is kept whole) and is retried later; it is reported like other persistence errors.
 fn poll_compaction(lib: &mut Library) {
-    if let Err(e) = lib.journal.poll() {
+    let polled = lib.journal.poll();
+    note_upgrade_kept(lib);
+    if let Err(e) = polled {
         log::error!("library: compaction: {e}");
         lib.last_error = Some(format!("compaction: {e}"));
     }
     // (never waits: the log's thread publishes what it holds)
     lib.log_held = lib.journal.unwritten();
+}
+
+/// A snapshot that upgraded a library left in an older format at open kept the files it was:
+/// tell so once, like the open does ([`kept_note`]). Cheap when nothing was kept.
+fn note_upgrade_kept(lib: &mut Library) {
+    let kept = lib.journal.take_kept();
+    if let Some(note) = kept_note(&kept, None) {
+        lib.settings_warnings.push(note);
+        lib.report.kept.extend(kept);
+    }
 }
 
 /// How long the frame loop waits before retrying a failed append (commands retry at once).
@@ -382,12 +394,12 @@ struct SettingsLoad {
 
 /// What to tell the person when opening the library upgraded it: the files it was are kept
 /// beside it (as large as it was), and are theirs to delete.
-fn kept_note(report: &LoadReport) -> Option<String> {
-    if report.kept.is_empty() {
+fn kept_note(kept: &[String], damaged: Option<&String>) -> Option<String> {
+    if kept.is_empty() {
         return None;
     }
     // (a library whose log was damaged: that log is the other half of what it was)
-    let kept: Vec<&str> = report.kept.iter().chain(&report.damaged).map(String::as_str).collect();
+    let kept: Vec<&str> = kept.iter().chain(damaged).map(String::as_str).collect();
     Some(format!(
         "This library was upgraded for this version of LightCraft, and earlier versions can't open it now. The library as it was is kept beside it as {}: delete it once the earlier version is no longer wanted (docs/catalog-persistence.md, \"Going back to an older version\").",
         kept.join(" and ")
@@ -678,7 +690,7 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
-        let kept = kept_note(&report);
+        let kept = kept_note(&report.kept, report.damaged.as_ref());
         self.library = Some(Library {
             dir,
             on_disk,
@@ -756,6 +768,8 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // (a compaction that wrote its snapshot at once, where there is no worker thread)
+        note_upgrade_kept(lib);
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -1006,6 +1020,7 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        note_upgrade_kept(lib);
     }
 
     /// Compact the log into a snapshot now.
@@ -1015,7 +1030,9 @@ impl Session {
             return Err(EngineError::Other("can't compact during an interaction".into()));
         }
         if let Some(lib) = self.library.as_mut() {
-            lib.journal.snapshot(&self.catalog)?;
+            let snapshot = lib.journal.snapshot(&self.catalog);
+            note_upgrade_kept(lib);
+            snapshot?;
         }
         Ok(())
     }
