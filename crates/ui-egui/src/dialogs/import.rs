@@ -259,11 +259,21 @@ impl ImportDialog {
             o => Ok(Some(o.to_string())),
         }
     }
+    /// Importing checked candidate `i` as it stands joins the library with the browsed record it
+    /// names, as the engine's `Promote` does: a browsed file the library doesn't have, or one whose
+    /// content is in Recently Deleted under "Import as new" (which replaces the trashed photo).
+    /// "Restore them" brings the trashed photo back instead and "Leave them" skips the file.
+    fn promotes_browsed(&self, i: usize) -> bool {
+        !self.copy
+            && self.checked.get(i).copied().unwrap_or(false)
+            && self.candidates.get(i).is_some_and(|c| c.local && c.error.is_none())
+            && (self.is_browsed(i) || (self.is_trashed(i) && self.on_deleted == "fresh"))
+    }
     /// Keywords or a preset are set while a checked browsed photo would join the library as it is:
     /// the engine applies them to new files only, so the review says so.
     fn options_skip_browsed(&self) -> bool {
         let has_options = !self.keywords().is_empty() || !self.preset.is_empty() || !self.metadata_preset.is_empty();
-        has_options && !self.copy && (0..self.candidates.len()).any(|i| self.checked.get(i).copied().unwrap_or(false) && self.is_browsed(i))
+        has_options && (0..self.candidates.len()).any(|i| self.promotes_browsed(i))
     }
     fn keywords(&self) -> Vec<String> {
         self.keywords.split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect()
@@ -341,6 +351,26 @@ mod tests {
         d.checked[0] = false;
         assert!(!d.options_skip_browsed(), "unchecked: not imported anyway");
         d.checked[0] = true;
+        d.copy = true;
+        assert!(!d.options_skip_browsed(), "copying doesn't offer it");
+    }
+
+    /// A browsed photo whose content is in Recently Deleted is promoted only by "Import as new" (the
+    /// engine's `Fresh`, which purges the trashed twin); "Restore them" brings the trashed photo back
+    /// and "Leave them" skips the file, so neither imports the browsed record and the notice stays off.
+    #[test]
+    fn the_notice_follows_the_engines_promotion_of_a_browsed_photo_with_a_trashed_twin() {
+        let c = ImportCandidate { path: "a.png".into(), local: true, duplicate: Some("content".into()), existing: Some(7), ..Default::default() };
+        let mut d = ImportDialog::new(vec![c]);
+        d.set_trashed(vec![true]);
+        d.keywords = "beach".into();
+        d.set_on_deleted("restore");
+        assert!(d.checked[0] && !d.options_skip_browsed(), "Restore brings the trashed photo back, not the browsed one");
+        d.set_on_deleted("fresh");
+        assert!(d.checked[0] && d.options_skip_browsed(), "Import as new promotes the browsed record without the keywords");
+        d.set_on_deleted("");
+        assert!(!d.checked[0] && !d.options_skip_browsed(), "Leave them: unchecked");
+        d.set_on_deleted("fresh");
         d.copy = true;
         assert!(!d.options_skip_browsed(), "copying doesn't offer it");
     }
