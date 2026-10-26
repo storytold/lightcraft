@@ -310,7 +310,7 @@ mod tests {
                 c.fetch_add(1, Ordering::SeqCst);
             }
             let (open, cv) = &*g;
-            let limit = lightcraft_testkit::scaled(Duration::from_secs(5));
+            let limit = lightcraft_testkit::scaled(Duration::from_secs(5)).max(Duration::from_secs(5));
             drop(cv.wait_timeout_while(held(open), limit, |open| !*open).unwrap_or_else(PoisonError::into_inner));
             f.fetch_add(1, Ordering::SeqCst);
             p == "here"

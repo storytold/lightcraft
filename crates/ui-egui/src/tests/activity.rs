@@ -12,7 +12,13 @@ use crate::{LightcraftApp, Services};
 /// Generous: merges and renders run on worker threads that a busy machine (a full workspace test run)
 /// slows a lot. Stretched by `LIGHTCRAFT_TIME_SCALE`.
 fn t() -> Duration {
-    lightcraft_testkit::scaled(Duration::from_secs(60))
+    stretched(Duration::from_secs(60))
+}
+
+/// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the waits here sit on fixed times (the
+/// stand-in drive's 100 ms per file, the Auto Import listing every few seconds).
+fn stretched(d: Duration) -> Duration {
+    lightcraft_testkit::scaled(d).max(d)
 }
 
 fn demo() -> Headless {
@@ -391,7 +397,7 @@ fn scan_shows_a_row_and_cancel_closes_it() {
     assert!(tasks[0].cancellable);
     h.app.session.activity.cancel(tasks[0].id).unwrap();
     // like the old Cancel: the scan is dropped at once, without waiting for the file being read
-    assert!(h.step_until(lightcraft_testkit::scaled(Duration::from_secs(10)), |h| h.app.scan.is_none()));
+    assert!(h.step_until(stretched(Duration::from_secs(10)), |h| h.app.scan.is_none()));
     assert!(h.app.session.activity.list().is_empty());
     for _ in 0..3 {
         h.step();
@@ -578,7 +584,7 @@ fn auto_import_listing_has_no_row() {
     std::fs::create_dir_all(&dir).unwrap();
     h.app.session.import_defaults.auto_folder = Some(dir.to_string_lossy().to_string());
     // the watched folder is listed every few seconds, quietly
-    assert!(h.step_until(lightcraft_testkit::scaled(Duration::from_secs(10)), |h| h.app.tasks.is_running("Auto Import")));
+    assert!(h.step_until(stretched(Duration::from_secs(10)), |h| h.app.tasks.is_running("Auto Import")));
     assert!(h.app.session.activity.list().is_empty(), "{:?}", h.app.session.activity.list());
     h.app.session.import_defaults.auto_folder = None;
     let _ = std::fs::remove_dir_all(dir);
