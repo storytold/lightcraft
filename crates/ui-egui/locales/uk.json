@@ -2439,5 +2439,5 @@
   "Remove Folders from Library": "Вилучити теки з бібліотеки",
   "That includes the photos in the folders inside them.": "Також включаються фото у вкладених у них теках.",
   "The photos stay in All Photos. Undo brings the albums back.": "Фото залишаються в «Усіх фото». Скасування повертає альбоми.",
-  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "Фото залишаються в «Усіх фото». Видалення папки видаляє й її альбоми. Це можна скасувати."
+  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "Фото залишаються в «Усіх фото». Видалення теки видаляє й її альбоми. Це можна скасувати."
 }
