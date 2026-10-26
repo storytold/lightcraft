@@ -17,7 +17,7 @@ fn fits(s: &Session) -> bool {
     let p = s.catalog.photo(s.active().unwrap()).unwrap();
     let mut d = (*p.develop).clone();
     d.geometry.constrain_crop = true;
-    let f = Frame::with_lens(p.width as usize, p.height as usize, &d, true, p.embedded_lens.as_ref());
+    let f = Frame::with_lens(p.width as usize, p.height as usize, &d, true, p.embedded_lens.as_deref());
     let (a, b) = (f.crop.rect, p.develop.crop.geometry.rect);
     [a.x0 - b.x0, a.y0 - b.y0, a.x1 - b.x1, a.y1 - b.y1].iter().all(|d| d.abs() < 1e-9)
 }

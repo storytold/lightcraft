@@ -194,7 +194,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
 /// [`SlideSettings::is_plain`]: lightcraft_engine::slide::SlideSettings::is_plain
 fn slide_job(app: &mut LightcraftApp, id: PhotoId, area: Rect, ppp: f32, texture_side: usize) -> Option<lightcraft_engine::RenderJob> {
     let photo = app.session.catalog.photo(id)?.clone();
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &photo.develop, true, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &photo.develop, true, photo.embedded_lens.as_deref());
     let native = super::detail::output_px(&frame);
     if !app.session.slides_plain() {
         let (w, h) = slide_px(area, ppp, texture_side);

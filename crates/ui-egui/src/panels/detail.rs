@@ -296,7 +296,7 @@ pub(crate) fn output_px(frame: &Frame) -> [usize; 2] {
 pub(crate) fn focus_box(photo: &lightcraft_catalog::Photo) -> Option<lightcraft_geom::Rect> {
     let f = photo.meta.focus.as_ref()?;
     let d = &photo.develop;
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, true, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, true, photo.embedded_lens.as_deref());
     let [w, h] = output_px(&frame);
     let to_out = frame.out_to_norm(w, h).inverse()?;
     // stored on the upright photo: the user's Rotate / Flip on top, then the crop
@@ -527,7 +527,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the full-screen preview shows the photo only: no tool overlays
     let right = if fullscreen { RightPanel::None } else { app.ui.right };
     let crop_tool = right == RightPanel::Crop;
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &d, !crop_tool, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &d, !crop_tool, photo.embedded_lens.as_deref());
     let aspect = frame.aspect() as f32;
     let ppp = ui.ctx().pixels_per_point();
     let area = canvas.shrink(if fullscreen {
@@ -701,7 +701,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for (n, nid) in [next, prev].into_iter().enumerate() {
                 let Some(nid) = nid else { continue };
                 let Some(np) = app.session.catalog.photo(nid).cloned() else { continue };
-                let nf = Frame::with_lens(np.width.max(1) as usize, np.height.max(1) as usize, &np.develop, !crop_tool, np.embedded_lens.as_ref());
+                let nf = Frame::with_lens(np.width.max(1) as usize, np.height.max(1) as usize, &np.develop, !crop_tool, np.embedded_lens.as_deref());
                 let na = nf.aspect() as f32;
                 let nr = fit_rect(main_area, na, app.ui.zoom, output_px(&nf), ppp, app.ui.pan);
                 let nw =

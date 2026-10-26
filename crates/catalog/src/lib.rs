@@ -928,7 +928,7 @@ impl Catalog {
             }
             Op::SetEmbeddedLens { id, lens } => {
                 let p = self.photo_mut(id)?;
-                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+                Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens) }
             }
             Op::SetAsShotWb { id, wb } => {
                 if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {

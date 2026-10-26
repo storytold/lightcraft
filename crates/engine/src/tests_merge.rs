@@ -100,8 +100,8 @@ fn hdr_merge_keeps_the_reference_frames_lens_corrections() {
         let reference = s.catalog.photo(lightcraft_catalog::PhotoId(ids[1])).unwrap().clone();
         let expect = if orientation == Orientation::Normal { (452, 304) } else { (304, 452) };
         assert_eq!(((merged.width, merged.height), (reference.width, reference.height)), (expect, expect));
-        let a = reference.embedded_lens.expect("the source's correction");
-        let b = merged.embedded_lens.expect("the merged DNG carries the reference frame's correction");
+        let a = reference.embedded_lens.as_deref().copied().expect("the source's correction");
+        let b = merged.embedded_lens.as_deref().copied().expect("the merged DNG carries the reference frame's correction");
         let (wa, wb) = (a.warp.unwrap(), b.warp.unwrap());
         let (va, vb) = (a.vignette.unwrap(), b.vignette.unwrap());
         let (w, h) = (expect.0 as f64, expect.1 as f64);

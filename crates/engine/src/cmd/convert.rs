@@ -260,7 +260,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 /// what import gave it, the lens correction is turned on as import would; an edited photo keeps
 /// its settings.
 pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
-    if info.embedded_lens == ph.embedded_lens {
+    if info.embedded_lens.as_ref() == ph.embedded_lens.as_deref() {
         return Vec::new();
     }
     let mut ops = vec![Op::SetEmbeddedLens { id, lens: info.embedded_lens.map(Box::new) }];
@@ -486,7 +486,7 @@ mod tests {
             c.apply(op).unwrap();
         }
         let after = c.photo(lightcraft_catalog::PhotoId(1)).unwrap();
-        assert_eq!(after.embedded_lens, Some(lens()));
+        assert_eq!(after.embedded_lens, Some(Box::new(lens())));
         assert!(!after.is_edited());
         assert_eq!(*after.develop, after.camera_defaults());
         assert!(lens_ops(after.id, after, &info).is_empty(), "nothing more to do the second time");
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn reload_leaves_a_photo_whose_user_switched_the_correction_off_alone() {
         let mut ph = old_rw2();
-        ph.embedded_lens = Some(lens());
+        ph.embedded_lens = Some(Box::new(lens()));
         let mut d = ph.camera_defaults();
         d.optics.lens_profile = false;
         ph.develop = std::sync::Arc::new(d);

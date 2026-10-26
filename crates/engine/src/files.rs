@@ -2881,7 +2881,7 @@ pub(crate) mod tests {
                 let name = format!("x.{format}");
                 let mut p = Photo::new(PhotoId(1), Source::File { path: format!("/{name}") }, &name, format, 64, 48, "");
                 p.kind = MediaKind::Raw;
-                p.embedded_lens = embedded;
+                p.embedded_lens = embedded.map(Box::new);
                 crate::import::apply_import_defaults(&s, &mut p);
                 assert_eq!(p.develop.optics.lens_profile, embedded.is_some(), "{format} {embedded:?}");
             }

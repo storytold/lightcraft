@@ -1238,7 +1238,7 @@ fn header_info(p: &Photo) -> SourceInfo {
             raw: true,
             as_shot_temp: temp,
             as_shot_tint: tint,
-            lens: p.embedded_lens,
+            lens: p.embedded_lens.as_deref().copied(),
             relative_wb: relative,
             // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
             legacy_relative_wb: p.fitted_look() && !relative,
@@ -1525,7 +1525,7 @@ impl crate::Session {
             p.height.max(1) as usize,
             &job.settings,
             apply_crop,
-            p.embedded_lens.as_ref(),
+            p.embedded_lens.as_deref(),
         );
         let ppl = frame.px_per_long(full_w);
         lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
