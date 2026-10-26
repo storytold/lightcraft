@@ -1,8 +1,8 @@
 # CRW entropy-coding derivation log (P2)
 
 Chronological record of experiments and oracle probes, arw6-style. The oracle is LibRaw
-0.22.2, official pre-built Windows binaries installed by the maintainer at
-`C:\Users\Robert\LibRaw-0.22.2\bin` (2026-10-12); **only `bin\unprocessed_raw.exe` (plus
+0.22.2, official pre-built Windows binaries installed by the maintainer in
+a local `LibRaw-0.22.2\bin` folder (2026-10-12); **only `bin\unprocessed_raw.exe` (plus
 `libraw.dll`) is executed, as a black box. The LibRaw source tree that ships alongside those
 binaries is never opened, read or searched** — all structure below comes from feeding inputs
 to the binary and observing outputs. The Python reference model lives in the gitignored
