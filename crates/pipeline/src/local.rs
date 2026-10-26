@@ -15,6 +15,11 @@ use crate::{Prepared, Quality, SourceInfo, for_rows, masks, timed};
 /// White balance (relative to the source's as-shot white) and exposure, in place; channels below 0 are set to 0.
 pub fn scene_linear_pre(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
     wb_gain(img, info, s, 2f32.powf(s.light.exposure as f32));
+    clamp_negative(img);
+}
+
+/// Sets channels below 0 to 0, in place (after noise reduction, see [`white_balance`]).
+pub fn clamp_negative(img: &mut Rgb32f) {
     let w = img.width;
     for_rows(&mut img.data, w, |_, row| row.iter_mut().for_each(|p| *p = p.map(|v| v.max(0.0))));
 }
@@ -468,8 +473,7 @@ pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
     let (lum, col) = nr_params(s, scale);
     apply_nr(img, lum, col);
     // The image is signed up to here (`wb_gain`): later stages take it non-negative, as before (#840).
-    let w = img.width;
-    for_rows(&mut img.data, w, |_, row| row.iter_mut().for_each(|p| *p = p.map(|v| v.max(0.0))));
+    clamp_negative(img);
 }
 
 /// Noise reduction with explicit parameters (see [`denoise`]).
@@ -723,7 +727,9 @@ pub(crate) fn prepare(
 /// a windowed render must dehaze with the frame's airlight, not that of the pixels it holds.
 pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> f32 {
     let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    // non-negative, as the image the airlight is applied to is after noise reduction (`denoise`)
     white_balance(&mut img, info, s);
+    clamp_negative(&mut img);
     let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     airlight(&gaussian(&img.map(dark_of), sigma))
 }
