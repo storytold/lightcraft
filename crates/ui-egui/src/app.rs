@@ -221,6 +221,15 @@ impl LightcraftApp {
         }
     }
 
+    /// [`Self::act`] for a caller that hands the refusal on (a dialog's confirm, which the control
+    /// channel answers with it): the toast says the reason, the `Err` is the whole error.
+    pub(crate) fn act_told(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_told(id, params).map_err(|refusal| {
+            self.ui.toast = Some((refusal.why, self.tick_now() + REFUSAL_SECONDS, None));
+            refusal.error
+        })
+    }
+
     /// [`Self::run`], keeping what a refusal says to a person apart from the whole error.
     fn run_told(&mut self, id: &str, params: Value) -> Result<Value, Refusal> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {

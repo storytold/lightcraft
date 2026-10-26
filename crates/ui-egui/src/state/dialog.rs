@@ -142,6 +142,8 @@ pub enum Dialog {
         keyword: String,
         parent: Option<String>,
     },
+    /// Delete or remove several sidebar rows at once (albums, keywords, folders), after asking.
+    Several(crate::panels::side_select::Several),
     /// Delete a keyword from every photo and the keyword list, after asking.
     DeleteKeyword {
         keyword: String,

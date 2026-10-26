@@ -80,6 +80,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 .indent(indent)
                 .sense(Sense::click_and_drag())
                 .show(app, ui);
+            crate::panels::side_select::outline(app, ui, crate::panels::side_select::SideList::Albums, sel, resp.rect, 8.0);
             if !problems.is_empty() {
                 crate::widgets::register(ui, format!("albumProblem:{}", a.id.0), resp.rect);
             }
@@ -214,14 +215,29 @@ fn forget_hover(app: &LightcraftApp, ctx: &egui::Context) {
 
 /// Moves the dragged album into a folder (`album.move`, one undo step; `None`: the top level).
 fn drop_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, target: Option<AlbumId>) {
-    let r = app.run("album.move", json!({"id": dragged.0, "parent": target.map(|t| t.0)}));
+    // picked up as one of several albums chosen: they all go, as one step
+    let several = crate::panels::side_select::albums_dragged(app, dragged);
+    let r = if several.len() > 1 {
+        app.run("album.move", json!({"ids": several, "parent": target.map(|t| t.0)}))
+    } else {
+        app.run("album.move", json!({"id": dragged.0, "parent": target.map(|t| t.0)}))
+    };
     finish_drop(app, ui, dragged, r);
 }
 
 /// Places the dragged album in `parent` before the sibling `before` (`None`: last of its kind), by
 /// hand (`album.reorder`, one undo step).
 fn place_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, parent: Option<AlbumId>, before: Option<AlbumId>) {
-    let r = app.run("album.reorder", json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)}));
+    // picked up as one of several albums chosen: they all go into that folder (one step); a
+    // place by hand is one album's
+    let several = crate::panels::side_select::albums_dragged(app, dragged);
+    // (all of them there already: nothing to move, and the one dragged is placed)
+    let there = several.iter().all(|id| app.session.catalog.album(AlbumId(*id)).is_some_and(|a| a.parent == parent));
+    let r = if several.len() > 1 && !there {
+        app.run("album.move", json!({"ids": several, "parent": parent.map(|p| p.0)}))
+    } else {
+        app.run("album.reorder", json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)}))
+    };
     finish_drop(app, ui, dragged, r);
 }
 
@@ -362,6 +378,9 @@ pub fn album_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let (Some(pos), Some(name)) = (pos, app.session.catalog.album(AlbumId(id)).map(|a| a.name.clone())) else { return };
+    // picked up as one of several albums chosen: they all go
+    let several = crate::panels::side_select::albums_dragged(app, AlbumId(id)).len();
+    let name = if several > 1 { crate::i18n::tr_format!("{n} albums", n = several) } else { name };
     let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     egui::Area::new(egui::Id::unique("drag-album")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(

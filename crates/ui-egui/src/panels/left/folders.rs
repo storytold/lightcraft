@@ -104,6 +104,11 @@ pub(super) fn folder_tree(
 
 pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
     crate::widgets::context_menu(resp, |ui| {
+        // one of several albums chosen: what can be done to them all
+        let several = crate::panels::side_select::album_targets(app, a.id);
+        if several.len() > 1 {
+            return crate::panels::side_select::albums_menu(app, ui, &several);
+        }
         if a.folder {
             // the same commands as File ▸ New…, aimed at this folder
             crate::widgets::menu_button(ui, crate::i18n::tr("New"), |ui| {
@@ -319,13 +324,14 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
         let leads_on = n.own == 0 && n.children.len() == 1;
         let mut open = tree_open(ui, open_id, n.volume || leads_on);
         // a row whose path would cover other disks' photos too only opens and closes
+        let sel = n.selectable && crate::panels::side_select::folder_shown(app, &n.path);
         if n.selectable {
             app.ui.side.folders.saw(n.path.clone());
         }
         let name = if n.selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
         let id = format!("libfolder:{}", n.path);
         if !out_of_sight(app, ui, &id, &name, Some(n.count), indent, n.label.is_some()) {
-            folder_row(app, ui, n, &id, &name, indent, open_id, &mut open);
+            folder_row(app, ui, n, &id, &name, indent, open_id, &mut open, sel);
         }
         if open && !n.children.is_empty() {
             folder_rows(app, ui, &n.children, indent + INDENT_STEP);
@@ -335,8 +341,17 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
 
 /// One drawn row of [`folder_rows`], shown as `name`; `open_id` and `open` are its triangle's.
 #[allow(clippy::too_many_arguments)]
-fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &str, name: &str, indent: f32, open_id: egui::Id, open: &mut bool) {
-    let sel = n.selectable && crate::panels::side_select::folder_shown(app, &n.path);
+fn folder_row(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    n: &FolderNode,
+    id: &str,
+    name: &str,
+    indent: f32,
+    open_id: egui::Id,
+    open: &mut bool,
+    sel: bool,
+) {
     // the label is said with the name, as it is shown beside it
     let spoken = match n.label {
         Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
@@ -345,6 +360,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
     let mark = n.label.map(crate::theme::label_color);
     let resp = Row::new(id, Icon::Folder, name).spoken(&spoken).count(Some(n.count)).selected(sel).indent(indent).mark(mark).show(app, ui);
     folder_drop_target(app, ui, &resp, n, open_id, open);
+    crate::panels::side_select::outline(app, ui, crate::panels::side_select::SideList::Folders, sel, resp.rect, 8.0);
     let mut toggled = false;
     if !n.children.is_empty() {
         let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path), name);
@@ -505,6 +521,12 @@ fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[
 /// The context menu of a Folders row: a folder's own, a disk's (remove it), none for the
 /// startup disk.
 fn row_menu(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
+    // one of several folders chosen: what can be done to them all
+    let several = crate::panels::side_select::folder_targets(app, &n.path);
+    if several.len() > 1 {
+        crate::widgets::context_menu(resp, |ui| crate::panels::side_select::folders_menu(app, ui, &several));
+        return;
+    }
     if !n.volume {
         folder_menu_for_library(app, resp, n);
     } else if n.path != "/" {

@@ -1,24 +1,34 @@
 //! Several rows of a sidebar list chosen at once, driven through the control channel: Cmd/Ctrl+click
 //! and Shift+click in the left panel's Albums, Folders, Keywords and By Date and in the right
-//! panel's Keyword List.
+//! panel's Keyword List, and what a context menu, a drag and the − button do with several rows.
 //!
 //! Scenarios:
 //! - Given albums in the sidebar, when two are Cmd+clicked, then both are highlighted and the
 //!   grid shows the photos of either; Cmd+click on one of them takes it away again.
 //! - When one album is clicked and another Shift+clicked, then every album between them is
 //!   chosen, but none inside a closed folder; a plain click chooses one alone again.
+//! - Given several albums chosen, when the menu of one of them is opened, then it offers what can
+//!   be done to all (Delete N Albums… asks first, and is one step to undo); the menu of an album
+//!   that is not chosen is that album's own, and the chosen ones stay chosen.
+//! - Given two albums chosen, when one is dragged onto a folder, then both move into it.
 //! - Keywords and dates in the left panel: Cmd+click filters by any of those chosen; a plain
 //!   click on the one keyword shown still clears it.
-//! - Folders: Cmd+click shows the photos of both folders; Shift+click takes those between.
-//! - The Keyword List: Cmd+click and Shift+click pick several, and picking never changes the grid.
+//! - Folders: Cmd+click shows the photos of both folders; the menu removes both after asking.
+//! - The Keyword List: Cmd+click and Shift+click pick several; − and the menu delete them all
+//!   after one question; the menu gives them all to the selected photos; dragging one of them
+//!   nests them all.
+//! - Given several rows just chosen with Cmd/Shift+click, when Delete is pressed, then the
+//!   question about those rows comes up; after a click elsewhere, or with one row chosen the
+//!   usual way, Delete is the photos' as it always was.
 
 use std::time::Duration;
 
-use lightcraft_catalog::AlbumId;
+use lightcraft_catalog::{AlbumId, PhotoId};
 use lightcraft_engine::LibrarySource;
 use serde_json::{Value, json};
 
 use crate::headless::Headless;
+use crate::panels::side_select::Several;
 use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
 
@@ -58,6 +68,19 @@ fn cmd_click(h: &mut Headless, id: &str) {
 }
 fn shift_click(h: &mut Headless, id: &str) {
     ask(h, "ui.clickWidget", json!({"id": id, "shift": true}));
+}
+fn right_click(h: &mut Headless, id: &str) {
+    ask(h, "ui.clickWidget", json!({"id": id, "button": "right"}));
+}
+
+fn center(h: &Headless, id: &str) -> egui::Pos2 {
+    h.app.widgets.iter().rev().find(|(w, _)| w == id).map(|(_, r)| r.center()).unwrap_or_else(|| panic!("no {id} on screen"))
+}
+
+/// Drag the widget `from` and drop it on the widget `onto`.
+fn drag(h: &mut Headless, from: &str, onto: &str) {
+    let to = center(h, onto);
+    ask(h, "ui.dragWidget", json!({"id": from, "toX": to.x, "toY": to.y, "steps": 12}));
 }
 
 /// An album called `name` holding `photos`.
@@ -161,6 +184,59 @@ fn shift_click_does_not_take_albums_inside_a_closed_folder() {
 }
 
 #[test]
+fn the_menu_of_several_albums_deletes_them_after_asking_as_one_step() {
+    let mut h = app("info");
+    let ([a, b, c, d], _) = four_albums(&mut h);
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    // the menu of an album that is not chosen is its own, and the chosen ones stay
+    right_click(&mut h, &row(d));
+    assert!(has(&h, &format!("albumDelete:{d}")), "one album's menu");
+    assert!(!has(&h, "sideMenu:albums:delete"));
+    assert_eq!(shown(&h), vec![a, c]);
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    // the menu of one of them: what can be done to both
+    right_click(&mut h, &row(c));
+    assert!(has(&h, "sideMenu:albums:delete") && has(&h, "sideMenu:albums:export"));
+    assert!(!has(&h, &format!("albumDelete:{c}")), "not the single album's Delete");
+    let undo = h.app.session.undo.len();
+    click(&mut h, "sideMenu:albums:delete");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::Several(Several::DeleteAlbums { ids: vec![a, c] })));
+    ask(&mut h, "ui.dialog.cancel", json!({}));
+    let exists = |h: &Headless, id: u64| h.app.session.catalog.album(AlbumId(id)).is_some();
+    assert!(exists(&h, a) && exists(&h, c), "Cancel keeps them");
+    right_click(&mut h, &row(c));
+    click(&mut h, "sideMenu:albums:delete");
+    click(&mut h, "button:dialogOk");
+    assert!(!exists(&h, a) && !exists(&h, c) && exists(&h, b) && exists(&h, d));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    assert_eq!(h.app.session.source, LibrarySource::All, "nothing of what was shown is left");
+    run(&mut h, "edit.undo", json!({}));
+    assert!(exists(&h, a) && exists(&h, c));
+}
+
+#[test]
+fn dragging_one_of_several_albums_onto_a_folder_moves_them_all() {
+    let mut h = app("info");
+    let ([a, b, c, _], _) = four_albums(&mut h);
+    let folder = run(&mut h, "album.create", json!({"name": "Sel Folder", "folder": true}))["id"].as_u64().unwrap();
+    let parent = |h: &Headless, id: u64| h.app.session.catalog.album(AlbumId(id)).unwrap().parent.map(|p| p.0);
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    let undo = h.app.session.undo.len();
+    drag(&mut h, &row(c), &format!("source:folder:{folder}"));
+    assert_eq!((parent(&h, a), parent(&h, c), parent(&h, b)), (Some(folder), Some(folder), None));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    assert_eq!(shown(&h), vec![a, c], "still the ones shown");
+    // an album that is not one of them goes alone
+    drag(&mut h, &row(b), &format!("source:folder:{folder}"));
+    assert_eq!(parent(&h, b), Some(folder));
+    run(&mut h, "edit.undo", json!({}));
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!((parent(&h, a), parent(&h, c)), (None, None));
+}
+
+#[test]
 fn cmd_click_filters_by_any_of_several_keywords() {
     let mut h = app("info");
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
@@ -178,6 +254,10 @@ fn cmd_click_filters_by_any_of_several_keywords() {
         v.sort_unstable();
         v
     });
+    assert!(has(&h, "highlight:keyword:Sel One") && has(&h, "highlight:keyword:Sel Two"));
+    // the menu of one of them offers what can be done to both
+    right_click(&mut h, "source:keyword:Sel Two");
+    assert!(has(&h, "sideMenu:keywords:delete") && has(&h, "sideMenu:keywords:merge"));
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
     // a plain click: that keyword alone; again: every photo
     click(&mut h, "source:keyword:Sel Two");
@@ -222,7 +302,7 @@ fn folders_app(paths: &[&str]) -> Headless {
 }
 
 #[test]
-fn cmd_click_shows_several_folders_and_shift_click_takes_those_between() {
+fn cmd_click_shows_several_folders_and_the_menu_removes_them_after_asking() {
     let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg", "/pics/work/d.jpg"]);
     click(&mut h, "libraryFolderToggle:/pics");
     click(&mut h, "source:libfolder:/pics/trip");
@@ -231,8 +311,20 @@ fn cmd_click_shows_several_folders_and_shift_click_takes_those_between() {
     assert_eq!(h.app.session.visible().len(), 3);
     assert_eq!(crate::i18n::source_title(&h.app.session), "2 folders", "the title says how many are shown");
     assert!(has(&h, "highlight:libfolder:/pics/trip") && has(&h, "highlight:libfolder:/pics/work"));
+    right_click(&mut h, "source:libfolder:/pics/work");
+    assert!(has(&h, "sideMenu:folders:remove"));
+    click(&mut h, "sideMenu:folders:remove");
+    assert_eq!(
+        h.app.ui.dialog,
+        Some(Dialog::Several(Several::RemoveFolders { paths: vec!["/pics/trip".to_string(), "/pics/work".to_string()], count: 3 }))
+    );
+    let undo = h.app.session.undo.len();
+    click(&mut h, "button:dialogOk");
+    assert_eq!(h.app.session.undo.len(), undo + 1);
+    assert_eq!(h.app.session.source, LibrarySource::All);
+    assert_eq!(h.app.session.visible().len(), 1, "the photo of the folder that stayed");
     // Shift+click takes the folders between, as drawn
-    click(&mut h, "source:all");
+    run(&mut h, "edit.undo", json!({}));
     let rows: Vec<String> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("source:libfolder:/pics/").map(str::to_string)).collect();
     assert_eq!(rows.len(), 3, "{rows:?}");
     click(&mut h, &format!("source:libfolder:/pics/{}", rows[0]));
@@ -260,6 +352,12 @@ fn picked(h: &Headless) -> Vec<String> {
     crate::panels::side_select::list_picked(&h.app)
 }
 
+fn keywords_of(h: &Headless, id: u64) -> Vec<String> {
+    let mut k: Vec<String> = h.app.session.catalog.photo(PhotoId(id)).unwrap().meta.keywords.iter().filter(|k| k.contains("Sel")).cloned().collect();
+    k.sort();
+    k
+}
+
 #[test]
 fn the_keyword_list_picks_several_with_cmd_and_shift() {
     let (mut h, _) = keyword_list();
@@ -277,6 +375,124 @@ fn the_keyword_list_picks_several_with_cmd_and_shift() {
     // picking never changes what the grid shows
     assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default());
 }
+
+#[test]
+fn the_keyword_list_deletes_several_after_one_question() {
+    let (mut h, ids) = keyword_list();
+    click(&mut h, "keywordRow:Sel K1");
+    cmd_click(&mut h, "keywordRow:Sel K2");
+    let undo = h.app.session.undo.len();
+    click(&mut h, "keywordList:delete");
+    assert_eq!(
+        h.app.ui.dialog,
+        Some(Dialog::Several(Several::DeleteKeywords { keywords: vec!["Sel K1".to_string(), "Sel K2".to_string()], count: 2 }))
+    );
+    ask(&mut h, "ui.dialog.cancel", json!({}));
+    assert!(h.app.session.catalog.has_keyword("Sel K1"), "Cancel kept them");
+    // from the menu of one of them, the same question
+    right_click(&mut h, "keywordRow:Sel K2");
+    assert!(has(&h, "sideMenu:keywords:delete") && !has(&h, "keywordMenu:delete"), "the menu for several");
+    click(&mut h, "sideMenu:keywords:delete");
+    click(&mut h, "button:dialogOk");
+    assert!(!h.app.session.catalog.has_keyword("Sel K1") && !h.app.session.catalog.has_keyword("Sel K2"));
+    assert!(h.app.session.catalog.has_keyword("Sel K3"));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    assert!(picked(&h).is_empty(), "nothing that is gone stays picked");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(keywords_of(&h, ids[0]), vec!["Sel K1", "Sel K2"]);
+}
+
+#[test]
+fn the_menu_of_several_keywords_gives_them_all_to_the_selected_photos() {
+    let (mut h, ids) = keyword_list();
+    run(&mut h, "library.select", json!({"ids": [ids[2]]}));
+    click(&mut h, "keywordRow:Sel K1");
+    cmd_click(&mut h, "keywordRow:Sel K3");
+    // the menu of a keyword that is not picked is its own
+    right_click(&mut h, "keywordRow:Sel K2");
+    assert!(has(&h, "keywordMenu:delete") && !has(&h, "sideMenu:keywords:add"));
+    assert_eq!(picked(&h), vec!["Sel K1", "Sel K3"], "the picked ones stay picked");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    let undo = h.app.session.undo.len();
+    right_click(&mut h, "keywordRow:Sel K3");
+    click(&mut h, "sideMenu:keywords:add");
+    assert_eq!(keywords_of(&h, ids[2]), vec!["Sel K1", "Sel K3"]);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    // …and shows the photos with any of them
+    right_click(&mut h, "keywordRow:Sel K3");
+    click(&mut h, "sideMenu:keywords:show");
+    assert_eq!(h.app.session.filter.keywords, vec!["Sel K1".to_string(), "Sel K3".to_string()]);
+}
+
+#[test]
+fn dragging_one_of_several_keywords_nests_them_all() {
+    let (mut h, ids) = keyword_list();
+    click(&mut h, "keywordRow:Sel K1");
+    cmd_click(&mut h, "keywordRow:Sel K3");
+    let undo = h.app.session.undo.len();
+    drag(&mut h, "keywordRow:Sel K3", "keywordRow:Sel Parent");
+    assert_eq!(keywords_of(&h, ids[0]), vec!["Sel K2", "Sel Parent|Sel K1"]);
+    assert_eq!(keywords_of(&h, ids[1]), vec!["Sel K2", "Sel Parent|Sel K3"]);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    assert_eq!(picked(&h), vec!["Sel Parent|Sel K1", "Sel Parent|Sel K3"], "still picked, where they are now");
+    assert!(h.app.ui.dragging_keyword.is_none(), "the drag ended");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(keywords_of(&h, ids[0]), vec!["Sel K1", "Sel K2"]);
+}
+
+fn several_dialog(h: &Headless) -> bool {
+    matches!(h.app.ui.dialog, Some(Dialog::Several(_)))
+}
+
+#[test]
+fn delete_asks_about_several_rows_just_chosen_and_is_the_photos_otherwise() {
+    let mut h = app("info");
+    let ([a, _, c, _], _) = four_albums(&mut h);
+    // one album chosen the usual way: Delete is not about albums
+    click(&mut h, &row(a));
+    assert!(h.app.ui.side.keys.is_none());
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
+    ask(&mut h, "ui.dialog.cancel", json!({}));
+    // several chosen with Cmd+click: Delete asks about them
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    assert!(has(&h, &format!("highlight:album:{a}")));
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    assert_eq!(h.app.ui.dialog, Some(Dialog::Several(Several::DeleteAlbums { ids: vec![a, c] })));
+    ask(&mut h, "ui.dialog.cancel", json!({}));
+    assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "asking deleted nothing");
+    // forward Delete too
+    ask(&mut h, "ui.key", json!({"key": "Delete"}));
+    assert!(several_dialog(&h));
+    ask(&mut h, "ui.dialog.cancel", json!({}));
+    // a click anywhere else gives the key back to the photos, with both albums still shown
+    let cell =
+        h.app.widgets.iter().find(|(w, _)| w.starts_with("cell:") || w.starts_with("thumb:")).map(|(w, _)| w.clone()).expect("a photo in the grid");
+    click(&mut h, &cell);
+    assert_eq!(shown(&h), vec![a, c]);
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
+}
+
+#[test]
+fn delete_asks_about_several_keywords_picked_in_the_keyword_list() {
+    let (mut h, _) = keyword_list();
+    click(&mut h, "keywordRow:Sel K1");
+    shift_click(&mut h, "keywordRow:Sel K3");
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    assert_eq!(
+        h.app.ui.dialog,
+        Some(Dialog::Several(Several::DeleteKeywords { keywords: vec!["Sel K1".to_string(), "Sel K2".to_string(), "Sel K3".to_string()], count: 2 }))
+    );
+    click(&mut h, "button:dialogOk");
+    assert!(!h.app.session.catalog.has_keyword("Sel K2"));
+    // nothing is chosen there any more: Delete is the photos' again
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
+}
+
+// ---- What two independent reviews found
 
 /// A range starts from a row that is chosen: not from an album clicked before All Photos was shown.
 #[test]
@@ -307,7 +523,60 @@ fn showing_a_keyword_from_the_keyword_list_replaces_the_keywords_chosen_in_the_s
     assert_eq!(h.app.session.filter.keywords_wanted(), vec!["Sel K3".to_string()]);
 }
 
-/// A keyword that is gone is not picked any more.
+/// The Delete key goes back to the photos when anything else changes what is shown or selected.
+#[test]
+fn delete_is_the_photos_again_after_a_change_made_without_the_pointer() {
+    let mut h = app("info");
+    let ([a, _, c, _], ids) = four_albums(&mut h);
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    assert!(h.app.ui.side.keys.is_some());
+    // a key, a menu or an agent selects photos
+    run(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    ask(&mut h, "ui.key", json!({"key": "Backspace"}));
+    assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
+    assert!(h.app.ui.side.keys.is_none());
+}
+
+/// A confirmation for several rows that is refused says why.
+#[test]
+fn a_refused_question_about_several_albums_says_why() {
+    let mut h = app("info");
+    let ([a, _, c, _], _) = four_albums(&mut h);
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    right_click(&mut h, &row(c));
+    click(&mut h, "sideMenu:albums:delete");
+    // one of them goes while the question is up
+    h.app.session.execute("album.delete", &json!({"id": c})).unwrap();
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "refused as a whole");
+    let said = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(said.contains(&c.to_string()), "the toast names the album that is gone: {said:?}");
+    // only the reason, not the command it came from, and for as long as any refusal stays
+    assert!(!said.contains("album.delete"), "{said:?}");
+    let (left, now) = (h.app.ui.toast.as_ref().map_or(0.0, |t| t.1), h.time());
+    assert!(left - now > 5.0, "a refusal stays {} s", left - now);
+}
+
+/// The control channel's confirm of a refused question about several rows answers with the reason.
+#[test]
+fn a_refused_confirm_of_several_albums_answers_with_the_reason() {
+    let mut h = app("info");
+    let ([a, _, c, _], _) = four_albums(&mut h);
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    right_click(&mut h, &row(c));
+    click(&mut h, "sideMenu:albums:delete");
+    h.app.session.execute("album.delete", &json!({"id": c})).unwrap();
+    let r = h.request("ui.dialog.confirm", json!({}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], false, "{r}");
+    let said = r["error"].as_str().unwrap_or_default();
+    assert!(said.contains(&c.to_string()), "the error names the album that is gone: {said:?}");
+    assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "refused as a whole");
+}
+
+/// A keyword that is gone is not picked any more: the row left alone has its own menu.
 #[test]
 fn a_keyword_that_is_gone_is_not_picked_any_more() {
     let (mut h, _) = keyword_list();
@@ -315,6 +584,8 @@ fn a_keyword_that_is_gone_is_not_picked_any_more() {
     cmd_click(&mut h, "keywordRow:Sel K3");
     run(&mut h, "keyword.delete", json!({"keyword": "Sel K3"}));
     assert_eq!(picked(&h), vec!["Sel K1"]);
+    right_click(&mut h, "keywordRow:Sel K1");
+    assert!(has(&h, "keywordMenu:delete") && !has(&h, "sideMenu:keywords:delete"), "one keyword's menu");
     // one that was picked earlier is let go of too
     let (mut h, _) = keyword_list();
     click(&mut h, "keywordRow:Sel K1");
@@ -335,10 +606,11 @@ fn a_keyword_that_is_gone_is_not_picked_any_more() {
 fn delete_with_several_albums_shown_does_not_take_a_photo_out_of_the_one_chosen_last() {
     let mut h = app("info");
     let ([a, _, c, _], ids) = four_albums(&mut h);
+    run(&mut h, "library.select", json!({"ids": [ids[0]]}));
     click(&mut h, &row(a));
     cmd_click(&mut h, &row(c));
     assert!(!crate::menubar::in_normal_album(&h.app), "Remove from Album is not on offer for several albums");
-    // a photo that is in A and in C (the one chosen last)
+    // a photo that is in A and in C (the one chosen last): choosing it is a change, so the key is the photos' again
     run(&mut h, "library.select", json!({"ids": [ids[4]]}));
     ask(&mut h, "ui.key", json!({"key": "Delete"}));
     assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the photos' Delete asks");
@@ -360,12 +632,12 @@ fn what_was_chosen_is_forgotten_when_another_library_opens() {
     let ([a, _, c, _], _) = four_albums(&mut h);
     click(&mut h, &row(a));
     cmd_click(&mut h, &row(c));
-    assert!(h.app.ui.side.albums.anchor.is_some());
+    assert!(h.app.ui.side.keys.is_some());
     let dir = Scratch(std::env::temp_dir().join(format!("lc-multi-select-switch-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
     h.app.session.open_library(&dir.0, false).unwrap();
     h.settle(SETTLE);
-    assert!(h.app.ui.side.albums.anchor.is_none());
+    assert!(h.app.ui.side.keys.is_none());
 }
 
 /// A keyword picked in the Keyword List is not picked in another library that has the same keyword.

@@ -56,13 +56,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if plus.clicked() {
             app.ui.dialog = Some(create_dialog(app));
         }
-        let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
-        let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
+        let tree = app.caches.keyword_tree(&app.session.catalog);
+        let picked: Vec<String> = super::side_select::list_picked(app).into_iter().filter(|k| in_tree(&tree, k)).collect();
+        let minus = ui.add_enabled(!picked.is_empty(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
         register(ui, "keywordList:delete", minus.rect);
-        if minus.clicked()
-            && let Some(k) = picked
-        {
-            app.ui.dialog = Some(delete_dialog(app, &k));
+        if minus.clicked() {
+            // several picked: they all go, after one question
+            app.ui.dialog = match picked.as_slice() {
+                [] => None,
+                [one] => Some(delete_dialog(app, one)),
+                many => Some(super::side_select::delete_keywords_dialog(app, many)),
+            };
         }
     });
     ui.data_mut(|d| d.insert_temp(fid, filter.clone()));
@@ -136,7 +140,10 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(at) = at else { return };
     let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    let name = keyword.rsplit('|').next().unwrap_or(&keyword).to_string();
+    // picked up as one of several keywords picked: they all go
+    let several = super::side_select::list_targets(app, &keyword).len();
+    let name =
+        if several > 1 { crate::i18n::tr_format!("{n} keywords", n = several) } else { keyword.rsplit('|').next().unwrap_or(&keyword).to_string() };
     egui::Area::new(egui::Id::unique("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(
         ctx,
         |ui| {
@@ -151,6 +158,11 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// already, ask before merging the two; where it is already, nothing happens.
 fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, parent: Option<&str>) {
     app.ui.dragging_keyword = None;
+    // picked up as one of several keywords picked: they all go, as one step
+    let several = super::side_select::list_targets(app, keyword);
+    if several.len() > 1 {
+        return drop_keywords(app, &several, parent);
+    }
     let cat = &app.session.catalog;
     let leaf = keyword.rsplit('|').next().unwrap_or(keyword);
     let parent = parent.map(|p| cat.keyword_path(p).unwrap_or_else(|| p.to_string()));
@@ -171,6 +183,28 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
     }
 }
 
+/// Drop several keywords inside `parent` (`None`: the top level), as one undo step. Nothing
+/// merges here: where one of their names is taken the move is refused, and says so.
+fn drop_keywords(app: &mut LightcraftApp, keywords: &[String], parent: Option<&str>) {
+    let cat = &app.session.catalog;
+    let parent = parent.map(|p| cat.keyword_path(p).unwrap_or_else(|| p.to_string()));
+    // dropped on one of themselves, or on something inside one: nothing to do
+    if parent.as_deref().is_some_and(|p| keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(p, k))) {
+        return;
+    }
+    if app.act("keyword.move", json!({"keywords": keywords, "parent": parent})).is_none() {
+        return;
+    }
+    // the upper ones moved, and what is below them with them
+    let upper: Vec<&String> =
+        keywords.iter().filter(|k| !keywords.iter().any(|o| !same(o, k) && lightcraft_catalog::keywords::is_under(k, o))).collect();
+    for k in upper {
+        let leaf = k.rsplit('|').next().unwrap_or(k);
+        let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}|{leaf}"));
+        follow(app, k, &to);
+    }
+}
+
 /// One keyword's row: the triangle, the tick box, the name, the count, and on hover the arrow.
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
@@ -187,6 +221,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if picked {
         ui.painter().rect_filled(inner, 4.0, t.canvas);
         register(ui, format!("keywordPicked:{}", r.path), inner);
+        super::side_select::outline(app, ui, super::side_select::SideList::KeywordList, true, rect, 16.0);
     } else if resp.hovered() {
         ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
     }
@@ -374,6 +409,11 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
 
 /// A keyword's context menu.
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
+    // one of several keywords picked: what can be done to them all
+    let several = super::side_select::list_targets(app, path);
+    if several.len() > 1 {
+        return super::side_select::keywords_menu(app, ui, &several, true);
+    }
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(label));
