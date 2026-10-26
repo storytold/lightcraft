@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 557 verified; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 557 verified; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; CRW variant rows split by verification status) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -141,7 +141,9 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | CR3 | sRAW / mRAW | ⬜ | 4-plane Bayer only |
 | CR3 | HEIF / HDR PQ | ⬜ | HEVC tracks recognised, not decoded |
 | CR3 | dual-pixel raw | ⬜ | never substituted |
-| CRW | CIFF (EOS D30/D60/10D/300D, PowerShot G1–G6/Pro1/S-series) | ✅ | clean-room derivation frozen in `clean-room/crw/06-crw-format.md`; 28 of 29 files pixel-exact vs a black-box reference (8 CC0 EOS, G1, G6, 18 private D60); as-shot WB from ColorBalance; EOS D60 colour matrices measured on a ColorChecker (Kelvin white balance); G5 refused (entropy anomaly, preview); S/G2/G3/Pro1 unverified |
+| CRW | CIFF: EOS D30/D60/10D/300D, PowerShot G1/G6 | ✅ | clean-room derivation frozen in `clean-room/crw/06-crw-format.md`; 28 of 29 files pixel-exact vs a black-box reference (8 CC0 EOS, G1, G6, 18 private D60); as-shot WB from ColorBalance; EOS D60 colour matrices measured on a ColorChecker (Kelvin white balance) |
+| CRW | CIFF: PowerShot G2/G3/G4, Pro1, S-series | 🟡 | same decoder and tables; no sample file checked |
+| CRW | CIFF: PowerShot G5 | ⬜ | refused (entropy anomaly, `clean-room/crw/06-crw-format.md`); preview |
 | NEF | uncompressed, lossless, lossy type 1 / 2, lossy after split | ✅ | D5100, D7000, D7500, Z f corpus; ~60 NEFs by hand; #633; D4, D90, D5000, D600 and D610 image area measured against the camera JPEG (white level too for the D4, D90 and D5000) |
 | NEF | packed 14-bit stored under a compressed tag (Z 6II uncompressed) | ⬜ | #769; fix in PR #671 (not merged) |
 | NEF | High Efficiency / HE★ (JPEG XS) | ⬜ | named, preview (#193); needs a JPEG XS decoder |
@@ -295,6 +297,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | patch | CRW variant rows split by verification status (EOS and G1/G6 verified; G2/G3/G4/Pro1/S-series unverified; G5 preview); the CIFF heap walk is bounded by a per-file record budget, so a block of sub-heap records pointing back at their parent no longer hangs decode |
 | 2026-10-13 | minor | Canon CRW decoded (clean-room derivation, `clean-room/crw/`): EOS D30/D60/10D/300D, PowerShot G1/G6 verified pixel-exact (28 of 29 corpus files); G5 preview (entropy anomaly); as-shot WB from ColorBalance 0x10a9; 243 verified, 950 unverified, 217 preview; Canon bucket 76% (21% verified) |
 | 2026-10-18 | patch | X-T30, X-T30 II, X-Pro3, X100V, X-S10 and X-E4 take the X-T3's spectral matrices (same 26.1 MP X-Trans CMOS 4 sensor): an X-T30 raw with a black-and-white (Acros) camera JPEG no longer opens in the muted neutral fallback |
 | 2026-10-16 | minor | Kelvin white balance from Canon CR2 `ColorData` presets (PowerShot G1 X Mark III) |
