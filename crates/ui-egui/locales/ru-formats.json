@@ -305,5 +305,18 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Model in use: {name}": "Используемая модель: {name}",
+  "Works · {ms} ms per photo": "Работает · {ms} мс на фото",
+  "{got} of {total} from {host}": "{got} из {total} с {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Однократно загружает {size} с {host}. Каждый файл сверяется с записанной контрольной суммой, затем LightCraft начинает использовать модель.",
+  "about {m} min left": "осталось около {m} мин",
+  "about {h} h {m} min left": "осталось около {h} ч {m} мин",
+  "{n} of {total} photos indexed": "Проиндексировано {n} из {total} фото",
+  "Stopped at {n} of {total} photos.": "Остановлено на {n} из {total} фото.",
+  "All {total} photos are indexed.": "Все {total} фото проиндексированы.",
+  "{n} of {total} photos indexed.": "Проиндексировано {n} из {total} фото.",
+  "{n} photos could not be read.": "Не удалось прочитать фото: {n}.",
+  "{n} photos are offline: they are indexed when their drive is back.": "Фото вне сети: {n}. Они будут проиндексированы, когда диск вернётся.",
+  "Index: {size}": "Индекс: {size}"
 }

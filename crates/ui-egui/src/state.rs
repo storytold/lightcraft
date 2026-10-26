@@ -1294,6 +1294,12 @@ pub enum Dialog {
         info: serde_json::Value,
         accepted: bool,
     },
+    /// A content (search) model to download or use: its licence terms and the "I accept" box.
+    ContentModel {
+        /// The model's row from `content.models.list`.
+        info: serde_json::Value,
+        accepted: bool,
+    },
     SystemInfo {
         rows: Vec<(String, String)>,
     },

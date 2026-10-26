@@ -29,6 +29,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+# Settings ▸ Search tests describe a small model of their own
+lightcraft-vision = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # The model-setup tests install and resume a real denoise model. Without this the engine's

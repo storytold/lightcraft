@@ -29,7 +29,7 @@ cited here still exists. Formerly docs/parity.md.
 | A. Import (IMP) | 12 | 3 | 1 | 1 | 4/6 (67%) | 5/5 (100%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
-| D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
+| D. Search & filter (FILT) | 11 | 2 | 0 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 421 | 65 | 57 | 35 | 196/203 (97%) | 146/161 (91%) |
+| **Total** | 421 | 66 | 56 | 35 | 196/203 (97%) | 146/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 543 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.6%** of 543 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 57.0% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -147,7 +147,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
-| LR-FILT-SEARCH-AI | Natural-language search | P2 | ⬜ | | |
+| LR-FILT-SEARCH-AI | Natural-language search | P2 | 🟡 | `cmd:content.models.list`, `cmd:content.models.download`, `cmd:content.models.install`, `cmd:content.models.test`, `cmd:content.enable`, `cmd:content.status`, `cmd:content.search`, `cmd:content.similar`, `cmd:content.pump`, `cmd:content.pace`, `cmd:content.reindex`, `cmd:content.clearIndex`, `crates/vision/src/lib.rs`, `crates/engine/src/content_models.rs`, `crates/engine/src/content_index.rs`, `crates/engine/src/content_worker.rs`, `crates/ui-egui/src/panels/content.rs` | local content search (docs/content-search.md), in progress: the SigLIP 2 towers and tokenizer (pure Rust on candle, matching Hugging Face to cosine 0.999999), the models and their download (Settings ▸ Search, licence checkbox, SHA-256 checked) and the index are done: background indexing of the library (activity row with cancel/resume, pace, stale/deleted/offline handling, `content-embeddings-<model>.bin` beside the catalog) and `content.search` / `content.similar` for agents and the CLI. The search bar has no Contents mode yet (phase 4), so users cannot search by content in the UI |
 | LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`) |
 | LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged (one at a time) |
 | LR-FILT-LABEL | Colour-label filter | P1 | ✅ | `cmd:library.filter` (`label`), `crates/ui-egui/src/panels/filterbar.rs` | one label at a time; no “no label” choice |

@@ -305,5 +305,18 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Model in use: {name}": "Modelo em uso: {name}",
+  "Works · {ms} ms per photo": "Funciona · {ms} ms por foto",
+  "{got} of {total} from {host}": "{got} de {total} de {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Baixa {size} de {host}, uma única vez. Cada arquivo é verificado com sua soma de verificação registrada; depois o LightCraft começa a usá-lo.",
+  "about {m} min left": "cerca de {m} min restantes",
+  "about {h} h {m} min left": "cerca de {h} h {m} min restantes",
+  "{n} of {total} photos indexed": "{n} de {total} fotos indexadas",
+  "Stopped at {n} of {total} photos.": "Parado em {n} de {total} fotos.",
+  "All {total} photos are indexed.": "Todas as {total} fotos estão indexadas.",
+  "{n} of {total} photos indexed.": "{n} de {total} fotos indexadas.",
+  "{n} photos could not be read.": "{n} fotos não puderam ser lidas.",
+  "{n} photos are offline: they are indexed when their drive is back.": "{n} fotos estão offline: serão indexadas quando a unidade voltar.",
+  "Index: {size}": "Índice: {size}"
 }
