@@ -8,8 +8,10 @@ All algorithms are our own implementations from published papers (cited in the m
 
 - **App:** select the photos, then *Photo Merge ▸ HDR…* (`Ctrl+H`), *Panorama…* (`Ctrl+M`) or
   *HDR Panorama…* from the photo context menu (or the `dialog.merge*` commands). The dialog previews
-  the merge at ≤ 1024 px and re-runs the preview when an option changes; as in Lightroom, a click on the preview
-  zooms in on that point (drag to pan, click again to fit), and it stays there while options change; *Merge* runs the full merge
+  the merge at ≤ 1024 px and re-runs the preview when an option changes, reusing the photos it decoded (the
+  session's `FrameCache`, ≤ 512 MB, keyed by file, size and modification time), so switching a projection or a
+  deghost amount reads nothing again; as in Lightroom, a click on the preview zooms in on that point (drag to pan,
+  click again to fit), and it stays there while options change; *Merge* runs the full merge
   in the background (a row in the activity stack shows its progress, with ✕ to stop it). The result is written next to the first photo as
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected. *Photo Merge ▸ HDR for Each Bracket Set*
   merges many brackets in one go with the last HDR options: one HDR per stack among the selected photos, then per
@@ -72,6 +74,16 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   their clip in all three channels; measured exposure steps match EXIF within 0.03 EV.
 - Panorama, 5 views over 182° with a 1.3× exposure drift: relative rotations < 0.1°, focal < 1 %,
   BA RMS ≈ 0.35 px; median log error vs ground truth < 0.02; no seam steps.
+
+## Memory
+
+- Preview photos are binned straight from the mosaic (whole `k × k` blocks, `RawImage::develop_binned`), also when
+  the raw carries an `OpcodeList3` gain map (lens shading, as DJI drones write) or lens warps: those apply to the
+  binned image (`Opcode::binned`). A 48 MP DJI DNG took 1.7 GB and 2 s to load for a preview (a full-size
+  demosaic), now 0.35 GB and 0.3 s. Previews decode at most 4 photos at once; full-size merges one at a time.
+- An HDR panorama loads, merges and frees one bracket at a time. 12 DJI DNGs (4 brackets of 3, 48 MP): preview
+  1.9 s and 1.9 GB peak (40 GB and minutes before); the full 97 MP merge 27 s, peak 18.5 GB, set by the stitch
+  (the projected frames and the multi-band blend at full size), which `maxMegapixels` and the memory fit bound.
 
 ## Limits (known gaps)
 

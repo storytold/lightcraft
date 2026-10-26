@@ -959,10 +959,13 @@ fn into_lens_geometry(img: &Rgb32f, raw: &RawImage, k: usize, lens: &LensGeometr
 }
 
 fn sensor_proxy(raw: &RawImage, k: usize, edge: usize) -> Option<Rgb32f> {
-    Some(match raw.develop_binned(k, SENSOR_CLIP).ok()? {
+    // A DNG's lens opcodes are applied at full resolution, then reduced: the fit sees exactly the correction raw
+    // development makes (binning would re-express them at the binned scale).
+    let lens_opcodes = raw.format == RawFormat::Dng && !raw.opcodes.list3.is_empty();
+    let binned = if lens_opcodes { None } else { raw.develop_binned(k, SENSOR_CLIP).ok()? };
+    Some(match binned {
         Some(sensor) => sensor,
-        // Lens opcodes cannot be applied to a binned mosaic: they are defined at full resolution.
-        None if (raw.cpp == 3 && raw.cfa.is_none()) || (raw.format == RawFormat::Dng && !raw.opcodes.list3.is_empty()) => {
+        None if (raw.cpp == 3 && raw.cfa.is_none()) || lens_opcodes => {
             fit(&raw.develop(lightcraft_raw::Method::Bilinear).ok()?, edge, edge, Filter::Box)
         }
         None => return None,
@@ -4315,8 +4318,8 @@ mod tests {
         assert!(plain.data.iter().all(|p| *p == [0.2; 3]));
     }
 
-    /// Lens opcodes prevent mosaic binning. The DNG fit still gets a proxy, with the file's
-    /// full-resolution corrections applied once rather than silently losing the tone fit.
+    /// A DNG with lens opcodes gets a tone-fit proxy with the file's full-resolution corrections applied once, then
+    /// reduced (not binned, which re-expresses the opcodes at the binned scale).
     #[test]
     fn dng_sensor_proxy_applies_lens_opcodes_before_downsampling() {
         use lightcraft_raw::Opcode;
@@ -4324,8 +4327,7 @@ mod tests {
         let mut raw = lightcraft_raw::decode(&bytes).unwrap();
         raw.data = lightcraft_raw::RawData::U16(vec![4000; raw.width * raw.height]);
         raw.opcodes.list3 = vec![Opcode::FixVignetteRadial { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: [0.5, 0.5] }];
-        assert!(raw.develop_binned(2, SENSOR_CLIP).unwrap().is_none());
-        let proxy = sensor_proxy(&raw, 2, 32).expect("a corrected CFA proxy even when binning is unavailable");
+        let proxy = sensor_proxy(&raw, 2, 32).expect("a corrected CFA proxy at full resolution, not binned");
         assert_eq!((proxy.width, proxy.height), (32, 24));
         let center = proxy.data[12 * 32 + 16][1];
         let corner = proxy.data[0][1];

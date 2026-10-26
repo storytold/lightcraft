@@ -31,9 +31,9 @@ impl RawImage {
         (0..cfa.height).all(|j| (0..cfa.width).all(|i| block_layout(cfa, i, j, k).1.iter().all(|&n| n > 0)))
     }
 
-    /// Like [`RawImage::develop`] at `1/k` of the size (camera RGB, white = 1.0, default crop applied,
-    /// not oriented). `None` when the data cannot be binned ([`RawImage::can_bin`]) or carries an
-    /// `OpcodeList3` (whose operations are defined at full resolution); callers then demosaic.
+    /// Like [`RawImage::develop`] at `1/k` of the size (camera RGB, white = 1.0, `OpcodeList3` and the default crop
+    /// applied, not oriented). `None` when the data cannot be binned ([`RawImage::can_bin`]) or its `OpcodeList3`
+    /// holds an operation that needs every pixel ([`crate::opcodes::Opcode::binned`]); callers then demosaic.
     pub fn develop_binned(&self, k: usize, clip: f32) -> Result<Option<Rgb32f>> {
         Ok(self.bin(k, clip, true)?.map(|(img, _)| img))
     }
@@ -49,14 +49,19 @@ impl RawImage {
     /// block's maximum sample of the colour instead of the mean.
     fn bin(&self, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rgb32f, Vec<u8>)>> {
         self.validate()?;
-        if !self.can_bin(k) || !self.opcodes.list3.is_empty() {
+        if !self.can_bin(k) {
             return Ok(None);
         }
+        // `OpcodeList3` (lens shading as a gain map, lens corrections) works on the demosaiced active area: its
+        // operations re-expressed for the binned image, or a full-size develop when one needs every pixel
+        let Some(list3) = self.opcodes.list3.iter().map(|op| op.binned(k)).collect::<Option<Vec<_>>>() else { return Ok(None) };
         let Some(cfa) = &self.cfa else { return Ok(None) };
         let a = self.active_area;
-        // bin the default crop (relative to the active area) only
-        let c = self.crop.clipped(a.width, a.height);
-        let c = if c.width < k || c.height < k { crate::Rect::new(0, 0, a.width, a.height) } else { c };
+        let whole = crate::Rect::new(0, 0, a.width, a.height);
+        let crop = self.crop.clipped(a.width, a.height);
+        let crop = if crop.width < k || crop.height < k { whole } else { crop };
+        // bin the default crop (relative to the active area) only, or all of it for `OpcodeList3` (cropped after)
+        let c = if list3.is_empty() { crop } else { whole };
         let (bw, bh) = (c.width / k, c.height / k);
         if bw == 0 || bh == 0 {
             return Ok(None);
@@ -122,7 +127,18 @@ impl RawImage {
                 }
             }
         });
-        Ok(Some((out, mask)))
+        if list3.is_empty() {
+            return Ok(Some((out, mask)));
+        }
+        crate::opcodes::apply_list3(&list3, &mut out);
+        // the default crop at the binned scale
+        let (x0, y0) = ((crop.x / k).min(bw - 1), (crop.y / k).min(bh - 1));
+        let (cw, ch) = ((crop.width / k).clamp(1, bw - x0), (crop.height / k).clamp(1, bh - y0));
+        if (x0, y0, cw, ch) == (0, 0, bw, bh) {
+            return Ok(Some((out, mask)));
+        }
+        let mask = (y0..y0 + ch).flat_map(|y| mask[y * bw + x0..y * bw + x0 + cw].iter().copied()).collect();
+        Ok(Some((out.into_crop(x0, y0, cw, ch), mask)))
     }
 }
 
@@ -250,5 +266,79 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod list3_tests {
+    use crate::demosaic::mosaic_from_rgb;
+    use crate::opcodes::{Area, Opcode};
+    use crate::*;
+
+    fn raw(list3: Vec<Opcode>) -> RawImage {
+        let img = Rgb32f::from_fn(32, 24, |x, y| [0.1 + x as f32 * 0.005, 0.2 + y as f32 * 0.005, 0.25]);
+        let n = mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap());
+        RawImage {
+            format: RawFormat::Dng,
+            width: n.width,
+            height: n.height,
+            cpp: 1,
+            data: RawData::U16(n.data.iter().map(|&v| (v * 16383.0).round() as u16).collect()),
+            cfa: n.cfa.clone(),
+            bits: 14,
+            black: BlackLevel::uniform(0.0),
+            white: vec![16383.0],
+            active_area: Rect::new(0, 0, n.width, n.height),
+            crop: Rect::new(2, 2, 28, 20),
+            orientation: Orientation::Normal,
+            color: ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists { list3, ..Default::default() },
+            metadata: Metadata::default(),
+            lens_metadata: Default::default(),
+        }
+    }
+
+    fn area() -> Area {
+        Area { top: 0, left: 0, bottom: 24, right: 32, plane: 0, planes: 3, row_pitch: 1, col_pitch: 1 }
+    }
+
+    /// A lens-shading gain map in `OpcodeList3` (as DJI DNGs carry) no longer forces a full-size develop: the binned
+    /// image gets it at its own scale, and the default crop after it.
+    #[test]
+    fn a_gain_map_applies_to_the_binned_image() {
+        let gain =
+            Opcode::GainMap { area: area(), points_v: 2, points_h: 2, spacing: [1.0, 1.0], origin: [0.0, 0.0], map_planes: 1, gains: vec![2.0; 4] };
+        let plain = raw(Vec::new()).develop_binned(2, 0.99).unwrap().unwrap();
+        let shaded = raw(vec![gain]).develop_binned(2, 0.99).unwrap().expect("binned despite OpcodeList3");
+        assert_eq!((shaded.width, shaded.height), (plain.width, plain.height));
+        assert_eq!((plain.width, plain.height), (14, 10), "the default crop at the binned scale");
+        for (a, b) in plain.data.iter().zip(&shaded.data) {
+            for c in 0..3 {
+                assert!((b[c] - 2.0 * a[c]).abs() < 1e-4, "{a:?} {b:?}");
+            }
+        }
+    }
+
+    /// An operation that needs every pixel (per-row deltas) still refuses binning: the caller demosaics.
+    #[test]
+    fn a_per_row_opcode_refuses_binning() {
+        let rows = Opcode::DeltaPerRow { area: area(), deltas: vec![0.01; 24] };
+        assert!(raw(vec![rows]).develop_binned(2, 0.99).unwrap().is_none());
+        assert!(
+            Opcode::GainMap {
+                area: Area { row_pitch: 2, ..area() },
+                points_v: 1,
+                points_h: 1,
+                spacing: [1.0, 1.0],
+                origin: [0.0, 0.0],
+                map_planes: 1,
+                gains: vec![1.0]
+            }
+            .binned(2)
+            .is_none()
+        );
     }
 }

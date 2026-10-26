@@ -130,6 +130,45 @@ impl Opcode {
         matches!(self, Opcode::WarpRectilinear { .. } | Opcode::WarpRectilinear2 { .. } | Opcode::FixVignetteRadial { .. })
     }
 
+    /// This `OpcodeList3` operation for the image binned by `k` (each pixel the mean of a `k × k` block, the binned
+    /// image `1/k` of the size): the warps and `FixVignetteRadial` work in coordinates relative to the image and stay
+    /// as they are; `GainMap`, `MapTable` and `MapPolynomial` work over an area in pixels, which is scaled (a gain map's
+    /// own grid is relative to the image). `None` for the rest (per-row / per-column tables, bad pixels, areas that
+    /// skip rows or columns), which need every pixel: the caller develops at full size instead. Opcodes that
+    /// [`apply_list3`] skips stay as they are.
+    pub fn binned(&self, k: usize) -> Option<Opcode> {
+        let k = u32::try_from(k).ok().filter(|&k| k >= 1)?;
+        let area = |a: &Area| {
+            (a.row_pitch <= 1 && a.col_pitch <= 1).then(|| Area {
+                top: a.top / k,
+                left: a.left / k,
+                bottom: a.bottom.div_ceil(k),
+                right: a.right.div_ceil(k),
+                ..*a
+            })
+        };
+        match self {
+            Opcode::WarpRectilinear { .. }
+            | Opcode::WarpRectilinear2 { .. }
+            | Opcode::FixVignetteRadial { .. }
+            | Opcode::WarpFisheye { .. }
+            | Opcode::TrimBounds { .. }
+            | Opcode::Unknown { .. } => Some(self.clone()),
+            Opcode::GainMap { area: a, points_v, points_h, spacing, origin, map_planes, gains } => Some(Opcode::GainMap {
+                area: area(a)?,
+                points_v: *points_v,
+                points_h: *points_h,
+                spacing: *spacing,
+                origin: *origin,
+                map_planes: *map_planes,
+                gains: gains.clone(),
+            }),
+            Opcode::MapTable { area: a, table } => Some(Opcode::MapTable { area: area(a)?, table: table.clone() }),
+            Opcode::MapPolynomial { area: a, coefficients } => Some(Opcode::MapPolynomial { area: area(a)?, coefficients: coefficients.clone() }),
+            _ => None,
+        }
+    }
+
     /// This lens correction re-expressed for the part `crop` of the `width × height` image it was written for: applied
     /// to the cropped image it gives the crop of the corrected whole. The centre moves into the crop and the
     /// coefficients are rescaled for the crop's farthest corner, the radius every coordinate is normalised by. Centres

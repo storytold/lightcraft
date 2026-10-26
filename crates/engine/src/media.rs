@@ -353,6 +353,8 @@ impl SourceRef {
 }
 
 pub struct MediaCache {
+    /// Decoded photos of recent Photo Merge previews.
+    pub merge_frames: crate::merge::FrameCache,
     settings_hashes: SettingsHashes,
     /// Decoded thumbnail-level sources (LRU by bytes).
     thumbs: Lru<PhotoId, DecodedSource>,
@@ -439,6 +441,7 @@ impl Default for MediaCache {
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
         MediaCache {
+            merge_frames: crate::merge::FrameCache::default(),
             settings_hashes: SettingsHashes::default(),
             thumbs: Lru::new(THUMB_SOURCE_BYTES.min(budget)),
             previews: Vec::new(),
@@ -487,6 +490,7 @@ impl MediaCache {
 
     /// Forget every decoded source (photo ids changed meaning, e.g. another library was opened).
     pub fn clear_sources(&mut self) {
+        self.merge_frames.clear();
         self.settings_hashes = SettingsHashes::default();
         self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
         self.previews.clear();
