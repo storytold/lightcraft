@@ -699,10 +699,12 @@ impl Catalog {
             | Op::SetFolderRecord { .. } => self.changes.broad = self.revision.saturating_add(1),
         }
         Ok(match op {
-            Op::AddPhoto { photo } => {
+            Op::AddPhoto { mut photo } => {
                 if self.photos.contains_key(&photo.id) {
                     return Err(CatalogError::Invalid(format!("photo {:?} exists", photo.id)));
                 }
+                // keywords nest `MAX_LEVELS` deep at most, so every walk of the keyword tree is bounded
+                keywords::bound_levels(&mut photo.meta.keywords);
                 let id = photo.id;
                 self.next_photo = self.next_photo.max(id.0.saturating_add(1));
                 self.photos.insert(id, Arc::new(*photo));
@@ -735,7 +737,8 @@ impl Catalog {
                 let old_edit = std::mem::replace(&mut p.edited, edited);
                 Op::SetDevelop { id, settings: old, label, edited: old_edit }
             }
-            Op::SetMeta { id, meta } => {
+            Op::SetMeta { id, mut meta } => {
+                keywords::bound_levels(&mut meta.keywords);
                 let p = self.photo_mut(id)?;
                 Op::SetMeta { id, meta: Box::new(std::mem::replace(&mut p.meta, *meta)) }
             }
@@ -1054,8 +1057,9 @@ impl Catalog {
     /// finds in them, and walks folders up to the top): every photo, album and stack carries the
     /// id it is filed under; the id counters lie past every id in use; a stack keeps only photos
     /// in the catalog, once each, and goes when fewer than two are left; an album whose parent is
-    /// missing, not a folder or inside itself moves to the top level. Returns what was changed
-    /// (nothing, for a catalog this build wrote).
+    /// missing, not a folder or inside itself moves to the top level; a keyword nested deeper than
+    /// [`keywords::MAX_LEVELS`], a photo's or a listed one, keeps its top levels (the keyword tree
+    /// recurses once per level). Returns what was changed (nothing, for a catalog this build wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
         for (id, p) in self.photos.iter_mut() {
@@ -1063,6 +1067,28 @@ impl Catalog {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
                 Arc::make_mut(p).id = *id;
             }
+        }
+        let max = keywords::MAX_LEVELS;
+        let mut deep = 0usize;
+        for p in self.photos.values_mut() {
+            // looked at first: a sound photo isn't copied
+            if p.meta.keywords.iter().any(|k| keywords::too_deep(k)) {
+                keywords::bound_levels(&mut Arc::make_mut(p).meta.keywords);
+                deep += 1;
+            }
+        }
+        if deep > 0 {
+            changed.push(format!("{deep} photo(s): a keyword deeper than {max} levels cut to its top {max}"));
+        }
+        let listed: Vec<String> = self.keyword_list.iter().filter(|(_, l)| keywords::too_deep(&l.path)).map(|(k, _)| k.clone()).collect();
+        if !listed.is_empty() {
+            changed.push(format!("keyword list: {} keyword(s) deeper than {max} levels cut to their top {max}", listed.len()));
+        }
+        for key in listed {
+            let Some(mut l) = self.keyword_list.remove(&key) else { continue };
+            l.path = keywords::clean(&l.path);
+            // one already listed under the path it has now stays
+            self.keyword_list.entry(l.path.to_lowercase()).or_insert(l);
         }
         for (id, a) in self.albums.iter_mut() {
             if a.id != *id {
