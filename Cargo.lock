@@ -3888,6 +3888,7 @@ version = "0.18.0"
 dependencies = [
  "jpeg-encoder",
  "lightcraft-raster",
+ "lightcraft-testkit",
  "log",
  "siphasher",
  "zune-core",
