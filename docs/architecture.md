@@ -86,8 +86,9 @@ binary (`RUST_TEST_THREADS = { value = "4", force = false }`, so a value already
 wins), and `.config/nextest.toml` sets `test-threads = 4` for `cargo nextest run`. `cargo xtask` runs
 under that config too, so `[env]` also sets a marker, `LIGHTCRAFT_TEST_THREADS_DEFAULT`, to the same
 value: a `RUST_TEST_THREADS` equal to it counts as unset (`caller_sets` in `xtask/src/main.rs`) and the
-caps replace it with the RAM-aware value, while any other value is the caller's and wins. A caller who
-sets 4 explicitly looks like the default; the caps only ever lower it.
+caps replace it with the RAM-aware value, while any other value is the caller's and wins as-is. An
+explicit `RUST_TEST_THREADS=4` can't be told apart from the default, so `ci` and `xtask test` may
+lower it to their RAM-aware value (never raise it).
 
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask

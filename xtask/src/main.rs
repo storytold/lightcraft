@@ -188,8 +188,9 @@ fn ci_caps() -> &'static [(&'static str, String); 4] {
     })
 }
 
-/// The caps `c` gets: each of `caps` the environment doesn't set itself (`is_set`), so an explicit
-/// setting always wins.
+/// The caps `c` gets: each of `caps` the environment doesn't set itself (`is_set`, normally
+/// [`caller_sets`]), so a caller's setting wins; see [`set_by_caller`] for an explicit
+/// `RUST_TEST_THREADS=4`.
 fn caps_to_set<'a>(caps: &'a [(&'static str, String)], is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'a str)> {
     caps.iter().filter(|(key, _)| !is_set(key)).map(|(key, value)| (*key, value.as_str())).collect()
 }
@@ -201,9 +202,10 @@ const TEST_THREADS_DEFAULT_MARKER: &str = "LIGHTCRAFT_TEST_THREADS_DEFAULT";
 
 /// Whether the caller set `key` in the environment (`get` reads it), rather than leaving it unset
 /// or to the `RUST_TEST_THREADS` default of `.cargo/config.toml`: that one counts as unset when it
-/// equals the marker [`TEST_THREADS_DEFAULT_MARKER`] holds. A caller who sets the same value (4)
-/// can't be told apart and is treated as the default; the caps only ever lower it (`ci`'s test
-/// threads are at most 4), so they still never get more threads than they asked for.
+/// equals the marker [`TEST_THREADS_DEFAULT_MARKER`] holds. So an explicit value other than the
+/// default (4) wins as-is, but an explicit `RUST_TEST_THREADS=4` can't be told apart from the
+/// default: `ci` and `xtask test` may lower it to their RAM-aware value (never raise it, as that is
+/// at most 4). Without the marker (xtask run outside cargo) every value is the caller's.
 fn set_by_caller(key: &str, get: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
     let Some(value) = get(key) else {
         return false;
@@ -211,14 +213,16 @@ fn set_by_caller(key: &str, get: impl Fn(&str) -> Option<std::ffi::OsString>) ->
     !(key == "RUST_TEST_THREADS" && get(TEST_THREADS_DEFAULT_MARKER).is_some_and(|default| default == value))
 }
 
-/// [`set_by_caller`] for this process's environment.
+/// [`set_by_caller`] for this process's environment (an explicit `RUST_TEST_THREADS=4` counts as
+/// the config default).
 pub fn caller_sets(key: &str) -> bool {
     set_by_caller(key, |k| std::env::var_os(k))
 }
 
 /// Give `c` CI's resource caps when this run opted in ([`use_ci_caps`]). Full Windows debuginfo
 /// plus one linker per CPU can exhaust RAM before any tests run, and one test thread per CPU
-/// can exhaust it while they run (#3057).
+/// can exhaust it while they run (#3057). A caller's setting wins ([`caller_sets`]), except that an
+/// explicit `RUST_TEST_THREADS=4` looks like the config default and may be lowered.
 fn apply_ci_caps(c: &mut Command) {
     if CI_CAPS.load(std::sync::atomic::Ordering::Relaxed) {
         c.envs(caps_to_set(ci_caps(), caller_sets));
