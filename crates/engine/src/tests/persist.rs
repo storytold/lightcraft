@@ -260,7 +260,7 @@ fn kept_for_v6(dir: &std::path::Path, prefix: &str) -> Vec<String> {
         .map(|e| e.unwrap())
         .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with(prefix) && !n.ends_with(".tmp"))
+        .filter(|n| n.starts_with(prefix))
         .collect();
     names.sort();
     names

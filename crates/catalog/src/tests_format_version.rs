@@ -359,6 +359,27 @@ fn a_library_that_cannot_be_kept_is_not_upgraded() {
     assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, Some(6), 2));
 }
 
+/// Given an older library on disk whose files can't be kept (the name of one is taken by a directory), when it is
+/// opened, then it is not upgraded, and no copy or half-written staging file of the files it tried to keep is left
+/// lying about in the library's folder.
+#[test]
+fn a_library_on_disk_that_cannot_be_kept_leaves_nothing_lying_about() {
+    let dir = std::env::temp_dir().join(format!("lc-keep-fails-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("catalog.log.v6-8")).unwrap();
+    let (snap, log) = fixture(6).unwrap();
+    std::fs::write(dir.join(SNAPSHOT), snap).unwrap();
+    std::fs::write(dir.join(LOG), log).unwrap();
+
+    let (_, c, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, None, 0));
+    let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, [LOG, "catalog.log.v6-8", SNAPSHOT], "nothing but the library and the name that was taken");
+    assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), snap.as_bytes());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Given an older library whose upgrade can't be written, when it is opened, then it opens as it
 /// was, with no copy of it left lying about: there is nothing to go back from.
 #[test]

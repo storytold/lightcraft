@@ -172,12 +172,18 @@ impl Store for FsStore {
             self.appender = None;
         }
         let tmp = self.path(&format!("{name}.tmp"));
-        {
+        let staged = (|| {
             let mut f = create_staging(&tmp)?;
             f.write_all(data)?;
             f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, self.path(name))
+        })();
+        if let Err(e) = staged {
+            // no staging file is left beside the library (a kept copy is all or nothing)
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
         }
-        std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
         Ok(())
     }
@@ -212,7 +218,10 @@ impl Store for FsStore {
                 return Err(e);
             }
         };
-        std::fs::rename(&tmp, self.path(name))?;
+        if let Err(e) = std::fs::rename(&tmp, self.path(name)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
         self.sync_dir();
         Ok(n)
     }
@@ -424,6 +433,39 @@ mod tests_staging {
         std::fs::write(dir.join("catalog.log"), b"abc").unwrap();
         store.truncate("catalog.log", 1).unwrap();
         assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"a");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests_failed_write {
+    use super::*;
+
+    fn dir_with_a_directory_at(tag: &str, name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(name)).unwrap();
+        dir
+    }
+
+    /// A write that can't land (here the rename fails, the name being a directory) leaves no staging file behind: the
+    /// files a library keeps before an upgrade are "all or nothing", and a `.tmp` beside them is a copy lying about.
+    #[test]
+    fn write_atomic_that_fails_leaves_no_staging_file() {
+        let dir = dir_with_a_directory_at("write-atomic-fails", "catalog.snap.v6-8");
+        let mut store = FsStore::open(&dir).unwrap();
+        assert!(store.write_atomic("catalog.snap.v6-8", b"{}").is_err());
+        assert!(!dir.join("catalog.snap.v6-8.tmp").exists(), "a staging file was left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The streamed write cleans up the same way when the rename fails (it already did when the content can't be written).
+    #[test]
+    fn write_atomic_with_that_fails_to_rename_leaves_no_staging_file() {
+        let dir = dir_with_a_directory_at("write-atomic-with-fails", "catalog.log");
+        let mut store = FsStore::open(&dir).unwrap();
+        assert!(store.write_atomic_with("catalog.log", &mut |w| w.write_all(b"[1]")).is_err());
+        assert!(!dir.join("catalog.log.tmp").exists(), "a staging file was left behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
