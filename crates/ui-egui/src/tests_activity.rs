@@ -529,3 +529,77 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
 }
+
+/// A FIFO at the destination blocks verification until the test releases it. Settings must
+/// return to drawing, show the activity row, and accept cancellation while that I/O waits.
+#[cfg(unix)]
+#[test]
+fn smart_migration_settings_stays_responsive_and_cancel_keeps_old_folder() {
+    use lightcraft_engine::smart;
+    use std::io::Write;
+    use std::sync::mpsc;
+    let root = std::env::temp_dir().join(format!("lc-ui-smart-migration-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(root.join("library"), false).unwrap();
+    let old = s.media.smart_dir.clone().unwrap();
+    let new = root.join("destination");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::create_dir(&new).unwrap();
+    let bytes = smart::encode_format(&lightcraft_raster::Rgb32f::new(8, 6), None, smart::Format::Lossless).unwrap();
+    std::fs::write(old.join("one.lcsp"), &bytes).unwrap();
+    let fifo = new.join("one.lcsp");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let destination = new.to_string_lossy().to_string();
+    let services = Services { png: None, pick_folder: Some(Box::new(move || Some(destination.clone()))), ..Default::default() };
+    let mut h = Headless::new(LightcraftApp::new(s, services), [1600.0, 1000.0], 1.0);
+    h.app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "performance".into() });
+    // the dialog fades in: let it settle before clicking in it
+    h.settle(T);
+    // the smart preview rows are at the foot of the Performance page: scroll them into view
+    let window = rect(&h, "dialog:window");
+    h.request("ui.move", json!({"x": window.center().x, "y": window.center().y}), T);
+    for _ in 0..6 {
+        h.request("ui.scroll", json!({"dy": -400.0}), T);
+        h.step();
+    }
+    h.settle(T);
+    let (release, wait) = mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        // Bounded even if Settings regresses to synchronous migration.
+        let _ = wait.recv_timeout(Duration::from_secs(5));
+        std::fs::OpenOptions::new().write(true).open(fifo).unwrap().write_all(b"invalid destination").unwrap();
+    });
+    let start = std::time::Instant::now();
+    click(&mut h, "button:settingsSmartChoose");
+    let elapsed = start.elapsed();
+    wait_visible(&mut h);
+    let task = h.app.session.activity.list().into_iter().find(|t| t.kind == "smartMigration");
+    let old_still_used = h.app.session.media.smart_dir.as_ref() == Some(&old);
+    if let Some(task) = &task {
+        if let Some(output) = std::env::var_os("LC_SMART_SCREENSHOTS") {
+            let pixels = h.view.paint(&Default::default());
+            let image = lightcraft_raster::Rgba8 {
+                width: pixels.size[0],
+                height: pixels.size[1],
+                data: pixels.pixels.iter().map(|p| p.to_array()).collect(),
+            };
+            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+            std::fs::write(std::path::PathBuf::from(output).join("migration-settings.png"), png).unwrap();
+        }
+        h.app.ui.dialog = None;
+        click(&mut h, &format!("activity:cancel:{}", task.id));
+    }
+    let _ = release.send(());
+    writer.join().unwrap();
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()));
+    h.step();
+    assert!(elapsed < Duration::from_secs(2), "Settings blocked for {elapsed:?}");
+    assert!(task.is_some_and(|t| t.cancellable && t.total == 1), "missing progress/cancel row");
+    assert!(old_still_used);
+    assert_eq!(h.app.session.media.smart_dir.as_ref(), Some(&old));
+    assert_eq!(std::fs::read(old.join("one.lcsp")).unwrap(), bytes);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("cancelled")), "{:?}", h.app.ui.toast);
+    drop(h);
+    std::fs::remove_dir_all(root).unwrap();
+}

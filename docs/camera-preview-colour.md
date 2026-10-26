@@ -223,6 +223,8 @@ is recorded here yet. Whether they should come before the file-local fit for the
 
 ## Smart previews and the look version
 
+See [Smart previews](smart-previews.md) for the optional lossless format, migration, storage limits, and header compatibility.
+
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.

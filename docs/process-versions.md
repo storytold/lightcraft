@@ -21,6 +21,9 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
   error, CPU and GPU disagreeing) are not looks and can land in place, as before.
 - Changes to how a file is decoded or which camera colour it gets change the source, not how settings
   are interpreted; the process doesn't reach that stage today.
+- The smart preview format (Compact or Lossless) stores the source, so it has no process either. What
+  older versions do with a library that uses Lossless smart previews is in
+  [smart previews](smart-previews.md#opening-the-library-in-an-older-version).
 
 **Neutral display tone map** (JPEG, PNG and other display-referred sources with Contrast, Whites and
 Blacks at 0) is the identity up to white: the SDR shoulder no longer pulls 1.0 down to 0.9875 (8-bit

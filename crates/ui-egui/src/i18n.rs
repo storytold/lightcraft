@@ -563,6 +563,22 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
     if language() == Locale::En { rules.describe_with(catalog) } else { describe(rules, catalog, 0) }
 }
 
+/// Cardinal plural forms for whole photo and file counts in the shipped languages.
+pub(crate) fn integer_plural_form(locale: Locale, count: u64) -> &'static str {
+    match locale {
+        Locale::Ja | Locale::ZhHans | Locale::ZhHant => "other",
+        Locale::Ru | Locale::Uk => match (count % 10, count % 100) {
+            (1, n) if n != 11 => "one",
+            (2..=4, n) if !(12..=14).contains(&n) => "few",
+            _ => "many",
+        },
+        Locale::Fr | Locale::PtBr if count <= 1 => "one",
+        Locale::Fr | Locale::PtBr | Locale::Es if count != 0 && count.is_multiple_of(1_000_000) => "many",
+        _ if count == 1 => "one",
+        _ => "other",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,7 +660,8 @@ mod tests {
     #[test]
     fn catalogs_load() {
         let files = catalog_files();
-        assert_eq!(files.len(), 2 * (Locale::ALL.len() - 1), "a plain and a formats catalog per translation");
+        // plus `en-formats.json`: the English plural forms, which are not a translation
+        assert_eq!(files.len(), 2 * (Locale::ALL.len() - 1) + 1, "a plain and a formats catalog per translation");
         for path in files {
             let repeated = repeated_keys(&path);
             assert_eq!(repeated, Ok(Vec::new()), "{}", path.display());
@@ -673,7 +690,12 @@ mod tests {
             }
             fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Vec<String>, A::Error> {
                 let (mut seen, mut repeated) = (std::collections::BTreeSet::new(), Vec::new());
-                while let Some((key, _)) = map.next_entry::<String, String>()? {
+                // a message is a string, or (in a formats catalog) its plural forms, an object of strings
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    let forms = |v: &serde_json::Value| v.as_object().is_some_and(|f| f.values().all(serde_json::Value::is_string));
+                    if !value.is_string() && !forms(&value) {
+                        return Err(serde::de::Error::custom(format!("{key:?} is neither a string nor plural forms")));
+                    }
                     if !seen.insert(key.clone()) {
                         repeated.push(key);
                     }
@@ -798,7 +820,7 @@ mod tests {
         // text (an album name with braces and CJK) and counts are never dropped.
         for language in Locale::ALL {
             set_language(*language);
-            let text = tr_format!("{count} smart preview{} · {:.1} MB", "s", 12.345, count = 3);
+            let text = tr_format!("{count} smart previews · {size:.1} MiB", count = 3, size = 12.345);
             assert!(text.contains("12.3") && !text.contains("12.34"), "{language:?}: {text}");
             let merging = tr_format!("Merging… {stage} {:.0}%", 42.4, stage = "Aligning");
             assert!(merging.contains("42%"), "{language:?}: {merging}");
@@ -821,6 +843,41 @@ mod tests {
         }
         set_language(Locale::En);
         assert_eq!(tr_format!("Reading photos… {} of {}", 3, 10), "Reading photos… 3 of 10");
+    }
+
+    #[test]
+    fn smart_preview_counts_use_complete_plural_forms() {
+        for (locale, one, few, many) in
+            [(Locale::Ru, "21 фотография", "22 фотографии", "25 фотографий"), (Locale::Uk, "21 фотографія", "22 фотографії", "25 фотографій")]
+        {
+            set_language(locale);
+            for (count, expected) in [(21, one), (22, few), (25, many)] {
+                assert_eq!(tr_format!("Photos: {count}", count = count), expected);
+            }
+            for count in [0, 5, 11, 12, 14, 111] {
+                assert_eq!(integer_plural_form(locale, count), "many");
+            }
+            assert_eq!(integer_plural_form(locale, 101), "one");
+            assert_eq!(integer_plural_form(locale, 102), "few");
+        }
+        set_language(Locale::En);
+        assert_eq!(tr_format!(". {count} existing previews kept unchanged", count = 1), ". 1 existing preview kept unchanged");
+        assert_eq!(tr_format!(". {count} existing previews kept unchanged", count = 2), ". 2 existing previews kept unchanged");
+        for locale in Locale::ALL {
+            set_language(*locale);
+            for count in [0u64, 1, 2, 5, 11, 21, 22, 25, 101, 1_000_000] {
+                let photo = tr_format!("Photos: {count}", count = count);
+                let previews = tr_format!("{count} smart previews · {size:.1} MiB", count = count, size = 12.345);
+                let kept = tr_format!(". {count} existing previews kept unchanged", count = count);
+                let failed = tr_format!("Smart preview folder changed. {count} source files could not be removed.", count = count);
+                for text in [&photo, &previews, &kept, &failed] {
+                    assert!(text.contains(&count.to_string()), "{locale:?}: {text}");
+                    assert!(!text.contains(['{', '}']), "{locale:?}: {text}");
+                }
+                assert!(previews.contains("12.3") && !previews.contains("12.34"));
+            }
+        }
+        set_language(Locale::En);
     }
 
     /// Every character a catalog paints has a glyph in the fonts the UI installs, so a translation
@@ -898,10 +955,18 @@ mod tests {
             if path.extension().is_none_or(|ext| ext != "json") {
                 continue;
             }
-            let messages: BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            for (source, text) in messages {
-                for bad in UNPAINTABLE {
-                    assert!(!text.contains(bad), "{}: {source:?} uses the unpaintable {bad:?}", path.display());
+            let messages: BTreeMap<String, serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for (source, value) in messages {
+                let forms: Vec<_> = match &value {
+                    serde_json::Value::String(_) => vec![&value],
+                    serde_json::Value::Object(forms) => forms.values().collect(),
+                    _ => panic!("invalid translation: {source:?}"),
+                };
+                for text in forms {
+                    let text = text.as_str().unwrap();
+                    for bad in UNPAINTABLE {
+                        assert!(!text.contains(bad), "{}: {source:?} uses the unpaintable {bad:?}", path.display());
+                    }
                 }
             }
         }

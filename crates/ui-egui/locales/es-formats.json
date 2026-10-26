@@ -137,7 +137,6 @@
   "the {n} selected photos": "las {n} fotos seleccionadas",
   "the {} photos in view": "las {} fotos de la vista",
   "these {count} photos": "estas {count} fotos",
-  "{count} smart preview{} · {:.1} MB": "{count} vista{0} previa{0} inteligente{0} · {1:.1} MB",
   "{f} folders (and their subfolders)": "{f} carpetas (y sus subcarpetas)",
   "{label} Grading": "Gradación de {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} en cada foto seleccionada",
@@ -305,5 +304,35 @@
   "Could not read {name}: {e}": "No se pudo leer {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} añadida{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "¿Dónde debe ir el catálogo de Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})",
+  "Photos: {count}": {
+    "one": "Foto: {count}",
+    "few": "Fotos: {count}",
+    "many": "Fotos: {count}",
+    "other": "Fotos: {count}"
+  },
+  "Estimated total size: {size}": "Tamaño total estimado: {size}",
+  "Destination: {path}": "Destino: {path}",
+  "Free space: {size}": "Espacio libre: {size}",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Carpeta de vistas previas inteligentes cambiada. No se pudo eliminar {count} archivo de origen.",
+    "few": "Carpeta de vistas previas inteligentes cambiada. No se pudieron eliminar {count} archivos de origen.",
+    "many": "Carpeta de vistas previas inteligentes cambiada. No se pudieron eliminar {count} archivos de origen.",
+    "other": "Carpeta de vistas previas inteligentes cambiada. No se pudieron eliminar {count} archivos de origen."
+  },
+  "Smart preview folder change failed: {error}": "No se pudo cambiar la carpeta de vistas previas inteligentes: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". Se conservó {count} vista previa existente sin cambios",
+    "few": ". Se conservaron {count} vistas previas existentes sin cambios",
+    "many": ". Se conservaron {count} vistas previas existentes sin cambios",
+    "other": ". Se conservaron {count} vistas previas existentes sin cambios"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} vista previa inteligente · {size:.1} MiB",
+    "few": "{count} vistas previas inteligentes · {size:.1} MiB",
+    "many": "{count} vistas previas inteligentes · {size:.1} MiB",
+    "other": "{count} vistas previas inteligentes · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "No se pudo comprobar el almacenamiento de vistas previas inteligentes: {e}",
+  "free space is unavailable for {path} on this platform": "El espacio libre de {path} no está disponible en esta plataforma."
 }

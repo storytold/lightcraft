@@ -142,7 +142,6 @@
   "the {n} selected photos": "выбранные {n} фото",
   "the {} photos in view": "все {} фото в представлении",
   "these {count} photos": "эти {count} фото",
-  "{count} smart preview{} · {:.1} MB": "Смарт-просмотров: {count}{:.0} · {:.1} МБ",
   "{f} folders (and their subfolders)": "Папок: {f} (и их подпапок)",
   "{label} Grading": "Цветокоррекция: {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} для каждого выбранного фото",
@@ -305,5 +304,35 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Photos: {count}": {
+    "one": "{count} фотография",
+    "few": "{count} фотографии",
+    "many": "{count} фотографий",
+    "other": "{count} фотографий"
+  },
+  "Estimated total size: {size}": "Расчётный общий размер: {size}",
+  "Destination: {path}": "Папка назначения: {path}",
+  "Free space: {size}": "Свободное место: {size}",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Папка смарт-просмотров изменена. Не удалось удалить {count} исходный файл.",
+    "few": "Папка смарт-просмотров изменена. Не удалось удалить {count} исходных файла.",
+    "many": "Папка смарт-просмотров изменена. Не удалось удалить {count} исходных файлов.",
+    "other": "Папка смарт-просмотров изменена. Не удалось удалить {count} исходных файлов."
+  },
+  "Smart preview folder change failed: {error}": "Не удалось изменить папку смарт-просмотров: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} существующий смарт-просмотр сохранён без изменений",
+    "few": ". {count} существующих смарт-просмотра сохранены без изменений",
+    "many": ". {count} существующих смарт-просмотров сохранено без изменений",
+    "other": ". {count} существующих смарт-просмотров сохранено без изменений"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} смарт-просмотр · {size:.1} МиБ",
+    "few": "{count} смарт-просмотра · {size:.1} МиБ",
+    "many": "{count} смарт-просмотров · {size:.1} МиБ",
+    "other": "{count} смарт-просмотров · {size:.1} МиБ"
+  },
+  "could not check smart preview storage: {e}": "Не удалось проверить хранилище смарт-просмотров: {e}",
+  "free space is unavailable for {path} on this platform": "На этой платформе невозможно определить свободное место для {path}."
 }

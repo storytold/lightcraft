@@ -414,6 +414,13 @@ pub struct Session {
     pub slide_backdrop: std::sync::Arc<slide::BackdropCache>,
     /// Where smart previews are kept when not in the library folder (persisted in prefs.json).
     pub smart_previews_dir: Option<std::path::PathBuf>,
+    pub smart_previews_format: crate::smart::Format,
+    /// Persistent thumbnail namespace, saved atomically with the smart preview folder.
+    pub(crate) smart_previews_cache_generation: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) smart_migration: Option<cmd::previews::location::Migration>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub smart_migration_result: Option<std::result::Result<Value, String>>,
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
@@ -537,6 +544,12 @@ impl Session {
             slide_templates_cache: None,
             slide_backdrop: Default::default(),
             smart_previews_dir: None,
+            smart_previews_format: Default::default(),
+            smart_previews_cache_generation: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            smart_migration: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            smart_migration_result: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
             #[cfg(not(target_arch = "wasm32"))]
             apple_photos: None,
@@ -556,6 +569,8 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        #[cfg(not(target_arch = "wasm32"))]
+        cmd::previews::location::poll(self);
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {

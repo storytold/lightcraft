@@ -169,7 +169,6 @@
   "the {} photos in view": "fotografie v zobrazení: {}",
   "these {count} photos": "tyto fotografie: {count}",
   "{:.1} MB": "{:.1} MB",
-  "{count} smart preview{} · {:.1} MB": "Inteligentní náhledy: {count}{0:.0} · {1:.1} MB",
   "{done} of {total}": "{done} z {total}",
   "{done} of {total} MB": "{done} z {total} MB",
   "{file} · {size}": "{file} · {size}",
@@ -305,5 +304,35 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Destination: {path}": "Cíl: {path}",
+  "Estimated total size: {size}": "Odhadovaná celková velikost: {size}",
+  "Free space: {size}": "Volné místo: {size}",
+  "Smart preview folder change failed: {error}": "Změna složky inteligentních náhledů se nezdařila: {error}",
+  "could not check smart preview storage: {e}": "úložiště inteligentních náhledů nelze zkontrolovat: {e}",
+  "free space is unavailable for {path} on this platform": "na této platformě nelze zjistit volné místo pro {path}",
+  "Photos: {count}": {
+    "one": "Fotografie: {count}",
+    "few": "Fotografie: {count}",
+    "many": "Fotografie: {count}",
+    "other": "Fotografie: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "Inteligentní náhledy: {count} · {size:.1} MiB",
+    "few": "Inteligentní náhledy: {count} · {size:.1} MiB",
+    "many": "Inteligentní náhledy: {count} · {size:.1} MiB",
+    "other": "Inteligentní náhledy: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". Ponechané existující náhledy: {count}",
+    "few": ". Ponechané existující náhledy: {count}",
+    "many": ". Ponechané existující náhledy: {count}",
+    "other": ". Ponechané existující náhledy: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}.",
+    "few": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}.",
+    "many": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}.",
+    "other": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}."
+  }
 }

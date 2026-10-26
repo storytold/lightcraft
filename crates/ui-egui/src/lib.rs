@@ -43,6 +43,7 @@ pub mod render;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod slideshow_export;
+mod smart_previews;
 pub mod softpaint;
 pub mod state;
 pub mod sync;
@@ -541,6 +542,7 @@ pub struct LightcraftApp {
     pub scan: Option<import::ScanTask>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
+    pub(crate) smart_preview_space: Option<smart_previews::SpaceCheck>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
@@ -680,6 +682,7 @@ impl LightcraftApp {
             import: None,
             scan: None,
             sync: None,
+            smart_preview_space: None,
             sync_owns_changes: false,
             sync_run: None,
             lightroom: None,
@@ -854,6 +857,9 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        if let Some(result) = smart_previews::intercept(self, id, &params) {
+            return result.map_err(CommandError::from);
+        }
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }
@@ -1043,6 +1049,10 @@ impl LightcraftApp {
                         crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
                     }
                 };
+                let kept = b.kept.load(Ordering::Relaxed);
+                if kept > 0 {
+                    msg.push_str(&crate::i18n::tr_format!(". {count} existing previews kept unchanged", count = kept));
+                }
                 if failed > 0 {
                     msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
                 }
@@ -1961,6 +1971,7 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
+        smart_previews::poll(self, ctx);
         sync::poll_run(self, ctx);
         // Import commits batches and must not run twice in one host frame. The first layout pass
         // and a hidden logic tick both report pass index 0; a second pass reports 1. A wall-clock

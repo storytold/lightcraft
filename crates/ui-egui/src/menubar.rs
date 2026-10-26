@@ -488,14 +488,35 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
                 MenuNode::Separator,
                 // (read and written on a worker thread: the originals may be on a slow drive)
-                item(
-                    "library.smartPreviews",
-                    json!({"background": true}),
-                    crate::i18n::tr_format!("Build Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
-                    None,
-                    app.session.media.smart_dir.is_some() && !running,
-                    None,
-                ),
+                MenuNode::Submenu {
+                    label: crate::i18n::tr_format!("Build Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
+                    children: vec![
+                        item(
+                            "library.smartPreviews",
+                            json!({"background": true}),
+                            "Use Library Format",
+                            None,
+                            app.session.media.smart_dir.is_some() && !running,
+                            None,
+                        ),
+                        item(
+                            "library.smartPreviews",
+                            json!({"background": true, "format": "compact"}),
+                            "Compact (JPEG)",
+                            None,
+                            app.session.media.smart_dir.is_some() && !running,
+                            None,
+                        ),
+                        item(
+                            "library.smartPreviews",
+                            json!({"background": true, "format": "lossless"}),
+                            "Lossless (32-bit TIFF)",
+                            None,
+                            app.session.media.smart_dir.is_some() && !running,
+                            None,
+                        ),
+                    ],
+                },
                 item(
                     "library.smartPreviews",
                     json!({"discard": true, "background": true}),

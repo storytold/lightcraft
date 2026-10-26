@@ -1741,7 +1741,7 @@ mod thumbnail_tests {
     }
 
     #[test]
-    fn explicit_clear_repairs_same_key_bad_pixels_and_rejects_old_same_key_job() {
+    fn explicit_clear_changes_render_key_repairs_bad_pixels_and_rejects_old_same_key_job() {
         let (mut app, work, ctx) = fixture();
         let job = app.session.thumb_job(PhotoId(1), 256).unwrap();
         let expected = job.clone().run().rendered.unwrap().image;
@@ -1753,7 +1753,7 @@ mod thumbnail_tests {
         let (slot, corrupt) = take_job(&work);
         finish(&mut app, &work, &ctx, slot, corrupt.run());
         assert_eq!(app.renderer.thumb(PhotoId(1)).unwrap().pixels.as_ref().unwrap().pixels[0].to_array(), [255, 0, 255, 255]);
-        // An old job can have the SAME render key and stale decoded pixels.
+        // Keep an old job with stale decoded pixels pending across the cache clear.
         let mut old = job.clone();
         old.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(lightcraft_engine::media::DecodedSource::new(
             Arc::new(lightcraft_raster::Rgb32f::new(8, 8)),
@@ -1767,9 +1767,13 @@ mod thumbnail_tests {
         assert!(app.renderer.thumb(PhotoId(1)).is_none());
         request(&mut app);
         let (_, repaired) = take_job(&work);
-        assert_eq!(repaired.key, job.key);
+        assert_ne!(repaired.key, job.key, "the generation changes the render key");
+        assert_eq!(repaired.cache.as_ref().unwrap().1, key, "the content cache key remains stable");
+        let repaired_key = repaired.key;
         finish(&mut app, &work, &ctx, slot, repaired.run());
-        finish(&mut app, &work, &ctx, slot, old.run());
+        let mut old = old.run();
+        old.key = repaired_key; // A coincident key still cannot make the old request current.
+        finish(&mut app, &work, &ctx, slot, old);
         assert_eq!(cache.get(key).unwrap().as_bytes(), expected.as_bytes());
         assert_eq!(
             app.renderer.thumb(PhotoId(1)).unwrap().pixels.as_ref().unwrap().pixels.iter().flat_map(|c| c.to_array()).collect::<Vec<_>>(),
@@ -1981,6 +1985,8 @@ mod color_image_tests {
     fn the_worker_converts_the_texture_pixels() {
         let image = lightcraft_raster::Rgba8::from_fn(5, 3, |x, y| [(x * 40) as u8, (y * 80) as u8, 7, 255]);
         let result = |rendered| RenderResult {
+            cache_generation: 0,
+            cache_owner: std::sync::Weak::new(),
             request_id: 1,
             source_key: None,
             photo: PhotoId(1),

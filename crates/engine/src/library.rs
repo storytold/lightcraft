@@ -240,6 +240,8 @@ struct PrefsFile {
     cache_mb: u32,
     /// Folder for smart previews (default: `Smart Previews` in the library).
     smart_previews_dir: Option<String>,
+    smart_previews_format: crate::smart::Format,
+    smart_previews_cache_generation: u64,
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
@@ -453,6 +455,11 @@ impl Session {
 
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.smart_migration = None;
+            self.smart_migration_result = None;
+        }
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
@@ -520,6 +527,8 @@ impl Session {
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
         self.refresh_view();
+        self.smart_previews_format = prefs.smart_previews_format;
+        self.smart_previews_cache_generation = prefs.smart_previews_cache_generation;
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
@@ -570,8 +579,10 @@ impl Session {
         let presets_saved = PresetsSaved::state_of(self);
         // photo ids are per library: drop decoded sources of the previous one
         self.media.clear_sources();
+        #[cfg(not(target_arch = "wasm32"))]
+        let interrupted = if on_disk { self.new_namespace_after_interrupted_runs(&dir.join("thumbs")) } else { Vec::new() };
         if on_disk {
-            self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
+            self.media.attach_disk_cache_namespace(&dir.join("thumbs"), self.cache_bytes(), self.smart_previews_cache_generation);
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
@@ -593,6 +604,8 @@ impl Session {
             blocked: settings.blocked,
             lock: lock.take(),
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        self.forget_interrupted_runs(interrupted);
         // forget untouched Local records of folders not browsed for a while (journaled at once)
         if self.forget_local_days > 0 {
             let plan = self.forget_local(false, None);
@@ -674,9 +687,54 @@ impl Session {
         Ok(())
     }
 
+    /// A smart preview build or look refresh that ended before clearing the thumbnail cache (a
+    /// quit or crash) left a marker in `thumbs` ([`crate::media::interrupted_runs`]): the cache
+    /// can hold thumbnails of the proxies it replaced. The library then takes a new thumbnail
+    /// namespace before its cache is attached. Returns the markers, removed by
+    /// [`Self::forget_interrupted_runs`] once the namespace is saved.
+    ///
+    /// The namespace moves on by one per marker. Until a save succeeds the markers stay, and
+    /// every run interrupted since adds one, so an opening after a session that could not save
+    /// its namespace, and that was interrupted again, does not take that session's namespace.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new_namespace_after_interrupted_runs(&mut self, thumbs: &std::path::Path) -> Vec<PathBuf> {
+        let markers = crate::media::interrupted_runs(thumbs);
+        if !markers.is_empty() {
+            log::info!("thumbnail cache: {} smart preview run(s) did not finish; using new thumbnail keys", markers.len());
+            match u64::try_from(markers.len()).ok().and_then(|n| self.smart_previews_cache_generation.checked_add(n)) {
+                Some(next) => self.smart_previews_cache_generation = next,
+                // no new namespace left: remove the cached thumbnails instead
+                None => lightcraft_preview::DiskCache::new(thumbs, 0).clear(),
+            }
+        }
+        markers
+    }
+
+    /// Save the namespace [`Self::new_namespace_after_interrupted_runs`] took, then remove the
+    /// markers. If the save fails they stay and count again at the next opening.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn forget_interrupted_runs(&mut self, markers: Vec<PathBuf>) {
+        if markers.is_empty() {
+            return;
+        }
+        if let Err(e) = self.save_prefs() {
+            log::warn!("thumbnail cache: {e}; the next opening uses new thumbnail keys again");
+            return;
+        }
+        for marker in markers {
+            if let Err(e) = std::fs::remove_file(&marker)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                log::warn!("thumbnail cache: {}: {e}", marker.display());
+            }
+        }
+    }
+
     /// Persist if commands left ops pending (cheap; frontends call it once per frame for state
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::cmd::previews::location::poll(self);
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
@@ -783,6 +841,8 @@ impl Session {
             import: self.import_defaults.clone(),
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
+            smart_previews_format: self.smart_previews_format,
+            smart_previews_cache_generation: self.smart_previews_cache_generation,
             forget_local_days: Some(self.forget_local_days),
             slideshow: self.slideshow.clone(),
             slide_layout: self.slide_layout.clone(),

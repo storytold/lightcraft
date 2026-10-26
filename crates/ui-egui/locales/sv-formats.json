@@ -199,7 +199,6 @@
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "XMP-profilen \"{profile}\" tillämpades inte för {path}; färgerna kan skilja sig från Lightroom.",
   "{:.1} MB": "{:.1} MB",
   "{count} more warnings.": "{count} varningar till.",
-  "{count} smart preview{} · {:.1} MB": "{count} smarta förhandsgranskning{} · {:.1} MB",
   "{done} of {total}": "{done} av {total}",
   "{done} of {total} MB": "{done} av {total} MB",
   "{file} · {size}": "{file} · {size}",
@@ -305,5 +304,35 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Destination: {path}": "Mål: {path}",
+  "Estimated total size: {size}": "Uppskattad total storlek: {size}",
+  "Free space: {size}": "Ledigt utrymme: {size}",
+  "Smart preview folder change failed: {error}": "Bytet av mapp för smarta förhandsgranskningar misslyckades: {error}",
+  "could not check smart preview storage: {e}": "kunde inte kontrollera lagringen för smarta förhandsgranskningar: {e}",
+  "free space is unavailable for {path} on this platform": "ledigt utrymme för {path} kan inte läsas på den här plattformen",
+  "Photos: {count}": {
+    "one": "Foton: {count}",
+    "few": "Foton: {count}",
+    "many": "Foton: {count}",
+    "other": "Foton: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} smart förhandsgranskning · {size:.1} MiB",
+    "few": "{count} smarta förhandsgranskningar · {size:.1} MiB",
+    "many": "{count} smarta förhandsgranskningar · {size:.1} MiB",
+    "other": "{count} smarta förhandsgranskningar · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} befintlig förhandsgranskning behölls oförändrad",
+    "few": ". {count} befintliga förhandsgranskningar behölls oförändrade",
+    "many": ". {count} befintliga förhandsgranskningar behölls oförändrade",
+    "other": ". {count} befintliga förhandsgranskningar behölls oförändrade"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Mappen för smarta förhandsgranskningar har bytts. {count} källfil kunde inte tas bort.",
+    "few": "Mappen för smarta förhandsgranskningar har bytts. {count} källfiler kunde inte tas bort.",
+    "many": "Mappen för smarta förhandsgranskningar har bytts. {count} källfiler kunde inte tas bort.",
+    "other": "Mappen för smarta förhandsgranskningar har bytts. {count} källfiler kunde inte tas bort."
+  }
 }

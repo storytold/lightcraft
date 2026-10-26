@@ -137,7 +137,6 @@
   "the {n} selected photos": "вибрані фото: {n}",
   "the {} photos in view": "фото в поданні: {}",
   "these {count} photos": "ці фото ({count})",
-  "{count} smart preview{} · {:.1} MB": "Смарт-переглядів: {count}{:.0} · {:.1} МБ",
   "{f} folders (and their subfolders)": "Тек: {f} (і їхніх вкладених тек)",
   "{label} Grading": "Колірне тонування: {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} на кожному вибраному фото",
@@ -305,5 +304,35 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Photos: {count}": {
+    "one": "{count} фотографія",
+    "few": "{count} фотографії",
+    "many": "{count} фотографій",
+    "other": "{count} фотографій"
+  },
+  "Estimated total size: {size}": "Розрахунковий загальний розмір: {size}",
+  "Destination: {path}": "Тека призначення: {path}",
+  "Free space: {size}": "Вільне місце: {size}",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Теку смарт-переглядів змінено. Не вдалося видалити {count} вихідний файл.",
+    "few": "Теку смарт-переглядів змінено. Не вдалося видалити {count} вихідні файли.",
+    "many": "Теку смарт-переглядів змінено. Не вдалося видалити {count} вихідних файлів.",
+    "other": "Теку смарт-переглядів змінено. Не вдалося видалити {count} вихідних файлів."
+  },
+  "Smart preview folder change failed: {error}": "Не вдалося змінити теку смарт-переглядів: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} наявний смарт-перегляд збережено без змін",
+    "few": ". {count} наявні смарт-перегляди збережено без змін",
+    "many": ". {count} наявних смарт-переглядів збережено без змін",
+    "other": ". {count} наявних смарт-переглядів збережено без змін"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} смарт-перегляд · {size:.1} МіБ",
+    "few": "{count} смарт-перегляди · {size:.1} МіБ",
+    "many": "{count} смарт-переглядів · {size:.1} МіБ",
+    "other": "{count} смарт-переглядів · {size:.1} МіБ"
+  },
+  "could not check smart preview storage: {e}": "Не вдалося перевірити сховище смарт-переглядів: {e}",
+  "free space is unavailable for {path} on this platform": "На цій платформі неможливо визначити вільне місце для {path}."
 }

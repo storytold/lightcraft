@@ -293,6 +293,10 @@
 
 ## 2026-10-15
 
+### Faster Build Smart Previews
+- Build Smart Previews works on several photos at once, up to four on a machine with 16 or more cores (issue #1492).
+  On a 16-core Mac, 24 raws took 2.6 s instead of 5.8 s (Compact) and 3.1 s instead of 8.3 s (Lossless).
+
 ### Photo Merge takes each photo once
 - A merge that names the same photo more than once (through `ids` on the control channel, MCP or the CLI) now merges
   it once (issue #1947). Naming one photo three times no longer "merges" it with itself, and a long repeated list no

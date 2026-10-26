@@ -137,7 +137,6 @@
   "the {n} selected photos": "les {n} photos sélectionnées",
   "the {} photos in view": "les {} photos affichées",
   "these {count} photos": "ces {count} photos",
-  "{count} smart preview{} · {:.1} MB": "{count} aperçu{0} dynamique{0} · {1:.1} Mo",
   "{f} folders (and their subfolders)": "{f} dossier(s) (et leurs sous-dossiers)",
   "{label} Grading": "Étalonnage de {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} sur chaque photo sélectionnée",
@@ -305,5 +304,35 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Photos: {count}": {
+    "one": "Photo : {count}",
+    "few": "Photos : {count}",
+    "many": "Photos : {count}",
+    "other": "Photos : {count}"
+  },
+  "Estimated total size: {size}": "Taille totale estimée : {size}",
+  "Destination: {path}": "Destination : {path}",
+  "Free space: {size}": "Espace libre : {size}",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Dossier des aperçus dynamiques modifié. {count} fichier source n'a pas pu être supprimé.",
+    "few": "Dossier des aperçus dynamiques modifié. {count} fichiers sources n'ont pas pu être supprimés.",
+    "many": "Dossier des aperçus dynamiques modifié. {count} fichiers sources n'ont pas pu être supprimés.",
+    "other": "Dossier des aperçus dynamiques modifié. {count} fichiers sources n'ont pas pu être supprimés."
+  },
+  "Smart preview folder change failed: {error}": "Échec du changement du dossier des aperçus dynamiques : {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} aperçu existant conservé sans modification",
+    "few": ". {count} aperçus existants conservés sans modification",
+    "many": ". {count} aperçus existants conservés sans modification",
+    "other": ". {count} aperçus existants conservés sans modification"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} aperçu dynamique · {size:.1} Mio",
+    "few": "{count} aperçus dynamiques · {size:.1} Mio",
+    "many": "{count} aperçus dynamiques · {size:.1} Mio",
+    "other": "{count} aperçus dynamiques · {size:.1} Mio"
+  },
+  "could not check smart preview storage: {e}": "Impossible de vérifier le stockage des aperçus dynamiques : {e}",
+  "free space is unavailable for {path} on this platform": "L'espace libre de {path} est indisponible sur cette plateforme."
 }

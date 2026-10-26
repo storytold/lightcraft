@@ -135,7 +135,6 @@
   "the {n} selected photos": "le {n} foto selezionate",
   "the {} photos in view": "le {} foto nella vista",
   "these {count} photos": "queste {count} foto",
-  "{count} smart preview{} · {:.1} MB": "Anteprime avanzate: {count}{0:.0} · {1:.1} MB",
   "{f} folders (and their subfolders)": "{f} cartelle (e le loro sottocartelle)",
   "{label} Grading": "Gradazione di {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} su ogni foto selezionata",
@@ -305,5 +304,35 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "Destination: {path}": "Destinazione: {path}",
+  "Estimated total size: {size}": "Dimensioni totali stimate: {size}",
+  "Free space: {size}": "Spazio libero: {size}",
+  "Smart preview folder change failed: {error}": "Impossibile cambiare la cartella delle anteprime avanzate: {error}",
+  "could not check smart preview storage: {e}": "impossibile verificare lo spazio per le anteprime avanzate: {e}",
+  "free space is unavailable for {path} on this platform": "lo spazio libero per {path} non è disponibile su questa piattaforma",
+  "Photos: {count}": {
+    "one": "Foto: {count}",
+    "few": "Foto: {count}",
+    "many": "Foto: {count}",
+    "other": "Foto: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "Anteprime avanzate: {count} · {size:.1} MiB",
+    "few": "Anteprime avanzate: {count} · {size:.1} MiB",
+    "many": "Anteprime avanzate: {count} · {size:.1} MiB",
+    "other": "Anteprime avanzate: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". Anteprime esistenti mantenute invariate: {count}",
+    "few": ". Anteprime esistenti mantenute invariate: {count}",
+    "many": ". Anteprime esistenti mantenute invariate: {count}",
+    "other": ". Anteprime esistenti mantenute invariate: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}.",
+    "few": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}.",
+    "many": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}.",
+    "other": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}."
+  }
 }

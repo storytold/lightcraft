@@ -206,7 +206,6 @@
   "these {count} photos": "nämä kuvat ({count})",
   "{:.1} MB": "{:.1} Mt",
   "{count} more warnings.": "Varoituksia lisäksi: {count}.",
-  "{count} smart preview{} · {:.1} MB": "Älyesikatseluita: {count}{:.0} · {:.1} Mt",
   "{done} of {total}": "{done} / {total}",
   "{done} of {total} MB": "{done} / {total} Mt",
   "{file} · {size}": "{file} · {size}",
@@ -305,5 +304,35 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Destination: {path}": "Kohde: {path}",
+  "Estimated total size: {size}": "Arvioitu kokonaiskoko: {size}",
+  "Free space: {size}": "Vapaa tila: {size}",
+  "Smart preview folder change failed: {error}": "Älyesikatselujen kansion vaihto epäonnistui: {error}",
+  "could not check smart preview storage: {e}": "älyesikatselujen tallennustilaa ei voitu tarkistaa: {e}",
+  "free space is unavailable for {path} on this platform": "kohteen {path} vapaata tilaa ei voi selvittää tällä alustalla",
+  "Photos: {count}": {
+    "one": "Kuvia: {count}",
+    "few": "Kuvia: {count}",
+    "many": "Kuvia: {count}",
+    "other": "Kuvia: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "Älyesikatseluita: {count} · {size:.1} MiB",
+    "few": "Älyesikatseluita: {count} · {size:.1} MiB",
+    "many": "Älyesikatseluita: {count} · {size:.1} MiB",
+    "other": "Älyesikatseluita: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". Ennallaan säilytettyjä esikatseluita: {count}",
+    "few": ". Ennallaan säilytettyjä esikatseluita: {count}",
+    "many": ". Ennallaan säilytettyjä esikatseluita: {count}",
+    "other": ". Ennallaan säilytettyjä esikatseluita: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Älyesikatselujen kansio vaihdettiin. Poistamatta jääneitä lähdetiedostoja: {count}.",
+    "few": "Älyesikatselujen kansio vaihdettiin. Poistamatta jääneitä lähdetiedostoja: {count}.",
+    "many": "Älyesikatselujen kansio vaihdettiin. Poistamatta jääneitä lähdetiedostoja: {count}.",
+    "other": "Älyesikatselujen kansio vaihdettiin. Poistamatta jääneitä lähdetiedostoja: {count}."
+  }
 }

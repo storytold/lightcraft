@@ -79,7 +79,6 @@
   "the {n} selected photos": "{n} foto yang dipilih",
   "the {} photos in view": "{} foto yang ditampilkan",
   "these {count} photos": "{count} foto ini",
-  "{count} smart preview{} · {:.1} MB": "{count} pratinjau pintar{0:.0} · {1:.1} MB",
   "{f} folders (and their subfolders)": "{f} folder (beserta subfoldernya)",
   "{label} Grading": "Grading {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} pada setiap foto yang dipilih",
@@ -305,5 +304,35 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Destination: {path}": "Tujuan: {path}",
+  "Estimated total size: {size}": "Perkiraan ukuran total: {size}",
+  "Free space: {size}": "Ruang kosong: {size}",
+  "Smart preview folder change failed: {error}": "Perubahan folder pratinjau pintar gagal: {error}",
+  "could not check smart preview storage: {e}": "tidak dapat memeriksa penyimpanan pratinjau pintar: {e}",
+  "free space is unavailable for {path} on this platform": "ruang kosong untuk {path} tidak dapat diketahui di platform ini",
+  "Photos: {count}": {
+    "one": "Foto: {count}",
+    "few": "Foto: {count}",
+    "many": "Foto: {count}",
+    "other": "Foto: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} pratinjau pintar · {size:.1} MiB",
+    "few": "{count} pratinjau pintar · {size:.1} MiB",
+    "many": "{count} pratinjau pintar · {size:.1} MiB",
+    "other": "{count} pratinjau pintar · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} pratinjau yang ada dipertahankan tanpa perubahan",
+    "few": ". {count} pratinjau yang ada dipertahankan tanpa perubahan",
+    "many": ". {count} pratinjau yang ada dipertahankan tanpa perubahan",
+    "other": ". {count} pratinjau yang ada dipertahankan tanpa perubahan"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Folder pratinjau pintar diubah. {count} file sumber tidak dapat dihapus.",
+    "few": "Folder pratinjau pintar diubah. {count} file sumber tidak dapat dihapus.",
+    "many": "Folder pratinjau pintar diubah. {count} file sumber tidak dapat dihapus.",
+    "other": "Folder pratinjau pintar diubah. {count} file sumber tidak dapat dihapus."
+  }
 }

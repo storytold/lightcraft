@@ -422,6 +422,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                             | crate::state::Dialog::SamModel { .. }
                             | crate::state::Dialog::SmartRules { .. }
                             | crate::state::Dialog::SaveEffect { .. }
+                            | crate::state::Dialog::BuildSmartPreviews { .. }
                             | crate::state::Dialog::CaptureTime { .. }
                     ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
