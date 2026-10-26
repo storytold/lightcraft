@@ -3021,6 +3021,7 @@ fn the_bounded_video_reader_skips_an_mdat_before_moov() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A moov over the 64 MiB metadata cap is refused instead of read.
 #[test]
 fn a_moov_over_the_metadata_cap_is_refused_without_reading_it() {
     let src = temp_dir("video-big-moov");
@@ -3042,6 +3043,7 @@ fn a_moov_over_the_metadata_cap_is_refused_without_reading_it() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A PNG named .mp4 is probed as the PNG it is, not catalogued as a video.
 #[test]
 fn a_file_named_mp4_that_is_not_a_container_is_probed_as_what_it_is() {
     let src = temp_dir("video-misnamed");
@@ -3059,6 +3061,7 @@ fn a_file_named_mp4_that_is_not_a_container_is_probed_as_what_it_is() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A video’s top-level XMP title and keywords reach the catalogued photo.
 #[test]
 fn a_clip_carries_its_top_level_xmp_into_the_catalog() {
     // Some cameras and editors write XMP in a top-level `uuid` box: the bounded reader keeps it,
@@ -3092,6 +3095,7 @@ fn a_clip_carries_its_top_level_xmp_into_the_catalog() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {
     use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};

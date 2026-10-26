@@ -69,6 +69,7 @@ fn merge(dst: &mut Value, patch: &Value, depth: usize) {
     }
 }
 
+/// The print module's state for the current selection, excluding videos (which have no frame).
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
     // a video has no frame to print: it does not take a cell or a page (print.exportPdf skips it)
     Ok(state(s, printable_count(s, p)?))
@@ -239,6 +240,7 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"pages": 1, "cells": 0}))
 }
 
+/// Print the current layout to a PDF, skipping videos with a per-file warning.
 fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.exportPdf";
     let path = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(ID, "missing path"))?;

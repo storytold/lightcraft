@@ -168,6 +168,7 @@ fn photos_imports(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// The export commands and their contact-sheet variant.
 pub fn specs() -> Vec<CommandSpec> {
     #[allow(unused_mut)]
     let mut v = vec![

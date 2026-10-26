@@ -333,6 +333,7 @@ fn unwritable_targets_and_long_videos_are_errors() {
     assert!(e.to_string().contains("limited to 120 min"), "{e}");
 }
 
+/// A video in a slideshow is skipped with a warning; the photo slide still exports.
 #[test]
 fn a_video_in_a_slideshow_is_skipped_with_a_warning() {
     use lightcraft_catalog::{MediaKind, Op, Photo, Source};

@@ -139,10 +139,12 @@ impl Queue {
         self.lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Waits until a lane frees a slot or the batch stops.
     fn wait<'a>(&self, g: std::sync::MutexGuard<'a, Lane>) -> std::sync::MutexGuard<'a, Lane> {
         self.cv.wait(g).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Record photo `i`'s result and wake the placer waiting on it.
     fn finish(&self, i: usize, r: Result<Ran, String>) {
         self.lock().done.insert(i, r);
         self.cv.notify_all();

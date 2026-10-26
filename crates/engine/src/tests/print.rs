@@ -509,6 +509,7 @@ fn every_print_command_is_registered_with_a_description() {
     }
 }
 
+/// A video in the print is skipped with a warning; only clips is a clear error.
 #[test]
 fn a_video_in_the_print_is_skipped_with_a_warning() {
     use lightcraft_catalog::{MediaKind, Op, Photo, Source};

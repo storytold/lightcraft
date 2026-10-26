@@ -74,6 +74,8 @@ pub struct Document {
     pub photos: usize,
 }
 
+/// Sets up the PDF for `photos`: videos are left off the sheet with a warning (their cells
+/// reflow), and the returned [`Prepared`] holds one render job per remaining photo.
 pub fn prepare(session: &mut Session, p: &Value) -> Result<Prepared, String> {
     let options = Options::parse(p)?;
     if let Some(ids) = p.get("ids") {
@@ -122,6 +124,7 @@ impl Prepared {
         self.items.len()
     }
 
+    /// Whether no photo remains for the sheet (all were videos).
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -224,6 +227,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Out-of-range settings, bad ids and too many pages are refused.
     #[test]
     fn validates_settings_and_selection() {
         let mut s = Session::with_demo();
@@ -247,6 +251,7 @@ mod tests {
         assert!(prepare(&mut s, &json!({"ids": vec![id; 101], "columns": 1, "rows": 1})).is_err());
     }
 
+    /// A video is left off the sheet with a warning; only clips is a clear error.
     #[test]
     fn a_video_is_left_off_the_sheet_with_a_warning() {
         use lightcraft_catalog::{MediaKind, Op, Photo, Source};

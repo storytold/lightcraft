@@ -114,6 +114,8 @@ pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::Ph
     ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone())).collect()
 }
 
+/// One photo's export, with the batch's shared guard against overwriting an original. `Err` when
+/// the photo can't be exported; a video in a rendered format becomes a [`Work::Skip`] instead.
 fn prepare_guarded(
     session: &mut crate::Session,
     id: lightcraft_catalog::PhotoId,
@@ -224,6 +226,8 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
 }
 
 impl PreparedExport {
+    /// Run the prepared export: the encoded bytes to write, or (for a video in a rendered
+    /// format) the reason the batch leaves it out.
     pub fn run(self) -> Result<Ran, String> {
         let file_name = self.file_name;
         match self.work {

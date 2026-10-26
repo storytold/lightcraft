@@ -791,6 +791,7 @@ mod tests {
         out
     }
 
+    /// A 64-bit mdat before moov is skipped by the box walk, not treated as metadata.
     #[test]
     fn mdat_before_moov_and_a_64_bit_mdat_size() {
         let file = synthetic_mp4(60, 600, 1920, 1080, 0);
@@ -807,6 +808,7 @@ mod tests {
         assert_eq!((meta.duration, meta.width, meta.height), (Some(10.0), 1920, 1080));
     }
 
+    /// Apple mdta creation date, make and model are read from meta/keys/ilst.
     #[test]
     fn quicktime_creation_date_and_camera_come_from_mdta() {
         let file = synthetic_mp4(60, 600, 1920, 1080, 0);
@@ -822,6 +824,7 @@ mod tests {
         assert_eq!(meta.metadata.model.as_deref(), Some("iPhone 17 Pro"));
     }
 
+    /// A 90-degree display matrix is read as Rotate90.
     #[test]
     fn rotated_90_degrees_matrix_detected() {
         let mut bytes = synthetic_mp4(1000, 5000, 1920, 1080, 0);
@@ -869,6 +872,7 @@ mod tests {
         }
     }
 
+    /// Empty, short and every truncated prefix of a synthetic movie return gracefully.
     #[test]
     fn corrupted_and_truncated_buffers_do_not_panic() {
         assert_eq!(probe_video(b""), None);
