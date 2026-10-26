@@ -445,6 +445,32 @@ mod ci_jobs_tests {
         assert!(!set_by_caller("CARGO_BUILD_JOBS", env(&[(MARKER, "4")])));
     }
 
+    /// The `RUST_TEST_THREADS` a capped run's test binaries get in environment `vars` when `ci`'s
+    /// RAM-aware value is `cap`: the cap where the caller didn't set it, else the environment's.
+    fn test_threads(vars: &[(&str, &str)], cap: &str) -> String {
+        let caps = [("RUST_TEST_THREADS", cap.to_owned())];
+        let get = env(vars);
+        let set = crate::caps_to_set(&caps, |key| crate::set_by_caller(key, &get));
+        match set.first() {
+            Some((_, value)) => (*value).to_owned(),
+            None => get("RUST_TEST_THREADS").unwrap().into_string().unwrap(),
+        }
+    }
+
+    #[test]
+    fn an_explicit_test_thread_count_wins_except_one_equal_to_the_config_default() {
+        const MARKER: &str = crate::TEST_THREADS_DEFAULT_MARKER;
+        let threads = "RUST_TEST_THREADS";
+        assert_eq!(test_threads(&[(threads, "9"), (MARKER, "4")], "2"), "9", "explicit 9 is kept");
+        assert_eq!(test_threads(&[(threads, "2"), (MARKER, "4")], "3"), "2", "explicit 2 is kept");
+        assert_eq!(test_threads(&[(threads, "4"), (MARKER, "4")], "2"), "2", "the config default yields to the RAM-aware cap");
+        // An explicit RUST_TEST_THREADS=4 looks the same as the config default (documented): it
+        // may be lowered, never raised.
+        assert_eq!(test_threads(&[(threads, "4"), (MARKER, "4")], "2"), "2", "explicit 4 under cargo is lowered like the default");
+        assert_eq!(test_threads(&[(threads, "4")], "2"), "4", "no marker (xtask run outside cargo): 4 is the caller's");
+        assert_eq!(test_threads(&[(MARKER, "4")], "3"), "3", "unset: the cap");
+    }
+
     /// The quoted `value` of the `key = { value = "…", … }` line in `.cargo/config.toml`'s `[env]`.
     fn config_env(config: &str, key: &str) -> Option<(String, String)> {
         let line = config.lines().find(|l| l.split('=').next().is_some_and(|k| k.trim() == key))?;

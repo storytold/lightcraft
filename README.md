@@ -427,8 +427,10 @@ unchanged. Explicit `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS`, `RUST_TEST_TH
 plain `cargo test` to 4 tests at once in each test binary (`RUST_TEST_THREADS=4` unless the
 environment sets it; libtest's own default is one per CPU), and `.config/nextest.toml` does the same
 for `cargo nextest run`. `cargo xtask` inherits that default but doesn't count it as an explicit
-setting: a marker beside it (`LIGHTCRAFT_TEST_THREADS_DEFAULT`) tells it apart, so `ci` still
-lowers the threads on a machine short of RAM. The tests run under
+setting (a marker beside it, `LIGHTCRAFT_TEST_THREADS_DEFAULT`, tells it apart), so `ci` still
+lowers the threads on a machine short of RAM. An explicit `RUST_TEST_THREADS` other than 4 wins
+as-is; an explicit 4 can't be told apart from the default, so `ci` and `cargo xtask test` may lower
+it to their RAM-aware value (never raise it). The tests run under
 `cargo test`; `LIGHTCRAFT_NEXTEST=1` runs them under [cargo-nextest](https://nexte.st) instead (one
 process per test, slower here because each regenerates the demo scenes). Ordinary development commands keep their own settings.
 
