@@ -3800,6 +3800,7 @@ dependencies = [
  "lightcraft-scenes",
  "lightcraft-segment",
  "lightcraft-slideshow",
+ "lightcraft-sysmem",
  "lightcraft-testkit",
  "log",
  "miniz_oxide 0.9.1",
