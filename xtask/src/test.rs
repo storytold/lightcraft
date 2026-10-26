@@ -155,27 +155,61 @@ fn names<'a>(packages: impl Iterator<Item = &'a Package>) -> String {
     packages.map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
 }
 
+/// The resource limits a test binary run directly gets, where the environment doesn't set them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caps {
+    /// `cargo xtask test`: all of CI's caps ([`super::apply_ci_caps`]), so `RUST_TEST_THREADS` is
+    /// the RAM-aware `min(build jobs by available RAM, 4)` that `ci`'s cargo runs get.
+    Ci,
+    /// `ci --quick`: only `RUST_TEST_THREADS = min(CPUs, 4)`, its default before `test` existed.
+    QuickCi,
+}
+
 /// Run one test binary as `cargo test` would (from its package's directory, with its
-/// `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`) under CI's caps, with `args`; skips the tests record
+/// `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`) under `caps`, with `args`; skips the tests record
 /// go to `skip_log`. The one place `test` and `ci --quick` start a test binary and wait for it.
-pub fn run_binary(root: &Path, binary: &Binary, args: &[&str], skip_log: Option<&Path>) -> Result<(), String> {
+/// The error says how it ended: its exit status, the signal that killed it, or why it didn't start.
+pub fn run_binary(root: &Path, binary: &Binary, args: &[&str], skip_log: Option<&Path>, caps: Caps) -> Result<(), String> {
     let dir = Path::new(&binary.manifest).parent().unwrap_or(root);
     let mut c = Command::new(&binary.exe);
     c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", &binary.package).args(args);
     if let Some(log) = skip_log {
         c.env(crate::ci_report::SKIP_LOG_ENV, log);
     }
-    super::apply_ci_caps(&mut c);
+    match caps {
+        Caps::Ci => super::apply_ci_caps(&mut c),
+        Caps::QuickCi => {
+            if std::env::var_os("RUST_TEST_THREADS").is_none() {
+                // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
+                c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
+            }
+        }
+    }
     let shown = std::iter::once(binary.label()).chain(args.iter().map(|a| (*a).to_owned())).collect::<Vec<_>>().join(" ");
-    super::run(c, &shown)
+    eprintln!("$ {shown}");
+    let status = c.status().map_err(|e| format!("failed to start: {e}"))?;
+    if status.success() { Ok(()) } else { Err(describe(status)) }
+}
+
+/// How a process that failed ended: `exit status: 101`, or on Unix the signal that killed it
+/// (`signal: 9 (SIGKILL)`), with a hint for SIGKILL, which is what the out-of-memory killer sends.
+pub fn describe(status: std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if status.signal() == Some(9) {
+            return format!("{status}: killed, maybe for running out of memory");
+        }
+    }
+    status.to_string()
 }
 
 /// The outcome of running a list of test binaries.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Outcome {
     pub passed: usize,
-    /// The labels of the binaries that failed.
-    pub failed: Vec<String>,
+    /// The labels of the binaries that failed, each with how it ended.
+    pub failed: Vec<(String, String)>,
     /// Binaries not run: the run stopped at the first failure.
     pub not_run: usize,
 }
@@ -184,11 +218,11 @@ pub struct Outcome {
 pub fn run_all(binaries: &[Binary], keep_going: bool, mut run_one: impl FnMut(&Binary) -> Result<(), String>) -> Outcome {
     let mut outcome = Outcome::default();
     for (i, binary) in binaries.iter().enumerate() {
-        if run_one(binary).is_ok() {
+        let Err(error) = run_one(binary) else {
             outcome.passed += 1;
             continue;
-        }
-        outcome.failed.push(binary.label());
+        };
+        outcome.failed.push((binary.label(), error));
         if !keep_going {
             outcome.not_run = binaries.len().saturating_sub(i + 1);
             break;
@@ -206,8 +240,12 @@ pub fn selected(root: &Path, packages: &BTreeSet<String>, skip_log: &Path) -> Re
         println!("no test binaries in {}", names(packages.values()));
         return Ok(());
     }
-    let outcome = run_all(&binaries, true, |b| run_binary(root, b, &[], Some(skip_log)));
-    if outcome.failed.is_empty() { Ok(()) } else { Err(format!("tests failed in {}", outcome.failed.join(", "))) }
+    let outcome = run_all(&binaries, true, |b| run_binary(root, b, &[], Some(skip_log), Caps::QuickCi));
+    if outcome.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("tests failed in {}", outcome.failed.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ")))
+    }
 }
 
 /// The `cargo nextest run` arguments for `args`: the workspace build, the `-p` packages as a
@@ -229,7 +267,8 @@ pub fn nextest_args<'a>(args: &Args<'a>) -> Vec<String> {
 }
 
 /// The `cargo test --doc` arguments for `args`: the workspace's doctests, or those of the `-p`
-/// packages that have a library (`None` when none has).
+/// packages that have a library (`None` when none has); `--no-fail-fast` for `--keep-going`, so a
+/// package's failing doctests don't stop the next package's.
 pub fn doc_args<'a>(args: &Args<'a>, packages: &BTreeMap<String, Package>) -> Option<Vec<String>> {
     let mut v = vec!["test".to_owned(), "--doc".to_owned()];
     if args.packages.is_empty() {
@@ -242,6 +281,9 @@ pub fn doc_args<'a>(args: &Args<'a>, packages: &BTreeMap<String, Package>) -> Op
         for p in libs {
             v.extend(["-p".to_owned(), p.name.clone()]);
         }
+    }
+    if args.keep_going {
+        v.push("--no-fail-fast".to_owned());
     }
     if !args.test_args.is_empty() {
         v.push("--".to_owned());
@@ -265,15 +307,15 @@ pub fn run(raw: &[&str]) -> Result<(), String> {
         let nextest = nextest_args(&args);
         let mut c = super::cargo();
         c.args(["nextest", "run"]).args(&nextest);
-        if super::run(c, &format!("cargo nextest run {}", nextest.join(" "))).is_err() {
-            failed.push("cargo nextest run".to_owned());
+        if let Err(e) = super::run(c, &format!("cargo nextest run {}", nextest.join(" "))) {
+            failed.push(("cargo nextest run".to_owned(), e));
         }
     } else {
         let binaries = build(&packages, args.packages.is_empty())?;
         if binaries.is_empty() {
             println!("no test binaries in {}", names(packages.values()));
         }
-        let outcome = run_all(&binaries, args.keep_going, |b| run_binary(&root, b, &args.test_args, None));
+        let outcome = run_all(&binaries, args.keep_going, |b| run_binary(&root, b, &args.test_args, None, Caps::Ci));
         summary.push(format!("{} of {} test binaries passed", outcome.passed, binaries.len()));
         if outcome.not_run > 0 {
             summary.push(format!("{} not run after the first failure (--keep-going runs them)", outcome.not_run));
@@ -287,8 +329,8 @@ pub fn run(raw: &[&str]) -> Result<(), String> {
             Some(doc) => {
                 let mut c = super::cargo();
                 c.args(&doc);
-                if super::run(c, &format!("cargo {}", doc.join(" "))).is_err() {
-                    failed.push("doctests".to_owned());
+                if let Err(e) = super::run(c, &format!("cargo {}", doc.join(" "))) {
+                    failed.push(("doctests".to_owned(), e));
                 }
             }
             None => println!("no doctests: none of {} has a library", names(packages.values())),
@@ -299,10 +341,10 @@ pub fn run(raw: &[&str]) -> Result<(), String> {
         println!("  all passed");
         return Ok(());
     }
-    for f in &failed {
-        println!("  FAIL  {f}");
+    for (label, error) in &failed {
+        println!("  FAIL  {label}: {error}");
     }
-    Err(format!("tests failed in {}", failed.join(", ")))
+    Err(format!("tests failed in {}", failed.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>().join(", ")))
 }
 
 #[cfg(test)]
@@ -394,7 +436,8 @@ mod tests {
             fail(b)
         });
         assert_eq!(ran, ["a", "b", "c", "d"]);
-        assert_eq!(outcome, Outcome { passed: 2, failed: vec!["b (b-0)".into(), "d (d-0)".into()], not_run: 0 });
+        let failed = vec![("b (b-0)".into(), "exit 101".into()), ("d (d-0)".into(), "exit 101".into())];
+        assert_eq!(outcome, Outcome { passed: 2, failed, not_run: 0 });
     }
 
     #[test]
@@ -406,7 +449,7 @@ mod tests {
             if b.package == "b" { Err("exit 101".to_owned()) } else { Ok(()) }
         });
         assert_eq!(ran, ["a", "b"]);
-        assert_eq!(outcome, Outcome { passed: 1, failed: vec!["b (b-0)".into()], not_run: 2 });
+        assert_eq!(outcome, Outcome { passed: 1, failed: vec![("b (b-0)".into(), "exit 101".into())], not_run: 2 });
         assert_eq!(run_all(&binaries, false, |_| Ok(())), Outcome { passed: 4, failed: vec![], not_run: 0 });
     }
 
@@ -428,7 +471,38 @@ mod tests {
         let args = parse(&["-p", "a", "-p", "b", "--doc", "--", "x"]).unwrap();
         let sel = packages(&metadata(), &args.packages).unwrap();
         assert_eq!(doc_args(&args, &sel).unwrap(), ["test", "--doc", "-p", "a", "--", "x"], "b has no library");
+        let keep_going = parse(&["-p", "a", "--doc", "--keep-going", "--", "x"]).unwrap();
+        assert_eq!(doc_args(&keep_going, &sel).unwrap(), ["test", "--doc", "-p", "a", "--no-fail-fast", "--", "x"], "cargo's flag, before `--`");
+        assert_eq!(doc_args(&parse(&["--keep-going"]).unwrap(), &all).unwrap(), ["test", "--doc", "--workspace", "--no-fail-fast"]);
         let bin_only = parse(&["-p", "b"]).unwrap();
         assert_eq!(doc_args(&bin_only, &packages(&metadata(), &bin_only.packages).unwrap()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_says_how_the_binary_ended() {
+        use std::os::unix::process::ExitStatusExt;
+        // wait(2) statuses: an exit code in the high byte, a terminating signal in the low bits
+        assert_eq!(describe(std::process::ExitStatus::from_raw(101 << 8)), "exit status: 101");
+        let killed = describe(std::process::ExitStatus::from_raw(9));
+        assert!(killed.contains("SIGKILL") && killed.contains("out of memory"), "{killed}");
+        assert!(describe(std::process::ExitStatus::from_raw(11)).contains("SIGSEGV"));
+    }
+
+    #[test]
+    fn a_binary_that_cannot_start_reports_why() {
+        let missing = Binary { package: "a".into(), manifest: "/nonexistent/a/Cargo.toml".into(), exe: "/nonexistent/a/target/a-0".into() };
+        let err = run_binary(Path::new("/nonexistent"), &missing, &[], None, Caps::QuickCi).unwrap_err();
+        assert!(err.starts_with("failed to start:"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_binary_reports_its_exit_status() {
+        let binary = Binary { package: "sh".into(), manifest: "/Cargo.toml".into(), exe: "/bin/sh".into() };
+        let err = run_binary(Path::new("/"), &binary, &["-c", "exit 3"], None, Caps::QuickCi).unwrap_err();
+        assert_eq!(err, "exit status: 3");
+        let err = run_binary(Path::new("/"), &binary, &["-c", "kill -9 $$"], None, Caps::QuickCi).unwrap_err();
+        assert!(err.contains("SIGKILL"), "{err}");
     }
 }
