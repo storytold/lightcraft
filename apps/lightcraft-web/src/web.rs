@@ -75,6 +75,8 @@ struct Options {
     reset: bool,
     /// `?host=parent`: framed by a same-origin page that opens and saves the photo ([`host`]).
     host: bool,
+    /// `?host_origin=`: a cross-origin parent the page accepts as the host ([`host`]).
+    host_origin: Option<String>,
 }
 
 impl Options {
@@ -96,6 +98,7 @@ impl Options {
             workers: get("workers").and_then(|v| v.parse().ok()),
             reset: get("reset").is_some(),
             host: get("host").as_deref() == Some("parent"),
+            host_origin: get("host_origin").and_then(|v| js_sys::decode_uri_component(&v).ok()).map(String::from),
         }
     }
 }
@@ -412,8 +415,9 @@ struct WebApp {
     first_frame_logged: bool,
     last_save: f64,
     ui_written: Vec<u8>,
-    /// Host mode: the photo the parent opened and its edit settings when opened or last exported.
-    hosted: Option<(PhotoId, Arc<DevelopSettings>)>,
+    /// Host mode: each photo the parent opened and its edit settings when opened or when an
+    /// export of it was last confirmed.
+    hosted: crate::bridge::Baselines<PhotoId, Arc<DevelopSettings>>,
 }
 
 impl WebApp {
@@ -517,7 +521,7 @@ impl WebApp {
             first_frame_logged: false,
             last_save: 0.0,
             ui_written,
-            hosted: None,
+            hosted: Default::default(),
         }
     }
 
@@ -553,17 +557,41 @@ impl WebApp {
         let Some((id, develop)) = id.and_then(|id| Some((id, self.app.session.catalog.photo(id)?.develop.clone()))) else { return };
         self.app.session.selection = lightcraft_engine::Selection { ids: vec![id], active: Some(id) };
         self.app.ui.view = lightcraft_ui_egui::state::ViewMode::Detail;
-        self.hosted = Some((id, develop));
+        self.hosted.opened(id, develop);
     }
 
-    /// Host mode: report whether the photo's edits differ from those it was opened or last exported with.
-    fn report_dirty(&mut self) {
-        let Some((id, baseline)) = &mut self.hosted else { return };
-        let Some(now) = self.app.session.catalog.photo(*id).map(|p| p.develop.clone()) else { return };
-        if host::take_saved() {
-            *baseline = now.clone();
+    /// Host mode: tell the bridge what an export this frame would be of (the selected hosted
+    /// photos, at their current settings), so a confirmed export cleans only those.
+    fn note_exporting(&self) {
+        if !host::is_hosted() {
+            return;
         }
-        host::dirty(*baseline != now);
+        let catalog = &self.app.session.catalog;
+        let of = self
+            .app
+            .session
+            .selection
+            .ids
+            .iter()
+            .filter(|id| self.hosted.hosts(id))
+            .filter_map(|id| Some((*id, catalog.photo(*id)?.develop.clone())))
+            .collect();
+        host::set_exporting(of);
+    }
+
+    /// Host mode: report whether any hosted photo's edits differ from its baseline (opened, or
+    /// last confirmed export).
+    fn report_dirty(&mut self, ctx: &egui::Context) {
+        if !host::is_hosted() {
+            return;
+        }
+        let (confirmed, waiting) = host::take_confirmed();
+        self.hosted.confirmed(confirmed);
+        if waiting {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        let catalog = &self.app.session.catalog;
+        host::dirty(self.hosted.dirty(|id| catalog.photo(*id).map(|p| p.develop.clone())));
     }
 
     /// Load originals the main thread asked for (and the active photo's, ahead of time).
@@ -701,8 +729,9 @@ impl eframe::App for WebApp {
             // its own thread, so it gets the budget every frame and applies it on the next store.
             w.set_budget(self.app.session.cache_bytes());
         }
+        self.note_exporting();
         self.app.logic(ctx);
-        self.report_dirty();
+        self.report_dirty(ctx);
         self.save();
         if let Some(b) = self.bench.as_mut()
             && let Some(report) = b.step(&mut self.app)
@@ -771,7 +800,7 @@ pub fn start(chinese_font: Vec<u8>) {
         log::warn!("lightcraft: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");
     }
     let mut opts = Options::from_url();
-    if opts.host && host::connect() {
+    if opts.host && host::connect(opts.host_origin.as_deref()) {
         // one photo at a time, kept in memory: no library in browser storage, no demo photos
         opts.store = "memory".into();
     }

@@ -5,16 +5,22 @@
 //! - `lightcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
 //!   `Uint8Array` of any format LightCraft imports (JPEG, PNG, TIFF, WebP, DNG and camera raws…).
 //!   It is imported like a dropped file, selected and shown in the Detail (edit) view.
-//! - `lightcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
+//! - `lightcraft:save` (to the parent): `{ id, name, bytes }` (a transferred `ArrayBuffer`) for every
 //!   file LightCraft would otherwise download: Export (`<photo name>.jpg` by default, or what the
-//!   Export dialog chose), Export with Previous and the other exports. An export marks the photo
-//!   clean.
+//!   Export dialog chose), Export with Previous and the other exports.
+//! - `lightcraft:saved` (from the parent): `{ id }`, the file from that `lightcraft:save` is stored.
+//!   Only then are the hosted photos that export was of marked clean; without it within 30 s the
+//!   app posts `lightcraft:failed { id, error }` and they stay dirty.
 //! - `lightcraft:dirty` (to the parent): `{ dirty }` whenever the opened photo's edit settings
-//!   differ from those it was opened or last exported with.
+//!   differ from those it was opened or last exported with (per hosted photo).
 //! - `lightcraft:failed` (to the parent): `{ error }` when the app couldn't start, or when a
-//!   `lightcraft:open` file is over the size cap ([`crate::backup::MAX_BYTES`]).
+//!   `lightcraft:open` file is over the size cap ([`crate::backup::MAX_BYTES`]), or an export went
+//!   unconfirmed.
 //!
-//! Only the parent window on the page's own origin is heard or answered. In host mode the library
+//! The bridge is installed only for a same-origin parent, or for a parent on the origin named by
+//! `?host_origin=` (a bare `scheme://host[:port]` origin); messages go to that exact origin and only
+//! the parent window on it is heard. A cross-origin parent without `host_origin` gets no bridge:
+//! the page runs as usual and exports download. In host mode the library
 //! lives in memory only (no browser storage, no demo photos, no one-tab lock) and the parent guards
 //! leaving the page. LightCraft has no user name, so `?author=` is ignored.
 
@@ -23,6 +29,14 @@ use std::cell::{Cell, RefCell};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
+
+use lightcraft_engine::catalog::PhotoId;
+use lightcraft_engine::develop::DevelopSettings;
+
+use crate::bridge::SaveAcks;
+
+/// Hosted photos and their edit settings, as an export had them.
+pub type Exported = Vec<(PhotoId, std::sync::Arc<DevelopSettings>)>;
 
 struct Bridge {
     parent: web_sys::Window,
@@ -35,15 +49,23 @@ thread_local! {
     static INBOX: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// The unsaved-changes state last reported to the parent.
     static REPORTED: Cell<Option<bool>> = const { Cell::new(None) };
-    /// A file went to the parent since the last [`take_saved`].
-    static SAVED: Cell<bool> = const { Cell::new(false) };
+    /// What an export written now would be of (set each frame by the app: the selected hosted photos).
+    static EXPORTING: RefCell<Exported> = const { RefCell::new(Vec::new()) };
+    /// Exports waiting for `lightcraft:saved`.
+    static ACKS: RefCell<SaveAcks<Exported>> = RefCell::new(SaveAcks::default());
+    /// Exports the parent confirmed since the last [`take_confirmed`].
+    static CONFIRMED: RefCell<Exported> = const { RefCell::new(Vec::new()) };
 }
 
-/// Connect to the parent when the page is framed; false when it isn't.
-pub fn connect() -> bool {
+/// Connect to the parent when the page is framed by a same-origin parent, or by the parent on
+/// `host_origin`; false otherwise (no bridge).
+pub fn connect(host_origin: Option<&str>) -> bool {
     let Some(window) = web_sys::window() else { return false };
     let Some(parent) = window.parent().ok().flatten().filter(|p| !js_sys::Object::is(p, &window)) else { return false };
-    let Ok(origin) = window.location().origin() else { return false };
+    let Ok(own) = window.location().origin() else { return false };
+    // Reading a cross-origin parent's location throws: treat that as cross-origin.
+    let parent_origin = parent.location().origin().ok();
+    let Some(origin) = crate::bridge::target_origin(&own, parent_origin.as_deref(), host_origin) else { return false };
     listen(&window, parent.clone(), origin.clone());
     BRIDGE.with(|b| *b.borrow_mut() = Some(Bridge { parent, origin }));
     true
@@ -59,20 +81,43 @@ pub fn save(name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         let b = b.borrow();
         let b = b.as_ref()?;
         let buffer = js_sys::Uint8Array::from(bytes).buffer();
-        let r = match message(&[("type", "lightcraft:save".into()), ("name", name.into()), ("bytes", buffer.clone().into())]) {
-            Some(m) => b.parent.post_message_with_transfer(&m, &b.origin, &js_sys::Array::of1(&buffer)).map_err(|e| format!("couldn't hand {name} to the page: {e:?}")),
+        let of = EXPORTING.with(|e| e.borrow().clone());
+        let id = ACKS.with(|a| a.borrow_mut().posted(name, of, js_sys::Date::now()));
+        let r = match message(&[
+            ("type", "lightcraft:save".into()),
+            ("id", JsValue::from_f64(id as f64)),
+            ("name", name.into()),
+            ("bytes", buffer.clone().into()),
+        ]) {
+            Some(m) => b
+                .parent
+                .post_message_with_transfer(&m, &b.origin, &js_sys::Array::of1(&buffer))
+                .map_err(|e| format!("couldn't hand {name} to the page: {e:?}")),
             None => Err("couldn't build the message".into()),
         };
-        if r.is_ok() {
-            SAVED.with(|s| s.set(true));
+        if r.is_err() {
+            ACKS.with(|a| a.borrow_mut().failed(id));
         }
         Some(r)
     })
 }
 
-/// Whether a file went to the parent since the last call.
-pub fn take_saved() -> bool {
-    SAVED.with(|s| s.replace(false))
+/// What an export written from now on is of.
+pub fn set_exporting(of: Exported) {
+    EXPORTING.with(|e| *e.borrow_mut() = of);
+}
+
+/// Exports the parent confirmed since the last call; fails the ones it didn't confirm in time.
+/// True while exports are still waiting.
+pub fn take_confirmed() -> (Exported, bool) {
+    for (id, name) in ACKS.with(|a| a.borrow_mut().expire(js_sys::Date::now())) {
+        send(&[
+            ("type", "lightcraft:failed".into()),
+            ("id", JsValue::from_f64(id as f64)),
+            ("error", format!("{name}: the host page didn't confirm the export").into()),
+        ]);
+    }
+    (CONFIRMED.with(|c| std::mem::take(&mut *c.borrow_mut())), ACKS.with(|a| a.borrow().waiting()))
 }
 
 /// Photos the parent sent since the last call.
@@ -106,8 +151,19 @@ fn listen(window: &web_sys::Window, parent: web_sys::Window, origin: String) {
             return;
         }
         let data = event.data();
-        if string(&data, "type").as_deref() != Some("lightcraft:open") {
-            return;
+        match string(&data, "type").as_deref() {
+            Some("lightcraft:open") => {}
+            Some("lightcraft:saved") => {
+                let id = js_sys::Reflect::get(&data, &JsValue::from_str("id")).ok().and_then(|v| v.as_f64());
+                if let Some(of) =
+                    id.filter(|id| id.is_finite() && *id >= 0.0 && id.fract() == 0.0).and_then(|id| ACKS.with(|a| a.borrow_mut().saved(id as u64)))
+                {
+                    CONFIRMED.with(|c| c.borrow_mut().extend(of));
+                    crate::web::request_repaint();
+                }
+                return;
+            }
+            _ => return,
         }
         let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Photo.jpg".to_string());
         let Some(bytes) = bytes(&data) else { return };

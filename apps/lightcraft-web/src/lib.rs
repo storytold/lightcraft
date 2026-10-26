@@ -18,6 +18,7 @@
 
 pub mod backup;
 pub mod bench;
+pub mod bridge;
 pub mod files;
 pub mod store;
 pub mod wire;

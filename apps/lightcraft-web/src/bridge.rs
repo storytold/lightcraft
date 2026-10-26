@@ -1,0 +1,210 @@
+//! The host bridge's decisions, kept free of `web_sys` so they are tested natively: which parent
+//! origin the bridge may talk to, and which saves the parent has confirmed.
+
+use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
+
+/// How long the parent has to answer `lightcraft:save` with `lightcraft:saved` (milliseconds).
+pub const SAVE_ACK_TIMEOUT_MS: f64 = 30_000.0;
+
+/// The origin the bridge posts to and hears from, or `None` for no bridge (saves download).
+///
+/// - `own`: this page's origin.
+/// - `parent`: the parent window's origin, `None` when reading it threw (a cross-origin parent).
+/// - `allowed`: the `?host_origin=` query value, an origin the embedding page vouches for.
+///
+/// A same-origin parent is accepted. A cross-origin parent is accepted only when `allowed` is a
+/// valid URL origin (`scheme://host[:port]`, nothing else); messages then go to that exact origin,
+/// so the browser drops them if the parent is anything else. Opaque origins (`"null"`) never match.
+pub fn target_origin(own: &str, parent: Option<&str>, allowed: Option<&str>) -> Option<String> {
+    if let Some(parent) = parent
+        && parent == own
+        && is_origin(own)
+    {
+        return Some(own.to_string());
+    }
+    let allowed = allowed?.trim();
+    is_origin(allowed).then(|| allowed.to_string())
+}
+
+/// True for a serialised URL origin: `http(s)://host[:port]` with no path, query, fragment or
+/// credentials.
+pub fn is_origin(s: &str) -> bool {
+    let Some((scheme, rest)) = s.split_once("://") else { return false };
+    if !matches!(scheme, "http" | "https") || rest.is_empty() {
+        return false;
+    }
+    // IPv6 literals aren't accepted; name the host instead.
+    if rest.contains(['/', '?', '#', '@', ' ', '\\', '[', ']']) {
+        return false;
+    }
+    let (host, port) = match rest.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (rest, None),
+    };
+    if host.is_empty() {
+        return false;
+    }
+    match port {
+        Some(p) => p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok(),
+        None => true,
+    }
+}
+
+/// Exports posted to the parent and not yet confirmed. Each carries `T`: what the export was of
+/// (for LightCraft, the hosted photos and their edit settings when it was handed over).
+#[derive(Debug)]
+pub struct SaveAcks<T> {
+    next_id: u64,
+    /// Request id → (file name, deadline in ms, what was exported).
+    pending: BTreeMap<u64, (String, f64, T)>,
+}
+
+impl<T> Default for SaveAcks<T> {
+    fn default() -> Self {
+        Self { next_id: 0, pending: BTreeMap::new() }
+    }
+}
+
+impl<T> SaveAcks<T> {
+    /// Record a save posted at `now`; returns its request id.
+    pub fn posted(&mut self, name: &str, of: T, now: f64) -> u64 {
+        self.next_id = self.next_id.wrapping_add(1);
+        self.pending.insert(self.next_id, (name.to_string(), now + SAVE_ACK_TIMEOUT_MS, of));
+        self.next_id
+    }
+
+    /// The parent confirmed request `id`: what it was of, or `None` when no such save is waiting.
+    pub fn saved(&mut self, id: u64) -> Option<T> {
+        self.pending.remove(&id).map(|(_, _, of)| of)
+    }
+
+    /// Request `id` couldn't be sent; forget it.
+    pub fn failed(&mut self, id: u64) -> Option<String> {
+        self.pending.remove(&id).map(|(name, _, _)| name)
+    }
+
+    /// Saves past their deadline at `now`, removed and returned as `(id, name)`.
+    pub fn expire(&mut self, now: f64) -> Vec<(u64, String)> {
+        let late: Vec<u64> = self.pending.iter().filter(|(_, (_, deadline, _))| now >= *deadline).map(|(id, _)| *id).collect();
+        late.into_iter().filter_map(|id| self.pending.remove(&id).map(|(name, _, _)| (id, name))).collect()
+    }
+
+    /// Whether any save is still waiting for the parent.
+    pub fn waiting(&self) -> bool {
+        !self.pending.is_empty()
+    }
+}
+
+/// Each hosted photo's edit settings when the parent opened it or last confirmed an export of it.
+#[derive(Debug)]
+pub struct Baselines<K, V> {
+    of: HashMap<K, V>,
+}
+
+impl<K, V> Default for Baselines<K, V> {
+    fn default() -> Self {
+        Self { of: HashMap::new() }
+    }
+}
+
+impl<K: Eq + Hash + Copy, V: PartialEq + Clone> Baselines<K, V> {
+    /// The parent opened photo `id`, now at `settings`.
+    pub fn opened(&mut self, id: K, settings: V) {
+        self.of.insert(id, settings);
+    }
+
+    /// Whether `id` is a photo the parent opened.
+    pub fn hosts(&self, id: &K) -> bool {
+        self.of.contains_key(id)
+    }
+
+    /// The parent confirmed an export of these photos, at the settings they had when exported.
+    pub fn confirmed(&mut self, exported: impl IntoIterator<Item = (K, V)>) {
+        for (id, settings) in exported {
+            if let Some(b) = self.of.get_mut(&id) {
+                *b = settings;
+            }
+        }
+    }
+
+    /// Whether any hosted photo's settings (`now`, `None` when it's gone) differ from its baseline.
+    pub fn dirty(&self, now: impl Fn(&K) -> Option<V>) -> bool {
+        self.of.iter().any(|(id, base)| now(id).is_some_and(|v| v != *base))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OWN: &str = "https://app.example";
+
+    #[test]
+    fn same_origin_parent_enables_the_bridge() {
+        assert_eq!(target_origin(OWN, Some(OWN), None).as_deref(), Some(OWN));
+    }
+
+    #[test]
+    fn cross_origin_parent_disables_the_bridge() {
+        // Reading a cross-origin parent's origin throws (None) or names another origin.
+        assert_eq!(target_origin(OWN, None, None), None);
+        assert_eq!(target_origin(OWN, Some("https://evil.example"), None), None);
+        assert_eq!(target_origin(OWN, Some("null"), None), None);
+        assert_eq!(target_origin("null", Some("null"), None), None);
+    }
+
+    #[test]
+    fn host_origin_parameter_must_be_an_exact_origin() {
+        let files = "https://files.example:8443";
+        assert_eq!(target_origin(OWN, None, Some(files)).as_deref(), Some(files));
+        for bad in
+            ["*", "null", "files.example", "https://files.example/", "https://a@files.example", "javascript://x", "https://", "https://x:99999"]
+        {
+            assert_eq!(target_origin(OWN, None, Some(bad)), None, "{bad}");
+        }
+    }
+
+    /// Photo 1 hosted, opened at settings 0.
+    fn hosted() -> Baselines<u32, i32> {
+        let mut b = Baselines::default();
+        b.opened(1, 0);
+        b
+    }
+
+    #[test]
+    fn export_stays_dirty_until_the_parent_confirms() {
+        let mut base = hosted();
+        let mut acks = SaveAcks::default();
+        let edited = |_: &u32| Some(5);
+        let id = acks.posted("a.jpg", vec![(1, 5)], 0.0);
+        assert!(base.dirty(edited), "posted is not saved");
+        assert!(acks.saved(id + 1).is_none(), "an unknown id confirms nothing");
+        base.confirmed(acks.saved(id).unwrap_or_default());
+        assert!(!base.dirty(edited));
+        assert!(!acks.waiting());
+    }
+
+    #[test]
+    fn unanswered_export_times_out_and_stays_dirty() {
+        let base = hosted();
+        let mut acks = SaveAcks::default();
+        let id = acks.posted("a.jpg", vec![(1u32, 5)], 1_000.0);
+        assert!(acks.expire(1_000.0 + SAVE_ACK_TIMEOUT_MS - 1.0).is_empty());
+        assert_eq!(acks.expire(1_000.0 + SAVE_ACK_TIMEOUT_MS), vec![(id, "a.jpg".to_string())]);
+        assert!(base.dirty(|_| Some(5)));
+    }
+
+    #[test]
+    fn exporting_another_photo_leaves_the_hosted_one_dirty() {
+        let mut base = hosted();
+        base.opened(2, 0);
+        // Photo 1 was edited; photo 2 (unedited) was exported and confirmed.
+        base.confirmed([(2, 0), (3, 7)]);
+        assert!(base.dirty(|id| Some(if *id == 1 { 5 } else { 0 })));
+        assert!(!base.hosts(&3), "a photo the parent didn't open gets no baseline");
+        // Each hosted photo keeps its own baseline.
+        base.confirmed([(1, 5)]);
+        assert!(!base.dirty(|id| Some(if *id == 1 { 5 } else { 0 })));
+    }
+}
