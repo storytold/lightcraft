@@ -219,12 +219,46 @@ C-RAW captures; the pinned R7 file is lossless, so R7 C-RAW still has no black-b
 
 ## White level
 
-The white level is Canon's specular white from `ColorData` (the word after the
-normal white level), not the sensor's saturation point. On the RP at ISO 100
-it is 14558 while samples clip at 16383. At the −⅓-stop ISOs, which pull a
-higher analog ISO down digitally, it drops further: 11062 at ISO 5000, where
-red saturates near 13668. Samples above the white level render as clipped.
-Whether Lightroom recovers them has not been measured.
+`ColorData`'s white level (the word after the normal white level) is not the
+sensor's saturation point. On the EOS RP it is 14558 at every ISO while samples
+pile up at 16383, and in between the sensor is linear: on a night shot of the
+moon (ISO 3200) the G/R and G/B ratios of the same surfaces stay within 1% from
+G = 8000 up to 16300. The CC0 EOS R100 samples at ISO 640, a −⅓-stop ISO that
+pulls a higher analog ISO down digitally, state 10439 under a pile-up spread over
+13300–13700 (about 0.4 EV). Highlight reconstruction treated every sample above
+the stated level as clipped and rebuilt it, so where a bright sky crossed 14558
+it drew a hard-edged pale band (a ring around a backlit portrait).
+
+When samples run past the stated level (at least 1 in 100,000 of them, and 64),
+the decoder moves the white level up to the data's saturation point
+(`RawImage::extend_white_to_saturation`, `crates/raw/src/saturation.rs`): the
+lower edge of each colour's pile-up at the top of the data, searched on coarse
+bins of 1/128 of the range so a spread plateau counts, the lowest over the three
+colours. When no pile-up is found but the data reaches the top of the bit depth,
+the level is that top (a pile-up there hidden by a busy patch of light below
+it); data that ends under the top without piling up has no measured saturation
+point and keeps the stated level. The difference goes into the baseline exposure,
+so everything below the old white level renders exactly as before; only the
+highlights gain range. It is also recorded (`ColorData::white_extension_ev`) so
+the camera-look fit (`crates/engine/src/camera_preview.rs`) still leaves out the
+samples at or above the stated level: with the raised level, heavily clipped
+frames gave the fit hundreds of new highlight pairs, which shifted the fitted
+tone curve and with it the whole frame (#2053). A file with nothing above the
+stated level is unchanged.
+
+Measured on 966 private EOS RP files (ISO 100–12800) and the 35 CC0 CR3 samples
+of `cargo xtask corpus`: 555 RP files keep 14558, 391 move to 16319–16320 (the
+16383 pile-up's bin) and 20 reach 16383 without a pile-up the bins can find and
+move there; 50 with some light above 14558 that ends under the top keep it. Of
+the CC0 samples, 11 move (RP to 16320, R100 and M50 Mark II to 13322–13323, R10,
+R50 V, R6 Mark II and an R5 Mark II crop-mode file to 16319) and the other 24 are
+unchanged. Rendered at 2000 px with default settings against the decoder before
+the change, every pixel below 0.8 stays within 0.02 mean dE76 on all 35 CC0
+samples and on 12 of the most clipped RP frames (the camera-look fit included);
+across 228 CR3s of 29 bodies, the version without the fit's old-level clipping
+moved whole heavily clipped frames by up to 8.9 dE76 (#2053). Limits: a busy
+patch of light within 8 bins (about 6%) under a pile-up can hide it; whether
+Lightroom recovers the same range has not been measured.
 
 ## Colour limits
 

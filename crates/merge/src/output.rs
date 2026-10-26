@@ -34,12 +34,13 @@ pub enum DngSamples {
 
 /// The DNG colour tags for frames of `color`. A source's gain table map is dropped: it is
 /// positioned on that one capture's active area, which a merged image (aligned, oriented,
-/// stitched, cropped) no longer shares.
+/// stitched, cropped) no longer shares. So is its white extension: the merged image has its own white level.
 pub fn color_data(color: &FrameColor) -> ColorData {
     match color {
         FrameColor::Camera(c) => {
             let mut c = (**c).clone();
             c.profile.gain_table_map = None;
+            c.white_extension_ev = 0.0;
             c
         }
         FrameColor::Linear { to_xyz_d50 } => {
@@ -54,6 +55,7 @@ pub fn color_data(color: &FrameColor) -> ColorData {
                 as_shot_neutral: Some([1.0, 1.0, 1.0]),
                 as_shot_white_xy: None,
                 baseline_exposure: 0.0,
+                white_extension_ev: 0.0,
                 baseline_sharpness: None,
                 profile: Default::default(),
                 kelvin_presets: None,

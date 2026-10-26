@@ -243,6 +243,7 @@ pub(crate) fn dng_colour(tags: &ColorData, declared: &crate::files::DngWhite, t:
         as_shot_neutral: Some(neutral),
         as_shot_white_xy: None,
         baseline_exposure: t.baseline_exposure + k.log2(),
+        white_extension_ev: 0.0,
         baseline_sharpness: tags.baseline_sharpness,
         kelvin_presets: None,
         profile: ProfileLook {
@@ -320,6 +321,14 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
 /// the render's highlight reconstruction.
 const SENSOR_CLIP: f32 = 0.99;
 
+/// [`SENSOR_CLIP`] relative to the white level the file states, for `raw`'s normalised samples. A CR3 whose white
+/// level the decoder raised to the sensor's saturation point (`white_extension_ev`) still fits its look without the
+/// samples the file calls clipped, so the fit, and every render below the old white level, stays as it was.
+fn sensor_clip(raw: &RawImage) -> f32 {
+    let ev = raw.color.white_extension_ev;
+    if ev.is_finite() && ev > 0.0 { SENSOR_CLIP * (-ev).exp2() as f32 } else { SENSOR_CLIP }
+}
+
 /// [`fit_look_with`] for a photo without Sony's DRO.
 #[cfg(test)]
 fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
@@ -385,10 +394,10 @@ fn without_clipped(sensor: &Rgb32f, clipped: &[bool]) -> Option<Rgb32f> {
     Some(out)
 }
 
-/// 1 where any channel of a camera-RGB pixel is at or above [`SENSOR_CLIP`], else 0.
-fn clip_mask(camera: &Rgb32f) -> Rgb32f {
+/// 1 where any channel of a camera-RGB pixel is at or above `clip` ([`sensor_clip`]), else 0.
+fn clip_mask(camera: &Rgb32f, clip: f32) -> Rgb32f {
     let mut mask = camera.clone();
-    mask.map_in_place(|p| if p.iter().any(|v| *v >= SENSOR_CLIP) { [1.0; 3] } else { [0.0; 3] });
+    mask.map_in_place(|p| if p.iter().any(|v| *v >= clip) { [1.0; 3] } else { [0.0; 3] });
     mask
 }
 
@@ -652,7 +661,7 @@ fn proxies(
     // Fixed, bounded proxy: the selected look cannot depend on thumbnail/export resolution.
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
-    let mut clipped = clip_mask(&sensor);
+    let mut clipped = clip_mask(&sensor, sensor_clip(raw));
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
     // zoom; other cameras when their correction setting is on): the sensor moved into that geometry is a candidate,
     // kept below when it lines up with the JPEG better than the uncorrected one.
@@ -959,7 +968,7 @@ fn into_lens_geometry(img: &Rgb32f, raw: &RawImage, k: usize, lens: &LensGeometr
 }
 
 fn sensor_proxy(raw: &RawImage, k: usize, edge: usize) -> Option<Rgb32f> {
-    Some(match raw.develop_binned(k, SENSOR_CLIP).ok()? {
+    Some(match raw.develop_binned(k, sensor_clip(raw)).ok()? {
         Some(sensor) => sensor,
         // Lens opcodes cannot be applied to a binned mosaic: they are defined at full resolution.
         None if (raw.cpp == 3 && raw.cfa.is_none()) || (raw.format == RawFormat::Dng && !raw.opcodes.list3.is_empty()) => {
@@ -4334,6 +4343,29 @@ mod tests {
         assert_eq!(proxy.data, full.data, "the same opcode interpretation as raw development");
         let small = sensor_proxy(&raw, 2, 16).unwrap();
         assert_eq!(small.data, fit(&full, 16, 16, Filter::Box).data, "correct first, then reduce");
+    }
+
+    /// A raw whose white level the decoder raised to the sensor's saturation point (a CR3, issue #2053) fits its look
+    /// without the samples the file calls clipped, as it did before the raise.
+    #[test]
+    fn samples_at_the_stated_white_level_stay_clipped_after_the_white_level_is_raised() {
+        let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        let mut raw = lightcraft_raw::decode(&bytes).unwrap();
+        let (black, stated) = (raw.black.mean(), raw.white_at(0));
+        raw.data = lightcraft_raw::RawData::U16(vec![stated as u16; raw.width * raw.height]);
+        let clipped_share = |raw: &RawImage| {
+            let mask = clip_mask(&sensor_proxy(raw, 2, 32).unwrap(), sensor_clip(raw));
+            mask.data.iter().filter(|p| p[0] == 1.0).count() as f64 / mask.data.len() as f64
+        };
+        assert_eq!(clipped_share(&raw), 1.0);
+        // the decoder's raise (`extend_white_to_saturation`): a white level 0.3 EV higher, the change in the baseline
+        // exposure and recorded as the white extension
+        raw.white = vec![black + (stated - black) * 0.3f32.exp2()];
+        raw.color.baseline_exposure += 0.3;
+        raw.color.white_extension_ev = 0.3;
+        assert_eq!(clipped_share(&raw), 1.0);
+        raw.color.white_extension_ev = 0.0;
+        assert_eq!(clipped_share(&raw), 0.0, "without the record the old white level reads as unclipped light");
     }
 
     /// Which DNGs get a tone fitted to their camera JPEG: a colour matrix, a tone curve that is absent or the
