@@ -42,7 +42,7 @@ mod deadline;
 pub mod watchdog;
 
 pub use deadline::{MAX_TIME_SCALE, MIN_TIME_SCALE, TIME_SCALE_ENV, recv_within, scaled, time_scale, wait_until};
-pub use watchdog::{DEFAULT_WATCHDOG_MINUTES, WATCHDOG_ENV, Watch, watch};
+pub use watchdog::{DEFAULT_WATCHDOG_MINUTES, WATCHDOG_ENV, WATCHDOG_EXIT_CODE, Watch, watch, watched};
 
 /// The environment variable naming the file skips are appended to (JSON lines).
 pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
