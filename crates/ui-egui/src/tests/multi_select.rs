@@ -385,3 +385,36 @@ fn show_in_library_clears_keywords_chosen_with_cmd_click() {
     assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default());
     assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(ids[0]));
 }
+
+/// "Show in Library" shows every photo: albums and folders put in the filter by an agent (the
+/// sidebars never leave them there) are not kept either. Both lists are left out of the default
+/// filter's JSON when empty, so the reset patch has to name them.
+#[test]
+fn show_in_library_clears_albums_and_folders_in_the_filter() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
+    let a = album(&mut h, "Sel A", None, &[]);
+    let b = album(&mut h, "Sel B", None, &[]);
+    run(&mut h, "library.filter", json!({"albums": [a, b], "libraryFolders": ["/pics/trip", "/pics/home"]}));
+    assert!(!h.app.session.filter.albums.is_empty() && !h.app.session.filter.library_folders.is_empty());
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    h.app.ui.dialog = Some(Dialog::LightroomResult { summary: "done".into(), library: None, details: vec![], first: Some(first) });
+    h.settle(SETTLE);
+    click(&mut h, "button:dialogOk");
+    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default());
+}
+
+/// The smart-album editor counts the photos of every folder the album was made from, not only the
+/// first.
+#[test]
+fn the_smart_album_editor_counts_photos_of_every_folder_the_album_was_made_from() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/pics/work/c.jpg"]);
+    let id =
+        run(&mut h, "album.createSmart", json!({"name": "Two folders", "rules": {"libraryFolder": "/pics/trip", "libraryFolders": ["/pics/home"]}}))
+            ["id"]
+            .as_u64()
+            .unwrap();
+    h.app.ui.dialog = Some(Dialog::SmartRules { id: Some(id), name: "Two folders".into(), rules: Default::default(), parent: None });
+    h.settle(SETTLE);
+    let text = h.painted_text().join(" ");
+    assert!(text.contains("2 photos match"), "{text}");
+}
