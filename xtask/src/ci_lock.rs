@@ -9,6 +9,11 @@
 //! - `LIGHTCRAFT_CI_SLOTS=N`: N runs at once (1–64).
 //! - `LIGHTCRAFT_CI_LOCK=off`: no lock (e.g. a CI runner that only ever runs one job).
 //! - `LIGHTCRAFT_CI_LOCK=<dir>`: keep the lock files there instead.
+//! - `LIGHTCRAFT_CI_LOCK_WAIT=MIN`: give up after waiting MIN minutes for a slot (default
+//!   [`DEFAULT_WAIT_MIN`]; `0` or `off` waits as long as it takes), with an error naming the run
+//!   that holds it (#3060). A full `ci` takes about 15 minutes on a 16-core machine, and a hung test
+//!   binary can't hold a slot past its own limit any more ([`crate::deadline`]), so two hours is
+//!   several runs ahead in the queue; a wait longer than that means something is stuck.
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
@@ -16,6 +21,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_secs(2);
+
+/// How long to wait for a slot, in minutes.
+pub const WAIT_ENV: &str = "LIGHTCRAFT_CI_LOCK_WAIT";
+/// The default of [`WAIT_ENV`].
+pub const DEFAULT_WAIT_MIN: u64 = 120;
 
 /// A held CI slot; dropping it releases the slot.
 pub struct Held {
@@ -98,23 +108,42 @@ pub fn acquire(root: &Path, command: &str) -> Result<Option<Held>, String> {
     let Some(dir) = lock_dir() else {
         return Ok(None);
     };
-    let slots = slots();
+    let wait = crate::deadline::minutes_from_env(WAIT_ENV, DEFAULT_WAIT_MIN)?;
     let owner = format!("pid {} in {}: {command}", std::process::id(), root.display());
-    if let Some(held) = try_acquire(&dir, slots, &owner)? {
+    wait_for_slot(&dir, slots(), &owner, wait, POLL)
+}
+
+/// Take a slot of `slots` in `dir`, polling every `poll` for at most `wait` (`None`: no limit).
+fn wait_for_slot(dir: &Path, slots: usize, owner: &str, wait: Option<Duration>, poll: Duration) -> Result<Option<Held>, String> {
+    if let Some(held) = try_acquire(dir, slots, owner)? {
         return Ok(Some(held));
     }
     let waiting = Instant::now();
-    eprintln!("=== ci: waiting for another CI run to finish ({slots} at a time; LIGHTCRAFT_CI_SLOTS changes it) ===");
-    for h in holders(&dir, slots) {
+    let limit = wait.map_or_else(|| "no time limit".to_owned(), |w| format!("for up to {}", crate::deadline::show(w)));
+    eprintln!("=== ci: waiting for another CI run to finish ({slots} at a time; LIGHTCRAFT_CI_SLOTS changes it), {limit} ({WAIT_ENV}) ===");
+    for h in holders(dir, slots) {
         eprintln!("  running: {h}");
     }
     loop {
-        std::thread::sleep(POLL);
-        if let Some(held) = try_acquire(&dir, slots, &owner)? {
+        std::thread::sleep(poll);
+        if let Some(held) = try_acquire(dir, slots, owner)? {
             eprintln!("=== ci: waited {:.0} s for a CI slot ===", waiting.elapsed().as_secs_f64());
             return Ok(Some(held));
         }
+        if let Some(wait) = wait.filter(|w| waiting.elapsed() >= *w) {
+            return Err(gave_up(wait, &holders(dir, slots)));
+        }
     }
+}
+
+/// The error when the wait for a slot ran out: who holds the slots, and what to do.
+fn gave_up(wait: Duration, holders: &[String]) -> String {
+    let held_by = if holders.is_empty() { "a run that didn't record itself".to_owned() } else { holders.join("; ") };
+    format!(
+        "ci lock: gave up after waiting {} for a CI slot, held by: {held_by}. If that run is stuck, end it; \
+         {WAIT_ENV}=<minutes> waits longer (0 for as long as it takes), LIGHTCRAFT_CI_SLOTS=2 runs beside it",
+        crate::deadline::show(wait)
+    )
 }
 
 #[cfg(test)]
@@ -137,6 +166,41 @@ mod tests {
         assert!(holders(&dir, 1).is_empty());
         assert!(try_acquire(&dir, 1, "third").unwrap().is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_wait_for_a_held_slot_ends_with_the_holder_named() {
+        let dir = scratch("wait");
+        let _held = try_acquire(&dir, 1, "pid 1 in /w: cargo xtask ci").unwrap().expect("free slot");
+        let t = Instant::now();
+        let err = wait_for_slot(&dir, 1, "second", Some(Duration::from_millis(300)), Duration::from_millis(20)).err().expect("gave up");
+        assert!(t.elapsed() >= Duration::from_millis(300) && t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        assert!(err.contains("gave up after waiting 300 ms") && err.contains("held by: pid 1 in /w: cargo xtask ci"), "{err}");
+        assert!(err.contains("LIGHTCRAFT_CI_LOCK_WAIT=<minutes>"), "says how to wait longer: {err}");
+        assert_eq!(holders(&dir, 1), ["pid 1 in /w: cargo xtask ci"], "giving up leaves the holder alone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_slot_freed_within_the_wait_is_taken() {
+        let dir = scratch("freed");
+        let held = try_acquire(&dir, 1, "first").unwrap().expect("free slot");
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(held);
+        });
+        let got = wait_for_slot(&dir, 1, "second", Some(Duration::from_secs(30)), Duration::from_millis(20)).unwrap();
+        assert!(got.is_some());
+        assert_eq!(holders(&dir, 1), ["second"]);
+        release.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn giving_up_names_an_unrecorded_holder_too() {
+        assert!(
+            gave_up(Duration::from_secs(7200), &[]).contains("gave up after waiting 120 min for a CI slot, held by: a run that didn't record itself")
+        );
     }
 
     #[test]

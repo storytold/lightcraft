@@ -415,7 +415,14 @@ the wasm check when the changes touch them; a change to `Cargo.toml`, `Cargo.loc
 config tests everything. GitHub runs the full `cargo xtask ci` on every pull request
 (`.github/workflows/ci.yml`). Only one `ci` runs at a time per machine: a second one, from another
 worktree say, waits for the first and names it, since several at once take longer in total than in
-turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock.
+turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock. The wait
+gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes (default 120; `0` waits as long as it takes) and
+names the run holding the slot. Nothing a run waits on is unbounded either: each test binary may run
+for `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30, timed from cargo's `Running` line for it;
+`0` for no limit). One that runs longer, a test hung on a GPU device say, is killed with every
+process it started, and the run reports it as `timed out after 30 min` with the tests still running
+and those that never reported a result. Under `LIGHTCRAFT_NEXTEST=1`, `.config/nextest.toml` kills a
+test after 30 minutes instead.
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
