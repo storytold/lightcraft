@@ -40,6 +40,11 @@ Merging preserves the original foreign XML rather than writing these opaque keys
 The parser and merge scanner each cap generated opaque names at 8 MiB per packet, returning `TooComplex`
 if repeated use of a long namespace URI would exceed that budget.
 
+XMP GPS latitude and longitude are projected into `Metadata` only when each supplied minute and second
+component is in `[0, 60)` and the resulting coordinate is within its axis range. Invalid coordinate
+properties remain available in `XmpData::properties`, but are not applied as GPS and cannot override
+valid EXIF GPS during extraction.
+
 ## Robustness
 
 No panics on malformed input: proptests feed random bytes to every container walker and random text to the

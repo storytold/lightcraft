@@ -18,6 +18,22 @@ pub struct Exported {
     pub gpu_fallback: Option<String>,
 }
 
+/// Recognized raw XMP GPS properties still make an Original unsafe to copy when their values are
+/// malformed and therefore cannot be projected into `Metadata`. Parse canonical properties from
+/// the source packet; don't infer metadata from XML substrings. A packet that can't be inspected
+/// fails closed, like the existing extraction guard above.
+fn original_embeds_xmp_gps(bytes: &[u8], label: &str) -> Result<bool, String> {
+    if bytes.starts_with(b"8BPS") {
+        return Ok(false);
+    }
+    let Some(packet) = lightcraft_meta::embedded(bytes).xmp else { return Ok(false) };
+    let xmp = lightcraft_meta::parse_xmp(&packet)
+        .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
+    Ok(["exif:GPSLatitude", "exif:GPSLongitude"]
+        .into_iter()
+        .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|value| !value.trim().is_empty()))))
+}
+
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
     let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
@@ -227,20 +243,13 @@ impl PreparedExport {
                     if remove_location {
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        if !bytes.starts_with(b"8BPS") {
-                            let embedded = lightcraft_meta::embedded(&bytes);
-                            if let Some(xmp) = embedded.xmp.as_deref() {
-                                lightcraft_meta::parse_xmp(xmp).map_err(|e| {
-                                    format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}")
-                                })?;
-                            }
-                        }
+                        let embeds_xmp_gps = original_embeds_xmp_gps(&bytes, &label)?;
                         let embeds_place_name =
                             [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]
                                 .into_iter()
                                 .flatten()
                                 .any(|value| !value.trim().is_empty());
-                        if metadata.gps.is_some() || embeds_place_name {
+                        if metadata.gps.is_some() || embeds_xmp_gps || embeds_place_name {
                             return Err(format!(
                                 "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));

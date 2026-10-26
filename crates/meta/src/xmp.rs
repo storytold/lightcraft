@@ -425,8 +425,8 @@ fn parse_gps_coord(s: &str) -> Option<f64> {
     let parts: Vec<f64> = body.split(',').map(|p| p.trim().parse::<f64>().ok()).collect::<Option<_>>()?;
     let v = match parts.as_slice() {
         [d] => *d,
-        [d, m] => d + m / 60.0,
-        [d, m, sec] => d + m / 60.0 + sec / 3600.0,
+        [d, m] if (0.0..60.0).contains(m) => d + m / 60.0,
+        [d, m, sec] if (0.0..60.0).contains(m) && (0.0..60.0).contains(sec) => d + m / 60.0 + sec / 3600.0,
         _ => return None,
     };
     let v = match dir.to_ascii_uppercase() {

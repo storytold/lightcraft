@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Malformed embedded GPS remains protected during Original export
+- XMP GPS minute and second components outside [0, 60) are rejected as coordinates. With Remove Location Info enabled, Original export also refuses recognized nonblank XMP GPS properties even when the coordinate is malformed, preventing a byte-for-byte copy from retaining location data.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
