@@ -20,6 +20,7 @@ impl LightcraftApp {
             // …and the library's counts, when they were made on a worker
             let repaint = ctx.clone();
             self.caches.library.set_wake(std::sync::Arc::new(move || repaint.request_repaint()));
+            self.caches.library.set_activity(self.session.activity.clone());
             self.styled = true;
             self.font_language = self.ui.language;
         } else if self.font_language != self.ui.language {

@@ -13,6 +13,9 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 use lightcraft_catalog::Catalog;
 use lightcraft_catalog::library_tally::LibraryTally;
+use lightcraft_engine::activity::Activity;
+#[cfg(not(target_arch = "wasm32"))]
+use lightcraft_engine::activity::Cancel;
 
 /// Libraries up to this many photos are counted whole on the calling thread: a few milliseconds,
 /// less than handing the count to a thread costs. Larger ones are counted on a worker.
@@ -44,6 +47,8 @@ pub struct LibraryWork {
     count_with: CountWith,
     /// Asks for a frame when a background count is done.
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Lists a count made on a worker in the activity stack.
+    activity: Option<Activity>,
     /// Counts of every photo made (on this thread, on a worker).
     here: usize,
     background: usize,
@@ -59,6 +64,7 @@ impl Default for LibraryWork {
             count_here_up_to: COUNT_HERE_UP_TO,
             count_with: Arc::new(LibraryTally::of),
             wake: None,
+            activity: None,
             here: 0,
             background: 0,
         }
@@ -69,6 +75,11 @@ impl LibraryWork {
     /// What asks for a frame once a count made in the background is done.
     pub fn set_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
         self.wake = Some(wake);
+    }
+
+    /// The activity stack that lists a count made in the background while it runs.
+    pub fn set_activity(&mut self, activity: Activity) {
+        self.activity = Some(activity);
     }
 
     /// The tally of library `library` (its [`lightcraft_engine::Session::library_generation`])
@@ -101,13 +112,15 @@ impl LibraryWork {
         self.tally.as_ref().is_some_and(|(of, t)| *of == library && t.revision() == cat.revision && t.exact())
     }
 
-    /// Whether a count of every photo of library `library` is still running after a change too large to follow photo by
-    /// photo: the tally then shows the folders from before it. Not once the count is done, though nothing took its
-    /// result (the sidebar is not drawn): the next [`LibraryWork::current`] does, and a command that calls it is
-    /// right. Also `false` while the tally trails and no count has started, because only `current` starts one (with the
-    /// sidebar not drawn that is the next command that asks for the folders). A read-only look: it counts nothing.
+    /// Whether a count of every photo is still running and the tally of library `library` is not what it shows: it
+    /// shows the folders from before the change that set the count going, or nothing yet when it is the library's first
+    /// count (a library opened while another's count still runs waits for it). Not once the count is done, though
+    /// nothing took its result (the sidebar is not drawn): the next [`LibraryWork::current`] does, and a command that
+    /// calls it is right. Also `false` while no count has started, because only `current` starts one (with the sidebar
+    /// not drawn that is the next command that asks for the folders). A read-only look: it counts nothing.
     pub fn lags(&self, library: u64) -> bool {
-        self.tally.as_ref().is_some_and(|(of, _)| *of == library) && self.recount.as_ref().is_some_and(|r| r.library == library) && self.busy()
+        let has_tally = self.tally.as_ref().is_some_and(|(of, _)| *of == library);
+        self.busy() && (!has_tally || self.recount.as_ref().is_some_and(|r| r.library == library))
     }
 
     /// Whether a count of every photo is under way (its result is taken by the next
@@ -181,7 +194,10 @@ impl LibraryWork {
         let done = finished.clone();
         let (cat, count, wake) = (cat.clone(), self.count_with.clone(), self.wake.clone());
         let revision = cat.revision;
+        // (the row lives as long as the count: the worker owns the guard)
+        let guard = self.activity.as_ref().map(|a| a.start("cache", "Counting library", Cancel::No));
         let started = std::thread::Builder::new().name("lc-library-counts".into()).spawn(move || {
+            let _guard = guard;
             // last-resort guard: a panic is this count's failure, not the app's
             let r = lightcraft_engine::guard::catch("library counts", || count(&cat));
             drop(cat);

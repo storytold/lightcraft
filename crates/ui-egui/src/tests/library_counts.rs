@@ -254,3 +254,98 @@ fn show_in_folders_is_offered_once_a_count_is_done_though_the_sidebar_was_hidden
     assert!(crate::menus::show_in_folders_enabled(&h.app, Some(new)), "the count is done: nothing lags");
     h.app.run("app.showInFolders", json!({"id": new.0})).unwrap();
 }
+
+/// The app on a library of `n` photos whose first count of every photo waits until the returned flag is set, stepped
+/// until that count is under way.
+fn app_counting_first_time(n: usize) -> (Headless, Arc<std::sync::atomic::AtomicBool>) {
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let wait = open.clone();
+    let mut s = lightcraft_engine::Session::new();
+    let ops: Vec<Op> =
+        (0..n).map(|i| Op::AddPhoto { photo: Box::new(photo(s.catalog.alloc_photo_id(), "Entities/Z", &format!("IMG_{i:05}.jpg"))) }).collect();
+    s.catalog.apply(Op::Batch { ops }).unwrap();
+    let mut app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    app.caches.library.count_in_background_past(0);
+    app.caches.library.count_with(Arc::new(move |cat: &Catalog| {
+        while !wait.load(std::sync::atomic::Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        LibraryTally::of(cat)
+    }));
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), Duration::from_millis(300));
+    h.step();
+    assert!(h.app.caches.library.busy(), "the first count is under way");
+    (h, open)
+}
+
+/// A library just opened has no tally until its first count is made: Show in Folders has no tree to look in meanwhile,
+/// so it is not offered (the command would find the folders empty and refuse).
+#[test]
+fn show_in_folders_is_not_offered_while_the_first_count_of_a_large_library_runs() {
+    let (mut h, open) = app_counting_first_time(400);
+    let id = h.app.session.catalog.photos().next().unwrap().id;
+    h.app.run("library.select", json!({"ids": [id.0]})).unwrap();
+    h.step();
+    assert!(!crate::menus::show_in_folders_enabled(&h.app, Some(id)), "no folders are known yet");
+    open.store(true, std::sync::atomic::Ordering::Release);
+    assert!(h.settle(T));
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(id)), "counted: the folder has its row");
+}
+
+/// The count of every photo of a large library is a task like any other: the activity stack lists it while it runs.
+#[test]
+fn the_count_of_a_large_library_shows_in_the_activity_stack_while_it_runs() {
+    let (mut h, open) = app_counting_first_time(400);
+    let rows = h.app.session.activity.list();
+    assert!(rows.iter().any(|r| r.kind == "cache" && r.label == "Counting library" && !r.cancellable), "{rows:?}");
+    open.store(true, std::sync::atomic::Ordering::Release);
+    assert!(h.settle(T));
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the row goes with the count");
+}
+
+/// A library opened while the previous one is still counted has no tally, and its own count waits for the first to end:
+/// it lags all that time, so Show in Folders is not offered for it.
+#[test]
+fn a_library_opened_while_another_is_counted_lags_until_it_has_its_own_tally() {
+    let library = |n: usize| {
+        let mut c = Catalog::new();
+        let ops: Vec<Op> = (0..n).map(|i| Op::AddPhoto { photo: Box::new(photo(c.alloc_photo_id(), "A", &format!("IMG_{i}.jpg"))) }).collect();
+        c.apply(Op::Batch { ops }).unwrap();
+        c
+    };
+    let (first, second) = (library(30), library(7));
+    let mut work = crate::library_work::LibraryWork::default();
+    work.count_in_background_past(0);
+    let gate = Arc::new(Mutex::new(()));
+    let held = gate.lock().unwrap_or_else(PoisonError::into_inner);
+    let g = gate.clone();
+    work.count_with(Arc::new(move |cat: &Catalog| {
+        drop(g.lock().unwrap_or_else(PoisonError::into_inner));
+        LibraryTally::of(cat)
+    }));
+    assert!(work.current(&first, 1).is_none());
+    assert!(work.lags(1), "the first count runs");
+    assert!(work.current(&second, 2).is_none());
+    assert!(work.lags(2), "the second library has no tally while the first one is counted");
+    drop(held);
+    let t0 = std::time::Instant::now();
+    while work.current(&second, 2).is_none() {
+        assert!(t0.elapsed() < T, "the second library is counted");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!work.lags(2), "counted");
+}
+
+/// The command itself says why when it is run anyway (a shortcut, the control channel, a hidden sidebar that has
+/// not started the first count): the folders are being counted, not that the folder is missing.
+#[test]
+fn show_in_folders_says_the_folders_are_being_counted_while_the_first_count_runs() {
+    let (mut h, open) = app_counting_first_time(400);
+    let id = h.app.session.catalog.photos().next().unwrap().id;
+    let err = h.app.run("app.showInFolders", json!({"id": id.0})).unwrap_err();
+    assert!(err.contains("still being counted"), "{err}");
+    open.store(true, std::sync::atomic::Ordering::Release);
+    assert!(h.settle(T));
+    h.app.run("app.showInFolders", json!({"id": id.0})).unwrap();
+}
