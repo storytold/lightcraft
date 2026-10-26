@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### Zooming into the photo you stopped on
+- Staying on a photo in Detail for a second now decodes its full-resolution original in the background ("Preparing
+  full resolution" in the activity stack), so zooming to 1:1 shows sharp pixels in a fraction of a second instead of
+  after the decode (2-3 s on a 64 MP raw). Photos you only pass through are not decoded, and neither is an original
+  bigger than the memory budget's cache share.
+
+### Stepping on from a zoomed 64 MP photo
+- Moving to the next photo after zooming into a high-resolution raw no longer decodes the previews of the photo you
+  move to and of its neighbours again. The kept original of the photo you left now goes first when memory is short.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

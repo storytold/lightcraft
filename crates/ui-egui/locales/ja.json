@@ -1967,6 +1967,7 @@
   "Fill Location": "場所を入力",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "空の市区町村・都道府県・国を GPS から入力 (GeoNames の地名、オフライン)",
   "Looking up places": "場所を検索中",
+  "Preparing full resolution": "フル解像度を準備中",
   "Downloading place names": "地名データをダウンロード中",
   "Place names downloaded": "地名データをダウンロードしました",
   "Place names download cancelled": "地名データのダウンロードを中止しました",

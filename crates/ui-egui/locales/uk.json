@@ -2144,6 +2144,7 @@
   "Fill Location": "Заповнити місце",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "Заповнити порожні поля «Місто», «Регіон» і «Країна» за GPS (назви місць GeoNames, офлайн)",
   "Looking up places": "Пошук місць",
+  "Preparing full resolution": "Підготовка повної роздільної здатності",
   "Downloading place names": "Завантаження назв місць",
   "Place names downloaded": "Назви місць завантажено",
   "Place names download cancelled": "Завантаження назв місць скасовано",

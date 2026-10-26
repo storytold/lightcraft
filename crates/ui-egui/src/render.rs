@@ -43,7 +43,8 @@ pub enum Slot {
     /// that is on screen, drawn over it (see [`crate::region`] and `panels::compare`).
     CompareRegion(u8),
     /// Background preparation of a neighbouring photo (no texture: its decoded source and view
-    /// render are cached by the engine). 0 = next, 1 = previous.
+    /// render are cached by the engine). 0 = next, 1 = previous, 2 = the open photo's original, for a
+    /// zoom (`panels::detail`).
     Prefetch(u8),
     /// A variant thumbnail (profile / preset browsers), by its job key ([`Session::variant_job`]).
     /// Kept in a bounded LRU ([`VARIANT_TEXTURES`]).
@@ -602,6 +603,12 @@ impl Renderer {
         self.requests.retain(|s, _| !gone(s));
         self.failed.retain(|s, _| !gone(s));
         self.slides_live = !keep.is_empty();
+    }
+
+    /// Let the next [`Self::prefetch`] for `slot` run even with the key of the last one (what that one
+    /// prepared is gone).
+    pub fn forget_prefetch(&mut self, slot: Slot) {
+        self.prefetched.remove(&slot);
     }
 
     /// Is a request for `slot` queued or running?

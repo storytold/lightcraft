@@ -1965,6 +1965,7 @@
   "Fill Location": "填寫位置",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "根據 GPS 填寫空白的城市、州/省和國家（GeoNames 地名，離線）",
   "Looking up places": "正在查找地點",
+  "Preparing full resolution": "正在準備全解析度",
   "Downloading place names": "正在下載地名資料",
   "Place names downloaded": "地名資料已下載",
   "Place names download cancelled": "已取消下載地名資料",

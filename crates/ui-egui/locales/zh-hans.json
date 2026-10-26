@@ -1959,6 +1959,7 @@
   "Fill Location": "填写位置",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "根据 GPS 填写空白的城市、省/州和国家（GeoNames 地名，离线）",
   "Looking up places": "正在查找地点",
+  "Preparing full resolution": "正在准备全分辨率",
   "Downloading place names": "正在下载地名数据",
   "Place names downloaded": "地名数据已下载",
   "Place names download cancelled": "已取消下载地名数据",

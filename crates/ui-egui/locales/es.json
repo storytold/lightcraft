@@ -2147,6 +2147,7 @@
   "Fill Location": "Rellenar ubicación",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "Rellenar Ciudad, Estado y País vacíos desde el GPS (nombres de lugares de GeoNames, sin conexión)",
   "Looking up places": "Buscando lugares",
+  "Preparing full resolution": "Preparando la resolución completa",
   "Downloading place names": "Descargando nombres de lugares",
   "Place names downloaded": "Nombres de lugares descargados",
   "Place names download cancelled": "Descarga de nombres de lugares cancelada",

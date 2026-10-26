@@ -1679,6 +1679,7 @@
   "Fill Location": "Заполнить место",
   "Fill empty City, State and Country from GPS (offline GeoNames place names)": "Заполнить пустые поля «Город», «Регион» и «Страна» по GPS (названия мест GeoNames, офлайн)",
   "Looking up places": "Поиск мест",
+  "Preparing full resolution": "Подготовка полного разрешения",
   "Downloading place names": "Загрузка названий мест",
   "Place names downloaded": "Названия мест загружены",
   "Place names download cancelled": "Загрузка названий мест отменена",

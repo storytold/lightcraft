@@ -157,6 +157,8 @@ mod in_the_loupe {
         let services = Services { png: None, ..Default::default() };
         let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
         let mut h = Headless::new(app, size, 1.0);
+        // (the background decode of the original is part of the loupe here; the headless host turns it off)
+        h.app.original_prefetch.off = false;
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
@@ -773,6 +775,204 @@ mod in_the_loupe {
         h.request("ui.set", json!({"view": "photoGrid"}), T);
         h.step();
         assert_eq!(h.app.session.memory_report().full_source.bytes, 0, "the grid needs no original");
+    }
+
+    /// The background decode of the Detail photo's original is running.
+    fn decoding_original(h: &Headless) -> bool {
+        h.app.renderer.is_pending(Slot::Prefetch(crate::panels::detail::ORIGINAL_SLOT))
+    }
+
+    fn original_row(h: &Headless) -> Option<lightcraft_engine::activity::TaskInfo> {
+        h.app.session.activity.list().into_iter().find(|r| r.kind == "original")
+    }
+
+    /// Frames in `secs` (the headless host steps 1/60 s a frame).
+    fn frames(secs: f64) -> usize {
+        (secs * 60.0).ceil() as usize
+    }
+
+    // Given a photo a zoom would need the original of, when the loupe has been idle on it for a while, then its
+    // original is decoded in the background, with a row in the activity stack (a decode can't stop: no ✕) until it
+    // ends, once, and a zoom to 1:1 then renders the window from it
+    #[test]
+    fn an_idle_loupe_decodes_the_original_for_a_zoom() {
+        let (mut h, _) = detail();
+        // (on the next photo: the loupe is idle on it from the frame its renders are done)
+        h.request("engine.execute", json!({"command": "library.next"}), T);
+        let id = h.app.session.active().expect("a photo is open");
+        let full = |h: &Headless| h.app.session.media.has_source(id, lightcraft_engine::SourceLevel::Full);
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.in_flight() == 0 && h.app.renderer.queued() == 0), "the photo settled");
+        assert!(!full(&h) && !decoding_original(&h), "fit needs no original");
+        for _ in 0..frames(crate::panels::detail::ORIGINAL_DWELL_SECS / 2.0) {
+            h.step();
+        }
+        assert!(!decoding_original(&h), "not before the loupe has been idle for a while");
+        assert!(h.step_until(T, decoding_original), "then it starts");
+        let row = original_row(&h).expect("a row in the activity stack");
+        assert_eq!((row.label.as_str(), row.cancellable), ("Preparing full resolution", false));
+        h.settle(SETTLE);
+        assert!(full(&h), "the original is kept while the photo is on screen");
+        assert_eq!(original_row(&h), None, "the row went with the job");
+        for _ in 0..frames(2.0 * crate::panels::detail::ORIGINAL_DWELL_SECS) {
+            h.step();
+            assert!(!decoding_original(&h), "decoded once");
+        }
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        assert!(tile(&h, Slot::Region).is_some(), "the window is rendered");
+    }
+
+    // Given photos stepped through, each shown until nothing renders but for less than the dwell, then no original
+    // is decoded in the background (seconds of CPU each on a 64 MP raw)
+    #[test]
+    fn stepping_through_photos_decodes_no_original() {
+        let (mut h, _) = detail();
+        for _ in 0..3 {
+            h.request("engine.execute", json!({"command": "library.next"}), T);
+            assert!(h.step_until(SETTLE, |h| h.app.renderer.in_flight() == 0 && h.app.renderer.queued() == 0), "the photo settled");
+            for _ in 0..10 {
+                h.step();
+                assert!(!decoding_original(&h), "not for a photo passed through");
+            }
+        }
+        assert_eq!(h.app.session.memory_report().full_source.bytes, 0);
+    }
+
+    // Given an export (or any other task) in the activity stack, the original isn't decoded in the background while it
+    // runs (it keeps the processor busy too), and is once it ends and the loupe has been idle for the dwell
+    #[test]
+    fn no_original_is_decoded_while_another_task_runs() {
+        let (mut h, _) = detail();
+        let export = h.app.session.activity.start("export", "Exporting", lightcraft_engine::activity::Cancel::No);
+        for _ in 0..frames(2.0 * crate::panels::detail::ORIGINAL_DWELL_SECS) {
+            h.step();
+            assert!(!decoding_original(&h), "not while the export runs");
+        }
+        drop(export);
+        assert!(h.step_until(T, decoding_original), "once it has ended");
+    }
+
+    // Given a memory budget whose cache share can't hold the original, it isn't decoded ahead: only a zoom does
+    #[test]
+    fn no_original_is_decoded_ahead_when_the_cache_share_cannot_hold_it() {
+        let (mut h, _) = detail();
+        h.app.session.media.set_budget(16 << 20);
+        for _ in 0..frames(2.0 * crate::panels::detail::ORIGINAL_DWELL_SECS) {
+            h.step();
+            assert!(!decoding_original(&h));
+        }
+    }
+
+    // Given the original decoding in the background, a zoom to 1:1 waits for it instead of decoding it a second time
+    // beside it
+    #[test]
+    fn a_zoom_waits_for_the_original_decoding_in_the_background() {
+        let (mut h, _) = detail();
+        assert!(h.step_until(T, decoding_original), "the decode starts");
+        h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
+        let mut waited = 0;
+        while decoding_original(&h) {
+            h.step();
+            // (the frame that takes the decoded original asks for the window at once)
+            if decoding_original(&h) {
+                assert!(!h.app.renderer.is_pending(Slot::Region), "no window job beside the decode");
+                waited += 1;
+            }
+        }
+        assert!(waited > 0, "the zoom came while the original was decoding");
+        h.settle(SETTLE);
+        assert!(tile(&h, Slot::Region).is_some(), "the window arrived");
+    }
+
+    // Given a zoom to 1:1 waiting for the original decoding in the background, the loupe says "Rendering…" over the
+    // magnified frame until the window arrives, as it does while a window renders
+    #[test]
+    fn a_zoom_waiting_for_the_background_decode_says_rendering() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let (mut h, _) = detail();
+        let pill = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "loupe:rendering");
+        // a 3000 × 2000 file whose full-size decode is held until released (at most 20 s)
+        let dir = std::env::temp_dir().join(format!("lc-ui-bg-original-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("held.dng");
+        std::fs::write(&path, b"").unwrap();
+        let held = Arc::new(AtomicBool::new(true));
+        let gate = held.clone();
+        h.app.session.media.file_loader = Some(Arc::new(move |_, max_edge| {
+            if max_edge > 2560 {
+                for _ in 0..20_000 {
+                    if !gate.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+            let s = (max_edge as f64 / 3000.0).min(1.0);
+            let mut image = lightcraft_raster::Rgb32f::new((3000.0 * s).round() as usize, (2000.0 * s).round() as usize);
+            image.data.fill([0.2, 0.3, 0.4]);
+            Ok((image, Default::default()))
+        }));
+        let id = PhotoId(h.app.session.catalog.photos().map(|p| p.id.0).max().unwrap_or(0) + 1);
+        let photo = Photo::new(id, Source::File { path: path.to_string_lossy().into_owned() }, "held.dng", "DNG", 3000, 2000, "");
+        h.app.session.commit("setup", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+        assert!(h.step_until(SETTLE, decoding_original), "the decode starts");
+        h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
+        for _ in 0..frames(1.0) {
+            h.step();
+        }
+        assert!(decoding_original(&h) && !h.app.renderer.is_pending(Slot::Region), "the window waits for the decode");
+        assert!(pill(&h), "the magnified frame isn't final");
+        held.store(false, Ordering::SeqCst);
+        assert!(h.step_until(SETTLE, |h| tile(h, Slot::Region).is_some() && !pill(h)), "the window arrives, the pill goes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Given the full-screen preview (it draws the photo without the view, so `compare::prepare` doesn't run), when the
+    // background decode of the original ends, then its row leaves the activity stack there too
+    #[test]
+    fn the_original_row_goes_in_the_full_screen_preview() {
+        let (mut h, _) = detail();
+        h.request("engine.execute", json!({"command": "view.fullScreenPreview"}), T);
+        h.request("engine.execute", json!({"command": "library.next"}), T);
+        assert!(h.step_until(SETTLE, decoding_original), "the decode starts");
+        assert!(original_row(&h).is_some());
+        assert!(h.step_until(SETTLE, |h| !decoding_original(h)), "the decode ends");
+        h.step();
+        assert!(h.app.ui.fullscreen);
+        assert_eq!(original_row(&h), None, "the row went with the job");
+    }
+
+    // Given a photo whose zoom renders from the preview (2000 px long: `SourceLevel::Preview`), when the loupe has been
+    // idle on it, then nothing is prepared: no job, no "Preparing full resolution" row
+    #[test]
+    fn a_photo_the_preview_holds_prepares_no_original() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let (mut h, _) = detail();
+        let dir = std::env::temp_dir().join(format!("lc-ui-small-original-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("small.dng");
+        std::fs::write(&path, b"").unwrap();
+        h.app.session.media.file_loader = Some(std::sync::Arc::new(|_, max_edge| {
+            let s = (max_edge as f64 / 2000.0).min(1.0);
+            let mut image = lightcraft_raster::Rgb32f::new((2000.0 * s).round() as usize, (1333.0 * s).round() as usize);
+            image.data.fill([0.2, 0.3, 0.4]);
+            Ok((image, Default::default()))
+        }));
+        let id = PhotoId(h.app.session.catalog.photos().map(|p| p.id.0).max().unwrap_or(0) + 1);
+        let photo = Photo::new(id, Source::File { path: path.to_string_lossy().into_owned() }, "small.dng", "DNG", 2000, 1333, "");
+        h.app.session.commit("setup", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.in_flight() == 0 && h.app.renderer.queued() == 0), "the photo settled");
+        for _ in 0..frames(2.0 * crate::panels::detail::ORIGINAL_DWELL_SECS) {
+            h.step();
+            assert_eq!(original_row(&h), None, "nothing to prepare");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The meshes the last frame drew with `slot`'s texture: (paint order, clip rect, bounds).

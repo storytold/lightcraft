@@ -445,9 +445,10 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
         to_px * (v.visible.bottom() - v.target.top()),
     );
     let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
-    // a window waits for the original another window job is decoding (see `defer_window`)
+    // a window waits for the original another window job is decoding (see `defer_window`), or the
+    // background decode of it (a second decode beside it would take twice as long)
     let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
-    let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
+    let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore) || decoding_original(app, c.id);
     if crate::region::defer_window(window_pending, original_held) {
         return if v.before { app.region_before_view } else { app.region_view }.filter(|w| w.photo == c.id);
     }
@@ -693,7 +694,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     // once this photo is on screen: prepare its neighbours in filmstrip order (source decoded and
     // kept, view render cached) so stepping to them is instant
-    if !interacting && !app.renderer.is_pending(Slot::Main) && app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id) {
+    let settled = !interacting && !app.renderer.is_pending(Slot::Main) && app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id);
+    if settled {
         let ids = app.session.visible_cloned();
         if let Some(i) = ids.iter().position(|p| *p == id) {
             let next = ids.get(i + 1).copied();
@@ -713,6 +715,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+    // …and once all that is done and the photo has had a look, its original, if a zoom would need it
+    let zoom_needs_original = native_long as f32 > plan.main_edge as f32 * crate::region::WINDOW_RATIO;
+    decode_original_when_idle(app, ui.ctx(), id, native, settled && zoom_needs_original && plan.window_edge.is_none(), crop_tool);
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     if app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
         && let Some(q) = app.session.quick_view_job(id, want.max(8), !crop_tool)
@@ -984,8 +989,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else {
         &[Slot::Main]
     };
+    // (a zoom's window also waits while the original decodes in the background)
     let coming = !matches!(shown, "none" | "hover")
-        && whole.iter().chain(windows.iter().map(|(v, _)| &v.slot)).any(|s| app.renderer.is_pending(*s) && !app.renderer.retrying(*s));
+        && (whole.iter().chain(windows.iter().map(|(v, _)| &v.slot)).any(|s| app.renderer.is_pending(*s) && !app.renderer.retrying(*s))
+            || (window_ctx.frame_edge.is_some() && decoding_original(app, id)));
     let keys =
         [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore].map(|s| app.renderer.textures.get(&s).filter(|t| t.photo == id).map(|t| t.key));
     let rendering = ui.ctx().data_mut(|d| rendering_overdue(d.get_temp_mut_or(egui::Id::unique("loupe-rendering"), None), keys, coming, now));
@@ -1525,6 +1532,107 @@ pub(crate) fn failed_pill(
     let r = loupe_pill(ui, canvas, over, navigator, id, text, true);
     let resp = ui.interact(r, egui::Id::unique(("render-failed", id)), Sense::hover()).on_hover_text(error);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{text}: {error}")));
+}
+
+/// The [`Slot::Prefetch`] that decodes the Detail photo's original in the background.
+pub(crate) const ORIGINAL_SLOT: u8 = 2;
+
+/// How long the loupe must have been idle on a photo before its original is decoded in the background (s): stepping
+/// through photos never starts one (a 64 MP raw costs 2-5 s of CPU), and someone who stops to look at a photo and
+/// then zooms in usually finds it done.
+pub(crate) const ORIGINAL_DWELL_SECS: f64 = 1.0;
+
+/// The activity-stack kind of the background decode's row.
+const ORIGINAL_KIND: &str = "original";
+
+/// The background decode of the Detail photo's original ([`decode_original_when_idle`]).
+#[derive(Default)]
+pub struct OriginalPrefetch {
+    /// The photo the loupe is idle on, and since when (egui time, s).
+    idle_since: Option<(PhotoId, f64)>,
+    /// The photo whose original was asked for while it is shown (once per visit).
+    asked: Option<PhotoId>,
+    /// The photo being decoded and its row in the activity stack, until the job ends ([`Self::frame`]).
+    running: Option<(PhotoId, lightcraft_engine::activity::TaskGuard)>,
+    /// Never start one: the headless host (`Headless::new`), whose clock runs on while a test settles, would start it
+    /// in the middle of any test that steps a second of idle frames.
+    pub(crate) off: bool,
+}
+
+impl OriginalPrefetch {
+    /// Every frame, in any view (`compare::prepare`, or the full-screen preview's frame): the row goes once the decode
+    /// ended (`decoding` false), and leaving Detail (`shown` none) ends the visit.
+    pub(crate) fn frame(&mut self, shown: Option<PhotoId>, decoding: bool) {
+        if !decoding {
+            self.running = None;
+        }
+        if shown.is_none() {
+            self.idle_since = None;
+            self.asked = None;
+        }
+    }
+}
+
+/// Is photo `id`'s original being decoded in the background?
+fn decoding_original(app: &LightcraftApp, id: PhotoId) -> bool {
+    app.original_prefetch.running.as_ref().is_some_and(|(p, _)| *p == id) && app.renderer.is_pending(Slot::Prefetch(ORIGINAL_SLOT))
+}
+
+/// Once the loupe has been idle on photo `id` for [`ORIGINAL_DWELL_SECS`] (nothing renders, and no export, merge,
+/// import or other task is in the activity stack), decode its original in the background (kept while the photo is on
+/// screen, `MediaCache::set_on_screen`): a zoom to 1:1 then only renders its window (~0.2 s) instead of decoding the
+/// original first (64 MP raw: 2-3 s). `wanted`: a zoom would need the original and the view is not zoomed yet
+/// (zoomed, the window job decodes it). Only when the cache share alone could hold the original, and once per visit of
+/// the photo. The decode can't stop once it runs (no ✕).
+fn decode_original_when_idle(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId, native: [usize; 2], wanted: bool, crop_tool: bool) {
+    // (the browser runs these jobs on the UI thread: a decode of seconds would freeze it)
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+    let o = &mut app.original_prefetch;
+    if o.asked.is_some_and(|p| p != id) {
+        o.asked = None;
+    }
+    let bytes = app.session.catalog.photo(id).map_or(usize::MAX, |p| (p.width as usize).saturating_mul(p.height as usize).saturating_mul(12));
+    // idle: nothing renders and no other task runs (an export, merge or import keeps the processor busy too)
+    let idle = app.renderer.queued() == 0 && app.renderer.in_flight() == 0 && app.session.activity.list().iter().all(|t| t.kind == ORIGINAL_KIND);
+    if !wanted
+        || o.off
+        || !idle
+        || o.asked.is_some()
+        || bytes > app.session.media.budget()
+        || app.session.media.has_source(id, lightcraft_engine::SourceLevel::Full)
+    {
+        o.idle_since = None;
+        return;
+    }
+    let now = ctx.input(|i| i.time);
+    let since = match o.idle_since {
+        Some((p, t)) if p == id => t,
+        _ => o.idle_since.insert((id, now)).1,
+    };
+    let left = ORIGINAL_DWELL_SECS - (now - since);
+    if left > 0.0 {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.min(ORIGINAL_DWELL_SECS)));
+        return;
+    }
+    o.idle_since = None;
+    o.asked = Some(id);
+    // a small window from the middle of the frame: the job decodes the whole original for it
+    let [fw, fh] = native;
+    let (w, h) = (fw.min(256), fh.min(256));
+    let win = lightcraft_pipeline::PixelWindow { x: (fw - w) / 2, y: (fh - h) / 2, w, h };
+    let Some(job) = app.session.region_job(id, fw, fh, win, !crop_tool) else { return };
+    // (a photo whose zoom renders from the preview has no original to prepare)
+    if job.level != lightcraft_engine::SourceLevel::Full {
+        return;
+    }
+    let slot = Slot::Prefetch(ORIGINAL_SLOT);
+    // (a visit before decoded it with the same key; it has been let go since)
+    app.renderer.forget_prefetch(slot);
+    app.renderer.prefetch(slot, job, PREFETCH_PRIORITY);
+    let row = app.session.activity.start(ORIGINAL_KIND, "Preparing full resolution", lightcraft_engine::activity::Cancel::No);
+    app.original_prefetch.running = Some((id, row));
 }
 
 fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {

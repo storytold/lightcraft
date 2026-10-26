@@ -457,6 +457,8 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, pane: u8, id: PhotoId, lo
 pub fn prepare(app: &mut LightcraftApp) {
     let shown = if app.ui.view == ViewMode::Detail { app.session.active() } else { None };
     app.session.media.set_on_screen(shown);
+    let decoding = app.renderer.is_pending(Slot::Prefetch(super::detail::ORIGINAL_SLOT));
+    app.original_prefetch.frame(shown, decoding);
     if app.ui.view != ViewMode::Detail {
         app.region_view = None;
         app.region_before_view = None;

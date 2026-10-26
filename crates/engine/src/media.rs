@@ -514,7 +514,8 @@ impl MediaCache {
 
     fn trim_full(&mut self) {
         while self.full.len() > self.full_capacity {
-            let oldest = self.full.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0);
+            // the photo on screen keeps its original: one decoded in the background for the photo before can end after it
+            let oldest = self.full.iter().enumerate().min_by_key(|(_, e)| (Some(e.0) == self.on_screen, e.2)).map(|(i, _)| i).unwrap_or(0);
             self.full.remove(oldest);
         }
     }
@@ -541,22 +542,26 @@ impl MediaCache {
     /// Evict least recently used entries across the source caches and the rendered previews
     /// until they fit the budget. The newest preview-level source (the photo on screen, or the
     /// one just decoded) is never evicted here, nor is the original of the photo on screen
-    /// ([`Self::set_on_screen`]).
+    /// ([`Self::set_on_screen`]); while a photo is on screen, the originals of others go first.
     pub fn enforce_budget(&mut self) {
         // The on-screen original is never evicted here, so it does not count either: counted, a 64 MP original (760 MiB)
         // nearly fills the default share (768 MiB) alone and everything else went instead — the photo's preview and
         // thumbnail sources and the neighbours' were decoded again from the raw on every edit, zoom-out and step.
         let pinned: usize = self.full.iter().filter(|e| Some(e.0) == self.on_screen).map(|e| e.1.bytes()).sum();
         let mut held = self.held().saturating_sub(pinned);
+        // In Detail the original of a photo no longer shown goes first: at 64 MP it is ~0.8 GB, and by recency the
+        // previews of the photo now shown and of its neighbours went before it (each decoded from the raw again).
+        let others_first = self.on_screen.is_some();
         while held > self.budget {
             let newest_preview = self.previews.iter().map(|e| e.2).max();
+            // (order, which cache, tick)
             let candidates = [
-                self.thumbs.oldest_tick().map(|t| (t, 0)),
-                self.previews.iter().filter(|e| Some(e.2) != newest_preview).map(|e| e.2).min().map(|t| (t, 1)),
-                self.full.iter().filter(|e| Some(e.0) != self.on_screen).map(|e| e.2).min().map(|t| (t, 2)),
-                self.rendered.oldest_tick().map(|t| (t, 3)),
+                self.thumbs.oldest_tick().map(|t| (t, 0, t)),
+                self.previews.iter().filter(|e| Some(e.2) != newest_preview).map(|e| e.2).min().map(|t| (t, 1, t)),
+                self.full.iter().filter(|e| Some(e.0) != self.on_screen).map(|e| e.2).min().map(|t| (if others_first { 0 } else { t }, 2, t)),
+                self.rendered.oldest_tick().map(|t| (t, 3, t)),
             ];
-            let Some((tick, which)) = candidates.into_iter().flatten().min() else { break };
+            let Some((_, which, tick)) = candidates.into_iter().flatten().min() else { break };
             let freed = match which {
                 0 => self.thumbs.pop_oldest(),
                 1 => self.previews.iter().position(|e| e.2 == tick).map(|i| self.previews.remove(i).1.bytes()),
@@ -2131,6 +2136,23 @@ mod tests {
         }
     }
 
+    // Given the original of the photo shown until now (decoded in the background after the neighbours' previews), when
+    // the next photo is shown and the budget can't hold everything, that original goes, not the previews (by recency
+    // the new photo's own preview went first and was decoded from the raw again)
+    #[test]
+    fn the_original_of_the_photo_left_goes_before_the_previews() {
+        let img = |w: usize| Arc::new(Rgb32f::new(w, w));
+        let mut m = MediaCache::default();
+        m.set_budget(20 << 20);
+        m.set_on_screen(Some(PhotoId(1)));
+        m.insert(PhotoId(2), SourceLevel::Preview, img(500)); // the neighbours, prefetched
+        m.insert(PhotoId(3), SourceLevel::Preview, img(500));
+        m.insert(PhotoId(1), SourceLevel::Full, img(1500)); // 27 MB, kept while on screen
+        m.set_on_screen(Some(PhotoId(2)));
+        assert!(!m.has_source(PhotoId(1), SourceLevel::Full));
+        assert!(m.has_source(PhotoId(2), SourceLevel::Preview) && m.has_source(PhotoId(3), SourceLevel::Preview));
+    }
+
     // A 64 MP original (797 MB as linear float) is bigger than the default cache share (768 MiB):
     // evicted on insert, every pan of a zoomed view decoded the raw again. The original of the photo
     // on screen stays, whatever is decoded after it (prefetched neighbours), until another is shown.
@@ -2150,6 +2172,19 @@ mod tests {
         m.set_on_screen(Some(PhotoId(2)));
         assert!(!m.has_source(PhotoId(1), SourceLevel::Full));
         assert!(m.held() <= 20 * mb, "{}", m.held());
+    }
+
+    // Given the original of the photo on screen, when the original of the photo before it arrives after it (its
+    // background decode can't stop) and only one original is kept, then the late one goes, not the one on screen
+    #[test]
+    fn a_late_original_does_not_evict_the_one_on_screen() {
+        let img = |w: usize| Arc::new(Rgb32f::new(w, w));
+        let mut m = MediaCache::default();
+        m.set_on_screen(Some(PhotoId(2)));
+        m.insert(PhotoId(2), SourceLevel::Full, img(100));
+        m.insert(PhotoId(1), SourceLevel::Full, img(100));
+        assert!(m.has_source(PhotoId(2), SourceLevel::Full));
+        assert!(!m.has_source(PhotoId(1), SourceLevel::Full));
     }
 
     #[test]
