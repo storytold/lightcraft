@@ -764,6 +764,8 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
         edit.typed |= edit.text != edit.start;
+        // the fields' width (the row below and the map keep to it)
+        let width = r.response.rect.width();
         if r.editing {
             ui.data_mut(|d| d.insert_temp(gid, edit.clone()));
         } else {
@@ -778,20 +780,29 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.toast(ui.ctx(), e);
         }
         // (one photo's place: not shown while the selected photos' places differ)
-        if let Some((la, lo)) = m.gps.filter(|_| !gps_mixed) {
+        let one_place = m.gps.filter(|_| !gps_mixed);
+        if let Some((la, lo)) = one_place {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
-                    .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
-                    .clicked()
-                {
-                    let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
-                    if let Err(e) = crate::links::open(app, &url) {
-                        app.toast(ui.ctx(), e);
-                    }
+            ui.add(egui::Label::new(egui::RichText::new(pretty).size(11.0).color(t.text_dim)).truncate());
+        }
+        // the map of the shown photo's place (the active one's, also while the selected photos'
+        // places differ); a click on it opens the Map view there, the button below opens
+        // OpenStreetMap's site
+        if let Some(pos) = lightcraft_map::LatLon::from_gps(m.gps) {
+            ui.add_space(6.0);
+            super::map::mini_map(app, ui, id, pos, width);
+        }
+        if let Some((la, lo)) = one_place {
+            ui.add_space(6.0);
+            if text_button(ui, "showOnMap", crate::i18n::tr("Open in Browser"), false)
+                .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
+                .clicked()
+            {
+                let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
+                if let Err(e) = crate::links::open(app, &url) {
+                    app.toast(ui.ctx(), e);
                 }
-            });
+            }
             if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
                 .on_hover_text(format!(
                     "{}\n{}",

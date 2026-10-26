@@ -53,6 +53,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -366,6 +367,11 @@ pub struct Session {
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
     /// The target album B adds to (`None` = the Quick Collection).
     pub target_album: Option<lightcraft_catalog::AlbumId>,
+    /// Photos whose GPS position was set or cleared by a command in this session (map drops,
+    /// pins moved, Remove GPS, the Info panel): their sidecars take LightCraft's position as it
+    /// is, so a cleared one (or an undone geotag) is removed from the sidecar too. Other photos'
+    /// sidecar GPS is never removed (LightCraft doesn't read GPS from sidecars).
+    pub gps_edited: std::collections::HashSet<PhotoId>,
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).
     pub auto_import_seen: std::collections::HashMap<String, u64>,
@@ -417,6 +423,8 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// The map's tile source (persisted in prefs.json), tile cache folder and tile service.
+    pub map: map::MapState,
     /// Adds exported files to Apple Photos ([`apple_photos`]): `/usr/bin/osascript`, installed by
     /// [`Session::with_fs`] on macOS; `None` elsewhere and in sessions without a file system. Tests
     /// put a fake here.
@@ -516,6 +524,7 @@ impl Session {
             signatures: Default::default(),
             lut_profiles: Vec::new(),
             target_album: None,
+            gps_edited: Default::default(),
             auto_import_seen: Default::default(),
             keyword_sets: Vec::new(),
             keyword_set: None,
@@ -538,6 +547,7 @@ impl Session {
             slide_backdrop: Default::default(),
             smart_previews_dir: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            map: map::MapState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             apple_photos: None,
             #[cfg(not(target_arch = "wasm32"))]

@@ -421,6 +421,11 @@ pub const OWNED: &[&str] = &[
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
 
+/// GPS properties added to [`OWNED`] for a photo whose position was edited in LightCraft
+/// ([`Session::gps_edited`]): its position is LightCraft's, so one cleared (or a geotag undone) is
+/// removed from the sidecar.
+pub const GPS_OWNED: &[&str] = &["exif:GPSLatitude", "exif:GPSLongitude", "exif:GPSAltitude", "exif:GPSAltitudeRef"];
+
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     lightcraft_catalog::safe_file::write_atomic(path, data)
@@ -459,7 +464,7 @@ pub struct SidecarSaved {
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+fn sidecar_contents(path: &Path, fresh: String, stamp: &str, gps_owned: bool) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
@@ -469,7 +474,8 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((fresh, false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    let owned: Vec<&str> = OWNED.iter().chain(if gps_owned { GPS_OWNED } else { &[] }).copied().collect();
+    let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
     match std::str::from_utf8(&bytes)
         .map_err(|e| e.to_string())
         .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
@@ -815,7 +821,8 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) =
+            sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)(), self.gps_edited.contains(&id)).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
