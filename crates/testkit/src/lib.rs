@@ -20,12 +20,29 @@
 //! `cargo xtask ci` lists the skips by need and reason in its summary and in
 //! `target/ci/report.json`. A test that runs part of its checks (e.g. only the CPU half) records
 //! the part it could not run the same way.
+//!
+//! **Deadlines.** Stable libtest has no per-test timeout, so a wait with no limit hangs its binary
+//! with no message. Waits go through [`wait_until`] (a condition) and [`recv_within`] (a channel),
+//! which fail the test with what they waited for; a hand-made limit (a condvar's
+//! `wait_timeout_while`) uses [`scaled`]. Every limit is stretched by [`time_scale`]
+//! (`LIGHTCRAFT_TIME_SCALE`, default 1) on a slow or shared machine.
+//!
+//! **Watchdog.** [`watch`] registers the running test; a test still registered after
+//! `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30, × the time scale; `0` turns it off) makes
+//! the watchdog print the watched tests still running and end the binary (exit status 124). ui-egui's
+//! `Headless::new` calls it in that crate's unit tests. See [`watchdog`] for the defaults' reasons.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
+
+mod deadline;
+pub mod watchdog;
+
+pub use deadline::{MAX_TIME_SCALE, MIN_TIME_SCALE, TIME_SCALE_ENV, recv_within, scaled, time_scale, wait_until};
+pub use watchdog::{DEFAULT_WATCHDOG_MINUTES, WATCHDOG_ENV, Watch, watch};
 
 /// The environment variable naming the file skips are appended to (JSON lines).
 pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
