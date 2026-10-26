@@ -242,13 +242,13 @@
   "{done} of {total}": "{total}件中{done}件",
   "{done} of {total} MB": "{done} / {total} MB",
   "{pct} %": "{pct}%",
-  "+{n} more": "ほか{n}件",
   "Create the keyword “{name}”": "キーワード「{name}」を作成",
   "new, inside {parent}": "新規、{parent} の中",
   "Keywords of {n} selected photos": "選択した写真{n}枚のキーワード",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "「{name}」を写真{n}枚から削除しました。「編集」→「取り消す」で元に戻せます。",
   "1 task is still running: {names}. Quitting stops it.": "1件のタスクが実行中です：{names}。終了すると停止します。",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n}件のタスクが実行中です：{names}。終了すると停止します。",
+  "{n} tasks": "{n}件のタスク",
   "{what} merge cancelled": "{what}合成をキャンセルしました",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "ローカル写真{n}枚をスキップしました{0:.0}：アルバムに入れられるのはライブラリの写真です（先にマイフォトに追加してください）",
   "New Folder in “{name}”": "「{name}」に新規フォルダ",
@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "+{n} more": "ほか{n}件"
 }

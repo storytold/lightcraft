@@ -238,13 +238,13 @@
   "{done} of {total}": "{done} sur {total}",
   "{done} of {total} MB": "{done} sur {total} Mo",
   "{pct} %": "{pct} %",
-  "+{n} more": "+{n} autres",
   "Create the keyword “{name}”": "Créer le mot-clé « {name} »",
   "new, inside {parent}": "nouveau, dans {parent}",
   "Keywords of {n} selected photos": "Mots-clés de {n} photos sélectionnées",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "« {name} » retiré de {n} photos. Modifier → Annuler le rétablit.",
   "1 task is still running: {names}. Quitting stops it.": "1 tâche est encore en cours : {names}. Quitter l'arrête.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} tâches sont encore en cours : {names}. Quitter les arrête.",
+  "{n} tasks": "{n} tâches",
   "{what} merge cancelled": "Fusion {what} annulée",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Photos locales ignorées : {n}{0:.0} — les albums contiennent des photos de la bibliothèque (ajoutez-les d’abord à Mes photos)",
   "New Folder in “{name}”": "Nouveau dossier dans « {name} »",
@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "+{n} more": "+{n} autres"
 }

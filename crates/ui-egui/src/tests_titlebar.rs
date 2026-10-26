@@ -134,6 +134,10 @@ fn without_the_integrated_title_bar_the_bar_is_not_a_window_handle() {
 #[test]
 fn the_search_field_stays_centred_on_the_window() {
     let mut h = integrated();
+    // the integrated title bar is macOS's, whose menus are in the system menu bar: with in-window
+    // menus the field moves right of them when there is no room (`topbar::search_centre`)
+    h.app.native_menu = true;
+    play(&mut h);
     let window_centre = 1200.0 / 2.0;
     let windowed = widget(&h, "field:search");
     assert_eq!(windowed.center().x, window_centre, "windowed, the field is centred on the window");

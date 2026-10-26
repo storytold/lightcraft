@@ -31,6 +31,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod notifications;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
@@ -594,8 +595,14 @@ pub struct LightcraftApp {
     /// Whether each recent library can be opened, answered by a worker (issue #1290): the launch
     /// list and File ▸ Open Recent Library never look at a folder on the UI thread.
     pub recent_checks: panels::library_problem::RecentChecks,
-    /// The activity stack shows every task, not just the first few ("+N more" was clicked).
-    pub activity_expanded: bool,
+    /// The list of running tasks under the top bar's bell is open (as of the last frame).
+    pub activity_open: bool,
+    /// `view.tasks` asked for the list to be opened or closed; the top bar does it on its next frame.
+    pub(crate) activity_set: Option<bool>,
+    /// Recent outcomes the list under the bell keeps below the running tasks.
+    pub notifications: notifications::Notifications,
+    /// The toast on show has a Details link: its text, and the notification whose report it opens.
+    pub toast_link: Option<(String, u64)>,
 }
 
 impl LightcraftApp {
@@ -704,7 +711,10 @@ impl LightcraftApp {
             library_window_input: Default::default(),
             alt_asks_for_library: false,
             recent_checks: Default::default(),
-            activity_expanded: false,
+            activity_open: false,
+            activity_set: None,
+            notifications: Default::default(),
+            toast_link: None,
             model_setup: Default::default(),
         }
     }
@@ -1185,10 +1195,39 @@ impl LightcraftApp {
         }
     }
 
-    /// A toast for an error the user has to read and act on (stays 6 s).
+    /// A toast for an error the user has to read and act on (stays 6 s, and in the bell's list).
     pub fn toast_error(&mut self, _ctx: &egui::Context, text: impl Into<String>) {
         let t = self.tick_now();
-        self.ui.toast = Some((text.into(), t + 6.0, None));
+        let text = text.into();
+        self.notifications.push(text.clone(), true, None, t);
+        self.ui.toast = Some((text, t + 6.0, None));
+    }
+
+    /// Tell how something ended: a toast, kept in the bell's list. With a `report`, the toast stays 8 s and has a
+    /// Show Details link that opens it (the toast says what happened in a line; the report lists it all).
+    pub fn notify(&mut self, _ctx: &egui::Context, text: impl Into<String>, warning: bool, report: Option<notifications::Report>) {
+        let t = self.tick_now();
+        let text = text.into();
+        let linked = report.is_some();
+        let id = self.notifications.push(text.clone(), warning, report, t);
+        self.toast_link = linked.then(|| (text.clone(), id));
+        self.ui.toast = Some((text, t + if linked || warning { 8.0 } else { TOAST_SECONDS }, None));
+    }
+
+    /// Open notification `id`'s report (its Show Details link). False when it has none, or a dialog is open.
+    pub fn show_report(&mut self, id: u64) -> bool {
+        // (never over a dialog in progress: it would lose what was typed there)
+        if self.ui.dialog.is_some() {
+            return false;
+        }
+        let Some(report) = self.notifications.get(id).and_then(|n| n.report.clone()) else { return false };
+        self.ui.dialog = Some(state::Dialog::Report { report });
+        // the toast that led here has done its job (it would sit on the report)
+        if self.toast_link.as_ref().is_some_and(|(_, linked)| *linked == id) {
+            self.ui.toast = None;
+            self.toast_link = None;
+        }
+        true
     }
 
     /// Take the control receiver for this frame, run every queued request whose sender still
@@ -2619,7 +2658,10 @@ impl LightcraftApp {
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         if self.ui.fullscreen {
-            // full-screen preview: the photo alone on black
+            // full-screen preview: the photo alone on black (no top bar: the list of tasks under its bell is closed,
+            // and a request to open it is not kept for later)
+            self.activity_open = false;
+            self.activity_set = None;
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
@@ -2667,7 +2709,6 @@ impl LightcraftApp {
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
-        panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
