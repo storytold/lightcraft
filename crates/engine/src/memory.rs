@@ -120,7 +120,7 @@ impl GateState {
     }
 
     fn hold(&mut self, bytes: usize) -> u64 {
-        self.used += bytes;
+        self.used = self.used.saturating_add(bytes);
         self.next += 1;
         self.holders.push((self.next, bytes, crate::import::abandon_flag()));
         self.next
@@ -131,7 +131,6 @@ impl GateState {
 pub struct Permit<'a> {
     gate: &'a WorkGate,
     id: u64,
-    bytes: usize,
 }
 
 impl WorkGate {
@@ -168,13 +167,18 @@ impl WorkGate {
     /// Of the bytes held, those held by reads that were given up ([`crate::import`]'s Skip): possibly still in use
     /// until the drive answers, so they stay counted.
     pub fn abandoned_bytes(&self) -> usize {
-        self.lock().holders.iter().filter(|(_, _, f)| f.as_ref().is_some_and(|f| f.load(Ordering::SeqCst))).map(|(_, b, _)| *b).sum()
+        self.lock()
+            .holders
+            .iter()
+            .filter(|(_, _, f)| f.as_ref().is_some_and(|f| f.load(Ordering::SeqCst)))
+            .map(|(_, b, _)| *b)
+            .fold(0usize, usize::saturating_add)
     }
 
     /// Hold `bytes`, waiting until they fit (or nothing else is held).
     pub fn acquire(&self, bytes: usize) -> Permit<'_> {
         let mut g = self.lock();
-        while g.used > 0 && g.used + bytes > g.limit {
+        while g.used > 0 && g.used.saturating_add(bytes) > g.limit {
             // A wait for memory is not a read that stopped answering: say once a second that this one goes on, as
             // long as some holder that was not given up is working. A wait that only abandoned reads block (they
             // keep their memory until the drive answers) is not progress: the waiting read is named and can be
@@ -186,21 +190,22 @@ impl WorkGate {
             }
         }
         let id = g.hold(bytes);
-        Permit { gate: self, id, bytes }
+        Permit { gate: self, id }
     }
 
     /// Hold `bytes` without waiting (interactive work): counted, so background work waits for it.
     pub fn acquire_urgent(&self, bytes: usize) -> Permit<'_> {
         let id = self.lock().hold(bytes);
-        Permit { gate: self, id, bytes }
+        Permit { gate: self, id }
     }
 }
 
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
         let mut g = self.gate.lock();
-        g.used = g.used.saturating_sub(self.bytes);
         g.holders.retain(|(id, ..)| *id != self.id);
+        // recounted, not subtracted: a saturated `used` cannot be given back piece by piece
+        g.used = g.holders.iter().fold(0usize, |sum, (_, bytes, _)| sum.saturating_add(*bytes));
         drop(g);
         self.gate.cv.notify_all();
     }
@@ -366,5 +371,37 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::WorkGate;
+
+    /// Given sizes that saturated (`usize::MAX`, from a file size scaled with `saturating_mul`),
+    /// When they are held and waited for,
+    /// Then the gate's arithmetic saturates: no overflow panic, the huge read waits for the others and runs alone.
+    #[test]
+    fn sizes_that_saturate_do_not_overflow_the_gate() {
+        let g = WorkGate::new(100);
+        let huge = g.acquire_urgent(usize::MAX);
+        let more = g.acquire_urgent(usize::MAX);
+        assert_eq!(g.usage().0, usize::MAX);
+        assert_eq!(g.abandoned_bytes(), 0);
+        drop(huge);
+        assert_eq!(g.usage().0, usize::MAX, "the other huge hold is still counted");
+        drop(more);
+        assert_eq!(g.usage().0, 0);
+        let (big, small) = (g.acquire_urgent(usize::MAX), g.acquire_urgent(10));
+        drop(big);
+        assert_eq!(g.usage().0, 10, "the small hold stays counted");
+        drop(small);
+        assert_eq!(g.usage().0, 0);
+        // a small hold, then a huge one: it is the only holder after the small one lets go, so it fits
+        let small = g.acquire(10);
+        drop(small);
+        let alone = g.acquire(usize::MAX);
+        assert_eq!(g.usage().0, usize::MAX);
+        drop(alone);
     }
 }

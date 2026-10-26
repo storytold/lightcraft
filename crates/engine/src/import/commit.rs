@@ -140,7 +140,6 @@ pub(super) fn run_transfers(
 
 /// What a transfer made after it was given up is not wanted: a placed file is taken back (its source was never
 /// touched), a copy removed.
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn discard(item: PreparedItem) {
     let PreparedItem::Ready(ready) = item else { return };
     match &ready.placed {

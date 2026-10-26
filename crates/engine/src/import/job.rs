@@ -21,7 +21,7 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
     s.import_probes.extend(std::mem::take(&mut job.cache));
     if let Some(why) = prepared.stopped() {
         let why = why.to_string();
-        prepared.rollback();
+        prepared.discard();
         return Err(crate::EngineError::Other(why));
     }
     commit_prepared(s, &job.opts, &job.now, prepared)
@@ -109,6 +109,12 @@ impl Prepared {
                 crate::import_move::rollback(pl);
             }
         }
+    }
+
+    /// Throw the batch away: [`Prepared::rollback`], and the copies it made are removed too. For a batch that will not
+    /// be committed at all (an import that stopped), where nothing would ever catalog its copies.
+    pub fn discard(self) {
+        self.items.into_iter().for_each(discard);
     }
 
     /// Why the import ended early for a reason of its own, if it did: the drive stopped answering (the
