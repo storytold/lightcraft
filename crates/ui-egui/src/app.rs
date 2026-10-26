@@ -405,7 +405,7 @@ impl LightcraftApp {
 
     /// A task waiting in line whose lane freed while nothing was asked starts now (commands start them too); then the
     /// run in progress is looked at, so that one started here is polled for its end from this frame on.
-    fn tick_preview_builds(&mut self, ctx: &egui::Context) {
+    pub(crate) fn tick_preview_builds(&mut self, ctx: &egui::Context) {
         self.session.start_waiting();
         self.preview_build_status(ctx);
     }

@@ -265,6 +265,11 @@ fn request_for(command: &str, p: &Value, ids: &[lightcraft_catalog::PhotoId]) ->
 /// The refusal of a build while another runs, unless the call asks to `queue`.
 const REFUSED: &str = "a preview build is already running";
 
+/// Builds wait in line ahead of one asked for now (not counting the line a build is being started from).
+fn line_ahead(s: &Session) -> bool {
+    !s.starting_waiting && s.activity.lane_waiting(Lane::Previews)
+}
+
 fn queue_param(p: &Value) -> bool {
     p.get("queue").and_then(Value::as_bool).unwrap_or(false)
 }
@@ -585,7 +590,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
             busy = true;
         }
     }
-    if !queue && busy {
+    // (nor ahead of builds already waiting: the line starts them after this command, in the order asked; the build
+    // `start_waiting` is starting itself is not held back by the line it came out of)
+    if !queue && (busy || line_ahead(s)) {
         return Err(bad(C, REFUSED));
     }
     s.fit_disk_cache();
@@ -833,7 +840,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             busy = true;
         }
     }
-    if background && !queue && busy {
+    if background && !queue && (busy || line_ahead(s)) {
         return Err(bad(C, REFUSED));
     }
     let what = if discard { "discarding smart previews" } else { "smart previews" };
