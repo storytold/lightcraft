@@ -221,6 +221,15 @@ fn single(pair: Pair) -> Pair {
     (f(pair.0), f(pair.1))
 }
 
+/// Puts a photo's pairs in value order (all six values, compared in turn): pairs are sampled in scan order over the
+/// preview, and that order would keep the photo's coarse layout in a pairs file. Pairs are ordered when they enter the
+/// pool, from a raw file or a pairs file, so either route gives the same fit (the fits hold out every third pair by
+/// position, so they follow the order).
+pub fn canonical_order(pairs: &mut [Pair]) {
+    let key = |p: &Pair| -> [f64; 6] { [p.0[0], p.0[1], p.0[2], p.1[0], p.1[1], p.1[2]] };
+    pairs.sort_by(|a, b| key(a).iter().zip(&key(b)).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal));
+}
+
 impl Pool {
     /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not an ARW,
     /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
@@ -232,18 +241,24 @@ impl Pool {
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
         let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
+        // subsampled in scan order (evenly over the frame), then put in value order
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
+        let mut pairs: Vec<Pair> = pairs.into_iter().step_by(step).map(single).collect();
+        canonical_order(&mut pairs);
         self.photos.push(PhotoPairs {
             model: model.to_owned(),
             id: lightcraft_preview::hash_bytes(bytes).to_string(),
             dro: lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes),
-            pairs: pairs.into_iter().step_by(step).map(single).collect(),
+            pairs,
         });
         Ok(Some(model.to_owned()))
     }
 
-    /// Add photos read from a pairs file.
-    pub fn add_photos(&mut self, photos: Vec<PhotoPairs>) {
+    /// Add photos read from a pairs file (their pairs put in [`canonical_order`]).
+    pub fn add_photos(&mut self, mut photos: Vec<PhotoPairs>) {
+        for photo in &mut photos {
+            canonical_order(&mut photo.pairs);
+        }
         self.photos.extend(photos);
     }
 
@@ -453,6 +468,53 @@ mod tests {
         // too few photos of a model are left out
         pooled.add_photos(synthetic("X-T4", 2, 9));
         assert_eq!(pooled.fit(5).len(), 1);
+    }
+
+    #[test]
+    fn pairs_files_keep_no_scan_order_and_fit_the_same() {
+        // pairs sampled in scan order over a 192x128 gradient preview: red follows the column, green the row
+        let (w, h) = (192, 128);
+        let scan: Vec<Pair> = (0..w * h)
+            .step_by(7)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64 / w as f64, (i / w) as f64 / h as f64);
+                let c = [0.05 + 0.8 * x, 0.05 + 0.8 * y, 0.4 - 0.3 * x * y];
+                single((c, [c[0] * 1.4 - c[1] * 0.2, c[1] * 1.3 - c[2] * 0.1, c[2] * 1.2 + 0.05 * c[0]]))
+            })
+            .collect();
+        let rows = |p: &[Pair]| p.windows(2).filter(|w| w[1].0[1] < w[0].0[1]).count();
+        assert_eq!(rows(&scan), 0, "in scan order the row channel never steps back");
+        let photos: Vec<PhotoPairs> =
+            (0..5).map(|k| PhotoPairs { model: "ILCE-7M4".into(), id: format!("{:032x}", k + 1), dro: None, pairs: scan.clone() }).collect();
+        let mut pool = Pool::default();
+        pool.add_photos(photos.clone());
+        let fitted = pool.fit(5).remove(0).unwrap();
+        // the written file holds each photo's pairs sorted by value, not in scan order
+        let written = crate::camera_pairs::write(&photos.iter().collect::<Vec<_>>()).unwrap();
+        assert_eq!(written, pool.pairs_file().unwrap());
+        let reread = crate::camera_pairs::read(&written, "t").unwrap();
+        for photo in &reread {
+            assert_eq!(photo.pairs.len(), scan.len());
+            assert_ne!(photo.pairs, scan);
+            assert!(photo.pairs.is_sorted_by(|a, b| a.0[0] <= b.0[0]), "sorted by value");
+            assert!(rows(&photo.pairs) >= w / 2, "the row channel no longer follows the scan");
+            let mut a = photo.pairs.clone();
+            let mut b = scan.clone();
+            a.sort_by(|p, q| p.partial_cmp(q).unwrap());
+            b.sort_by(|p, q| p.partial_cmp(q).unwrap());
+            assert_eq!(a, b, "the same pairs");
+        }
+        // a round trip, or the pairs arriving in any order, gives the same profile
+        let mut again = Pool::default();
+        again.add_pairs_file(&written, "t").unwrap();
+        assert_eq!(again.fit(5).remove(0).unwrap(), fitted);
+        let mut reversed = photos;
+        for photo in &mut reversed {
+            photo.pairs.reverse();
+        }
+        let mut shuffled = Pool::default();
+        shuffled.add_photos(reversed);
+        assert_eq!(shuffled.fit(5).remove(0).unwrap(), fitted);
     }
 
     #[test]

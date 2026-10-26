@@ -270,7 +270,12 @@ fn calibrate_pairs_only_exports_and_pools_pairs_files() {
         .unwrap();
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
     assert!(!default_dir.exists(), "--pairs without --out must not install a profile");
-    assert_eq!(camera_pairs::read(&std::fs::read(&merged).unwrap(), "merged").unwrap(), photos);
+    // the same photos, each one's pairs in value order
+    let mut sorted = photos;
+    for photo in &mut sorted {
+        lightcraft_engine::camera_profiles::canonical_order(&mut photo.pairs);
+    }
+    assert_eq!(camera_pairs::read(&std::fs::read(&merged).unwrap(), "merged").unwrap(), sorted);
 }
 
 fn mean(path: &std::path::Path) -> f64 {

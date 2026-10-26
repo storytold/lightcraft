@@ -20,8 +20,9 @@
 //! as little-endian `f32` (white-balanced camera RGB, then the camera JPEG's linear Rec.2020 RGB), each
 //! pair after the other, then split into four planes by byte position (all first bytes, all second bytes,
 //! …) so that zlib finds the repeated exponents, then zlib-compressed and base64-encoded. A file holds
-//! nothing else: no file names or paths, GPS, serial numbers, dates or image data.
-use crate::camera_profiles::{PAIRS_PER_FILE, Pair, PhotoPairs};
+//! nothing else: no file names or paths, GPS, serial numbers, dates or image data. Each photo's pairs are in value order
+//! (sorted by their six values), never in the order they were sampled across the picture.
+use crate::camera_profiles::{PAIRS_PER_FILE, Pair, PhotoPairs, canonical_order};
 use serde::{Deserialize, Serialize};
 
 const FORMAT: &str = "lightcraft-colour-pairs";
@@ -59,11 +60,15 @@ struct Photo {
     data: String,
 }
 
-/// The pairs file for `photos`.
+/// The pairs file for `photos`, each photo's pairs in value order ([`canonical_order`]).
 pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
     let photos = photos
         .iter()
-        .map(|p| Photo { model: p.model.clone(), id: p.id.clone(), dro: p.dro, pairs: p.pairs.len(), data: base64(&pack(&p.pairs)) })
+        .map(|p| {
+            let mut pairs = p.pairs.clone();
+            canonical_order(&mut pairs);
+            Photo { model: p.model.clone(), id: p.id.clone(), dro: p.dro, pairs: pairs.len(), data: base64(&pack(&pairs)) }
+        })
         .collect();
     serde_json::to_vec(&File { format: FORMAT.into(), version: VERSION, pair: LAYOUT.into(), photos }).map_err(|e| e.to_string())
 }
