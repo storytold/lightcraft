@@ -2,6 +2,16 @@
 
 ## 2026-10-24
 
+### Large Lightroom catalogs keep their edits
+- Importing a large Lightroom Classic catalog no longer drops every photo's edits when its develop settings
+  table is over 256 MiB (issue #1234); it used to finish with only a warning, and with history over the same
+  size it skipped the recovery archive's history. Tables are now read row by row, keeping only what the import
+  uses, so table size no longer matters.
+- If a catalog's develop settings can't be read at all (a damaged catalog), the import says so up front: the
+  summary leads with "Lightroom edits were not imported for N photos", and agents get `editsNotImported`.
+  Repair the catalog in Lightroom Classic (File > Optimize Catalog) and import it again with `updateExisting=true`
+  to bring the edits in.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

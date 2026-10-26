@@ -82,11 +82,15 @@ fn same_metadata(a: &Metadata, b: &Metadata) -> bool {
 
 const MAX_PAGE_ID: u32 = 16_777_216;
 const MAX_COLUMNS: usize = 16_384;
+#[cfg(test)]
 const MAX_ROWS: usize = 1_000_000;
 const MAX_CELLS: usize = 4_000_000;
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
-const MAX_TABLE_PAYLOAD: usize = 256 * 1024 * 1024;
 const MAX_OVERFLOW_PAGES: usize = 1_048_576;
+/// Smallest footprint of one table-leaf row: its 2-byte cell pointer plus a cell of at least a
+/// payload-length varint, a rowid varint and a one-byte record header. A walk that yields more rows
+/// than the visible database bytes allow is reading shared or overlapping cells.
+const MIN_ROW_BYTES: u64 = 5;
 const MAX_BTREE_DEPTH: usize = 64;
 
 /// Values supported by SQLite table records.
@@ -99,7 +103,7 @@ pub enum Value {
     Blob(Vec<u8>),
 }
 
-/// A row returned by [`Database::read_table`].
+/// A row handed out by [`Database::for_each_row`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     pub values: Vec<Value>,
@@ -133,10 +137,34 @@ enum TextEncoding {
     Utf16Be,
 }
 
+/// Why [`Database::for_each_row`] stopped early.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowError<E> {
+    /// The table could not be read: a malformed, hostile or truncated B-tree.
+    Table(String),
+    /// The visitor returned an error; the walk stopped there.
+    Visitor(E),
+}
+
+impl<E> From<String> for RowError<E> {
+    fn from(why: String) -> Self {
+        Self::Table(why)
+    }
+}
+
+impl<E> From<&str> for RowError<E> {
+    fn from(why: &str) -> Self {
+        Self::Table(why.to_string())
+    }
+}
+
+/// Bounds of one table walk. Nothing here is retained per row: memory is what the visitor keeps.
 struct WalkState {
     seen: HashSet<u32>,
-    out: Vec<Record>,
-    payload_total: usize,
+    rows: u64,
+    payload_total: u64,
+    max_rows: u64,
+    max_payload: u64,
 }
 
 struct WalOverlay {
@@ -242,8 +270,14 @@ impl Database {
         Ok(self.tables.clone())
     }
 
-    /// Read a table B-tree, decoding up to `ncols` values per record.
-    pub fn read_table(&self, rootpage: u32, ncols: usize) -> Result<Vec<Record>, String> {
+    /// Walk a table B-tree in key order and hand each row, decoded up to `ncols` values, to
+    /// `visit`. Rows are not collected: the caller keeps what it needs, so a table's size does not
+    /// decide how much memory a read takes. Structural limits still apply: depth, cycles and shared
+    /// pages, cell pointers, per-record payload, overflow chains, and two whole-walk sanity bounds
+    /// that a well-formed table cannot exceed (its rows' payload fits in the visible database bytes,
+    /// and each row needs at least [`MIN_ROW_BYTES`] of them), which stop shared or overlapping cells
+    /// from turning a small file into an endless walk.
+    pub fn for_each_row<E>(&self, rootpage: u32, ncols: usize, visit: &mut dyn FnMut(Record) -> Result<(), E>) -> Result<(), RowError<E>> {
         if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
             return Err("table root page is outside database".into());
         }
@@ -251,9 +285,31 @@ impl Database {
             return Err("table has too many columns".into());
         }
         let alias = self.rowid_aliases.get(&rootpage).copied();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
-        self.visit_table(rootpage, ncols, alias, 0, &mut state)?;
-        Ok(state.out)
+        let mut state = self.walk_state()?;
+        self.visit_table(rootpage, ncols, alias, 0, &mut state, visit)
+    }
+
+    /// Read a whole table into memory (tests only; the importer streams with [`Self::for_each_row`]).
+    #[cfg(test)]
+    pub fn read_table(&self, rootpage: u32, ncols: usize) -> Result<Vec<Record>, String> {
+        let mut out = Vec::new();
+        let result = self.for_each_row(rootpage, ncols, &mut |record| {
+            if out.len() >= MAX_ROWS {
+                return Err("SQLite table contains more than one million records".to_string());
+            }
+            out.push(record);
+            Ok(())
+        });
+        match result {
+            Ok(()) => Ok(out),
+            Err(RowError::Table(why) | RowError::Visitor(why)) => Err(why),
+        }
+    }
+
+    fn walk_state(&self) -> Result<WalkState, String> {
+        let usable = self.page_size.checked_sub(self.reserved).ok_or("invalid usable page size")?;
+        let bytes = u64::from(self.page_count).checked_mul(usable as u64).ok_or("SQLite database size overflow")?;
+        Ok(WalkState { seen: HashSet::new(), rows: 0, payload_total: 0, max_rows: bytes / MIN_ROW_BYTES, max_payload: bytes })
     }
 
     fn page(&self, page_id: u32) -> Result<Cow<'_, [u8]>, String> {
@@ -272,7 +328,15 @@ impl Database {
         self.main.get(start..end).map(Cow::Borrowed).ok_or_else(|| format!("page {page_id} is truncated"))
     }
 
-    fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState) -> Result<(), String> {
+    fn visit_table<E>(
+        &self,
+        page_id: u32,
+        ncols: usize,
+        alias: Option<usize>,
+        depth: usize,
+        state: &mut WalkState,
+        visit: &mut dyn FnMut(Record) -> Result<(), E>,
+    ) -> Result<(), RowError<E>> {
         if depth > MAX_BTREE_DEPTH {
             return Err("SQLite B-tree is too deep".into());
         }
@@ -285,7 +349,7 @@ impl Database {
         let content = page.get(..usable).ok_or("truncated usable SQLite page")?;
         let kind = *content.get(base).ok_or("truncated B-tree header")?;
         let cells = usize::from(be_u16_at(content, base + 3)?);
-        if cells > MAX_CELLS || state.out.len().saturating_add(cells) > MAX_ROWS.saturating_add(MAX_CELLS) {
+        if cells > MAX_CELLS {
             return Err("SQLite B-tree contains too many cells".into());
         }
         match kind {
@@ -308,9 +372,13 @@ impl Database {
                         return Err("SQLite record payload is too large".into());
                     }
                     let rowid = i64::from_be_bytes(read_varint(content, &mut at)?.to_be_bytes());
-                    state.payload_total = state.payload_total.checked_add(payload_len).ok_or("SQLite table payload total overflow")?;
-                    if state.payload_total > MAX_TABLE_PAYLOAD {
-                        return Err("SQLite table payload exceeds bounded import size".into());
+                    state.payload_total = state.payload_total.checked_add(payload_len as u64).ok_or("SQLite table payload total overflow")?;
+                    if state.payload_total > state.max_payload {
+                        return Err("SQLite table payload exceeds the database size (shared or overlapping cells)".into());
+                    }
+                    state.rows = state.rows.saturating_add(1);
+                    if state.rows > state.max_rows {
+                        return Err("SQLite table has more rows than the database can hold (shared or overlapping cells)".into());
                     }
                     let payload = self.payload(&page, at, payload_len)?;
                     let mut values = decode_record(&payload, ncols, self.encoding)?;
@@ -322,10 +390,7 @@ impl Database {
                             *value = Value::Integer(rowid);
                         }
                     }
-                    if state.out.len() >= MAX_ROWS {
-                        return Err("SQLite table contains more than one million records".into());
-                    }
-                    state.out.push(Record { values });
+                    visit(Record { values }).map_err(RowError::Visitor)?;
                 }
                 Ok(())
             }
@@ -348,16 +413,16 @@ impl Database {
                     }
                     let mut key_at = cell.checked_add(4).ok_or("interior cell overflow")?;
                     let _ = read_varint(content, &mut key_at)?;
-                    self.visit_table(child, ncols, alias, depth + 1, state)?;
+                    self.visit_table(child, ncols, alias, depth + 1, state, visit)?;
                 }
                 let right = be_u32_at(content, base + 8)?;
                 if right == 0 {
                     return Err("interior B-tree has null right child".into());
                 }
-                self.visit_table(right, ncols, alias, depth + 1, state)
+                self.visit_table(right, ncols, alias, depth + 1, state, visit)
             }
             0x02 | 0x0a => Err("SQLite index B-trees are unsupported".into()),
-            other => Err(format!("unsupported SQLite B-tree page type 0x{other:02x}")),
+            other => Err(format!("unsupported SQLite B-tree page type 0x{other:02x}").into()),
         }
     }
 
@@ -425,11 +490,11 @@ impl Database {
     }
 
     fn parse_schema(&self) -> Result<SchemaInfo, String> {
-        let mut tables = Vec::new();
+        let mut tables: Vec<LiveTable> = Vec::new();
+        let mut roots = HashSet::new();
         let mut aliases = HashMap::new();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
-        self.visit_table(1, 5, None, 0, &mut state)?;
-        for record in state.out {
+        let mut state = self.walk_state()?;
+        let mut visit = |record: Record| -> Result<(), String> {
             if record.values.len() < 5 {
                 return Err("sqlite_schema row has too few columns".into());
             }
@@ -441,31 +506,27 @@ impl Database {
                 Some(Value::Text(s)) => s.clone(),
                 _ => return Err("sqlite_schema row has invalid name".into()),
             };
-            if kind.eq_ignore_ascii_case("virtual") {
-                continue;
-            }
             if !kind.eq_ignore_ascii_case("table") {
-                continue;
+                return Ok(());
             }
             let rootpage = match record.values.get(3) {
                 Some(Value::Integer(n)) if *n > 0 => u32::try_from(*n).map_err(|_| "sqlite_schema root page is invalid")?,
-                _ => continue,
+                _ => return Ok(()),
             };
-            let sql = match record.values.get(4) {
-                Some(Value::Text(s)) => s,
-                _ => continue,
-            };
-            let Ok((column_names, alias)) = parse_create_table(sql) else { continue };
-            if column_names.len() > MAX_COLUMNS {
-                continue;
-            }
-            if tables.iter().any(|table: &LiveTable| table.rootpage == rootpage) {
-                continue;
+            let Some(Value::Text(sql)) = record.values.get(4) else { return Ok(()) };
+            let Ok((column_names, alias)) = parse_create_table(sql) else { return Ok(()) };
+            if column_names.len() > MAX_COLUMNS || !roots.insert(rootpage) {
+                return Ok(());
             }
             if let Some(index) = alias {
                 aliases.insert(rootpage, index);
             }
             tables.push(LiveTable { name, rootpage, column_names: Some(column_names) });
+            Ok(())
+        };
+        match self.visit_table(1, 5, None, 0, &mut state, &mut visit) {
+            Ok(()) => {}
+            Err(RowError::Table(why) | RowError::Visitor(why)) => return Err(why),
         }
         Ok(SchemaInfo { tables, aliases })
     }
@@ -1344,6 +1405,81 @@ mod tests {
         db.overlay.clear();
         let bytes = db.payload(&cell_page, 0, 600).unwrap();
         assert_eq!(&bytes[92..], &[b'y'; 508]);
+    }
+
+    fn bare_db(main: Vec<u8>, page_count: u32) -> Database {
+        Database {
+            file: None,
+            main,
+            overlay: HashMap::new(),
+            page_size: 512,
+            reserved: 0,
+            encoding: TextEncoding::Utf8,
+            page_count,
+            tables: Vec::new(),
+            rowid_aliases: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn rows_stream_to_the_visitor_in_key_order_and_its_error_stops_the_walk() {
+        let mut main = vec![0u8; 512];
+        let rows: Vec<(u64, Vec<u8>)> = (1..=5).map(|n| (n, vec![2, 1, u8::try_from(n).unwrap()])).collect();
+        let refs: Vec<(u64, &[u8])> = rows.iter().map(|(id, r)| (*id, r.as_slice())).collect();
+        leaf_rows(&mut main, 0, &refs);
+        let db = bare_db([vec![0u8; 512], main].concat(), 2);
+        let mut seen = Vec::new();
+        db.for_each_row(2, 1, &mut |r: Record| -> Result<(), String> {
+            seen.push(r.values[0].clone());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, (1..=5).map(Value::Integer).collect::<Vec<_>>());
+        let mut calls = 0;
+        let stopped = db.for_each_row(2, 1, &mut |_| {
+            calls += 1;
+            if calls == 2 { Err("enough") } else { Ok(()) }
+        });
+        assert_eq!(stopped, Err(RowError::Visitor("enough")));
+        assert_eq!(calls, 2);
+        assert!(matches!(db.for_each_row::<()>(3, 1, &mut |_| Ok(())), Err(RowError::Table(_))));
+    }
+
+    /// Cell pointers that all name one cell would let a one-page file yield rows (and payload)
+    /// without end; the walk stops at what the database's bytes can really hold.
+    #[test]
+    fn shared_cells_cannot_outgrow_the_database() {
+        // 250 pointers to one 3-byte cell: at most 204 real rows fit in a 1,024-byte database
+        let mut page = vec![0u8; 512];
+        page[0] = 0x0d;
+        page[3..5].copy_from_slice(&250u16.to_be_bytes());
+        page[508..511].copy_from_slice(&[1, 1, 1]);
+        for i in 0..250 {
+            page[8 + 2 * i..10 + 2 * i].copy_from_slice(&508u16.to_be_bytes());
+        }
+        let db = bare_db([vec![0u8; 512], page].concat(), 2);
+        let err = db.for_each_row::<()>(2, 1, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(&err, RowError::Table(why) if why.contains("more rows than the database")), "{err:?}");
+        // two pointers to one 600-byte overflowing cell: 1,200 payload bytes in a 1,536-byte file is
+        // still possible, three (1,800) are not
+        let mut leaf = vec![0u8; 512];
+        leaf[0] = 0x0d;
+        leaf[3..5].copy_from_slice(&3u16.to_be_bytes());
+        let cell = 400usize;
+        let mut head = varint(600);
+        head.extend(varint(1));
+        leaf[cell..cell + head.len()].copy_from_slice(&head);
+        let at = cell + head.len();
+        // record: a 3-byte header (its length, then serial 12 + 2 × 597 = 1206) and a 597-byte blob
+        leaf[at..at + 3].copy_from_slice(&[3, 0x89, 0x36]);
+        for i in 0..3 {
+            leaf[8 + 2 * i..10 + 2 * i].copy_from_slice(&u16::try_from(cell).unwrap().to_be_bytes());
+        }
+        // a 600-byte payload keeps 92 bytes in the cell, then the first overflow page number
+        leaf[at + 92..at + 96].copy_from_slice(&3u32.to_be_bytes());
+        let db = bare_db([vec![0u8; 512], leaf, vec![0u8; 512]].concat(), 3);
+        let err = db.for_each_row::<()>(2, 1, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(&err, RowError::Table(why) if why.contains("payload exceeds the database size")), "{err:?}");
     }
 
     #[test]

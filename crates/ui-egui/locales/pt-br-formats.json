@@ -51,6 +51,7 @@
   "Lightroom import complete: {imported} photos added": "Importação do Lightroom concluída: {imported} fotos adicionadas",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Importação do Lightroom concluída: {imported} fotos adicionadas, {failed} com falha",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Importação do Lightroom concluída: {imported} fotos adicionadas; aviso do índice: {warning}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "As edições do Lightroom de {count} fotos não foram importadas: não foi possível ler as configurações de revelação do catálogo",
   "Lightroom import failed: {e}{warning}": "Falha na importação do Lightroom: {e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Falha na inspeção do Lightroom: {e}{warning}",
   "Label Set: {name}": "Conjunto de rótulos: {name}",

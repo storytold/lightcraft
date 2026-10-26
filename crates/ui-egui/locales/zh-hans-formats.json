@@ -130,6 +130,7 @@
   "Lightroom import complete: {imported} photos added": "Lightroom 导入完成：已添加 {imported} 张照片",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom 导入完成：已添加 {imported} 张照片，{failed} 张失败",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom 导入完成：已添加 {imported} 张照片；索引警告：{warning}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "{count} 张照片的 Lightroom 编辑未导入：无法读取目录的冲印设置",
   "Lightroom import failed: {e}{warning}": "Lightroom 导入失败：{e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Lightroom 检查失败：{e}{warning}",
   "Label Set: {name}": "标签集：{name}",
