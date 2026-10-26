@@ -30,7 +30,6 @@ pub mod menu_level;
 pub mod menubar;
 pub mod menus;
 pub mod merge;
-mod model_setup;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
@@ -383,7 +382,6 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
-    pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -705,7 +703,6 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
-            model_setup: Default::default(),
         }
     }
 
@@ -854,9 +851,6 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
-        if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result.map_err(CommandError::from);
-        }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
@@ -1979,7 +1973,6 @@ impl LightcraftApp {
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
-        model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
@@ -3589,9 +3582,6 @@ mod cache_tests {
         assert_eq!(c.album_count_scans, 1);
     }
 }
-
-#[cfg(test)]
-mod tests_model_setup;
 
 #[cfg(test)]
 mod tests_docking_acceptance;

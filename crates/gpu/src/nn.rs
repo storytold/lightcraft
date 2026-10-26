@@ -21,7 +21,7 @@ use lightcraft_denoise::run::{Error, TileRunner};
 use wgpu::util::DeviceExt;
 
 /// Longest wait for one tile's GPU work before the device is given up on.
-const TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(60);
 /// The largest tile side (in input cells) the dispatch sizes and 32-bit indexing are checked for.
 const MAX_TILE: usize = 1024;
 /// The largest single buffer used: indices in the kernels are 32-bit element offsets.
@@ -32,18 +32,18 @@ const WORKSPACES: usize = 2;
 // ---------------------------------------------------------------------------------------------------------------------
 // the device
 
-struct Dev {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    info: wgpu::AdapterInfo,
-    limits: wgpu::Limits,
+pub(crate) struct Dev {
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) info: wgpu::AdapterInfo,
+    pub(crate) limits: wgpu::Limits,
 }
 
 static DEV: OnceLock<Result<Dev, String>> = OnceLock::new();
 static BROKEN: AtomicBool = AtomicBool::new(false);
 static BROKEN_WHY: Mutex<Option<String>> = Mutex::new(None);
 
-fn mark_broken(why: &str) {
+pub(crate) fn mark_broken(why: &str) {
     let mut w = BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner());
     if w.is_none() {
         *w = Some(why.to_string());
@@ -56,7 +56,7 @@ pub fn broken_reason() -> Option<String> {
     BROKEN.load(Ordering::Relaxed).then(|| BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into()))
 }
 
-fn dev() -> Result<&'static Dev, String> {
+pub(crate) fn dev() -> Result<&'static Dev, String> {
     if let Some(why) = broken_reason() {
         return Err(format!("stopped after a GPU failure: {why}"));
     }
@@ -72,7 +72,7 @@ fn dev() -> Result<&'static Dev, String> {
 }
 
 /// Why nothing runs on the GPU once [`crate::begin_shutdown`] was called.
-const CLOSING: &str = "LightCraft is closing";
+pub(crate) const CLOSING: &str = "LightCraft is closing";
 
 fn create_device() -> Result<Dev, String> {
     let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
@@ -492,7 +492,7 @@ struct Pipelines {
     built: Vec<(String, f64)>,
 }
 
-fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -501,7 +501,7 @@ fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntr
     }
 }
 
-fn pipeline(d: &Dev, label: &str, src: &str, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {
+pub(crate) fn pipeline(d: &Dev, label: &str, src: &str, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {
     let module = d.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(src.into()) });
     let pl = d.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(layout)], immediate_size: 0 });
     d.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -586,7 +586,7 @@ struct Shared {
     dummy: wgpu::Buffer,
 }
 
-fn storage(d: &Dev, label: &str, bytes: u64, extra: wgpu::BufferUsages) -> wgpu::Buffer {
+pub(crate) fn storage(d: &Dev, label: &str, bytes: u64, extra: wgpu::BufferUsages) -> wgpu::Buffer {
     d.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: bytes.max(16),
@@ -764,9 +764,12 @@ impl NetRunner {
 
     /// A workspace is gone (dropped after a failure): room for a new one, and a waiting caller may make it.
     fn forget(&self) {
+        // under `free`, as `take` is when it reads `made` and goes to wait: a wake-up sent between the two would be lost
+        let free = self.free.lock().unwrap_or_else(|e| e.into_inner());
         let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
         *made = made.saturating_sub(1);
         drop(made);
+        drop(free);
         self.wake.notify_one();
     }
 
@@ -957,6 +960,24 @@ mod tests {
         let Some(g) = gpu(&n, 6) else { return };
         let x: Vec<f32> = (1..=144).map(|i| i as f32).collect();
         assert_eq!(g.run(&x).unwrap(), reference::run(&n, 6, &x).unwrap());
+    }
+
+    /// `forget` must change `made` under the `free` lock: a waiting `take` holds it from reading `made` until it sleeps, so
+    /// a slot given up in between cannot be announced to nobody (the waiter would sleep on a free slot for good).
+    #[test]
+    fn forgetting_a_workspace_waits_for_a_taker_that_is_about_to_sleep() {
+        let n = Net::new(4, vec![copy(0, 12), Op::DepthToSpace2 { src: 1 }]).unwrap();
+        let Some(g) = gpu(&n, 4) else { return };
+        let g = std::sync::Arc::new(g);
+        let before = *g.made.lock().unwrap();
+        let held = g.free.lock().unwrap();
+        let other = g.clone();
+        let forgetter = std::thread::spawn(move || other.forget());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(*g.made.lock().unwrap(), before, "forget changed the count while a taker held the free list");
+        drop(held);
+        forgetter.join().unwrap();
+        assert_eq!(*g.made.lock().unwrap(), before.saturating_sub(1));
     }
 
     #[test]

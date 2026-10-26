@@ -2,6 +2,24 @@
 
 ## 2026-10-24
 
+### AI Denoise follows the photo's real noise
+- The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
+  about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
+  separately, ignores texture, and sets its strength from the noise it actually finds. On clean photos from a Canon EOS R and
+  an R6 Mark III with noise added at real ISO levels, the result at ISO 25600 is 2.2 to 2.7 dB closer to the original, and at
+  ISO 51200 about 5.5 dB closer; at ISO 6400 it is 0.6 to 1.0 dB closer, and quiet photos are no longer smoothed
+  needlessly. Photos denoised before are denoised again when they are next needed. See [AI Denoise](denoise.md).
+
+### Better built-in AI Denoise
+- The built-in denoiser now cleans with block-matching collaborative filtering: similar blocks of the picture are
+  grouped, transformed together and thresholded, so more fine detail survives at the same level of cleaning. On a
+  public raw with added noise it scores 0.25 to 0.6 dB higher than before at every noise level and keeps more
+  texture at medium to extreme noise (medium: 44 % of it against 42 %; extreme: 12 % against 9 %), a little less at
+  light noise (58 % against 62 %), with no colour blotches or   isolated specks. It is as fast as the old filter on the processor, and when the computer has a graphics card that is faster
+  it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
+  Denoise ▸ Run on chooses; Automatic times both). Photos
+  denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
@@ -17,9 +35,20 @@
 ### Drag the parametric Tone Curve
 - In the Tone Curve's parametric mode the graph is now drawn from the renderer's own curve, so it always matches the
   photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
-  Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
+  Shadows) and moving up or down changes that slider, as one undo step.   Hovering the line names the region first.
 
-## 2026-10-23
+  ## 2026-10-23
+
+### AI Denoise works out of the box
+- Turning on AI Denoise no longer asks for an ONNX model and a `denoise-model.json`: LightCraft's own built-in
+  denoiser runs automatically. Installing a model of your own is optional (Settings ▸ AI Denoise ▸ Your own model);
+  Stop using returns to the built-in one. The set-up prompt and its "resume after installing" flow are gone. See
+  [AI Denoise](denoise.md).
+- The built-in denoiser measures the photo's noise once, cleans the four colour planes together on variance-stabilised
+  data (so colour blotches go too), and cleans harder, with a second pass, the noisier the photo is. Colour noise gets
+  a wider pass of its own, and in heavy noise isolated specks are smoothed away. On a public raw with added noise it
+  scores 3.7 to 10.4 dB higher than the noisy picture, the most at heavy noise, and keeps more fine texture there
+  than before (heavy noise: 22 % of it against 20 %; extreme: 9 % against 7 %).
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
@@ -1276,7 +1305,7 @@
 
 ### AI RAW denoise
 - Detail has a per-photo AI Denoise switch and Amount. Bayer RAW photos use a disposable cache, with matching previews and exports and pure-Rust CPU/GPU inference.
-- Models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
+- Optional models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
 
 ### Library keyboard culling
 - Colour labels tint thumbnail surrounds in Square Grid and the Detail filmstrip, and a translucent footer along the bottom of the photo in Photo Grid. Label confirmations use a matching pale colour.
