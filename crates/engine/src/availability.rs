@@ -487,12 +487,18 @@ mod tests {
         let mut a = Availability::default();
         let log = Arc::new(Mutex::new(Vec::<String>::new()));
         let l = log.clone();
-        // the worker is held inside the fourth check until the sweep is told to give way
+        // the worker is held inside the fourth check (and says it got there) until the sweep is told to
+        // give way; the hold gives up after a while, so a failed test leaves no worker spinning
         let hold = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let h = hold.clone();
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (h, e) = (hold.clone(), entered.clone());
         a.set_probe(Arc::new(move |p| {
-            while p == "sweep 3" && h.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(1));
+            if p == "sweep 3" {
+                e.store(true, Ordering::SeqCst);
+                let t = std::time::Instant::now();
+                while h.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30)) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
             }
             held(&l).push(p.to_string());
             true
@@ -501,7 +507,9 @@ mod tests {
         let busy = busy_flag(&a);
         busy.store(false, Ordering::SeqCst);
         assert!(a.sweep((0..100).map(|i| format!("sweep {i}")).collect()));
-        wait_until("a few checks", || held(&log).len() >= 3);
+        // the fourth check has started (so giving way now can't keep it from starting)
+        wait_until("the worker inside the fourth check", || entered.load(Ordering::SeqCst));
+        assert_eq!(held(&log).len(), 3);
         busy.store(true, Ordering::SeqCst);
         hold.store(false, Ordering::SeqCst);
         wait_until("the check in flight", || held(&log).len() >= 4);
