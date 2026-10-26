@@ -51,9 +51,21 @@ corrections.
 verification, focal from homographies (or EXIF 35 mm), rotations chained along a maximum spanning
 tree, Levenberg–Marquardt bundle adjustment of rotations + focal lengths, straightening.
 Projections: spherical, cylindrical, perspective; *Auto* picks perspective for compact fields of
-view < 110°, cylindrical when the vertical field is < 90°, else spherical. Exposure: EXIF, then
-gain compensation from the overlaps. Seams: each pixel goes to the image with the highest
-centre-weighted feather weight; multi-band blending (Laplacian pyramids) in log space. Boundary
+view < 110°, cylindrical when the vertical field is < 90°, else spherical. Exposure: EXIF, then three
+steps fitted from the overlaps (`vignette.rs`, `compensate_exposure`, `level.rs`):
+- **Residual vignetting:** the falloff the frames' own correction left (a DNG's lens-shading gain map rarely fits
+  exactly), shared by all frames, `ln V = c₁r² + c₂r⁴ + c₃r⁶`, fitted with a log gain per frame from overlap pixel
+  pairs (as PTGui and Hugin do; d'Angelo 2007), then divided out. Fits beyond a factor of 1.6 are not used.
+- **Gain and flare offset per frame:** paired overlap pixels sorted by brightness into 8 bins, a gain and an additive
+  offset per frame by least squares. A frame facing the sun records the scene plus veiling flare, which a gain alone
+  lines up in the midtones and leaves as lifted shadows. Offsets are relative to the frame with the least flare and
+  subtracted in the camera white's colour, never more than half of a pixel.
+- **Seam leveling:** what is left at the seams (each frame's sky gradient, flare growing towards the sun) evened out
+  on a ≤ 384-cell grid: at every seam cell both frames move half way to each other in log colour, spread over each
+  frame by a membrane (Laplace) solve: gradient-domain stitching (Levin et al. 2004) for the low frequencies only.
+
+Seams: each pixel goes to the image with the highest centre-weighted feather weight; multi-band blending (Laplacian
+pyramids) in log space. `LIGHTCRAFT_PROFILE=1` prints each overlap's brightness levels. Boundary
 Warp: a separable stretch of the smoothed valid-area edges to the canvas edges. Auto Crop: the
 largest rectangle of image data (set as the develop crop, so it stays adjustable). Fill Edges:
 push–pull diffusion. Output: 16-bit integer DNG (16-bit float for HDR panoramas).

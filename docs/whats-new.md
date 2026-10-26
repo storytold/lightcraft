@@ -279,6 +279,13 @@
 
 ## 2026-10-16
 
+### Panoramas without bands or lifted shadows
+- Panoramas no longer show a band in the sky at every seam: what one brightness correction per photo can't line up
+  (the sky's gradient towards the sun, the lens's vignetting the photos' own correction left) is now evened out
+  across each seam.
+- Photos facing the sun carry veiling flare, light added over the whole picture. It used to lift their shadows next
+  to the other photos'; the merge now measures it from the overlaps and takes it out.
+
 ### Synchronize Folder shows that it is listing the folder
 - A folder with tens of thousands of photos, above all on a network share, can take minutes to list before
   Synchronize Folder checks a single photo. Its row in the activity stack used to sit at "0 of 64085" with an empty
