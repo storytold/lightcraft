@@ -2354,5 +2354,19 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Clear Preview Cache": "Очистити кеш переглядів",
+  "Compare Before and After": "Порівняти до й після",
+  "Show Clipping": "Показати відсікання",
+  "Show Mask Overlay": "Показати накладання маски",
+  "Show All Mask Overlays": "Показати всі накладення масок",
+  "Show Mask Pins": "Показати маркери масок",
+  "Show Photo Counts": "Показати кількість фото",
+  "Show Focus Point": "Показати точку фокусування",
+  "Fit to Photos": "Показати всі фото",
+  "Map": "Мапа",
+  "Map tiles are off (Settings / map.tileSource)": "Плитки мапи вимкнено (Налаштування / map.tileSource)",
+  "No photos with a location": "Немає фото з місцезнаходженням",
+  "photo without GPS": "фото без GPS",
+  "photos without GPS": "фото без GPS"
 }

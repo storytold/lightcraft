@@ -318,6 +318,16 @@
   read; reload the page to try again.
 ## 2026-10-14
 
+### Map view
+- View ▸ Map (or the map pin in the bottom bar) shows the photos in view on a map, with the filmstrip below. Nearby
+  photos gather in a numbered cluster that splits as you zoom in; click a pin to select its photos, double-click to
+  open one, rest the pointer on it to see the photo.
+- Drag to pan; the mouse wheel or a pinch zooms where the pointer is; Fit to Photos frames every photo with a location.
+  The count of photos without GPS is shown bottom left.
+- The map uses OpenStreetMap's tiles (credited on the map) or a tile server you choose, only fetches the visible tiles
+  and at most one ring around them, and can be switched off (`map.tileSource {offline: true}`); see [Map](map.md) for
+  what is sent where.
+
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time
