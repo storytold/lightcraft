@@ -1,0 +1,309 @@
+//! A watchdog for test binaries. Stable libtest has no per-test timeout: a test stuck in a wait
+//! keeps its binary (and the app's render workers) alive for good, and the run only looks busy.
+//! A test that calls [`watch`] (ui-egui's `Headless::new` does it for every headless test) is
+//! registered under its thread's name, which libtest sets to the test's path. One thread per
+//! process checks the registered tests; once one of them has run longer than the limit it prints
+//! every registered test still running, with how long each has run, and ends the process with
+//! [`WATCHDOG_EXIT_CODE`]. A
+//! stuck run then ends with a list of names instead of hanging.
+//!
+//! **The limit** is `LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes per test (fractions allowed),
+//! [`DEFAULT_WATCHDOG_MINUTES`] when unset, stretched by [`crate::time_scale`]. `0` or `off`
+//! turns the watchdog off (for a test paused in a debugger). Anything else that isn't a positive
+//! number is ignored with a note on stderr, and the default applies.
+//!
+//! **Why 30 minutes by default, and on.** Off unless set would leave exactly the runs that need it
+//! unguarded: an ad-hoc `cargo test` that hangs. The limit is per test, not per binary, so a long
+//! binary (the ui-egui unit tests take minutes at 4 threads, far more on a cold debug build on a
+//! loaded machine) never trips it; the slowest single test takes about a minute under load, so 30
+//! minutes is far past anything but a test that will never finish, and `LIGHTCRAFT_TIME_SCALE`
+//! stretches it on a machine that is slower still.
+//!
+//! **How it ends the process.** `std::process::exit` with [`WATCHDOG_EXIT_CODE`], so a stuck run
+//! leaves no crash report or core dump behind. The process is stuck by definition, and an exit
+//! handler (a GPU driver's) could get stuck too: if the exit hasn't finished
+//! [`ABORT_AFTER_EXIT`] later, the watchdog aborts the process instead.
+//!
+//! The report goes straight to the process's stderr: libtest captures the output of a test's
+//! threads (the watchdog's thread starts from the first watched test's), and a captured report
+//! would be lost with the process.
+
+use std::fmt::Write as _;
+use std::io::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Once, OnceLock, PoisonError, Weak};
+use std::time::{Duration, Instant};
+
+/// The environment variable holding the per-test limit in minutes (`0` or `off`: no watchdog).
+pub const WATCHDOG_ENV: &str = "LIGHTCRAFT_TEST_WATCHDOG_MIN";
+
+/// The per-test limit in minutes when [`WATCHDOG_ENV`] is unset, before [`crate::time_scale`].
+pub const DEFAULT_WATCHDOG_MINUTES: f64 = 30.0;
+
+/// The exit status of a test binary the watchdog ended: 124, as `timeout(1)` uses.
+pub const WATCHDOG_EXIT_CODE: i32 = 124;
+
+/// How long the exit may take before the watchdog aborts the process instead.
+pub const ABORT_AFTER_EXIT: Duration = Duration::from_secs(10);
+
+/// One registered test.
+struct Entry {
+    id: u64,
+    test: String,
+    since: Instant,
+    /// Alive while the registering thread runs: libtest runs each test on a thread of its own, so
+    /// a registration whose guard was leaked (or kept in a static) is dropped with its thread
+    /// instead of tripping the watchdog later in the run.
+    thread: Weak<()>,
+}
+
+static WATCHED: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    static THREAD_ALIVE: Arc<()> = Arc::new(());
+}
+
+/// A test's registration with the watchdog; dropping it (at the end of the test, also when the
+/// test panics) ends the registration.
+#[must_use = "the test is watched only while the guard lives: `let _watch = watch();`"]
+#[derive(Debug)]
+pub struct Watch {
+    id: u64,
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+        watched.retain(|e| e.id != self.id);
+    }
+}
+
+/// Register the current test (by its thread's name) with the watchdog until the returned guard
+/// is dropped, and start the watchdog thread on the first call. Hold the guard for the whole test:
+/// `let _watch = lightcraft_testkit::watch();`.
+pub fn watch() -> Watch {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let thread = std::thread::current();
+    let test = thread.name().unwrap_or("<unnamed thread>").to_owned();
+    let alive = THREAD_ALIVE.try_with(Arc::downgrade).unwrap_or_default();
+    WATCHED.lock().unwrap_or_else(PoisonError::into_inner).push(Entry { id, test, since: Instant::now(), thread: alive });
+    if let Some(limit) = limit() {
+        start(limit);
+    }
+    Watch { id }
+}
+
+/// The per-test limit ([`WATCHDOG_ENV`] × [`crate::time_scale`]), read once; `None` when off.
+fn limit() -> Option<Duration> {
+    static LIMIT: OnceLock<Option<Duration>> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let value = std::env::var(WATCHDOG_ENV).ok();
+        let (minutes, note) = parse_minutes(value.as_deref());
+        if let Some(note) = note {
+            eprintln!("{WATCHDOG_ENV}: {note}");
+        }
+        let minutes = minutes?;
+        // a limit too large for a Duration is no limit
+        Duration::try_from_secs_f64(minutes * 60.0).ok().map(crate::scaled)
+    })
+}
+
+/// The minutes `LIGHTCRAFT_TEST_WATCHDOG_MIN=value` means (`None`: off) and a note when the value
+/// was ignored.
+fn parse_minutes(value: Option<&str>) -> (Option<f64>, Option<String>) {
+    let Some(text) = value.map(str::trim).filter(|v| !v.is_empty()) else { return (Some(DEFAULT_WATCHDOG_MINUTES), None) };
+    if text.eq_ignore_ascii_case("off") {
+        return (None, None);
+    }
+    match text.parse::<f64>() {
+        Ok(0.0) => (None, None),
+        Ok(m) if m.is_finite() && m > 0.0 => (Some(m), None),
+        _ => (Some(DEFAULT_WATCHDOG_MINUTES), Some(format!("{text:?} is not a number of minutes (or 0 / off); using {DEFAULT_WATCHDOG_MINUTES}"))),
+    }
+}
+
+/// Start the watchdog thread, once per process.
+fn start(limit: Duration) {
+    static STARTED: Once = Once::new();
+    STARTED.call_once(|| {
+        // check often enough that a short limit (tests of the watchdog) isn't overshot by much
+        let poll = (limit / 20).clamp(Duration::from_millis(10), Duration::from_secs(5));
+        let spawned = std::thread::Builder::new().name("lightcraft-testkit-watchdog".into()).spawn(move || {
+            loop {
+                std::thread::sleep(poll);
+                let report = overdue(&WATCHED.lock().unwrap_or_else(PoisonError::into_inner), Instant::now(), limit);
+                if let Some(report) = report {
+                    // straight to stderr: `eprintln!` would go to the capture of the test that started this thread
+                    let _ = writeln!(std::io::stderr(), "{report}");
+                    end_process();
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            eprintln!("{WATCHDOG_ENV}: can't start the test watchdog ({e}); hung tests won't be stopped");
+        }
+    });
+}
+
+/// Exit with [`WATCHDOG_EXIT_CODE`], or abort when an exit handler holds the exit up for
+/// [`ABORT_AFTER_EXIT`].
+fn end_process() -> ! {
+    let _ = std::thread::Builder::new().name("lightcraft-testkit-watchdog-abort".into()).spawn(|| {
+        std::thread::sleep(ABORT_AFTER_EXIT);
+        let _ = writeln!(std::io::stderr(), "lightcraft-testkit watchdog: the exit is stuck too; aborting");
+        std::process::abort();
+    });
+    std::process::exit(WATCHDOG_EXIT_CODE)
+}
+
+/// When a live registered test has run for `limit` or longer: the report printed before the
+/// process ends, naming every live registered test, longest-running first.
+fn overdue(entries: &[Entry], now: Instant, limit: Duration) -> Option<String> {
+    let mut live: Vec<(&str, Duration)> =
+        entries.iter().filter(|e| e.thread.strong_count() > 0).map(|e| (e.test.as_str(), now.saturating_duration_since(e.since))).collect();
+    live.sort_by_key(|&(_, ran)| std::cmp::Reverse(ran));
+    let &(stuck, ran) = live.first().filter(|(_, ran)| *ran >= limit)?;
+    let mut report = format!(
+        "lightcraft-testkit watchdog: `{stuck}` has run for {}, past the limit of {} ({WATCHDOG_ENV} × {}); \
+         ending the test binary. Watched tests still running:",
+        minutes(ran),
+        minutes(limit),
+        crate::TIME_SCALE_ENV,
+    );
+    for (test, ran) in &live {
+        let _ = write!(report, "\n    {test} ({})", minutes(*ran));
+    }
+    Some(report)
+}
+
+/// `95.5 s` → `1m 35.5s`.
+fn minutes(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    let whole = (secs / 60.0).floor();
+    format!("{whole}m {:.1}s", secs - whole * 60.0)
+}
+
+/// The names of the live registered tests (for the tests).
+#[cfg(test)]
+fn running() -> Vec<String> {
+    let watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+    watched.iter().filter(|e| e.thread.strong_count() > 0).map(|e| e.test.clone()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Set for the child process [`a_stuck_test_ends_its_binary_with_the_tests_still_running`] starts.
+    const CHILD_ENV: &str = "LIGHTCRAFT_TESTKIT_WATCHDOG_CHILD";
+
+    fn entry(test: &str, since: Instant, thread: &Arc<()>) -> Entry {
+        Entry { id: 0, test: test.into(), since, thread: Arc::downgrade(thread) }
+    }
+
+    #[test]
+    fn the_limit_reads_minutes_and_off() {
+        assert_eq!(parse_minutes(None), (Some(DEFAULT_WATCHDOG_MINUTES), None));
+        assert_eq!(parse_minutes(Some(" ")), (Some(DEFAULT_WATCHDOG_MINUTES), None));
+        assert_eq!(parse_minutes(Some("45")), (Some(45.0), None));
+        assert_eq!(parse_minutes(Some("0.5")), (Some(0.5), None));
+        assert_eq!(parse_minutes(Some("0")), (None, None));
+        assert_eq!(parse_minutes(Some("OFF")), (None, None));
+        for bad in ["-1", "NaN", "inf", "ten", "1e400"] {
+            let (minutes, note) = parse_minutes(Some(bad));
+            assert_eq!(minutes, Some(DEFAULT_WATCHDOG_MINUTES), "{bad}");
+            assert!(note.is_some(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_test_past_the_limit_is_reported_with_everything_still_running() {
+        let base = Instant::now();
+        let (alive, gone) = (Arc::new(()), Arc::new(()));
+        let entries = vec![
+            entry("ui::quick", base + Duration::from_secs(50), &alive),
+            entry("ui::stuck", base, &alive),
+            entry("ui::leaked_by_a_finished_thread", base, &gone),
+        ];
+        drop(gone);
+        let limit = Duration::from_secs(60);
+        assert_eq!(overdue(&entries, base + Duration::from_secs(59), limit), None, "nothing is past the limit yet");
+        let report = overdue(&entries, base + Duration::from_secs(60), limit).unwrap();
+        assert!(report.contains("`ui::stuck` has run for 1m 0.0s, past the limit of 1m 0.0s"), "{report}");
+        let stuck = report.find("\n    ui::stuck (1m 0.0s)").unwrap();
+        let quick = report.find("\n    ui::quick (0m 10.0s)").unwrap();
+        assert!(stuck < quick, "longest first: {report}");
+        assert!(!report.contains("leaked"), "a finished thread's registration doesn't count: {report}");
+    }
+
+    #[test]
+    fn nothing_is_overdue_without_live_tests() {
+        let base = Instant::now();
+        assert_eq!(overdue(&[], base + Duration::from_secs(3600), Duration::from_secs(1)), None);
+        let gone = Arc::new(());
+        let entries = vec![entry("t", base, &gone)];
+        drop(gone);
+        assert_eq!(overdue(&entries, base + Duration::from_secs(3600), Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn a_watch_registers_the_test_until_it_ends() {
+        let me = std::thread::current().name().unwrap_or("<unnamed thread>").to_owned();
+        let count = || running().iter().filter(|t| **t == me).count();
+        let before = count();
+        let w = watch();
+        assert_eq!(count(), before + 1);
+        drop(w);
+        assert_eq!(count(), before);
+    }
+
+    #[test]
+    fn a_test_that_panics_or_leaks_its_watch_is_unregistered() {
+        let named = |name: &str| running().iter().filter(|t| *t == name).count();
+        let panicked = std::thread::Builder::new()
+            .name("testkit::panicking_test".into())
+            .spawn(|| {
+                let _watch = watch();
+                panic!("the test fails");
+            })
+            .unwrap()
+            .join();
+        assert!(panicked.is_err());
+        assert_eq!(named("testkit::panicking_test"), 0, "unwinding drops the guard");
+        std::thread::Builder::new().name("testkit::leaking_test".into()).spawn(|| std::mem::forget(watch())).unwrap().join().unwrap();
+        assert_eq!(named("testkit::leaking_test"), 0, "the thread ended with the test");
+    }
+
+    /// Run as a child by the next test: a test stuck in a wait, under a watchdog of a fraction of a
+    /// second. Ends on its own after a minute, so a watchdog that never fires fails the parent
+    /// rather than hanging it.
+    #[test]
+    #[ignore = "a stuck test: run as a child process by a_stuck_test_ends_its_binary_with_the_tests_still_running"]
+    fn stuck_child() {
+        if std::env::var_os(CHILD_ENV).is_none() {
+            return;
+        }
+        let _watch = watch();
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_stuck_test_ends_its_binary_with_the_tests_still_running() {
+        let exe = std::env::current_exe().unwrap();
+        let start = Instant::now();
+        let out = std::process::Command::new(exe)
+            // captured, as in a normal run: the report must get out anyway
+            .args(["--ignored", "--exact", "watchdog::tests::stuck_child", "--test-threads", "1"])
+            .env(CHILD_ENV, "1")
+            .env(WATCHDOG_ENV, "0.005") // 0.3 s
+            .env(crate::TIME_SCALE_ENV, "1")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(WATCHDOG_EXIT_CODE), "the watchdog ends the run: {stderr}");
+        assert!(start.elapsed() < Duration::from_secs(50), "it ended the stuck test early: {stderr}");
+        assert!(stderr.contains("lightcraft-testkit watchdog: `watchdog::tests::stuck_child` has run for"), "{stderr}");
+        assert!(stderr.contains("\n    watchdog::tests::stuck_child ("), "{stderr}");
+    }
+}
