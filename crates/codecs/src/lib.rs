@@ -169,6 +169,15 @@ pub fn decode(bytes: &[u8], opts: DecodeOptions) -> Result<Decoded> {
     std::panic::catch_unwind(|| decode_unguarded(bytes, format, &opts)).unwrap_or_else(|_| Err(Error::Malformed(format, "decoder panicked".into())))
 }
 
+/// A TIFF read from `reader` and reduced to (about) `opts.max_size` as it is read, strip by strip: neither the file nor
+/// the full-size image is held, so a multi-gigabyte layered TIFF makes a thumbnail in a few megabytes. `Ok(None)` when
+/// that does not apply (no target size, an image less than twice the target, a layout this path does not cover): decode
+/// the file whole with [`decode`]. Like [`decode`], malformed input yields an error, never a panic.
+pub fn decode_tiff_reduced<R: std::io::Read + std::io::Seek>(reader: R, opts: DecodeOptions) -> Result<Option<Decoded>> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tiff_codec::decode_reduced(reader, &opts)))
+        .unwrap_or_else(|_| Err(Error::Malformed(Format::Tiff, "decoder panicked".into())))
+}
+
 /// What a file's headers say about its image: enough to catalogue it without decoding pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {

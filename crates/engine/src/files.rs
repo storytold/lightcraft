@@ -1084,6 +1084,47 @@ pub fn fs_pair_loader() -> PairLoader {
     })
 }
 
+/// TIFFs at least this large are read strip by strip for thumbnails and previews ([`load_big_tiff_reduced`]).
+const BIG_TIFF: usize = 64 << 20;
+
+/// A big TIFF (a layered Photoshop file can be gigabytes) for a thumbnail or preview of `max_edge` pixels, reduced as
+/// it is read ([`lightcraft_codecs::decode_tiff_reduced`]) instead of reading the whole file and decoding it at full
+/// size. `None`: not such a file, or a layout that path does not cover: load it the usual way.
+fn load_big_tiff_reduced(path: &str, len: usize, max_edge: usize) -> Option<Result<(Rgb32f, SourceInfo), String>> {
+    use std::io::Read;
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    if len < BIG_TIFF || max_edge > crate::media::SourceLevel::Preview.max_edge() || !matches!(ext.as_deref(), Some("tif" | "tiff")) {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    // the whole first 64 KiB (one `read` may return less)
+    let mut head = Vec::with_capacity(64 << 10);
+    file.take(64 << 10).read_to_end(&mut head).ok()?;
+    let head = head.as_slice();
+    // a raw that happens to be called .tif goes the raw way
+    if lightcraft_codecs::sniff(head) != Some(lightcraft_codecs::Format::Tiff) || lightcraft_raw::probe(head).is_some() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    // Its working memory waits on the work gate like any decode: one strip or tile (the codec reads none larger than
+    // 64 MiB) and the sums of a picture at most twice the box on each side (four samples of 8 bytes, and a count).
+    let edge = max_edge.saturating_mul(2);
+    let weight = edge.saturating_mul(edge).saturating_mul(4 * 8 + 4).saturating_add(64 << 20);
+    let gate = crate::memory::work_gate();
+    let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
+    let d = match lightcraft_codecs::decode_tiff_reduced(std::io::BufReader::new(file), fit_box(max_edge)) {
+        Ok(Some(d)) => d,
+        // not covered, or something the whole decode may read after all: that path says what is wrong
+        Ok(None) | Err(_) => return None,
+    };
+    let img = d.to_working();
+    let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
+    let r = img.into_oriented(Orientation::from_exif(d.orientation));
+    drop(d);
+    crate::memory::release();
+    Some(Ok((r, SourceInfo::default())))
+}
+
 /// Filesystem-backed hooks (native). On the web the host installs bytes-based hooks instead.
 ///
 /// Their working memory is bounded by [`crate::memory::work_gate`]: background loads (grid
@@ -1092,7 +1133,13 @@ pub fn fs_pair_loader() -> PairLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
+    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        if let Some(r) = load_big_tiff_reduced(path, len, max_edge) {
+            return r;
+        }
+        fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge))
+    });
     let probe: FileProbe = Arc::new(|path: &str| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
