@@ -419,7 +419,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     let hint = if all_here {
         crate::i18n::tr_format!("Already in “{}”", name)
     } else {
-        crate::i18n::tr_format!("Move {n} photo{} to “{}”", if count == 1 { "" } else { "s" }, name, n = count)
+        crate::i18n::tr_format!("Move {n} file{} to “{}”", if count == 1 { "" } else { "s" }, name, n = count)
     };
     crate::panels::grid::drag_hint(ui.ctx(), hint);
     if all_here {
@@ -492,7 +492,7 @@ pub(crate) fn moved_text(n: u64, name: &str) -> String {
     if n == 0 {
         crate::i18n::tr_format!("Already in “{}”", name)
     } else {
-        crate::i18n::tr_format!("Moved {n} photo{} to “{}”. Edit → Undo moves them back.", if n == 1 { "" } else { "s" }, name, n = n)
+        crate::i18n::tr_format!("Moved {n} file{} to “{}”. Edit → Undo moves them back.", if n == 1 { "" } else { "s" }, name, n = n)
     }
 }
 

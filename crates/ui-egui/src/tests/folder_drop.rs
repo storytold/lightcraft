@@ -131,7 +131,7 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     let target = folder_row(&h, &home).expect("held over, the folder opened");
     // When it is brought over home: the label says where it will go
     glide(&mut h, parent.center(), target.center());
-    assert_eq!(hint(&h).as_deref(), Some("Move 1 photo to “home”"));
+    assert_eq!(hint(&h).as_deref(), Some("Move 1 file to “home”"));
     // and released there: it asks first, nothing moved yet
     release(&mut h, target.center());
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { .. })), "{:?}", h.app.ui.dialog);
@@ -142,7 +142,7 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     assert!(home.join("beach.png").is_file() && !trip.join("beach.png").exists(), "moved on disk");
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap();
     assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if Path::new(path) == home.join("beach.png")));
-    assert!(toast(&h).starts_with("Moved 1 photo to “home”. Edit → Undo moves them back."), "{}", toast(&h));
+    assert!(toast(&h).starts_with("Moved 1 file to “home”. Edit → Undo moves them back."), "{}", toast(&h));
     assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     // and one Undo moves it back
     h.app.run("edit.undo", json!({})).unwrap();
@@ -267,7 +267,7 @@ fn hint_over_home(tag: &str, extra_copies: usize, demo: bool, pick: impl Fn(&Hea
 fn the_label_counts_only_the_photos_a_drop_moves() {
     // one already in home, one outside it
     let text = hint_over_home("count", 0, false, |h| vec![id_of(h, "garden.png"), id_of(h, "beach.png")]);
-    assert_eq!(text.as_deref(), Some("Move 1 photo to “home”"));
+    assert_eq!(text.as_deref(), Some("Move 1 file to “home”"));
 }
 
 #[test]
@@ -281,7 +281,7 @@ fn virtual_copies_of_one_file_count_once() {
     // the master and a virtual copy of beach.png: one file moves
     let text =
         hint_over_home("copies", 1, false, |h| h.app.session.catalog.photos().filter(|p| p.file_name == "beach.png").map(|p| p.id.0).collect());
-    assert_eq!(text.as_deref(), Some("Move 1 photo to “home”"));
+    assert_eq!(text.as_deref(), Some("Move 1 file to “home”"));
 }
 
 /// What the question asked after the photos `pick` chooses are dropped on `home` says it moves.
@@ -313,13 +313,13 @@ fn question_over_home(tag: &str, extra_copies: usize, pick: impl Fn(&Headless) -
 #[test]
 fn the_question_counts_virtual_copies_of_one_file_once_like_the_label() {
     let text = question_over_home("q-copies", 1, |h| h.app.session.catalog.photos().filter(|p| p.file_name == "beach.png").map(|p| p.id.0).collect());
-    assert_eq!(text, "Move 1 photo to “home”?");
+    assert_eq!(text, "Move 1 file to “home”?");
 }
 
 #[test]
 fn the_question_leaves_out_a_photo_already_in_the_folder_like_the_label() {
     let text = question_over_home("q-count", 0, |h| vec![id_of(h, "garden.png"), id_of(h, "beach.png")]);
-    assert_eq!(text, "Move 1 photo to “home”?");
+    assert_eq!(text, "Move 1 file to “home”?");
 }
 
 #[test]
