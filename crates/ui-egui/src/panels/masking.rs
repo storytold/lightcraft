@@ -90,7 +90,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::pad_margin(ui, 0, 10)).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
         let tiles: [(&str, &str, Icon); 10] = [
@@ -305,7 +305,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::pad_margin(ui, 8, 8)).show(ui, |ui| {
         for (i, c) in m.components.iter().enumerate() {
             let (kind, icon) = kind_label(&c.shape);
             let label = c.name.clone().unwrap_or_else(|| match &c.shape {
@@ -875,7 +875,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
 
 fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::pad_margin(ui, 6, 0)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Brush")).font(t.semibold(13.0)));
             if text_button(ui, "brushAdd", crate::i18n::tr("Add"), !app.ui.brush_erase).clicked() {

@@ -78,7 +78,8 @@ pub struct Tokens {
     pub panel_w: f32,
     pub strip_w: f32,
     pub slider_row_h: f32,
-    pub section_h: f32,
+    /// Left and right inset of a panel's rows (labels, sliders, buttons); a card insets its own.
+    pub panel_pad: f32,
     pub film_h: f32,
 }
 
@@ -156,8 +157,8 @@ impl Default for Tokens {
             bottom_bar_h: 48.0,
             panel_w: 270.0,
             strip_w: 48.0,
-            slider_row_h: 45.0,
-            section_h: 57.0,
+            slider_row_h: 40.0,
+            panel_pad: 16.0,
             film_h: 142.0,
         }
     }

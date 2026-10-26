@@ -100,6 +100,8 @@ mod tests_drop_import;
 #[cfg(test)]
 mod tests_edit_layout;
 #[cfg(test)]
+mod tests_edit_panel;
+#[cfg(test)]
 mod tests_empty_library;
 #[cfg(test)]
 mod tests_error_kinds;

@@ -96,7 +96,8 @@ fn held_offset(ctx: &egui::Context) -> Option<f32> {
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);
+    let pad = crate::widgets::content_pad(ui);
+    ui.painter().text(pos2(r.left() + pad, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);
 }
 
 /// A panel title that folds its section shut and open again (`section:{id}`; kept in
@@ -120,7 +121,7 @@ pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, res
     if resp.has_focus() {
         p.rect_stroke(r.shrink(2.0), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
-    p.text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
+    p.text(pos2(r.left() + crate::widgets::content_pad(ui), r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
     let chevron = Rect::from_center_size(pos2(r.right() - 30.0, r.center().y + 2.0), vec2(14.0, 14.0));
     paint(p, chevron, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.icon);
     if resp.clicked() {
@@ -132,12 +133,13 @@ pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, res
 pub fn label_row(ui: &mut egui::Ui, label: &str, value: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(label), t.font(12.5), t.text_dim);
+    let pad = crate::widgets::content_pad(ui);
+    ui.painter().text(pos2(r.left() + pad, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(label), t.font(12.5), t.text_dim);
     ui.painter().text(pos2(r.left() + 110.0, r.center().y), Align2::LEFT_CENTER, value, t.font(12.5), t.text_label);
 }
 
 fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 6 }).show(ui, add);
+    egui::Frame::NONE.inner_margin(crate::widgets::pad_margin(ui, 6, 6)).show(ui, add);
 }
 
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).

@@ -2039,11 +2039,11 @@ fn disclosure_rows_publish_expanded_not_toggled() {
     ctx.enable_accesskit();
     let mut seen = Vec::new();
     frame(&ctx, raw(egui::vec2(400.0, 300.0)), |ui| {
-        let (resp, _) = crate::widgets::section_header(ui, "test-section", "Light", true, None);
+        let (resp, _) = crate::widgets::section_header(ui, "test-section", "Light", true, None, false);
         seen.push(ui.ctx().accesskit_node_builder(resp.id, |node| node.is_expanded()).flatten());
     });
     frame(&ctx, raw(egui::vec2(400.0, 300.0)), |ui| {
-        let (resp, _) = crate::widgets::section_header(ui, "test-section", "Light", false, None);
+        let (resp, _) = crate::widgets::section_header(ui, "test-section", "Light", false, None, false);
         seen.push(ui.ctx().accesskit_node_builder(resp.id, |node| node.is_expanded()).flatten());
     });
     assert_eq!(seen, vec![Some(true), Some(false)], "the disclosure reports Expanded, not Toggled");
