@@ -282,20 +282,30 @@ fn a_set_up_runs_beside_the_cpu_and_removes_its_marker() {
 fn a_set_up_that_takes_too_long_is_given_up_on() {
     let dir = folder("slowsetup");
     let marker = dir.join(GPU_SETUP_MARKER);
-    let started = web_time::Instant::now();
-    let slow = || -> Result<(), String> {
-        std::thread::sleep(Duration::from_millis(600));
+    // a card whose set-up is stuck until the test lets it go (it gives up after a while, so a caller
+    // that waits for it fails the test instead of hanging it)
+    let gate = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
+    let (g, f) = (gate.clone(), finished.clone());
+    let slow = move || -> Result<(), String> {
+        let t = web_time::Instant::now();
+        while !g.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        f.store(true, Ordering::SeqCst);
         Ok(())
     };
     let r = set_up_card(&marker, Duration::from_millis(50), slow, || ());
     assert!(r.as_ref().is_err_and(|e| e.contains("took longer") && worth_retrying(e)), "{r:?}");
-    assert!(started.elapsed() < Duration::from_millis(500), "the caller does not wait for the card");
+    assert!(!finished.load(Ordering::SeqCst), "the caller does not wait for the card");
     // while the first is still stuck, another set-up of the same model does not start a second one
     let again = set_up_card(&marker, Duration::from_secs(5), || Ok(()), || ());
     assert!(again.is_err_and(|e| e.contains("still setting up") && worth_retrying(&e)));
     // once it ends its marker goes, and the card can be set up again
+    gate.store(true, Ordering::SeqCst);
+    let started = web_time::Instant::now();
     while marker.exists() {
-        assert!(started.elapsed() < Duration::from_secs(10), "the stuck set-up ended");
+        assert!(started.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(10)), "the stuck set-up ended");
         std::thread::sleep(Duration::from_millis(20));
     }
     while SETTING_UP.lock().unwrap().iter().any(|m| m == &marker) {
