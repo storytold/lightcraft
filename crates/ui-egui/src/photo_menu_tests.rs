@@ -326,6 +326,80 @@ fn photo_rows_carry_the_right_clicked_photo() {
     }
 }
 
+/// The menu row of a selected photo that isn't the active one, with its own parameters.
+fn row_of(a: &LightcraftApp, photo: PhotoId, id: &str) -> (Value, bool) {
+    match find(&items(&nodes(a, photo)), id, &Value::Null) {
+        Some(MenuNode::Item { params, enabled, .. }) => (params.clone(), *enabled),
+        other => panic!("no {id} row: {other:?}"),
+    }
+}
+
+/// Right-clicking a selected photo that isn't the active one, Show in Finder is on for that
+/// photo's file (the active photo has none) and reveals it; a mistyped `id` is refused, not taken
+/// for the active photo.
+#[test]
+fn show_in_finder_reveals_the_right_clicked_photo() {
+    let mut a = app();
+    let v = photos(&mut a);
+    on_disk(&mut a, v[1], "/pics/clicked.jpg");
+    let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let s = shown.clone();
+    a.services.reveal = Some(Box::new(move |p: &str| {
+        s.lock().unwrap().push(p.to_string());
+        Ok(())
+    }));
+    select(&mut a, &[v[0], v[1]]);
+    assert_eq!(a.session.active(), Some(v[0]));
+    assert!(!crate::menus::ui_enabled(&a, "app.showInFinder"), "the menu bar's is off: the active photo has no file");
+    let (finder, on) = row_of(&a, v[1], "app.showInFinder");
+    assert!(on, "the right-clicked photo's row is on");
+    a.run("app.showInFinder", finder).unwrap();
+    assert_eq!(shown.lock().unwrap().as_slice(), ["/pics/clicked.jpg"]);
+    // a mistyped id is refused, not taken for the active photo; an unknown one says so
+    on_disk(&mut a, v[0], "/pics/active.jpg");
+    let e = a.run("app.showInFinder", json!({"id": "5"})).unwrap_err();
+    assert!(e.contains("must be a photo id"), "{e}");
+    let e = a.run("app.showInFinder", json!({"id": u64::MAX})).unwrap_err();
+    assert!(e.contains("no photo"), "{e}");
+    assert_eq!(shown.lock().unwrap().as_slice(), ["/pics/clicked.jpg"], "nothing else was revealed");
+}
+
+/// Right-clicking a selected photo that isn't the active one, Locate Missing File… relinks that
+/// photo, and leaves the active one alone.
+#[test]
+fn locate_relinks_the_right_clicked_photo() {
+    let mut a = app();
+    let v = photos(&mut a);
+    let dir = std::env::temp_dir().join(format!("lc-photo-menu-locate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let found = dir.join("found.jpg");
+    std::fs::write(&found, b"not read").unwrap();
+    on_disk(&mut a, v[0], "/pics/active.jpg");
+    on_disk(&mut a, v[1], "/pics/gone.jpg");
+    a.session.media.availability.set_probe(std::sync::Arc::new(|path: &str| path != "/pics/gone.jpg"));
+    select(&mut a, &[v[0], v[1]]);
+    assert_eq!(a.session.active(), Some(v[0]));
+    let (mut locate, _) = row_of(&a, v[1], "photo.locate");
+    locate["path"] = json!(found.to_string_lossy());
+    a.run("photo.locate", locate).unwrap();
+    let path = |a: &LightcraftApp, id: PhotoId| match a.session.catalog.photo(id).map(|p| &p.source) {
+        Some(lightcraft_catalog::Source::File { path }) => path.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(path(&a, v[1]), found.to_string_lossy(), "the right-clicked photo is relinked");
+    assert_eq!(path(&a, v[0]), "/pics/active.jpg", "the active photo is left alone");
+    // an unknown or mistyped id is refused before any file dialog opens
+    a.services.pick_files = Some(Box::new(|| panic!("no file dialog for a photo that doesn't exist")));
+    let e = a.run("photo.locate", json!({"id": u64::MAX})).unwrap_err();
+    assert!(e.contains("no photo"), "{e}");
+    let e = a.run("photo.locate", json!({"id": u64::MAX, "path": found.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("no photo"), "{e}");
+    let e = a.run("photo.locate", json!({"id": "5", "path": found.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("must be a photo id"), "{e}");
+    assert_eq!(path(&a, v[0]), "/pics/active.jpg", "still left alone");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Set as Reference Photo is off for a photo in Recently Deleted, and says why.
 #[test]
 fn a_deleted_photo_cant_be_the_reference() {

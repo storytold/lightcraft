@@ -259,9 +259,12 @@ fn nodes_with(app: &LightcraftApp, photo: PhotoId, infos: &[CommandInfo], preset
     // where it is: the original moved or its drive is gone (a cached answer, checked off the UI thread)
     let missing = matches!(app.session.catalog.photo(photo).map(|p| &p.source), Some(lightcraft_catalog::Source::File { path }) if app.session.media.availability.is_offline(path));
     if missing {
-        v.push(row("photo.locate"));
+        v.push(with(row("photo.locate"), |_, p, _, _| *p = json!({"id": photo.0})));
     }
-    v.push(row("app.showInFinder"));
+    v.push(with(row("app.showInFinder"), |_, p, e, _| {
+        *p = json!({"id": photo.0});
+        *e = crate::menus::show_in_finder_enabled(app, Some(photo));
+    }));
     v.push(with(row("app.showInFolders"), |_, p, e, _| {
         *p = json!({"id": photo.0});
         *e = crate::menus::show_in_folders_enabled(app, Some(photo));

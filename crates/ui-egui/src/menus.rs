@@ -12,6 +12,7 @@ mod files;
 mod run;
 mod ui_commands;
 
+pub(crate) use files::show_in_finder_enabled;
 pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_enabled};
 pub use run::{parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
@@ -54,14 +55,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
                     _ => false,
                 })
         }
-        "app.showInFinder" => {
-            app.services.reveal.is_some()
-                && app
-                    .session
-                    .active()
-                    .and_then(|id| app.session.catalog.photo(id))
-                    .is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. }))
-        }
+        "app.showInFinder" => show_in_finder_enabled(app, None),
         "app.showInFolders" => show_in_folders_enabled(app, None),
         // (asked every frame a menu is open: reads the selection in place, copies no path)
         "photo.copyPath" => {
