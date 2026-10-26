@@ -130,6 +130,21 @@ fn window_files(in_memory: bool) -> window_gpu::Files {
     window_gpu::Files::new(config_dir().filter(|_| !in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()))
 }
 
+/// Import files passed on the command line once the library is open. The app's saved startup view
+/// is already sanitized before this runs; preserve an explicit Detail choice and keep the grid
+/// behavior for Grid and Last.
+fn start_launch_files(app: &mut LightcraftApp, files: Vec<String>) {
+    if files.is_empty() {
+        return;
+    }
+    if let Err(e) = lightcraft_ui_egui::import::start_paths(app, files) {
+        log::warn!("import at launch: {e}");
+    }
+    if app.ui.settings.startup_view != lightcraft_ui_egui::state::StartupView::Detail {
+        app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+    }
+}
+
 /// Written while the GPU compute device is created, removed once that returned
 /// (`lightcraft_gpu::backend::set_init_marker`). Not with `LIGHTCRAFT_NO_PREFS` (tests, scripts).
 fn gpu_marker_path() -> Option<std::path::PathBuf> {
@@ -1061,10 +1076,7 @@ fn main() -> eframe::Result {
                     // listed and read on the import worker once the window shows (issue #374: never
                     // here, before the first frame, where a large folder kept the window from
                     // appearing)
-                    if let Err(e) = lightcraft_ui_egui::import::start_paths(&mut app, files) {
-                        log::warn!("import at launch: {e}");
-                    }
-                    app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+                    start_launch_files(&mut app, files);
                 }
                 // native menu bar generated from the command registry (macOS; elsewhere the menus are
                 // drawn in the window's top bar). LIGHTCRAFT_NO_NATIVE_MENU=1 keeps the in-window menus.
@@ -1174,6 +1186,126 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn startup_headless(
+        tag: &str,
+        startup_view: lightcraft_ui_egui::state::StartupView,
+        seed_demo: bool,
+    ) -> (std::path::PathBuf, lightcraft_ui_egui::headless::Headless) {
+        let root = dir(tag);
+        let mut session = Session::new().with_fs();
+        session.open_library(root.join("library"), seed_demo).unwrap();
+        let mut app = LightcraftApp::new(session, Services::default());
+        let mut ui = UiState::default();
+        ui.settings.startup_view = startup_view;
+        app.ui = ui.sanitized();
+        (root, lightcraft_ui_egui::headless::Headless::new(app, [1000.0, 700.0], 1.0))
+    }
+
+    fn startup_png(path: &std::path::Path, seed: u8) -> Vec<u8> {
+        let image = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[seed, 40, 90, 255]; 64] };
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(path, &bytes).unwrap();
+        bytes
+    }
+
+    fn start_launch_photo(h: &mut lightcraft_ui_egui::headless::Headless, path: &std::path::Path) {
+        start_launch_files(&mut h.app, vec![path.to_string_lossy().into_owned()]);
+        assert!(h.settle(std::time::Duration::from_secs(30)), "launch import did not settle");
+        assert!(h.app.import.is_none(), "launch import completed");
+    }
+
+    fn assert_launch_photo(h: &lightcraft_ui_egui::headless::Headless, name: &str) -> u64 {
+        let id = h.app.session.selection.active.expect("launch import selects a photo");
+        let photo = h.app.session.catalog.photo(id).expect("selected photo is in the catalog");
+        assert_eq!(photo.file_name, name);
+        id.0
+    }
+
+    #[test]
+    fn startup_view_detail_with_new_file() {
+        use lightcraft_ui_egui::state::{StartupView, ViewMode};
+        let (root, mut h) = startup_headless("startup-detail-new", StartupView::Detail, false);
+        let file = root.join("new.png");
+        let original = startup_png(&file, 25);
+
+        start_launch_photo(&mut h, &file);
+
+        assert_eq!(h.app.ui.view, ViewMode::Detail);
+        assert_eq!(h.app.session.catalog.photos().count(), 1);
+        assert_launch_photo(&h, "new.png");
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        drop(h);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_view_detail_with_existing_file() {
+        use lightcraft_ui_egui::state::{StartupView, ViewMode};
+        let (root, mut h) = startup_headless("startup-detail-existing", StartupView::Grid, false);
+        let file = root.join("existing.png");
+        let original = startup_png(&file, 75);
+        start_launch_photo(&mut h, &file);
+        let original_id = assert_launch_photo(&h, "existing.png");
+
+        let mut ui = h.app.ui.clone();
+        ui.settings.startup_view = StartupView::Detail;
+        h.app.ui = ui.sanitized();
+        start_launch_photo(&mut h, &file);
+
+        assert_eq!(h.app.ui.view, ViewMode::Detail);
+        assert_eq!(h.app.session.catalog.photos().count(), 1, "an existing launch argument is not duplicated");
+        assert_eq!(assert_launch_photo(&h, "existing.png"), original_id);
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        drop(h);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_view_grid_with_file() {
+        use lightcraft_ui_egui::state::{StartupView, ViewMode};
+        let (root, mut h) = startup_headless("startup-grid-file", StartupView::Grid, false);
+        let file = root.join("grid.png");
+        let original = startup_png(&file, 120);
+
+        start_launch_photo(&mut h, &file);
+
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+        assert_eq!(h.app.session.catalog.photos().count(), 1);
+        assert_launch_photo(&h, "grid.png");
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        drop(h);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_view_without_files_preserves_preferences() {
+        use lightcraft_ui_egui::state::{StartupView, ViewMode};
+        let (root, mut h) = startup_headless("startup-no-files", StartupView::Detail, true);
+        assert!(h.app.session.catalog.photos().count() > 0, "the launch library is populated");
+        start_launch_files(&mut h.app, Vec::new());
+        assert!(h.app.import.is_none());
+        assert_eq!(h.app.ui.view, ViewMode::Detail);
+        drop(h);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_view_last_with_files_preserves_current_policy() {
+        use lightcraft_ui_egui::state::{StartupView, ViewMode};
+        let (root, mut h) = startup_headless("startup-last-file", StartupView::Last, false);
+        let file = root.join("last.png");
+        let original = startup_png(&file, 170);
+
+        start_launch_photo(&mut h, &file);
+
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+        assert_eq!(h.app.session.catalog.photos().count(), 1);
+        assert_launch_photo(&h, "last.png");
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        drop(h);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Issue #374: launch arguments that would walk a whole drive or home folder are reported,

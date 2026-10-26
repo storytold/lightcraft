@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### Opening an image at launch honors the Detail startup view
+- When LightCraft starts with a new or already-catalogued image path, an explicit Startup View → Detail View now opens
+  the selected image in Detail after the asynchronous import completes. Photo Grid remains the launch view for Grid
+  and Last preferences; launches without image arguments keep the saved view when the library is populated. (#3028)
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
