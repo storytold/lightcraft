@@ -2414,5 +2414,15 @@
   "Remove Folders from Library": "Keluarkan folder dari pustaka",
   "That includes the photos in the folders inside them.": "Ini mencakup foto di dalam folder yang ada di dalamnya.",
   "The photos stay in All Photos. Undo brings the albums back.": "Foto tetap ada di Semua foto. Urungkan mengembalikan album.",
-  "Another library was opened since this window appeared: nothing was changed": "Pustaka lain telah dibuka setelah jendela ini muncul: tidak ada yang diubah"
+  "Another library was opened since this window appeared: nothing was changed": "Pustaka lain telah dibuka setelah jendela ini muncul: tidak ada yang diubah",
+  "A folder can't go inside itself": "Folder tidak bisa dimasukkan ke dalam dirinya sendiri",
+  "A keyword can't go inside itself": "Kata kunci tidak bisa dimasukkan ke dalam dirinya sendiri",
+  "Copied as text: paste it in a keyword box to give the keywords to photos": "Disalin sebagai teks: tempel di kotak kata kunci untuk memberikan kata kunci ke foto",
+  "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level": "Disalin: Tempel ada di menu folder, dan di menu + Album untuk tingkat teratas",
+  "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level": "Dipotong: Tempel ada di menu folder, dan di menu + Album untuk tingkat teratas",
+  "Cut: Paste is in the menu of the keyword they go inside": "Dipotong: Tempel ada di menu kata kunci tempat mereka dimasukkan",
+  "Duplicate Album": "Duplikat album",
+  "Paste Inside This Keyword": "Tempel ke dalam kata kunci ini",
+  "Paste Into This Folder": "Tempel ke folder ini",
+  "Paste at Top Level": "Tempel di tingkat teratas"
 }

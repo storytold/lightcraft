@@ -2503,5 +2503,15 @@
   "Remove Folders from Library": "Ta bort mappar från biblioteket",
   "That includes the photos in the folders inside them.": "Det omfattar fotona i mapparna inuti dem.",
   "The photos stay in All Photos. Undo brings the albums back.": "Fotona finns kvar i Alla foton. Ångra tar tillbaka albumen.",
-  "Another library was opened since this window appeared: nothing was changed": "Ett annat bibliotek har öppnats sedan det här fönstret visades: ingenting ändrades"
+  "Another library was opened since this window appeared: nothing was changed": "Ett annat bibliotek har öppnats sedan det här fönstret visades: ingenting ändrades",
+  "A folder can't go inside itself": "En mapp kan inte läggas i sig själv",
+  "A keyword can't go inside itself": "Ett nyckelord kan inte läggas i sig självt",
+  "Copied as text: paste it in a keyword box to give the keywords to photos": "Kopierat som text: klistra in i ett nyckelordsfält för att ge fotona nyckelorden",
+  "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level": "Kopierat: Klistra in finns i en mapps meny och, för översta nivån, i Album-menyn +",
+  "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level": "Urklippt: Klistra in finns i en mapps meny och, för översta nivån, i Album-menyn +",
+  "Cut: Paste is in the menu of the keyword they go inside": "Urklippt: Klistra in finns i menyn för det nyckelord de ska in i",
+  "Duplicate Album": "Duplicera album",
+  "Paste Inside This Keyword": "Klistra in i det här nyckelordet",
+  "Paste Into This Folder": "Klistra in i den här mappen",
+  "Paste at Top Level": "Klistra in på översta nivån"
 }

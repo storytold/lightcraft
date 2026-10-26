@@ -3524,5 +3524,15 @@
   "Remove Folders from Library": "Ordner aus Bibliothek entfernen",
   "That includes the photos in the folders inside them.": "Das schließt die Fotos in den enthaltenen Unterordnern ein.",
   "The photos stay in All Photos. Undo brings the albums back.": "Die Fotos bleiben in „Alle Fotos“. Rückgängig stellt die Alben wieder her.",
-  "Another library was opened since this window appeared: nothing was changed": "Seit dem Erscheinen dieses Fensters wurde eine andere Bibliothek geöffnet: Es wurde nichts geändert"
+  "Another library was opened since this window appeared: nothing was changed": "Seit dem Erscheinen dieses Fensters wurde eine andere Bibliothek geöffnet: Es wurde nichts geändert",
+  "A folder can't go inside itself": "Ein Ordner kann nicht in sich selbst liegen",
+  "A keyword can't go inside itself": "Ein Stichwort kann nicht in sich selbst liegen",
+  "Copied as text: paste it in a keyword box to give the keywords to photos": "Als Text kopiert: in ein Stichwortfeld einfügen, um Fotos die Stichwörter zu geben",
+  "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level": "Kopiert: „Einfügen“ steht im Menü eines Ordners und, für die oberste Ebene, im +-Menü der Alben",
+  "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level": "Ausgeschnitten: „Einfügen“ steht im Menü eines Ordners und, für die oberste Ebene, im +-Menü der Alben",
+  "Cut: Paste is in the menu of the keyword they go inside": "Ausgeschnitten: „Einfügen“ steht im Menü des Stichworts, in das sie kommen sollen",
+  "Duplicate Album": "Album duplizieren",
+  "Paste Inside This Keyword": "In dieses Stichwort einfügen",
+  "Paste Into This Folder": "In diesen Ordner einfügen",
+  "Paste at Top Level": "Auf oberster Ebene einfügen"
 }

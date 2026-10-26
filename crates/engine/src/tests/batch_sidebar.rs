@@ -299,3 +299,136 @@ fn several_folders_get_a_colour_label_as_one_step() {
     s.execute("folder.label", &json!({"paths": ["/pics/2025/alps", "/pics/2026/beach"], "label": "none"})).unwrap();
     assert!(label(&s, "/pics/2025/alps").is_none() && label(&s, "/pics/2026/beach").is_none());
 }
+
+// ---- album.duplicate (Copy, then Paste, in the Albums list)
+//
+// - Given an album with photos, when it is duplicated, then a second album "… copy" holds the
+//   same photos beside it, the original is untouched, and one undo takes the copy away.
+// - A smart album's copy has the same rules; a folder's copy holds copies of what is inside it.
+// - Given several albums, when they are duplicated into a folder, then every copy is inside it,
+//   as one undo step; of a folder and an album inside it, the folder is copied (once).
+// - A copy into something that is not a folder, or of an album that is not there, is refused
+//   and nothing is copied.
+
+fn photos_of(s: &Session, id: u64) -> Vec<u64> {
+    s.catalog.album(AlbumId(id)).unwrap().photos.iter().map(|p| p.0).collect()
+}
+
+fn fill(s: &mut Session, album: u64, ids: &[u64]) {
+    s.selection.ids = ids.iter().map(|i| PhotoId(*i)).collect();
+    s.execute("album.addPhotos", &json!({"id": album, "ids": ids})).unwrap();
+    s.selection.ids.clear();
+}
+
+fn names(s: &Session) -> Vec<String> {
+    let mut n: Vec<String> = s.catalog.albums().map(|a| a.name.clone()).collect();
+    n.sort();
+    n
+}
+
+#[test]
+fn an_album_is_duplicated_with_its_photos() {
+    let mut s = Session::new();
+    let ids = photos(&mut s, 3);
+    let a = album(&mut s, json!({"name": "Alps"}));
+    fill(&mut s, a, &[ids[2], ids[0]]);
+    let steps = s.undo.len();
+    let r = s.execute("album.duplicate", &json!({"id": a})).unwrap();
+    let copy = r["ids"][0].as_u64().unwrap();
+    assert_ne!(copy, a);
+    assert_eq!(s.catalog.album(AlbumId(copy)).unwrap().name, "Alps copy");
+    assert_eq!(photos_of(&s, copy), vec![ids[2], ids[0]], "the same photos, in the album's order");
+    assert_eq!(photos_of(&s, a), vec![ids[2], ids[0]], "the original is untouched");
+    assert_eq!(s.undo.len(), steps + 1);
+    // the copy is its own album from then on
+    fill(&mut s, copy, &[ids[1]]);
+    assert_eq!(photos_of(&s, a).len(), 2);
+    undo(&mut s);
+    undo(&mut s);
+    assert!(!has_album(&s, copy) && has_album(&s, a));
+}
+
+#[test]
+fn a_smart_album_and_a_folder_are_duplicated_with_what_makes_them() {
+    let mut s = Session::new();
+    photos(&mut s, 2);
+    let smart = s.execute("album.createSmart", &json!({"name": "Rated", "rules": {"rating": 3}})).unwrap()["id"].as_u64().unwrap();
+    let folder = album(&mut s, json!({"name": "Trips", "folder": true}));
+    let inner = album(&mut s, json!({"name": "Inner", "folder": true, "parent": folder}));
+    album(&mut s, json!({"name": "Deep", "parent": inner}));
+    let steps = s.undo.len();
+    // the folder, an album inside it (it goes with the folder) and the smart album
+    let r = s.execute("album.duplicate", &json!({"ids": [inner, folder, smart]})).unwrap();
+    assert_eq!(r["ids"].as_array().unwrap().len(), 2, "the folder and the smart album: {r}");
+    assert_eq!(s.undo.len(), steps + 1, "one step");
+    assert_eq!(names(&s), vec!["Deep", "Deep", "Inner", "Inner", "Rated", "Rated copy", "Trips", "Trips copy"]);
+    let copy = s.catalog.albums().find(|a| a.name == "Rated copy").unwrap();
+    assert_eq!(copy.smart.as_ref().map(|r| r.rating), Some(3));
+    let trips = s.catalog.albums().find(|a| a.name == "Trips copy").unwrap().id;
+    let inner_copy = s.catalog.albums().find(|a| a.name == "Inner" && a.parent == Some(trips)).expect("inside the copied folder").id;
+    assert!(s.catalog.albums().any(|a| a.name == "Deep" && a.parent == Some(inner_copy)));
+    undo(&mut s);
+    assert_eq!(names(&s), vec!["Deep", "Inner", "Rated", "Trips"]);
+}
+
+#[test]
+fn a_copied_smart_album_tests_the_copy_of_an_album_inside_a_group() {
+    let mut s = Session::new();
+    let folder = album(&mut s, json!({"name": "Trips", "folder": true}));
+    let sibling = album(&mut s, json!({"name": "Sibling", "parent": folder}));
+    let rules =
+        json!({"ruleSet": {"match": "all", "rules": [{"group": {"match": "any", "rules": [{"field": "album", "op": "is", "value": sibling}]}}]}});
+    let smart = s.execute("album.createSmart", &json!({"name": "Nested", "rules": rules, "parent": folder})).unwrap()["id"].as_u64().unwrap();
+    let r = s.execute("album.duplicate", &json!({"ids": [folder]})).unwrap();
+    let copy = r["ids"][0].as_u64().unwrap();
+    let sibling_copy = s.catalog.albums().find(|a| a.name == "Sibling" && a.parent == Some(AlbumId(copy))).unwrap().id;
+    let smart_copy = s.catalog.albums().find(|a| a.name == "Nested" && a.parent == Some(AlbumId(copy))).unwrap();
+    let tested = smart_copy.smart.as_ref().and_then(|r| r.rule_set.as_ref()).unwrap().albums_tested();
+    assert_eq!(tested, vec![sibling_copy], "it tests the copied sibling, not the original");
+    let original = s.catalog.album(AlbumId(smart)).unwrap().smart.as_ref().and_then(|r| r.rule_set.as_ref()).unwrap().albums_tested();
+    assert_eq!(original, vec![AlbumId(sibling)]);
+}
+
+#[test]
+fn several_albums_are_duplicated_into_a_folder_as_one_step() {
+    let mut s = Session::new();
+    let (a, b) = (album(&mut s, json!({"name": "A"})), album(&mut s, json!({"name": "B"})));
+    let folder = album(&mut s, json!({"name": "Trips", "folder": true}));
+    let steps = s.undo.len();
+    let r = s.execute("album.duplicate", &json!({"ids": [a, b], "parent": folder})).unwrap();
+    let copies: Vec<u64> = r["ids"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    assert_eq!(copies.len(), 2);
+    assert!(copies.iter().all(|c| parent_of(&s, *c) == Some(folder)));
+    let folder_id = AlbumId(folder);
+    assert_eq!((parent_of(&s, a), parent_of(&s, b)), (None, None), "the originals stay where they are");
+    assert_eq!(s.undo.len(), steps + 1);
+    // somewhere else, a copy keeps its name; beside the original it says it is a copy
+    assert!(s.catalog.albums().any(|x| x.name == "A" && x.parent == Some(folder_id)));
+    let again = s.execute("album.duplicate", &json!({"ids": [a], "parent": null})).unwrap()["ids"][0].as_u64().unwrap();
+    assert_eq!(s.catalog.album(AlbumId(again)).unwrap().name, "A copy");
+    // refused before anything is copied
+    let count = s.catalog.albums().count();
+    assert!(s.execute("album.duplicate", &json!({"ids": [a, 4242]})).unwrap_err().to_string().contains("4242"));
+    assert!(s.execute("album.duplicate", &json!({"ids": [a], "parent": b})).is_err(), "not a folder");
+    assert!(s.execute("album.duplicate", &json!({"ids": []})).is_err());
+    assert_eq!(s.catalog.albums().count(), count);
+}
+
+#[test]
+fn a_copied_folder_keeps_the_order_inside_it_and_its_smart_albums_go_by_the_copies() {
+    let mut s = Session::new();
+    photos(&mut s, 1);
+    let folder = album(&mut s, json!({"name": "Trips", "folder": true}));
+    let x = album(&mut s, json!({"name": "X", "parent": folder}));
+    let y = album(&mut s, json!({"name": "Y", "parent": folder}));
+    // by hand: Y before X
+    s.execute("album.reorder", &json!({"id": y, "before": x})).unwrap();
+    let smart = s.execute("album.createSmart", &json!({"name": "S", "rules": {"album": x}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.move", &json!({"id": smart, "parent": folder})).unwrap();
+    let copy = s.execute("album.duplicate", &json!({"id": folder})).unwrap()["ids"][0].as_u64().unwrap();
+    let inside = |s: &Session, name: &str| s.catalog.albums().find(|a| a.name == name && a.parent == Some(AlbumId(copy))).cloned().unwrap();
+    let (cx, cy, cs) = (inside(&s, "X"), inside(&s, "Y"), inside(&s, "S"));
+    assert!(cy.order.is_some() && cy.order < cx.order, "Y is still before X: {:?} {:?}", cy.order, cx.order);
+    assert_eq!(cs.smart.as_ref().and_then(|r| r.album), Some(cx.id), "limited to the copy of X, not to X");
+    assert_eq!(s.catalog.album(AlbumId(copy)).unwrap().order, None, "the copy itself is listed by name");
+}

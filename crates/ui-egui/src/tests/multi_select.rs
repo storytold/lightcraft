@@ -20,6 +20,11 @@
 //! - Given several rows just chosen with Cmd/Shift+click, when Delete is pressed, then the
 //!   question about those rows comes up; after a click elsewhere, or with one row chosen the
 //!   usual way, Delete is the photos' as it always was.
+//! - Given an album copied from its menu, when Paste is chosen in a folder's menu, then a copy
+//!   of it is inside the folder and the original stays; given albums cut, then Paste moves them
+//!   (one step) and there is nothing left to paste.
+//! - Given keywords cut in the Keyword List, when Paste is chosen in another keyword's menu, then
+//!   they are nested inside it; Copy puts their names on the clipboard as text.
 
 use std::time::Duration;
 
@@ -572,6 +577,73 @@ fn delete_asks_about_several_keywords_picked_in_the_keyword_list() {
     assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
 }
 
+#[test]
+fn copy_and_paste_duplicates_an_album_and_cut_and_paste_moves_several() {
+    use crate::panels::side_select::SideClip;
+    let mut h = app("info");
+    let ([a, b, c, _], ids) = four_albums(&mut h);
+    let folder = run(&mut h, "album.create", json!({"name": "Sel Folder", "folder": true}))["id"].as_u64().unwrap();
+    let folder_row = format!("source:folder:{folder}");
+    let inside = |h: &Headless| -> Vec<String> {
+        let mut n: Vec<String> = h.app.session.catalog.albums().filter(|x| x.parent == Some(AlbumId(folder))).map(|x| x.name.clone()).collect();
+        n.sort();
+        n
+    };
+    // nothing held: a folder's menu has no Paste
+    right_click(&mut h, &folder_row);
+    assert!(has(&h, "sideMenu:clip:copy") && !has(&h, "sideMenu:clip:paste"));
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    // Copy one album, Paste into the folder: a copy, and the original stays
+    right_click(&mut h, &row(b));
+    click(&mut h, "sideMenu:clip:copy");
+    assert_eq!(h.app.ui.side.clip, Some(SideClip::Albums { ids: vec![b], cut: false }));
+    assert_eq!(h.app.copied.as_deref(), Some("Sel B"), "its name is on the clipboard as text");
+    right_click(&mut h, &folder_row);
+    click(&mut h, "sideMenu:clip:paste");
+    assert_eq!(inside(&h), vec!["Sel B"]);
+    assert_eq!(h.app.session.catalog.album(AlbumId(b)).unwrap().parent, None, "the original stays");
+    let copy = h.app.session.catalog.albums().find(|x| x.parent == Some(AlbumId(folder))).unwrap();
+    assert_eq!(copy.photos.iter().map(|p| p.0).collect::<Vec<_>>(), vec![ids[1]], "with its photos");
+    assert!(h.app.ui.side.clip.is_some(), "what was copied can be pasted again");
+    // Cut two albums chosen together, Paste: both move, as one step, and nothing is held any more
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    right_click(&mut h, &row(c));
+    click(&mut h, "sideMenu:clip:cut");
+    assert_eq!(h.app.ui.side.clip, Some(SideClip::Albums { ids: vec![a, c], cut: true }));
+    let undo = h.app.session.undo.len();
+    right_click(&mut h, &folder_row);
+    click(&mut h, "sideMenu:clip:paste");
+    assert_eq!(inside(&h), vec!["Sel A", "Sel B", "Sel C"]);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    assert_eq!(h.app.ui.side.clip, None);
+    right_click(&mut h, &folder_row);
+    assert!(!has(&h, "sideMenu:clip:paste"));
+}
+
+#[test]
+fn cut_and_paste_nests_keywords_and_copy_puts_them_on_the_clipboard() {
+    use crate::panels::side_select::SideClip;
+    let (mut h, ids) = keyword_list();
+    click(&mut h, "keywordRow:Sel K1");
+    cmd_click(&mut h, "keywordRow:Sel K3");
+    right_click(&mut h, "keywordRow:Sel K3");
+    click(&mut h, "sideMenu:clip:copy");
+    assert_eq!(h.app.copied.as_deref(), Some("Sel K1, Sel K3"));
+    assert_eq!(h.app.ui.side.clip, None, "copied keywords are text, nothing is held to paste here");
+    right_click(&mut h, "keywordRow:Sel K3");
+    click(&mut h, "sideMenu:clip:cut");
+    assert_eq!(h.app.ui.side.clip, Some(SideClip::Keywords { keywords: vec!["Sel K1".to_string(), "Sel K3".to_string()] }));
+    let undo = h.app.session.undo.len();
+    right_click(&mut h, "keywordRow:Sel Parent");
+    click(&mut h, "sideMenu:clip:paste");
+    assert_eq!(keywords_of(&h, ids[0]), vec!["Sel K2", "Sel Parent|Sel K1"]);
+    assert_eq!(keywords_of(&h, ids[1]), vec!["Sel K2", "Sel Parent|Sel K3"]);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    assert_eq!(h.app.ui.side.clip, None);
+    assert_eq!(picked(&h), vec!["Sel Parent|Sel K1", "Sel Parent|Sel K3"], "still picked, where they are now");
+}
+
 // ---- What two independent reviews found
 
 /// A range starts from a row that is chosen: not from an album clicked before All Photos was shown.
@@ -826,9 +898,31 @@ fn delete_with_several_albums_shown_does_not_take_a_photo_out_of_the_one_chosen_
     assert_eq!(h.app.session.catalog.album_count(AlbumId(c)), 2);
 }
 
-/// Another library's rows are not what was chosen in this one.
+/// Cut albums are not pasted into one of themselves.
 #[test]
-fn what_was_chosen_is_forgotten_when_another_library_opens() {
+fn cut_albums_are_not_pasted_into_themselves() {
+    let mut h = app("info");
+    let folder = run(&mut h, "album.create", json!({"name": "Sel Folder", "folder": true}))["id"].as_u64().unwrap();
+    let inner = run(&mut h, "album.create", json!({"name": "Sel Inner", "folder": true, "parent": folder}))["id"].as_u64().unwrap();
+    right_click(&mut h, &format!("source:folder:{folder}"));
+    click(&mut h, "sideMenu:clip:cut");
+    let undo = h.app.session.undo.len();
+    for target in [folder, inner] {
+        right_click(&mut h, &format!("source:folder:{target}"));
+        assert!(has(&h, "sideMenu:clip:paste"));
+        // (a refusal of the engine would toast its reason: the item must not run the command at all)
+        h.app.ui.toast = None;
+        click(&mut h, "sideMenu:clip:paste");
+        assert!(h.app.ui.toast.is_none(), "greyed out: no command ran to be refused: {:?}", h.app.ui.toast);
+        assert_eq!(h.app.session.undo.len(), undo, "greyed out: nothing happens");
+        assert!(h.app.ui.side.clip.is_some());
+        ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    }
+}
+
+/// Another library's albums are not what was cut in this one.
+#[test]
+fn what_was_cut_is_forgotten_when_another_library_opens() {
     /// Gone with the test, however it ends.
     struct Scratch(std::path::PathBuf);
     impl Drop for Scratch {
@@ -840,12 +934,14 @@ fn what_was_chosen_is_forgotten_when_another_library_opens() {
     let ([a, _, c, _], _) = four_albums(&mut h);
     click(&mut h, &row(a));
     cmd_click(&mut h, &row(c));
-    assert!(h.app.ui.side.keys.is_some());
+    right_click(&mut h, &row(c));
+    click(&mut h, "sideMenu:clip:cut");
+    assert!(h.app.ui.side.clip.is_some());
     let dir = Scratch(std::env::temp_dir().join(format!("lc-multi-select-switch-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
     h.app.session.open_library(&dir.0, false).unwrap();
     h.settle(SETTLE);
-    assert!(h.app.ui.side.keys.is_none());
+    assert!(h.app.ui.side.clip.is_none() && h.app.ui.side.keys.is_none());
 }
 
 /// A keyword picked in the Keyword List is not picked in another library that has the same keyword.

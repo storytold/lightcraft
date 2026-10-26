@@ -49,6 +49,18 @@ pub struct SideState {
     /// The other keywords picked in the Keyword List beside `keyword_list_selected` (which is the
     /// one picked last, the one Edit takes), in the order picked.
     pub keyword_list_also: Vec<String>,
+    /// What Cut or Copy in a sidebar menu took, for Paste in another row's menu.
+    pub clip: Option<SideClip>,
+}
+
+/// Sidebar rows taken with Cut or Copy.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SideClip {
+    /// Albums and folders of albums: Paste moves them (`cut`) or makes copies of them.
+    Albums { ids: Vec<u64>, cut: bool },
+    /// Keywords that were cut: Paste nests them inside another keyword. (Copied keywords are text
+    /// on the system clipboard, for a keyword box.)
+    Keywords { keywords: Vec<String> },
 }
 
 /// A confirmation before something happens to several rows at once.
@@ -298,6 +310,7 @@ pub(crate) fn albums_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[u64
             }
         }
     });
+    album_clip_items(app, ui, ids);
     single_only(ui, "Rename…", "Choose one album to rename it");
     let delete = item(ui, "albums:delete", crate::i18n::tr_format!("Delete {n} Albums…", n = n), true)
         .on_hover_text(crate::i18n::tr("The photos stay in All Photos. Undo brings the albums back."));
@@ -457,6 +470,7 @@ pub(crate) fn keywords_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, keywords
         ui.close();
     }
     ui.separator();
+    keyword_clip_items(app, ui, keywords);
     if !list {
         single_only(ui, "Rename Keyword…", "Choose one keyword to rename it");
     }
@@ -518,6 +532,119 @@ pub(crate) fn list_clicked(app: &mut LightcraftApp, ui: &egui::Ui, path: &str) {
 /// picked that row up moves.
 pub(crate) fn list_targets(app: &LightcraftApp, path: &str) -> Vec<String> {
     targets(&list_picked(app), &path.to_string(), &same_kw)
+}
+
+// ---- Cut, Copy and Paste
+
+/// Cut and Copy for these albums, in an album's menu or the menu of several.
+pub(crate) fn album_clip_items(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[u64]) {
+    for (id, label, cut) in [("clip:cut", "Cut", true), ("clip:copy", "Copy", false)] {
+        if item(ui, id, crate::i18n::tr(label).to_string(), true).clicked() {
+            let names: Vec<String> = ids.iter().filter_map(|i| app.session.catalog.album(AlbumId(*i))).map(|a| a.name.clone()).collect();
+            // their names too, for wherever text is pasted
+            ui.ctx().copy_text(names.join("\n"));
+            app.ui.side.clip = Some(SideClip::Albums { ids: ids.to_vec(), cut });
+            let said = if cut {
+                "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level"
+            } else {
+                "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level"
+            };
+            app.toast(ui.ctx(), crate::i18n::tr(said).to_string());
+            ui.close();
+        }
+    }
+}
+
+/// Paste for albums taken with Cut or Copy, into folder `parent` (`None`: the top level). Only
+/// there while albums are held; cut albums move (one step), copied ones are duplicated.
+pub(crate) fn album_paste_item(app: &mut LightcraftApp, ui: &mut egui::Ui, parent: Option<AlbumId>) {
+    let Some(SideClip::Albums { ids, cut }) = app.ui.side.clip.clone() else { return };
+    // what is still there
+    let ids: Vec<u64> = ids.into_iter().filter(|i| app.session.catalog.album(AlbumId(*i)).is_some()).collect();
+    if ids.is_empty() {
+        // every album held is gone: nothing to paste, and no item to say why not
+        app.ui.side.clip = None;
+        return;
+    }
+    let label = if parent.is_some() { "Paste Into This Folder" } else { "Paste at Top Level" };
+    // cut albums can't move into one of themselves, or into a folder inside one
+    let cat = &app.session.catalog;
+    let inside_itself = cut
+        && parent.is_some_and(|mut at| {
+            for _ in 0..=cat.albums().count() {
+                if ids.contains(&at.0) {
+                    return true;
+                }
+                match cat.album(at).and_then(|a| a.parent) {
+                    Some(p) => at = p,
+                    None => break,
+                }
+            }
+            false
+        });
+    let paste = item(ui, "clip:paste", crate::i18n::tr(label).to_string(), !inside_itself)
+        .on_disabled_hover_text(crate::i18n::tr("A folder can't go inside itself"));
+    if !paste.clicked() {
+        return;
+    }
+    let to = parent.map(|p| p.0);
+    if cut {
+        if app.act("album.move", json!({"ids": ids, "parent": to})).is_some() {
+            // moved: there is nothing left to paste
+            app.ui.side.clip = None;
+            app.ui.reveal_album = ids.last().copied();
+        }
+    } else if let Some(r) = app.act("album.duplicate", json!({"ids": ids, "parent": to})) {
+        app.ui.reveal_album = r["ids"].as_array().and_then(|a| a.last()).and_then(serde_json::Value::as_u64);
+    }
+    ui.close();
+}
+
+/// Cut and Copy for these keywords, in a keyword's menu or the menu of several. Copy puts them on
+/// the system clipboard as text (`a, b|c`), which a keyword box takes to give them to photos.
+pub(crate) fn keyword_clip_items(app: &mut LightcraftApp, ui: &mut egui::Ui, keywords: &[String]) {
+    if item(ui, "clip:cut", crate::i18n::tr("Cut").to_string(), true).clicked() {
+        app.ui.side.clip = Some(SideClip::Keywords { keywords: keywords.to_vec() });
+        app.toast(ui.ctx(), crate::i18n::tr("Cut: Paste is in the menu of the keyword they go inside").to_string());
+        ui.close();
+    }
+    if item(ui, "clip:copy", crate::i18n::tr("Copy").to_string(), true).clicked() {
+        ui.ctx().copy_text(keywords.join(", "));
+        app.toast(ui.ctx(), crate::i18n::tr("Copied as text: paste it in a keyword box to give the keywords to photos").to_string());
+        ui.close();
+    }
+}
+
+/// Paste for keywords that were cut, inside keyword `parent`: they are nested there, as one
+/// step. Only there while keywords are held, and not on one of them.
+pub(crate) fn keyword_paste_item(app: &mut LightcraftApp, ui: &mut egui::Ui, parent: &str) {
+    let Some(SideClip::Keywords { keywords }) = app.ui.side.clip.clone() else { return };
+    let keywords: Vec<String> = keywords.into_iter().filter(|k| app.session.catalog.has_keyword(k)).collect();
+    if keywords.is_empty() {
+        // every keyword held is gone (deleted, merged away): nothing to paste
+        app.ui.side.clip = None;
+        return;
+    }
+    let inside_itself = keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(parent, k));
+    let paste = item(ui, "clip:paste", crate::i18n::tr("Paste Inside This Keyword").to_string(), !inside_itself)
+        .on_disabled_hover_text(crate::i18n::tr("A keyword can't go inside itself"));
+    if !paste.clicked() {
+        return;
+    }
+    let params = match keywords.as_slice() {
+        [one] => json!({"keyword": one, "parent": parent}),
+        many => json!({"keywords": many, "parent": parent}),
+    };
+    if app.act("keyword.move", params).is_some() {
+        app.ui.side.clip = None;
+        let into = app.session.catalog.keyword_path(parent).unwrap_or_else(|| parent.to_string());
+        // the upper ones moved, and what is below them with them
+        for k in keywords.iter().filter(|k| !keywords.iter().any(|o| !same_keyword(o, k) && lightcraft_catalog::keywords::is_under(k, o))) {
+            let leaf = k.rsplit('|').next().unwrap_or(k);
+            super::keyword_list::follow(app, k, &format!("{into}|{leaf}"));
+        }
+    }
+    ui.close();
 }
 
 // ---- The confirmations

@@ -3626,5 +3626,15 @@
   "Remove Folders from Library": "Retirer les dossiers de la bibliothèque",
   "That includes the photos in the folders inside them.": "Cela inclut les photos des dossiers qu'ils contiennent.",
   "The photos stay in All Photos. Undo brings the albums back.": "Les photos restent dans Toutes les photos. Vous pourrez annuler la suppression des albums.",
-  "Another library was opened since this window appeared: nothing was changed": "Une autre bibliothèque a été ouverte depuis l’apparition de cette fenêtre : rien n’a été modifié"
+  "Another library was opened since this window appeared: nothing was changed": "Une autre bibliothèque a été ouverte depuis l’apparition de cette fenêtre : rien n’a été modifié",
+  "A folder can't go inside itself": "Un dossier ne peut pas aller dans lui-même",
+  "A keyword can't go inside itself": "Un mot-clé ne peut pas aller dans lui-même",
+  "Copied as text: paste it in a keyword box to give the keywords to photos": "Copié comme texte : collez-le dans un champ de mots-clés pour donner les mots-clés à des photos",
+  "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level": "Copié : Coller se trouve dans le menu d'un dossier et, pour le niveau supérieur, dans le menu + des Albums",
+  "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level": "Coupé : Coller se trouve dans le menu d'un dossier et, pour le niveau supérieur, dans le menu + des Albums",
+  "Cut: Paste is in the menu of the keyword they go inside": "Coupé : Coller se trouve dans le menu du mot-clé dans lequel ils vont",
+  "Duplicate Album": "Dupliquer l'album",
+  "Paste Inside This Keyword": "Coller dans ce mot-clé",
+  "Paste Into This Folder": "Coller dans ce dossier",
+  "Paste at Top Level": "Coller au niveau supérieur"
 }

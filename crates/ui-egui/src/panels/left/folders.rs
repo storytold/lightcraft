@@ -243,6 +243,10 @@ pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Al
                 }
             }
         });
+        super::super::side_select::album_clip_items(app, ui, &[a.id.0]);
+        if a.folder {
+            super::super::side_select::album_paste_item(app, ui, Some(a.id));
+        }
         if ui.button(crate::i18n::tr("Rename…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::RenameAlbum { id: a.id.0, name: a.name.clone() });
         }

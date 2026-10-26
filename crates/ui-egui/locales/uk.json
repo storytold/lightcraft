@@ -2440,5 +2440,15 @@
   "That includes the photos in the folders inside them.": "Також включаються фото у вкладених у них теках.",
   "The photos stay in All Photos. Undo brings the albums back.": "Фото залишаються в «Усіх фото». Скасування повертає альбоми.",
   "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "Фото залишаються в «Усіх фото». Видалення теки видаляє й її альбоми. Це можна скасувати.",
-  "Another library was opened since this window appeared: nothing was changed": "Після появи цього вікна було відкрито іншу бібліотеку: нічого не змінено"
+  "Another library was opened since this window appeared: nothing was changed": "Після появи цього вікна було відкрито іншу бібліотеку: нічого не змінено",
+  "A folder can't go inside itself": "Теку не можна помістити в саму себе",
+  "A keyword can't go inside itself": "Ключове слово не можна помістити в саме себе",
+  "Copied as text: paste it in a keyword box to give the keywords to photos": "Скопійовано як текст: вставте в поле ключових слів, щоб призначити їх фото",
+  "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level": "Скопійовано: «Вставити» є в меню теки, а для верхнього рівня — у меню «+» розділу «Альбоми»",
+  "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level": "Вирізано: «Вставити» є в меню теки, а для верхнього рівня — у меню «+» розділу «Альбоми»",
+  "Cut: Paste is in the menu of the keyword they go inside": "Вирізано: «Вставити» є в меню ключового слова, усередину якого їх треба помістити",
+  "Duplicate Album": "Дублювати альбом",
+  "Paste Inside This Keyword": "Вставити в це ключове слово",
+  "Paste Into This Folder": "Вставити в цю теку",
+  "Paste at Top Level": "Вставити на верхній рівень"
 }

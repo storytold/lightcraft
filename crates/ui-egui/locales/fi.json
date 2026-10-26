@@ -2400,5 +2400,15 @@
   "Remove Folders from Library": "Poista kansiot kirjastosta",
   "That includes the photos in the folders inside them.": "Tämä sisältää niiden sisällä olevissa kansioissa olevat kuvat.",
   "The photos stay in All Photos. Undo brings the albums back.": "Kuvat pysyvät kohdassa Kaikki kuvat. Kumoa palauttaa albumit.",
-  "Another library was opened since this window appeared: nothing was changed": "Toinen kirjasto avattiin tämän ikkunan ilmestymisen jälkeen: mitään ei muutettu"
+  "Another library was opened since this window appeared: nothing was changed": "Toinen kirjasto avattiin tämän ikkunan ilmestymisen jälkeen: mitään ei muutettu",
+  "A folder can't go inside itself": "Kansio ei voi mennä itsensä sisään",
+  "A keyword can't go inside itself": "Avainsana ei voi mennä itsensä sisään",
+  "Copied as text: paste it in a keyword box to give the keywords to photos": "Kopioitu tekstinä: liitä se avainsanakenttään antaaksesi avainsanat kuville",
+  "Copied: Paste is in a folder's menu, and in the Albums + menu for the top level": "Kopioitu: Liitä on kansion valikossa ja, ylintä tasoa varten, Albumit-osion + -valikossa",
+  "Cut: Paste is in a folder's menu, and in the Albums + menu for the top level": "Leikattu: Liitä on kansion valikossa ja, ylintä tasoa varten, Albumit-osion + -valikossa",
+  "Cut: Paste is in the menu of the keyword they go inside": "Leikattu: Liitä on sen avainsanan valikossa, jonka sisään ne tulevat",
+  "Duplicate Album": "Monista albumi",
+  "Paste Inside This Keyword": "Liitä tämän avainsanan sisään",
+  "Paste Into This Folder": "Liitä tähän kansioon",
+  "Paste at Top Level": "Liitä ylimmälle tasolle"
 }
