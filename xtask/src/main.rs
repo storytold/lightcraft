@@ -13,6 +13,7 @@ mod layers;
 mod parity;
 mod stats;
 mod version;
+mod warm;
 mod web;
 
 use std::path::{Path, PathBuf};
@@ -32,6 +33,10 @@ commands:
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
+  warm [--from SEED] [--force] | warm --seed
+                  start this worktree's target/ from a copy-on-write clone of the main checkout's (or
+                  SEED's): only the packages that differ rebuild. --seed (in the seed checkout) does
+                  ci's clippy and test builds there first. See xtask/src/warm.rs
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app), in one call
   web [--serve [port]] [--dev]
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
@@ -70,6 +75,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
+        Some("warm") => warm::run(&root(), &rest),
         Some("ci") => cmd_ci(&rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
@@ -119,26 +125,32 @@ pub fn cargo() -> Command {
     // tests run. Scope these overridable defaults to CI, including parity/WASM
     // subprocesses, without changing ordinary developer builds or GPU coverage.
     if std::env::args().nth(1).as_deref() == Some("ci") {
-        static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-        let (build, threads) = JOBS.get_or_init(|| {
-            let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
-            let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
-            // More test threads barely shorten CI (a few heavy tests dominate) but make the
-            // wall-clock frame-budget tests flaky on a loaded machine.
-            (jobs.to_string(), jobs.min(4).to_string())
-        });
-        for (key, value) in [
-            ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
-            ("CARGO_BUILD_JOBS", build.as_str()),
-            ("RUST_TEST_THREADS", threads.as_str()),
-            ("NEXTEST_TEST_THREADS", threads.as_str()),
-        ] {
-            if std::env::var_os(key).is_none() {
-                c.env(key, value);
-            }
-        }
+        ci_env(&mut c);
     }
     c
+}
+
+/// The build settings of `cargo xtask ci` (also used by `warm --seed`, whose builds `ci` must
+/// find fresh: a different debuginfo level is a different build).
+pub fn ci_env(c: &mut Command) {
+    static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    let (build, threads) = JOBS.get_or_init(|| {
+        let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
+        let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
+        // More test threads barely shorten CI (a few heavy tests dominate) but make the
+        // wall-clock frame-budget tests flaky on a loaded machine.
+        (jobs.to_string(), jobs.min(4).to_string())
+    });
+    for (key, value) in [
+        ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
+        ("CARGO_BUILD_JOBS", build.as_str()),
+        ("RUST_TEST_THREADS", threads.as_str()),
+        ("NEXTEST_TEST_THREADS", threads.as_str()),
+    ] {
+        if std::env::var_os(key).is_none() {
+            c.env(key, value);
+        }
+    }
 }
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
@@ -436,6 +448,11 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until ci returns: one run at a time per machine (ci_lock.rs)
     let _slot = ci_lock::acquire(&root, &command)?;
+    // a warmed target whose seed has moved: said at the start and again after the summary
+    let seed_drift = warm::seed_drift(&root);
+    if let Some(w) = &seed_drift {
+        eprintln!("{w}");
+    }
     let plan = if quick {
         let (base, files) = ci_quick::changed_files(&root, base)?;
         let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &metadata()?), base);
@@ -637,6 +654,9 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     }
     if print_md {
         println!("\n{md}");
+    }
+    if let Some(w) = &seed_drift {
+        eprintln!("\n{w}");
     }
     match failure {
         Some((name, _)) => Err(format!("ci failed at `{name}`")),
