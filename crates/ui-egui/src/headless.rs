@@ -3328,6 +3328,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Local: a folder's files show as placeholders as soon as it is listed, before any of them is
+    /// read (on a network share reading them takes minutes), and photos take their places as they
+    /// are read. Before, nothing showed until every file had been read.
+    #[test]
+    fn browsed_files_show_as_placeholders_until_read() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut h = demo([1300.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-ui-pending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.jpg", "b.jpg", "c.jpg"] {
+            std::fs::write(dir.join(name), b"not read by this test").unwrap();
+        }
+        // a probe that waits until the test lets it read
+        let open = std::sync::Arc::new(AtomicBool::new(false));
+        let gate = open.clone();
+        h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
+            let t0 = std::time::Instant::now();
+            while !gate.load(Ordering::Relaxed) && t0.elapsed() < Duration::from_secs(20) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(lightcraft_engine::media::ProbeInfo { width: 30, height: 20, format: "JPEG".into(), file_size: 21, ..Default::default() })
+        }));
+        let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
+        assert_eq!(r["result"]["scanning"], true, "{r}");
+        let t0 = std::time::Instant::now();
+        while h.app.import.as_ref().is_none_or(|task| task.pending().len() < 3) && t0.elapsed() < t {
+            h.step();
+        }
+        assert_eq!(h.app.import.as_ref().map(|task| task.pending().len()), Some(3), "listed, nothing read yet");
+        assert!(h.app.session.visible_cloned().is_empty());
+        h.step();
+        let w = h.request("ui.widgets", json!({"filter": "pending:"}), t);
+        assert_eq!(w["result"].as_array().map(Vec::len), Some(3), "a placeholder per file: {w}");
+        if let Some(p) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+            let png = |img: &lightcraft_raster::Rgba8| {
+                lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
+                    .unwrap_or_default()
+            };
+            h.app.services.png = Some(Box::new(png));
+            h.app.services.write = Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string())));
+            let r = h.request("ui.screenshot", json!({"path": std::path::Path::new(&p).join("pending.png").to_string_lossy(), "headless": true}), t);
+            assert_eq!(r["ok"], true, "{r}");
+        }
+        open.store(true, Ordering::Relaxed);
+        h.settle(SETTLE);
+        assert!(h.app.import.is_none());
+        assert_eq!(h.app.session.visible_cloned().len(), 3);
+        let w = h.request("ui.widgets", json!({"filter": "pending:"}), t);
+        assert_eq!(w["result"].as_array().map(Vec::len), Some(0), "the photos replaced them: {w}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Local: Remove from Local hides a sidebar location (nothing on disk changes) and the
     /// "Show hidden locations" row puts it back. The folder is browsed and kept the way Browse
     /// Folder… does it, in the temporary folder — on Windows beneath Home, whose tree must not

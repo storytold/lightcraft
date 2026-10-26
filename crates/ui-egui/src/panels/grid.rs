@@ -84,6 +84,8 @@ pub struct GridCache {
     local: Option<(u64, usize)>,
     /// What was read of each photo of the list last shown.
     read: Option<ListRead>,
+    /// Placeholders of a folder being read, by (count, width, thumbnail size, square).
+    pending: Option<((usize, u32, u32, bool), Arc<GridLayout>)>,
 }
 
 /// What the grid read of each photo of a list, position by position: its own date group (a
@@ -253,6 +255,19 @@ impl GridCache {
         }
     }
 
+    /// The layout of `n` placeholders (3:2, or square cells), as a block of its own below the photos.
+    fn pending(&mut self, n: usize, avail_w: f32, target: f32, square: bool) -> Arc<GridLayout> {
+        let key = (n, avail_w.to_bits(), target.to_bits(), square);
+        match &self.pending {
+            Some((k, l)) if *k == key => l.clone(),
+            _ => {
+                let l = Arc::new(layout(&vec![PLACEHOLDER_ASPECT; n], &[], avail_w, target, square));
+                self.pending = Some((key, l.clone()));
+                l
+            }
+        }
+    }
+
     fn local(&mut self, cat: &Catalog, ids: &[PhotoId], generation: u64) -> usize {
         match self.local {
             Some((g, n)) if g == generation => n,
@@ -263,6 +278,40 @@ impl GridCache {
             }
         }
     }
+}
+
+/// The shape of a file's placeholder while its folder is read (most cameras' 3:2).
+const PLACEHOLDER_ASPECT: f32 = 1.5;
+
+/// The files of the Local folder on screen that are listed but not read yet (shown as
+/// placeholders), when no filter could hide them.
+fn pending_files(app: &LightcraftApp) -> Option<&[String]> {
+    let task = app.import.as_ref()?;
+    let b = app.session.browse.as_ref().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder)?;
+    if task.folder() != Some((b.path.as_str(), b.subfolders)) || app.session.filter != Default::default() {
+        return None;
+    }
+    Some(task.pending())
+}
+
+/// Whether the Local folder on screen is still being listed (nothing is known about it yet).
+fn listing(app: &LightcraftApp) -> bool {
+    let Some(task) = app.import.as_ref() else { return false };
+    let on_screen = app.session.browse.as_ref().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder);
+    on_screen.is_some_and(|b| task.folder() == Some((b.path.as_str(), b.subfolders))) && !task.listed()
+}
+
+/// A file not read yet: a blank cell with its name.
+fn placeholder(ui: &egui::Ui, i: usize, name: &str, r: Rect) {
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter();
+    p.rect_filled(r, 0.0, t.cell);
+    register(ui, format!("pending:{i}"), r);
+    let font = t.font(11.0);
+    let name = std::path::Path::new(name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let shown =
+        crate::widgets::elide_head(&name, (r.width() - 12.0).max(0.0), |s| p.layout_no_wrap(s.to_string(), font.clone(), t.text_dim).size().x);
+    p.text(r.center(), Align2::CENTER_CENTER, shown, font, t.text_disabled);
 }
 
 /// Width / height of a photo's cell: its cropped, oriented shape.
@@ -321,7 +370,12 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         super::filterbar::show(app, ui);
     }
     app.canvas_rect = Some(ui.max_rect());
-    if ids.is_empty() {
+    let pending_n = pending_files(app).map_or(0, <[String]>::len);
+    if ids.is_empty() && pending_n == 0 && listing(app) {
+        super::empty_message(ui, ui.max_rect(), "Looking for photos…", "");
+        return;
+    }
+    if ids.is_empty() && pending_n == 0 {
         if !chips.is_empty() {
             let body = match total {
                 Some(n) if n > 0 => {
@@ -380,7 +434,10 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     };
     let stacks = app.caches.grid.stacks(stats, &app.session.catalog, generation);
-    let total_h = lay.height + 12.0;
+    // a folder being read: its files not read yet, as a block of placeholders below the photos
+    let pend = (pending_n > 0).then(|| app.caches.grid.pending(pending_n, avail_w, target, square));
+    let pend_top = if ids.is_empty() { 0.0 } else { lay.height };
+    let total_h = pend.as_ref().map_or(lay.height, |p| pend_top + p.height) + 12.0;
     let active = app.session.selection.active;
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
     // comes back on screen; otherwise the scroll position is the user's
@@ -420,6 +477,18 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 cell(app, ui, id, r, square, onscreen, ppp);
                 if let Some((sid, pos)) = stacks.get(&id) {
                     stack_badge(app, ui, id, *sid, *pos, r, square);
+                }
+            }
+        }
+        if let Some(pend) = &pend {
+            let shift = vec2(0.0, pend_top);
+            let rows = rows_between(&pend.rows, viewport.top() - pend_top, viewport.bottom() - pend_top);
+            let first = rows.first().map_or(0, |r| r.start);
+            let end = rows.last().map_or(0, |r| r.end);
+            let names: Vec<String> = pending_files(app).and_then(|f| f.get(first..end)).map(<[String]>::to_vec).unwrap_or_default();
+            for (k, name) in names.iter().enumerate() {
+                if let Some(rect) = pend.cells.get(first + k) {
+                    placeholder(ui, first + k, name, rect.translate(origin.to_vec2() + shift));
                 }
             }
         }
