@@ -7,13 +7,14 @@
 //! somewhere are left out elsewhere: Open in Detail in Detail, Compare and Survey with one photo,
 //! the album rows outside an album, Locate Missing File… for a file that is there.
 //!
-//! This module builds the rows ([`nodes`]) and says why an off row is off ([`disabled_reason`]);
-//! the right-click menus of the grid, the filmstrip, the loupe and Compare / Survey draw them in
-//! the change that follows (parity row MENU-CTX-GRID).
+//! [`nodes`] builds the rows and [`disabled_reason`] says why an off row is off; [`show`] draws
+//! them as the right-click menu of the grid, the filmstrip, the loupe and Compare / Survey
+//! (parity row MENU-CTX-GRID), and runs the row clicked.
 
 use lightcraft_catalog::{Flag, PhotoId};
 use lightcraft_engine::cmd::CommandInfo;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use crate::LightcraftApp;
 use crate::menubar::{self, MenuNode};
@@ -64,7 +65,8 @@ fn with(n: Option<MenuNode>, f: impl FnOnce(&mut String, &mut Value, &mut bool, 
 }
 
 /// The rating, flag and label rows checked by `photo`'s values (the menu bar checks the active
-/// photo's, which a right-click on one of several selected photos may leave another). In Compare
+/// photo's; [`show`] makes the right-clicked photo the active one, except a filmstrip photo
+/// Compare or Survey doesn't show, and a caller of [`nodes`] may ask about another). In Compare
 /// and Survey a click there rates the active photo only (`compare::target_active`), so these rows
 /// name `photo`: the one checked is the one changed.
 fn recheck(app: &LightcraftApp, photo: PhotoId, mut sub: MenuNode) -> MenuNode {
@@ -119,6 +121,32 @@ fn presets(app: &LightcraftApp, any: bool) -> MenuNode {
     MenuNode::Submenu { label: "Apply Preset".into(), children: favorites.into_iter().chain(groups).collect() }
 }
 
+/// [`presets`], built again only when the list, the UI language or whether a photo is chosen
+/// changed: an imported collection can hold 10 000+ presets. Each build has its own number (one
+/// past the last), which keys what is measured from it ([`menubar::Rows::epoch`]).
+fn cached_presets(ctx: &egui::Context, app: &LightcraftApp, any: bool) -> (Arc<MenuNode>, u64) {
+    type Cached = (u64, bool, crate::i18n::Locale, Arc<MenuNode>, u64);
+    let id = egui::Id::unique("photo-menu-presets");
+    let key = (app.session.presets.generation(), any, crate::i18n::language());
+    let last = ctx.data(|d| d.get_temp::<Cached>(id));
+    if let Some((g, a, l, node, epoch)) = &last
+        && (*g, *a, *l) == key
+    {
+        return (node.clone(), *epoch);
+    }
+    let epoch = last.map_or(0, |c| c.4).wrapping_add(1);
+    let node = Arc::new(presets(app, any));
+    ctx.data_mut(|d| d.insert_temp::<Cached>(id, (key.0, key.1, key.2, node.clone(), epoch)));
+    (node, epoch)
+}
+
+/// The one row of the Apply Preset submenu [`show`] puts in the menu: drawn from the cached
+/// tree instead ([`menubar::Rows::children`]), so the presets aren't copied every frame.
+fn stands_for_presets(n: &MenuNode) -> bool {
+    matches!(n, MenuNode::Submenu { label, children } if label == "Apply Preset"
+        && matches!(children.as_slice(), [MenuNode::Item { id, params: Value::Null, .. }] if id == "preset.apply"))
+}
+
 /// The menu for `photo` (the right-click selects it unless it is one of the selected photos).
 pub fn nodes(app: &LightcraftApp, photo: PhotoId) -> Vec<MenuNode> {
     let any = !app.session.selected().is_empty();
@@ -166,6 +194,13 @@ fn nodes_with(app: &LightcraftApp, photo: PhotoId, infos: &[CommandInfo], preset
         v.push(sub("Photo", s).map(|s| recheck(app, photo, s)));
     }
     v.push(row("panel.addKeywords"));
+    // the keyword shortcut (Set Keyword Shortcut…), given to the selected photos
+    let keywords = app.session.catalog.keyword_shortcut();
+    if !keywords.is_empty() {
+        let names = keywords.iter().map(|k| k.replace('|', " › ")).collect::<Vec<_>>().join(", ");
+        let label = crate::i18n::tr_format!("Add Keyword “{keywords}”", keywords = names);
+        v.push(Some(menubar::item("photo.setMeta", json!({"addKeywords": keywords}), label, None, true, None)));
+    }
     let copied_meta = app.session.meta_clipboard.is_some();
     v.push(Some(submenu(
         "Metadata",
@@ -315,6 +350,170 @@ fn reason(app: &LightcraftApp, infos: &[CommandInfo], id: &str, params: &Value) 
 /// answer is the same whether or not it is.
 pub fn disabled_reason(app: &LightcraftApp, id: &str, params: &Value) -> Option<String> {
     reason(app, &app.session.commands(), id, params)
+}
+
+/// What an Export with Preset row says on hover: a TIFF preset that compresses with LZW says what that costs, as the Export
+/// dialog does.
+fn export_note(app: &LightcraftApp, id: &str, params: &Value) -> Option<String> {
+    let name = params.get("preset")?.as_str().filter(|_| id == "app.export")?;
+    let (preset, _) = app.session.all_export_presets().into_iter().find(|(p, _)| p.name == name)?;
+    crate::dialogs::preset_lzw_note(&preset.params).map(|note| crate::i18n::tr(note).to_string())
+}
+
+/// The ids the menu's rows had before it was built from the menu bar's model, kept for scripts.
+fn alias(n: &MenuNode) -> Option<String> {
+    match n {
+        MenuNode::Submenu { label, .. } if label == "Add to Album" => Some("button:contextAddToAlbum".into()),
+        MenuNode::Item { id, params, .. } => match id.as_str() {
+            "album.addPhotos" => Some(match params.get("id") {
+                Some(a) => format!("button:contextAlbum:{a}"),
+                None => "button:contextAddToAlbum".into(),
+            }),
+            "dialog.newAlbum" => Some("button:contextNewAlbum".into()),
+            "photo.setMeta" if params.get("addKeywords").is_some() => Some("button:contextAddKeywordShortcut".into()),
+            "photo.delete" => Some("button:contextDeletePhoto".into()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Is `photo` a selected photo that Compare's panes or Survey's tiles don't show (a filmstrip
+/// photo past them)? Asked while a right-click would make it the active one; Survey's tiles leave
+/// a selected photo out only past [`crate::panels::compare::SURVEY_MAX`], so it looks no further
+/// below that.
+pub(crate) fn culled_out(app: &mut LightcraftApp, photo: PhotoId) -> bool {
+    match app.ui.view {
+        ViewMode::Compare => app.ui.compare.is_some_and(|(a, b)| photo.0 != a && photo.0 != b),
+        ViewMode::Survey => {
+            app.session.selection.ids.len() > crate::panels::compare::SURVEY_MAX && !crate::panels::compare::survey_photos(app).contains(&photo)
+        }
+        _ => false,
+    }
+}
+
+/// The rows a view puts above a photo's menu: none, its own commands, or its commands in one
+/// submenu (the loupe's Zoom).
+pub enum Lead {
+    None,
+    Rows(&'static [&'static str]),
+    Submenu(&'static str, &'static [&'static str]),
+}
+
+/// Draw the menu for `photo`, below the view's `lead` rows, and run the row clicked. Rows are
+/// registered as `photomenu:<id|params>` and submenus as `photomenusub:<label>`; the whole menu
+/// is one bounded level, so it scrolls in a short window.
+///
+/// The right-click selects `photo` unless it is one of the selected photos; then it becomes the
+/// active one and the selection stays (as a click does in Compare and Survey), so the rows that
+/// act on one photo (Copy Edit Settings, Create Version, Open in Detail…) act on it. A selected
+/// filmstrip photo that Compare's panes or Survey's tiles don't show stays as it is, so the
+/// active photo, which the rating keys and the Edit panel act on, stays on screen (#744); its
+/// rating, flag and label rows still change it, while the rows that act on one photo act on the
+/// active one.
+pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, lead: Lead) {
+    let chosen = if !app.session.selection.contains(photo) {
+        Some(json!({"ids": [photo.0]}))
+    } else if app.session.active() != Some(photo) && !culled_out(app, photo) {
+        // (already selected: `add` only makes it the active one, without sending the selection)
+        Some(json!({"ids": [photo.0], "mode": "add"}))
+    } else {
+        None
+    };
+    if let Some(params) = chosen
+        && let Err(e) = app.run("library.select", params)
+    {
+        app.toast_error(ui.ctx(), e);
+    }
+    let infos = app.session.commands();
+    let rows = |ids: &[&str]| ids.iter().filter_map(|id| registered(app, &infos, id)).collect::<Vec<_>>();
+    let mut nodes = match lead {
+        Lead::None => Vec::new(),
+        Lead::Rows(ids) => rows(ids),
+        Lead::Submenu(label, ids) => vec![MenuNode::Submenu { label: label.into(), children: rows(ids) }],
+    };
+    if !nodes.is_empty() {
+        nodes.push(MenuNode::Separator);
+    }
+    let any = !app.session.selection.ids.is_empty() || app.session.active().is_some();
+    let (cached, epoch) = cached_presets(ui.ctx(), app, any);
+    let all: &[MenuNode] = match cached.as_ref() {
+        MenuNode::Submenu { children, .. } => children,
+        _ => &[],
+    };
+    let stand_in = vec![menubar::item("preset.apply", Value::Null, "", None, false, None)];
+    let presets = MenuNode::Submenu { label: "Apply Preset".into(), children: if all.is_empty() { Vec::new() } else { stand_in } };
+    nodes.extend(nodes_with(app, photo, &infos, presets));
+    let clicked = {
+        let app: &LightcraftApp = app;
+        let extra = |n: &MenuNode| {
+            let why = match n {
+                MenuNode::Item { id, params, enabled: false, .. } => reason(app, &infos, id, params),
+                MenuNode::Item { id, params, .. } => export_note(app, id, params),
+                _ => None,
+            };
+            (alias(n), why)
+        };
+        let children = |n: &MenuNode| stands_for_presets(n).then_some(all);
+        let rows = menubar::Rows { item: "photomenu", sub: "photomenusub", keyed: true, extra: Some(&extra), children: Some(&children), epoch };
+        menubar::show_rows(ui, &nodes, &rows)
+    };
+    if let Some((id, params)) = clicked {
+        run(app, ui.ctx(), &id, params);
+    }
+}
+
+/// Run a row: like the menu bar's, and a command that refuses says why.
+fn run(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: Value) {
+    if id == "photo.moveToFolder" {
+        move_to_folder(app, ctx);
+        return;
+    }
+    let preset = params.get("preset").is_some();
+    let applied = (id == "preset.apply").then(|| params["id"].as_str().map(str::to_string)).flatten();
+    match menubar::run_item(app, id, params) {
+        Ok(r) => after_run(app, ctx, id, &r, (preset, applied.as_deref())),
+        Err(e) => app.toast_error(ctx, e),
+    }
+}
+
+/// What a row that ran says or does after it: `r` is its result, `from_preset` whether it ran for a preset of the Export
+/// menu, and the id of the preset that `preset.apply` applied.
+fn after_run(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, r: &Value, (from_preset, applied): (bool, Option<&str>)) {
+    match id {
+        // the Presets panel marks it and offers its Amount slider, as after a click there
+        "preset.apply" => {
+            if let Some(p) = applied {
+                crate::panels::presets::note_applied(ctx, &app.session, p, 100.0);
+            }
+        }
+        // (Find Similar reads the photos in the background: its toast comes when the search ends, see `crate::find_similar`)
+        "album.addPhotos" => crate::panels::grid::toast_skipped(app, ctx, r),
+        "app.export" if from_preset && r.get("background").is_none() => exported(app, ctx, r),
+        _ => {}
+    }
+}
+
+/// An Export preset ran in the foreground.
+fn exported(app: &mut LightcraftApp, ctx: &egui::Context, r: &Value) {
+    let n = r["files"].as_array().map_or(0, Vec::len);
+    app.toast(ctx, crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n));
+}
+
+/// Move to Folder…: the folder dialog goes through the shared picker (off the UI thread where the
+/// host has one: then `photo.moveToFolder` runs when it closes).
+fn move_to_folder(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let req = crate::pick::PickRequest::folder(crate::i18n::tr("Move to Folder…"));
+    let picked =
+        crate::pick::ask(app, "photo.moveToFolder", &json!({}), "folder", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x]));
+    if let crate::pick::Picked::Now(v) = picked
+        && let Some(into) = v.into_iter().next()
+    {
+        match app.run("photo.moveToFolder", json!({"folder": into})) {
+            Ok(r) => app.toast(ctx, crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
+            Err(e) => app.toast_error(ctx, e),
+        }
+    }
 }
 
 #[cfg(test)]
