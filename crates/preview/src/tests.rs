@@ -234,7 +234,7 @@ fn pool_with_a_running_job() -> (JobPool<u8, ()>, std::sync::mpsc::Sender<()>) {
         1,
         Box::new(move || {
             let _ = started.send(());
-            let _ = released.recv_timeout(std::time::Duration::from_secs(60));
+            let _ = released.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(60)));
         }),
     );
     lightcraft_testkit::recv_within(&has_started, std::time::Duration::from_secs(30), "the job starts");
@@ -274,20 +274,21 @@ fn pool_shutdown_reports_workers_and_drop_does_not_wait_again() {
     let t0 = std::time::Instant::now();
     assert!(!p.shutdown(std::time::Duration::from_millis(100)), "the job is still running");
     let waited = t0.elapsed();
-    assert!(waited >= std::time::Duration::from_millis(100) && waited < std::time::Duration::from_secs(30), "{waited:?}");
+    assert!(waited >= std::time::Duration::from_millis(100) && waited < lightcraft_testkit::scaled(std::time::Duration::from_secs(30)), "{waited:?}");
     assert_eq!(p.live_workers(), 1);
     // stopped: nothing new is queued, and the job that ends is noticed
     p.submit(2, 0, 1, Box::new(|| ()));
     assert_eq!(p.queued(), 0);
     drop(release);
-    assert!(p.shutdown(std::time::Duration::from_secs(30)));
+    assert!(p.shutdown(lightcraft_testkit::scaled(std::time::Duration::from_secs(30))));
     assert_eq!(p.live_workers(), 0);
 
     let (mut p, _release) = pool_with_a_running_job();
     assert!(!p.shutdown(std::time::Duration::ZERO));
     let t0 = std::time::Instant::now();
     drop(p);
-    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "dropped after a shutdown: no second wait");
+    // a second wait would take DROP_WAIT (the job runs until `_release` goes)
+    assert!(t0.elapsed() < crate::pool::DROP_WAIT, "dropped after a shutdown: no second wait ({:?})", t0.elapsed());
 }
 
 #[test]
@@ -297,7 +298,7 @@ fn pool_drop_is_bounded_when_a_job_never_ends() {
     let t0 = std::time::Instant::now();
     drop(p);
     let waited = t0.elapsed();
-    assert!(waited >= std::time::Duration::from_secs(1) && waited < std::time::Duration::from_secs(30), "{waited:?}");
+    assert!(waited >= std::time::Duration::from_secs(1) && waited < lightcraft_testkit::scaled(std::time::Duration::from_secs(30)), "{waited:?}");
 }
 
 #[test]
@@ -305,10 +306,8 @@ fn pool_stops_after_a_job_panicked_and_when_dropped_by_its_own_job() {
     // a worker that unwound is not waited for
     let mut p: JobPool<u8, ()> = JobPool::new(1);
     p.submit(1, 0, 1, Box::new(|| panic!("a job panics (expected in this test)")));
-    while p.live_workers() > 0 {
-        std::thread::yield_now();
-    }
-    assert!(p.shutdown(std::time::Duration::from_secs(30)));
+    lightcraft_testkit::wait_until(std::time::Duration::from_secs(30), "the panicked worker ends", || p.live_workers() == 0);
+    assert!(p.shutdown(lightcraft_testkit::scaled(std::time::Duration::from_secs(30))));
 
     // the last owner of a pool is one of its jobs: the worker must not wait for (or join) itself
     let slot: Arc<std::sync::Mutex<Option<JobPool<u8, ()>>>> = Arc::new(std::sync::Mutex::new(None));
@@ -332,8 +331,9 @@ fn pool_stops_after_a_job_panicked_and_when_dropped_by_its_own_job() {
         }),
     );
     *slot.lock().unwrap() = Some(p);
-    let waited = has_dropped.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
-    assert!(waited < std::time::Duration::from_secs(1), "{waited:?}");
+    let waited = lightcraft_testkit::recv_within(&has_dropped, std::time::Duration::from_secs(30), "the job drops its own pool");
+    // waiting for itself would take DROP_WAIT (a running job can't end while it waits)
+    assert!(waited < crate::pool::DROP_WAIT, "{waited:?}");
 }
 
 #[test]
@@ -682,16 +682,16 @@ fn pool_wait_keeps_the_finished_job_for_try_recv() {
     let mut p: JobPool<u8, u8> = JobPool::new(1);
     assert!(!p.wait(std::time::Duration::from_millis(10)), "nothing runs");
     p.submit(1, 0, 1, Box::new(|| 7));
-    assert!(p.wait(std::time::Duration::from_secs(10)));
+    assert!(p.wait(lightcraft_testkit::scaled(std::time::Duration::from_secs(10))));
     assert!(p.wait(std::time::Duration::ZERO), "kept until taken");
     assert_eq!(p.try_recv().map(|d| d.result), Some(7));
     assert!(p.try_recv().is_none());
 }
 
-/// Wait up to `secs` for `f` to hold.
+/// Wait up to `secs` (stretched by `LIGHTCRAFT_TIME_SCALE`) for `f` to hold.
 fn eventually(secs: u64, mut f: impl FnMut() -> bool) -> bool {
     let t0 = std::time::Instant::now();
-    while t0.elapsed() < std::time::Duration::from_secs(secs) {
+    while t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(secs)) {
         if f() {
             return true;
         }
@@ -719,7 +719,7 @@ fn a_slot_runs_one_job_at_a_time() {
             most.fetch_max(now, Ordering::SeqCst);
             let _ = started.send(n);
             if let Some(w) = wait {
-                let _ = w.recv_timeout(std::time::Duration::from_secs(30));
+                let _ = w.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(30)));
             }
             running.fetch_sub(1, Ordering::SeqCst);
             n
@@ -777,7 +777,7 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
         assert!(cache.queued_bytes() <= MAX_QUEUED_BYTES, "{} bytes queued", cache.queued_bytes());
     }
     let t = std::time::Instant::now();
-    while cache.queued_bytes() > 0 && t.elapsed() < std::time::Duration::from_secs(120) {
+    while cache.queued_bytes() > 0 && t.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(120)) {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(cache.queued_bytes(), 0, "the queue drains");
