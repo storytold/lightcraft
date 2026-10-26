@@ -13,3 +13,6 @@ lightcraft-raster = { workspace = true }
 siphasher = { workspace = true }
 craft-image-codecs = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }

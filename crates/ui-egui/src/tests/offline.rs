@@ -42,8 +42,8 @@ impl Calls {
 }
 
 /// The sleeping drive: every file-system call waits until [`Nas::wake`] (or takes one of the
-/// calls [`Nas::let_through`] allows). A watchdog wakes it after [`WATCHDOG`] and records that it
-/// had to (some frame was waiting for the drive).
+/// calls [`Nas::let_through`] allows). A watchdog wakes it after [`WATCHDOG`] (× the test time
+/// scale) and records that it had to (some frame was waiting for the drive).
 #[derive(Default)]
 struct Nas {
     /// (awake, calls let through while asleep)
@@ -58,7 +58,7 @@ impl Nas {
         let dog = nas.clone();
         std::thread::spawn(move || {
             let state = dog.state.lock().unwrap();
-            let (mut state, _) = dog.changed.wait_timeout_while(state, WATCHDOG, |s| !s.0).unwrap();
+            let (mut state, _) = dog.changed.wait_timeout_while(state, lightcraft_testkit::scaled(WATCHDOG), |s| !s.0).unwrap();
             if !state.0 {
                 dog.forced.store(true, Ordering::SeqCst);
                 state.0 = true;
@@ -69,8 +69,13 @@ impl Nas {
     }
     fn wait(&self) {
         let state = self.state.lock().unwrap();
-        let mut state = self.changed.wait_while(state, |s| !s.0 && s.1 == 0).unwrap();
-        if !state.0 {
+        // bounded without the watchdog thread too, should it be gone: it wakes the drive after
+        // WATCHDOG, so only a call nothing will ever wake gets to twice that
+        let limit = lightcraft_testkit::scaled(WATCHDOG * 2);
+        let (mut state, waited) = self.changed.wait_timeout_while(state, limit, |s| !s.0 && s.1 == 0).unwrap();
+        if waited.timed_out() {
+            self.forced.store(true, Ordering::SeqCst);
+        } else if !state.0 {
             state.1 -= 1;
         }
     }

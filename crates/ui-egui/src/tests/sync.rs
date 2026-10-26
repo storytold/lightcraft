@@ -349,9 +349,7 @@ fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let g = gate.clone();
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(60), "the test opens the probe's gate", || g.load(std::sync::atomic::Ordering::Relaxed));
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
