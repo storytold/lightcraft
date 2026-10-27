@@ -582,22 +582,102 @@ fn memory_report_counts_decoded_sources_and_renders() {
 }
 
 #[test]
-fn paste_selected_settings_pastes_only_chosen_copied_groups() {
+fn paste_selected_settings_pastes_any_chosen_group_of_the_copied_photo() {
     let mut s = demo();
     let ids: Vec<_> = s.visible().iter().copied().take(2).collect();
     s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
     s.execute("develop.set", &json!({"values": {"light.exposure": 1.0, "color.vibrance": 30, "detail.sharpenAmount": 90}})).unwrap();
     s.execute("develop.copy", &json!({"groups": ["light", "color"]})).unwrap();
-    // `detail` was not copied: asking for it pastes nothing for it
+    // `detail` was left out of the copy: Paste Selected still pastes it, and only what was chosen
     s.execute("develop.paste", &json!({"ids": [ids[1].0], "groups": ["light", "detail"]})).unwrap();
     let d = s.develop_of(ids[1]).unwrap();
     let base = lightcraft_develop::DevelopSettings::default();
     assert_eq!(d.light.exposure, 1.0);
+    assert_eq!(d.detail.sharpen_amount, 90.0);
     assert_eq!(d.color.vibrance, base.color.vibrance);
-    assert_ne!(d.detail.sharpen_amount, 90.0);
-    // without groups: everything copied
+    // without groups: the copied groups
+    s.execute("develop.reset", &json!({"ids": [ids[1].0]})).unwrap();
     s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
-    assert_eq!(s.develop_of(ids[1]).unwrap().color.vibrance, 30.0);
+    let d = s.develop_of(ids[1]).unwrap();
+    assert_eq!((d.light.exposure, d.color.vibrance), (1.0, 30.0));
+    assert_eq!(d.detail.sharpen_amount, base.detail.sharpen_amount, "a plain paste leaves out what the copy left out");
+}
+
+/// Two demo photos of the same shape and one of the other (landscape / portrait).
+fn photos_by_shape(s: &mut Session) -> (lightcraft_catalog::PhotoId, lightcraft_catalog::PhotoId, lightcraft_catalog::PhotoId) {
+    let vis = s.visible_cloned();
+    let portrait = |id: &lightcraft_catalog::PhotoId| s.catalog.photo(*id).is_some_and(|p| p.height > p.width);
+    let land: Vec<_> = vis.iter().copied().filter(|id| !portrait(id)).take(2).collect();
+    let tall = vis.iter().copied().find(portrait).expect("the demo library has a portrait photo");
+    (land[0], land[1], tall)
+}
+
+/// The crop of `id` in pixels of its oriented frame.
+fn crop_px(s: &Session, id: lightcraft_catalog::PhotoId) -> lightcraft_geom::Rect {
+    let p = s.catalog.photo(id).unwrap();
+    let (w, h) = if p.develop.orientation.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
+    p.develop.crop.geometry.rect_px(w as f64, h as f64)
+}
+
+/// Issue #3056: Copy leaves crop and Remove out by default, as Lightroom does, so a plain paste
+/// doesn't carry them; ticking them in Paste Selected Settings pastes them (they used to be dropped
+/// because the clipboard held only the copied groups) onto every target, in one undo step.
+#[test]
+fn paste_selected_settings_pastes_crop_and_remove_left_out_of_the_copy() {
+    let mut s = demo();
+    let (a, b, c) = photos_by_shape(&mut s);
+    let c2 = s.visible_cloned().into_iter().find(|id| ![a, b, c].contains(id) && s.catalog.photo(*id).is_some_and(|p| p.width > p.height)).unwrap();
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.1, 0.2, 0.7, 0.8]})).unwrap();
+    s.execute("spot.add", &json!({"points": [[0.4, 0.5]], "size": 0.05, "mode": "heal"})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 0.5}})).unwrap();
+    let src = (*s.develop_of(a).unwrap()).clone();
+    s.execute("develop.copy", &json!({})).unwrap();
+
+    s.execute("develop.paste", &json!({"ids": [b.0]})).unwrap();
+    let d = s.develop_of(b).unwrap();
+    assert_eq!(d.light.exposure, 0.5);
+    assert!(d.crop.geometry.is_identity() && d.spots.is_empty(), "a plain paste carries no crop or Remove: {:?}", d.crop);
+
+    let before: Vec<_> = [b, c2].iter().map(|id| (*s.develop_of(*id).unwrap()).clone()).collect();
+    let r = s.execute("develop.paste", &json!({"ids": [b.0, c2.0], "groups": ["crop", "spots"]})).unwrap();
+    assert_eq!(r["changed"], 2);
+    for id in [b, c2] {
+        let d = s.develop_of(id).unwrap();
+        assert_eq!(d.crop.geometry, src.crop.geometry, "same shape: the same crop");
+        assert_eq!(d.spots, src.spots);
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    for (id, was) in [b, c2].iter().zip(&before) {
+        assert_eq!(*s.develop_of(*id).unwrap(), *was, "one undo step takes back the whole paste");
+    }
+}
+
+/// A crop pasted (or synced) onto a photo of another shape keeps its aspect ratio, as in Lightroom,
+/// instead of its normalized rectangle (which would stretch it).
+#[test]
+fn pasted_crop_keeps_its_aspect_on_a_photo_of_another_shape() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    // a square on the 3:2 landscape (6000 × 4000 nominal)
+    s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.3 + 0.6 * 4.0 / 6.0, 0.8]})).unwrap();
+    let src = crop_px(&s, a);
+    assert!((src.aspect() - 1.0).abs() < 1e-6, "{src:?}");
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [tall.0], "groups": ["crop"]})).unwrap();
+    let r = crop_px(&s, tall);
+    assert!((r.aspect() - 1.0).abs() < 1e-6, "the square stays square on the portrait photo: {r:?}");
+    let d = s.develop_of(tall).unwrap();
+    let (w, h) = (s.catalog.photo(tall).unwrap().width as f64, s.catalog.photo(tall).unwrap().height as f64);
+    assert!(d.crop.geometry.is_within_image(w, h));
+
+    // Sync Settings with the crop does the same
+    s.execute("develop.reset", &json!({"ids": [tall.0]})).unwrap();
+    s.execute("library.select", &json!({"ids": [a.0, tall.0], "active": a.0})).unwrap();
+    s.execute("develop.sync", &json!({"groups": ["crop"]})).unwrap();
+    let r = crop_px(&s, tall);
+    assert!((r.aspect() - 1.0).abs() < 1e-6, "sync: {r:?}");
 }
 
 /// A crop of no size (or a hair wide), as a sidecar can set it, made the render's
