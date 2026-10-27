@@ -38,6 +38,11 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### On macOS, a long job keeps the Mac awake
+- While an export, import, preview build, merge or other job you started is running, the Mac no longer goes to sleep
+  on its own and macOS no longer slows the app down when its window is hidden or minimized. Both end as soon as the
+  last job finishes or is canceled.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
@@ -342,7 +347,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 
