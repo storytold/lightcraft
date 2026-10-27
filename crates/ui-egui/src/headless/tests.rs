@@ -1875,6 +1875,43 @@ fn export_dialog_drops_a_depth_the_format_lacks() {
     assert_eq!(opened(&mut h, json!({"format": "tiff", "bitDepth": 32})).bit_depth, Some(32));
 }
 
+/// Issue #3033: with a size limit the dialog says the limit picks the quality, and warns when
+/// the limit leaves too little data per pixel at the size the export writes: the cropped size,
+/// worked out again when the crop changes but not on every frame.
+#[test]
+fn export_dialog_warns_when_a_size_limit_is_tight() {
+    let mut h = demo([1200.0, 1400.0]);
+    let t = Duration::from_secs(10);
+    let shown = |h: &mut Headless, last: Value| {
+        h.app.ui.dialog = None;
+        h.app.session.last_export = Some(last);
+        h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+        h.step();
+        let text = h.painted_text().join("\n");
+        (text.contains("The limit picks the highest quality"), text.contains("smooth areas can turn blotchy"))
+    };
+    assert_eq!(shown(&mut h, json!({"format": "jpeg", "limitKb": 1})), (true, true), "1 KB is tight at any size");
+    assert_eq!(shown(&mut h, json!({"format": "jpeg", "limitKb": 1024, "longEdge": 512})), (true, false));
+    assert_eq!(shown(&mut h, json!({"format": "jpeg", "longEdge": 512})), (false, false), "no limit, nothing to say");
+
+    // full size: a limit at 0.4 bits per pixel of the whole frame, which a crop to a quarter of it
+    // leaves at 1.6
+    h.app.session.selection.ids.clear();
+    let id = h.app.session.selection.active.expect("an active photo");
+    let p = h.app.session.catalog.photo(id).expect("the photo");
+    let kb = (0.4 * f64::from(p.width) * f64::from(p.height) / 8192.0) as u64;
+    let full = json!({"format": "jpeg", "limitKb": kb, "resize": null});
+    assert_eq!(shown(&mut h, full.clone()), (true, true), "uncropped");
+    let scans = h.app.caches.dialog_count_scans;
+    h.step();
+    h.step();
+    assert_eq!(h.app.caches.dialog_count_scans, scans, "unchanged frames don't look the photos up again");
+    let mut d = (*h.app.session.develop_of(id).expect("settings")).clone();
+    d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 0.5 };
+    h.app.session.set_develop(id, d, "Crop").expect("crop");
+    assert_eq!(shown(&mut h, full), (true, false), "cropped to a quarter");
+}
+
 /// Review of #1966: a `path` whose extension names no format exports JPEG here, so its
 /// `bitDepth` is checked against JPEG's, not let through to an 8-bit file.
 #[test]

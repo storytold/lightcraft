@@ -119,6 +119,24 @@ pub(super) fn watermark_preview(
     crate::widgets::register(ui, "image:exportWatermarkPreview", r.rect);
 }
 
+/// Whether a `limit_kb` JPEG size limit is tight ([`lightcraft_engine::export::size_limit_is_tight`])
+/// for the largest photo being exported (the selection, else the active photo) at the dialog's
+/// size: its cropped size, as [`lightcraft_engine::export::output_size`] gives it to the export.
+/// The largest size is worked out again only when the catalog, the photos or the size change.
+pub(super) fn size_limit_tight(app: &mut LightcraftApp, full_size: bool, resize: &lightcraft_engine::export::Resize, limit_kb: u32) -> bool {
+    use lightcraft_engine::export::{ExportOptions, output_size, size_limit_is_tight};
+    let resize = (!full_size).then_some(*resize);
+    let s = &app.session;
+    let size = resize.map(|r| (r.mode as u8, r.value.to_bits(), r.height, r.dont_enlarge));
+    let what = ("exportLargestOutput", &s.selection.ids, s.selection.active, size);
+    let pixels = app.caches.dialog_count(&s.catalog, what, || {
+        let o = ExportOptions { resize, ..Default::default() };
+        let largest = s.selected().iter().filter_map(|id| s.catalog.photo(*id)).map(|p| output_size(p, &o)).map(|(w, h)| w.saturating_mul(h)).max();
+        largest.unwrap_or(0)
+    });
+    size_limit_is_tight(limit_kb, pixels)
+}
+
 /// The Export dialog's choices as `app.export` params (without the folder).
 pub(super) fn export_dialog_params(
     opts: &lightcraft_engine::export::ExportOptions,

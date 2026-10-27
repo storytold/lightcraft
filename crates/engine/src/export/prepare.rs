@@ -1,5 +1,5 @@
 use super::batch::run_batch;
-use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
+use super::encoding::{export_metadata, gain_map_jpeg, removes_location, rendered};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
 use super::*;
@@ -16,6 +16,9 @@ pub struct Exported {
     /// Set when the render was tried on the GPU and fell back to the CPU: why (see
     /// `docs/gpu-pipeline.md`). The file holds the CPU render either way.
     pub gpu_fallback: Option<String>,
+    /// The JPEG quality a file-size limit (`limitKb`) settled on: the highest up to the requested
+    /// quality whose file fits. None without a limit.
+    pub limit_quality: Option<u8>,
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
@@ -207,15 +210,16 @@ impl PreparedExport {
                 let result = job.run();
                 let r = result.rendered?;
                 let gpu_fallback = result.gpu_fallback;
-                let bytes = match hdr_job {
+                let (bytes, limit_quality) = match hdr_job {
                     Some(hj) => {
                         let hr = hj.run().rendered?;
                         let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
-                        encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
+                        let (bytes, q) = gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?;
+                        (bytes, opts.limit_kb.map(|_| q))
                     }
-                    None => encode_rendered(&r, &opts, meta.as_ref())?,
+                    None => rendered(&r, &opts, meta.as_ref())?,
                 };
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback, limit_quality })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
@@ -240,6 +244,7 @@ impl PreparedExport {
                         height: size.1,
                         sidecars: vec![("xmp", packet.into_bytes())],
                         gpu_fallback: None,
+                        limit_quality: None,
                     });
                 };
                 if lightcraft_raw::probe(&bytes).is_none() {
@@ -258,7 +263,15 @@ impl PreparedExport {
                 };
                 let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None })
+                Ok(Exported {
+                    file_name,
+                    bytes: dng,
+                    width: raw.width,
+                    height: raw.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback: None,
+                    limit_quality: None,
+                })
             }
         }
     }

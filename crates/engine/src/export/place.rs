@@ -164,6 +164,9 @@ impl<'a> Placer<'a> {
                 if let Some(why) = &e.gpu_fallback {
                     entry["gpuFallback"] = json!(why);
                 }
+                if let Some(q) = e.limit_quality {
+                    entry["quality"] = json!(q);
+                }
                 self.out.push(entry);
             }
             Err(err) if self.stop_on_error => return Err(err),

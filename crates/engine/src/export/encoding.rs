@@ -88,6 +88,11 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    encode_8bit(img, o, meta).map(|(bytes, _)| bytes)
+}
+
+/// [`encode_with_metadata`], with the JPEG quality a file-size limit settled on (None without one).
+fn encode_8bit(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<(Vec<u8>, Option<u8>), String> {
     let img = finish_8bit(img, o);
     let space = o.effective_space();
     let profile = icc::write_named(named_space(space));
@@ -107,7 +112,8 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         ExportFormat::Jpeg => {
             // 4:4:4 normally; 4:2:0 when targeting a file size (much smaller at equal visual quality).
             let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
-            return encode_jpeg_with_limit(o, |q| encode::encode_jpeg(&e, q, sub, &meta));
+            let (bytes, q) = encode_jpeg_with_limit(o, |q| encode::encode_jpeg(&e, q, sub, &meta))?;
+            return Ok((bytes, o.limit_kb.map(|_| q)));
         }
         ExportFormat::Png => encode::encode_png(&e, &meta),
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
@@ -118,12 +124,13 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         f @ (ExportFormat::Original | ExportFormat::Dng) => return Err(format!("{f:?} export does not encode pixels")),
         ExportFormat::RenderedDng => return Err("Render to DNG needs a float render".into()),
     };
-    r.map_err(|e| e.to_string())
+    r.map(|bytes| (bytes, None)).map_err(|e| e.to_string())
 }
 
-/// Apply the same file-size policy to ordinary JPEGs and complete HDR gain map JPEGs.
-fn encode_jpeg_with_limit(o: &ExportOptions, jpeg: impl Fn(u8) -> lightcraft_codecs::Result<Vec<u8>>) -> Result<Vec<u8>, String> {
-    let Some(kb) = o.limit_kb else { return jpeg(o.quality).map_err(|e| e.to_string()) };
+/// Apply the same file-size policy to ordinary JPEGs and complete HDR gain map JPEGs: the file and
+/// the quality it was written at (`o.quality`, or the highest up to it that fits `o.limit_kb`).
+fn encode_jpeg_with_limit(o: &ExportOptions, jpeg: impl Fn(u8) -> lightcraft_codecs::Result<Vec<u8>>) -> Result<(Vec<u8>, u8), String> {
+    let Some(kb) = o.limit_kb else { return jpeg(o.quality).map(|b| (b, o.quality)).map_err(|e| e.to_string()) };
     let limit = u64::from(kb) * 1024;
     let (mut lo, mut hi) = (1u8, o.quality.min(100));
     let mut best = None;
@@ -131,7 +138,7 @@ fn encode_jpeg_with_limit(o: &ExportOptions, jpeg: impl Fn(u8) -> lightcraft_cod
         let mid = lo + (hi - lo) / 2;
         let b = jpeg(mid).map_err(|e| e.to_string())?;
         if b.len() as u64 <= limit {
-            best = Some(b);
+            best = Some((b, mid));
             lo = mid + 1;
         } else if mid == 1 {
             break;
@@ -169,6 +176,11 @@ fn finish_deep(img: &DeepImage, o: &ExportOptions) -> DeepImage {
 /// and the HDR rendition `hdr` (float linear, same space and size). The gain map is measured
 /// against the base as written, so its 8-bit rounding is handed back by the map.
 pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    gain_map_jpeg(sdr, hdr, o, meta).map(|(bytes, _)| bytes)
+}
+
+/// [`encode_gain_map_jpeg`], with the quality it was written at (see [`encode_jpeg_with_limit`]).
+pub(super) fn gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<(Vec<u8>, u8), String> {
     use lightcraft_codecs::gainmap;
     let base = finish_8bit(sdr, o);
     let hdr = finish_deep(hdr, o);
@@ -220,9 +232,14 @@ pub fn srgb8_in(space: OutputSpace, c: [u8; 3]) -> [u8; 3] {
 /// Encode a render according to `o`: its high-bit-depth samples when it has them (16-bit PNG/TIFF,
 /// 10-bit AVIF, 32-bit float linear TIFF), else its 8-bit image.
 pub fn encode_rendered(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    rendered(r, o, meta).map(|(bytes, _)| bytes)
+}
+
+/// [`encode_rendered`], with the JPEG quality a file-size limit settled on (None without one).
+pub(super) fn rendered(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, meta: Option<&Metadata>) -> Result<(Vec<u8>, Option<u8>), String> {
     match &r.deep {
-        Some(d) if o.effective_depth() != OutputDepth::U8 => encode_deep(d, o, meta),
-        _ => encode_with_metadata(&r.image, o, meta),
+        Some(d) if o.effective_depth() != OutputDepth::U8 => encode_deep(d, o, meta).map(|bytes| (bytes, None)),
+        _ => encode_8bit(&r.image, o, meta),
     }
 }
 

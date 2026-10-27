@@ -67,6 +67,31 @@ fn size_limit_respected() {
     assert!(b.len() <= kb as usize * 1024);
 }
 
+// Issue #3033: a size limit can cut the quality far below the requested one, so each file says
+// what it settled on; without a limit the file is written at the requested quality and says nothing
+#[test]
+fn a_size_limit_reports_the_quality_it_settled_on() {
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(1).collect();
+    let limited = ExportOptions::from_json(&json!({"format": "jpeg", "quality": 90, "limitKb": 8, "width": 512}));
+    let (files, _, _) = lanes_batch(&mut s, &ids, &limited, 1, true, usize::MAX);
+    let files = files.unwrap();
+    let q = files[0]["quality"].as_u64().unwrap_or_else(|| panic!("no quality: {files:?}"));
+    assert!((1..90).contains(&q), "{files:?}");
+    assert!(files[0]["bytes"].as_u64().unwrap() <= 8 * 1024, "{files:?}");
+    let plain = ExportOptions::from_json(&json!({"format": "jpeg", "quality": 90, "width": 512}));
+    let (files, _, _) = lanes_batch(&mut s, &ids, &plain, 1, true, usize::MAX);
+    assert!(files.unwrap()[0].get("quality").is_none());
+}
+
+#[test]
+fn a_size_limit_is_tight_below_half_a_bit_per_pixel() {
+    assert!(size_limit_is_tight(1024, 5152 * 7728), "1 MB over 40 MP is about 0.2 bits per pixel");
+    assert!(!size_limit_is_tight(1024, 1365 * 2048), "about 3 bits per pixel");
+    assert!(!size_limit_is_tight(200, 1365 * 2048), "0.6 bits per pixel: a smooth demo scene fits at quality 87");
+    assert!(!size_limit_is_tight(1024, 0));
+}
+
 #[test]
 fn hdr_jpeg_size_limit_respected() {
     let img = Rgba8::from_fn(256, 192, |x, y| {

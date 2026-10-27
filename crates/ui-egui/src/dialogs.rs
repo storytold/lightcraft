@@ -19,7 +19,7 @@ pub use confirm::confirm_dialog;
 pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap};
 use export::{
     LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
-    group_checklist, watermark_preview,
+    group_checklist, size_limit_tight, watermark_preview,
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
@@ -808,9 +808,18 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                         if num(ui, &LIMIT_KB, &mut k) {
                             *limit_kb = k as u32;
                         }
+                        if *limit_kb > 0 {
+                            let note = "The limit picks the highest quality, up to Quality, whose file fits.";
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                        }
                     }
                     if rendered {
                         export_size(ui, full_size, resize, &mut opts.ppi);
+                    }
+                    // issue #3033: too few bytes per pixel break skies into flat blocks
+                    if opts.format == F::Jpeg && *limit_kb > 0 && size_limit_tight(app, *full_size, resize, *limit_kb) {
+                        let warn = "At this size the limit leaves little data per pixel, so skies and other smooth areas can turn blotchy. A smaller size or a larger limit keeps more quality.";
+                        ui.label(egui::RichText::new(crate::i18n::tr(warn)).color(t.caution));
                     }
                     if rendered {
                     choices(
