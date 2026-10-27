@@ -833,6 +833,31 @@ fn copy_with_a_folder_template() {
     }
 }
 
+/// Auto import lists the watched folder's visible files: a dot name or (on Windows and macOS) the
+/// hidden attribute leaves a file out, as Local and import do (#3045), from the metadata it reads
+/// anyway.
+#[test]
+fn auto_import_lists_no_hidden_files() {
+    let dir = temp_dir("watch-hidden");
+    for name in ["shown.jpg", ".dot.jpg", "hidden.jpg"] {
+        std::fs::write(dir.join(name), b"x").unwrap();
+    }
+    std::fs::create_dir_all(dir.join("folder")).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("attrib").arg("+h").arg(dir.join("hidden.jpg")).status().unwrap().success());
+    #[cfg(target_os = "macos")]
+    assert!(std::process::Command::new("chflags").arg("hidden").arg(dir.join("hidden.jpg")).status().unwrap().success());
+    let mut listed: Vec<String> = crate::cmd::library::list_auto_import_folder(&dir.to_string_lossy()).unwrap().into_iter().map(|(p, _)| p).collect();
+    listed.sort();
+    let mut expected = vec![dir.join("shown.jpg").to_string_lossy().to_string()];
+    if !cfg!(any(windows, target_os = "macos")) {
+        expected.push(dir.join("hidden.jpg").to_string_lossy().to_string());
+    }
+    expected.sort();
+    assert_eq!(listed, expected);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Auto import: files in the watched folder are added once their size held between two scans,
 /// into the named album; non-photos are tried once; the selection stays put.
 #[test]
