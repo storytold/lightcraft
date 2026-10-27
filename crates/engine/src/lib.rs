@@ -1281,6 +1281,9 @@ impl Session {
                 self.source = LibrarySource::All;
                 self.library_folder = None;
                 self.also_library_folders.clear();
+                // folders of the filter were ignored while the folder was shown: they would narrow All Photos now
+                self.filter.library_folder = None;
+                self.filter.library_folders.clear();
                 return self.visible();
             }
             if matches!(self.source, LibrarySource::Album(_))

@@ -1064,6 +1064,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let ops = order.into_iter().rev().map(|id| Op::RemoveAlbum { id }).collect();
                 s.commit(if folder { "Delete Folder" } else { "Delete Album" }, Op::Batch { ops })?;
+                // an album chip of the filter, or of one put aside by Enable Filters, must not name a deleted album
+                s.filter.album = s.filter.album.filter(|a| !removed.contains(a));
+                s.filter.albums.retain(|a| !removed.contains(a));
+                if let Some(f) = s.shelved_filter.as_mut() {
+                    f.album = f.album.filter(|a| !removed.contains(a));
+                    f.albums.retain(|a| !removed.contains(a));
+                }
+                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
+                    s.shelved_filter = None;
+                }
                 // of several albums shown, the others stay
                 s.also_albums.retain(|a| !removed.contains(a));
                 if matches!(s.source, LibrarySource::Album(current) if removed.contains(&current)) {

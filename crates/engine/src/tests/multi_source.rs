@@ -514,3 +514,43 @@ fn a_view_of_several_albums_with_a_smart_one_says_why_it_cannot_be_saved() {
     s.execute("library.source", &json!({"kind": "album", "id": smart})).unwrap();
     assert_eq!(s.view_save_refusal(), None);
 }
+
+#[test]
+fn deleting_an_album_takes_it_out_of_the_filter_and_the_filter_put_aside() {
+    let mut s = Session::new();
+    let (ids, a, b) = two_albums(&mut s);
+    let c = album(&mut s, "Cairo", &[ids[3]]);
+    // Given albums in the filter: the single one and several
+    s.execute("library.filter", &json!({"album": c, "albums": [a, b, c]})).unwrap();
+    // When one is deleted
+    s.execute("album.delete", &json!({"id": c})).unwrap();
+    // Then the filter does not name it: no chip for a gone album
+    assert_eq!(s.filter.album, None);
+    assert_eq!(s.filter.albums, vec![AlbumId(a), AlbumId(b)]);
+    // and the same for the filter put aside by Enable Filters, which must not bring it back
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    s.execute("album.delete", &json!({"id": b})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(s.filter.albums, vec![AlbumId(a)]);
+    assert_eq!(shown(&mut s), vec![ids[0], ids[1]]);
+}
+
+#[test]
+fn folders_of_a_filter_do_not_narrow_the_all_photos_a_gone_folder_falls_back_to() {
+    let mut s = Session::new();
+    let alps = add_file(&mut s, "/pics/2025/alps/a.jpg");
+    let beach = add_file(&mut s, "/pics/2026/beach/c.jpg");
+    let city = add_file(&mut s, "/pics/2027/city/d.jpg");
+    s.execute("library.source", &json!({"kind": "libraryFolder", "paths": ["/pics/2025/alps"]})).unwrap();
+    // Given a preset naming folders, applied while a folder is shown (library.filter would refuse it)
+    s.filter.library_folder = Some("/pics/2026/beach".into());
+    s.filter.library_folders = vec!["/pics/2026/beach".into()];
+    // When the folder shown loses its last photo
+    s.execute("library.select", &json!({"ids": [alps]})).unwrap();
+    s.execute("photo.delete", &json!({"ids": [alps]})).unwrap();
+    // Then everything is shown, not what the stale folders of the filter leave
+    assert_eq!(shown(&mut s), vec![beach, city]);
+    assert_eq!(s.source, LibrarySource::All);
+    assert_eq!(s.filter.library_folder, None);
+    assert!(s.filter.library_folders.is_empty());
+}
