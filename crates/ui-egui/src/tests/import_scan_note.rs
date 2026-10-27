@@ -96,6 +96,33 @@ fn the_review_says_how_many_files_were_skipped() {
     assert!(has_note_widget(&mut h), "the line is a registered widget");
 }
 
+/// Nothing to import but a file that is not a photo: no review opens, and the message says why
+/// nothing was found, the same skipped count the review would have shown.
+#[test]
+fn an_empty_scan_says_what_it_left_out() {
+    let dir = Scratch::new("empty-skipped");
+    std::fs::write(dir.0.join("notes.txt"), b"not a photo").unwrap();
+    let mut h = headless();
+    assert_eq!(scan_empty_folder(&mut h, &dir), "No photos found · 1 file skipped (not a supported photo type)");
+    assert!(!matches!(h.app.ui.dialog, Some(Dialog::Import { .. })), "no review for a scan with no photos");
+}
+
+/// A folder with nothing in it: the plain message, as before.
+#[test]
+fn an_empty_folder_keeps_the_plain_message() {
+    let dir = Scratch::new("empty");
+    let mut h = headless();
+    assert_eq!(scan_empty_folder(&mut h, &dir), "No photos found");
+}
+
+/// File → Import from Folder… for `dir` (no photos in it): the message the scan leaves.
+fn scan_empty_folder(h: &mut Headless, dir: &Scratch) -> String {
+    let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.0.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(SETTLE, |h| h.app.ui.toast.is_some()), "no message: {:?}", h.app.ui.toast);
+    h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+}
+
 /// XMP sidecars beside the pictures are read with them, so they are not "skipped": no note for
 /// them, but a text file in the same folder still gets its line.
 #[test]
