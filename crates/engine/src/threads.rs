@@ -36,13 +36,40 @@ mod tests {
     /// its threads carry the name, and a second call leaves the pool as it is.
     #[test]
     fn the_global_pool_threads_are_named() {
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
+        use std::io::Read;
+        use std::process::Stdio;
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "threads::tests::in_a_fresh_process", "--ignored", "--test-threads=1"])
             .env("LC_NAME_GLOBAL_POOL", "1")
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .unwrap();
-        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}\n{stderr}");
+        // Drain both pipes on threads so a chatty child can't block on a full pipe.
+        let drain = |mut r: Box<dyn Read + Send>| {
+            std::thread::spawn(move || {
+                let mut s = String::new();
+                let _ = r.read_to_string(&mut s);
+                s
+            })
+        };
+        let (stdout, stderr) = (drain(Box::new(child.stdout.take().unwrap())), drain(Box::new(child.stderr.take().unwrap())));
+        // A stalled child (pool start-up, `broadcast`) fails the test instead of hanging the suite.
+        let limit = std::time::Duration::from_secs(60);
+        let deadline = std::time::Instant::now() + limit;
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the child process did not finish within {limit:?}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let (stdout, stderr) = (stdout.join().unwrap(), stderr.join().unwrap());
+        assert!(status.success() && stdout.contains("1 passed"), "{stdout}\n{stderr}");
     }
 
     #[test]
