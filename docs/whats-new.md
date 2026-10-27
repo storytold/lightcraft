@@ -6,7 +6,8 @@
 - A Lightroom catalog with a few contradictory records (two images with the same id, a virtual copy whose master
   is gone or is itself a copy, keywords or collections whose parents loop) no longer fails the whole import: those
   images are skipped and counted in the result window, and a looping keyword or collection is imported with a
-  warning. A catalog that can't be read at all now says which file and what is wrong ("the Lightroom catalog … is
+  warning. So is a second collection with the id of another (its photos go to the first), and a capture time that
+  isn't a date is left out with a warning. A catalog that can't be read at all now says which file and what is wrong ("the Lightroom catalog … is
   damaged: table Adobe_images can't be read: …") instead of "invalid parameters".
 
 ### Lightroom catalogs import into libraries on exFAT drives

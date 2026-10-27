@@ -273,7 +273,8 @@ fn identity(data: &CatalogImport, photo: &CatalogPhoto) -> String {
 /// import (#1588). An image with an id an earlier image has, and a virtual copy whose master is not
 /// in the catalog or is itself a virtual copy, are skipped and listed in `skipped`. A collection
 /// hierarchy that loops or is deeper than [`MAX_DEPTH`] is cut, the collection where it is cut
-/// going to the top level with a warning.
+/// going to the top level with a warning. A second collection with an id an earlier one has is
+/// left out with a warning.
 ///
 /// Called where the catalog is read and again where its photos become records, so neither route
 /// can keep one; the second pass finds nothing.
@@ -301,6 +302,7 @@ pub(crate) fn skip_inconsistent_records(data: &mut CatalogImport) {
         false
     });
     data.skipped.extend(skipped);
+    skip_duplicate_collections(data);
     let cut = collection_cuts(&data.collections);
     if cut.is_empty() {
         return;
@@ -311,6 +313,29 @@ pub(crate) fn skip_inconsistent_records(data: &mut CatalogImport) {
             data.warnings.push(format!("collection “{}”: {why}; imported at the top level", text(collection, "name")));
         }
     }
+}
+
+/// Keep the first collection of each id and leave out the rest with a warning naming both: two
+/// albums can't have one id. The photos and collections the catalog lists under that id stay
+/// there, so they land in the collection kept.
+fn skip_duplicate_collections(data: &mut CatalogImport) {
+    let mut kept: HashMap<i64, String> = HashMap::new();
+    let mut warnings = Vec::new();
+    data.collections.retain(|c| {
+        let id = number(c, "id_local");
+        let Some(first) = kept.get(&id) else {
+            kept.insert(id, text(c, "name").to_string());
+            return true;
+        };
+        let photos = if data.members.iter().any(|m| number(m, "collection") == id) {
+            format!("; the photos listed under that id go to “{first}”")
+        } else {
+            String::new()
+        };
+        warnings.push(format!("collection “{}”: not imported, it has the id of collection “{first}”{photos}", text(c, "name")));
+        false
+    });
+    data.warnings.extend(warnings);
 }
 
 /// The collections whose parent link must go for the hierarchy to be a tree no deeper than
@@ -654,9 +679,16 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     // these behind and ignores them); they and their virtual copies are skipped and reported
     // instead of failing the import
     let mut orphans = HashSet::new();
+    // a second image with an id already read is skipped before anything is keyed by its id, so it
+    // can't take the first one's records or its virtual copies with it (#1588)
+    let mut ids = HashSet::new();
     for image in table("Adobe_images")? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
+        if !ids.insert(id) {
+            out.skipped.push(SkippedImage { image: id, reason: SkipReason::DuplicateId });
+            continue;
+        }
         let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
             let folder = folders.get(&number(file, "folder")).ok_or(SkipReason::MissingFolder)?;
             let root = roots.get(&number(folder, "rootFolder")).ok_or(SkipReason::MissingRoot)?;
@@ -706,8 +738,8 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         });
     }
     drop_copies_of(&mut out, &orphans);
-    refuse_non_media(&mut out);
     skip_inconsistent_records(&mut out);
+    refuse_non_media(&mut out);
     ensure_read_active(cancel)?;
     reader.db.ensure_unchanged().map_err(|e| unreadable(path, e))?;
     let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
@@ -1142,9 +1174,10 @@ fn stage_collections(
 pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, context: ApplyPrepared<'_>) -> crate::Result<AppliedImport> {
     let ApplyPrepared { update_existing, files, index, archive_path, missing_sources, undo0 } = context;
     // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135),
-    // nor a contradictory one (#1588)
-    refuse_non_media(&mut data);
+    // nor a contradictory one (#1588); duplicate ids go first, so refusing a duplicate's original
+    // can't take the first image with it
     skip_inconsistent_records(&mut data);
+    refuse_non_media(&mut data);
     let mut warnings = data.warnings.clone();
     let duplicates: HashMap<_, _> =
         files.duplicates.iter().filter_map(|d| d.existing.map(|id| (key(&d.path), (PhotoId(id), d.file.as_deref())))).collect();
@@ -1303,8 +1336,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             _ => Flag::None,
         };
         p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
-        if !text(&src.image, "captureTime").is_empty() {
-            p.captured = Some(text(&src.image, "captureTime").into());
+        // a capture time the catalog can't hold would fail the whole batch at `SetCaptured`
+        let captured = text(&src.image, "captureTime");
+        if lightcraft_catalog::stacks::iso_seconds(captured).is_some() {
+            p.captured = Some(captured.into());
+        } else if !captured.is_empty() {
+            warnings.push(format!("image {}: capture time “{captured}” is not a date; imported without it", src.source_id));
         }
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
@@ -1358,8 +1395,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Op::SetFlag { id: p.id, flag: p.flag },
                 Op::SetLabel { id: p.id, label: p.label },
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
-                Op::SetCaptured { id: p.id, captured: p.captured.clone() },
             ]);
+            // a record an earlier import gave a time that isn't a date keeps it rather than fail the batch
+            if p.captured.as_deref().is_none_or(|c| lightcraft_catalog::stacks::iso_seconds(c).is_some()) {
+                ops.push(Op::SetCaptured { id: p.id, captured: p.captured.clone() });
+            }
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
             imported += 1;
