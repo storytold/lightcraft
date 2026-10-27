@@ -788,7 +788,8 @@ fn a_place_inside_the_folder_in_other_letter_case_is_the_same_place() {
     write_png(&dir.path("a/x.png"), 1);
     write_png(&dir.path("a/B/x.png"), 2);
     if !Path::new(&dir.path("a/b/x.png")).is_file() {
-        return; // this disk tells `B` from `b`: `a/b` is no folder here
+        lightcraft_testkit::skip!(System, "this disk tells `B` from `b`, so `a/b` is no folder");
+        return;
     }
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [dir.path("a")]})).unwrap();
