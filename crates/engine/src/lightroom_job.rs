@@ -32,16 +32,18 @@ fn cancelled() -> crate::EngineError {
 
 /// Save the recovery archive. It is best-effort: nothing reads it back during import, so a folder
 /// it can't be written to costs the archive (with a warning naming the folder), not the import.
+/// That warning goes first: the result window lists only the first few, and catalog warnings
+/// (one per unreadable record) can be many.
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
     let Some(dir) = archive_dir else { return Ok(None) };
     match crate::lightroom_archive::store_best_effort(dir, data) {
         Ok(Some(path)) => Ok(Some(path)),
         Ok(None) => {
-            data.warnings.push("Lightroom source archive exceeded 32 MiB; archive skipped".into());
+            data.warnings.insert(0, "Lightroom source archive exceeded 32 MiB; archive skipped".into());
             Ok(None)
         }
         Err(e) => {
-            data.warnings.push(format!("Lightroom source archive not saved in {}: {e}; archive skipped", dir.display()));
+            data.warnings.insert(0, format!("Lightroom source archive not saved in {}: {e}; archive skipped", dir.display()));
             Ok(None)
         }
     }
@@ -583,8 +585,10 @@ mod tests {
         let interop = dir.join("Interop");
         std::fs::write(&interop, b"a file where the folder belongs").unwrap();
         let mut data = empty_data();
+        // more catalog warnings than the result window lists: the archive's must still be seen
+        data.warnings = (0..10).map(|i| format!("record {i}: unreadable XMP")).collect();
         assert_eq!(stage_archive(Some(&interop), &mut data).unwrap(), None);
-        assert_eq!(data.warnings.len(), 1);
+        assert_eq!(data.warnings.len(), 11);
         assert!(data.warnings[0].starts_with("Lightroom source archive not saved in "), "{}", data.warnings[0]);
         assert!(data.warnings[0].contains(&*interop.to_string_lossy()), "{}", data.warnings[0]);
         std::fs::remove_dir_all(dir).unwrap();
