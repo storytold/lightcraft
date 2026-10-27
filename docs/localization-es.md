@@ -1,6 +1,6 @@
 # LightCraft en español
 
-Elegir **Editar → Idioma → Español** o **Ajustes → General → Idioma**. El cambio se aplica al
+Elegir **Ajustes → General → Idioma → Español**. El cambio se aplica al
 momento y se conserva para el próximo inicio (`language: "es"` en `ui.json`). `LIGHTCRAFT_LANGUAGE`
 acepta cualquier variante del español (`es`, `es-ES`, `es_MX.UTF-8`, `es-419`…).
 

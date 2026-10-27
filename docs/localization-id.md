@@ -1,6 +1,6 @@
 # LightCraft in Indonesian
 
-Choose **Edit → Language → Bahasa Indonesia** or **Settings → General → Language**. The choice applies
+Choose **Settings → General → Language → Bahasa Indonesia**. The choice applies
 at once and is saved for the next launch (`language: "id"` in `ui.json`); the control command is
 `app.language.indonesian`. `LIGHTCRAFT_LANGUAGE` selects it for headless runs and accepts `id`, `id-ID`
 and `id_ID.UTF-8`; the saved value is always `id`. LightCraft does not follow the system language, for
