@@ -180,7 +180,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
-        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let _ = self.gpu.poll(wgpu::PollType::wait_indefinitely());
     }
 
     /// A zero-filled buffer (the clear is recorded).
@@ -669,8 +669,10 @@ pub fn render(
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, req.space);
+    // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
+    fp.proof = req.proof.map(|pr| pr.params(req.space));
     if let Some(d) = &req.display {
-        fp.for_display(d, None);
+        fp.for_display(d, req.proof);
     }
     let present = Present {
         clarity: prep.clarity.is_some(),

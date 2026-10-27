@@ -118,14 +118,34 @@ impl ImageInfo {
         }
     }
 
-    /// All chunks that have an offset. Missing byte counts are inferred as "to the next offset / end of data"
-    /// using `data_len`.
-    pub fn chunks(&self, data_len: u64) -> Vec<Chunk> {
+    /// The chunk count the image declares (offsets present, cut to the layout's plane capacity) with the
+    /// geometry `chunks` needs to place each one. No descriptors are built, so a pathological strip array
+    /// costs it a length check.
+    fn chunk_grid(&self) -> (usize, u32, usize) {
         let (across, down) = self.grid();
         let per_plane = across as usize * down as usize;
         let planes = if self.planar == 2 { self.samples_per_pixel as usize } else { 1 };
+        (self.offsets.len().min(per_plane.saturating_mul(planes)), across, per_plane)
+    }
+
+    fn declared_chunk_count(&self) -> usize {
+        self.chunk_grid().0
+    }
+
+    /// The one chunk when the image has exactly one, else `None` — and no descriptor vector beyond it. Preview
+    /// extraction only serves single-chunk images, so it asks here before serving a hostile multi-strip layout.
+    pub fn single_chunk(&self, data_len: u64) -> Option<Chunk> {
+        if self.declared_chunk_count() != 1 {
+            return None;
+        }
+        self.chunks(data_len).into_iter().next()
+    }
+
+    /// All chunks that have an offset. Missing byte counts are inferred as "to the next offset / end of data"
+    /// using `data_len`.
+    pub fn chunks(&self, data_len: u64) -> Vec<Chunk> {
+        let (n, across, per_plane) = self.chunk_grid();
         let (cw, ch) = self.chunk_size();
-        let n = self.offsets.len().min(per_plane.saturating_mul(planes));
         let mut out = Vec::with_capacity(n);
         // the distinct offsets in order, for chunks without a byte count (sorted once, not scanned per chunk)
         let mut sorted: Vec<u64> = Vec::new();
@@ -190,6 +210,18 @@ mod tests {
             offsets,
             byte_counts,
         }
+    }
+
+    /// One offset is one chunk, and `single_chunk` refuses to build descriptors when the image declares more.
+    #[test]
+    fn single_chunk_is_the_only_chunk() {
+        let one = strips(vec![50], vec![10]);
+        assert_eq!(one.single_chunk(100).map(|c| (c.index, c.offset, c.len)), one.chunks(100).first().map(|c| (c.index, c.offset, c.len)));
+        // the inferred length matches too, and never falls back past the data
+        let inferred = strips(vec![70], vec![]);
+        assert_eq!(inferred.single_chunk(100).map(|c| c.len), Some(30));
+        assert!(strips(vec![50, 10], vec![10, 5]).single_chunk(100).is_none(), "a multi-chunk image has no single chunk");
+        assert!(strips(Vec::new(), Vec::new()).single_chunk(100).is_none());
     }
 
     #[test]

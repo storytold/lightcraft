@@ -21,7 +21,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | ⬜ (external-editor round trip writes 16-bit TIFF) | `crates/codecs/src/psd.rs` |
 | HEIC / HEIF | ✅ | ⬜ (Classic) / HDR only | ✅ in every release build (`crates/heif`, heic-rs) | ⬜ | `heif` feature on by packaging scripts |
 | AVIF | ✅ | ✅ (HDR) | ⬜ recognised, not decoded (no permissive pure-Rust AV1 decoder) | ✅ 8/10-bit, PQ HDR | |
-| JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests_export.rs` |
+| JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests/export.rs` |
 | WebP | not in its document types | ⬜ | ✅ | ✅ | beyond target |
 | GIF, BMP | ⬜ | ⬜ | ✅ | ⬜ | beyond target |
 | DNG (from raw) | ✅ | ✅ incl. lossy, embedded original | ✅ | ✅ uncompressed, LJ92, Deflate or lossy (JPEG tiles, optional long edge); ⬜ embedded original | `crates/raw/src/dngwrite.rs` |

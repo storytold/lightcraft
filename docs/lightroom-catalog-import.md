@@ -6,7 +6,41 @@ and a C SQLite runtime are not required. The source database is read-only, inclu
 
 File → Open Library… given a Lightroom catalog folder (or an `.lrdata` / `.lrcat-data` folder, or the `.lrcat`)
 doesn't make a LightCraft library there: it offers this import instead, with the catalog found
-(`crates/engine/src/lightroom_folder.rs`, issue #891). `lightcraft-cli --library` refuses those places too.
+(`crates/engine/src/lightroom_folder.rs`, issue #891), and then asks where the catalog goes as described next
+(unless the question is turned off, below).
+`lightcraft-cli --library` refuses those places too.
+
+**Where the catalog goes.** Before the import starts, the desktop app asks where the catalog goes (issue #2672),
+unless Settings says to always merge (*Turning the question off*, below):
+
+- **Merge into the open library "<name>" (N photos)**: the catalog's photos, collections and edits join the ones
+  already in the library open now (the library's name is its folder's name).
+- **Create a new library**: named after the catalog file (`Travel.lrcat` → "Travel", or "Travel 2" when a
+  "Travel" folder is already there) and placed next to the open library (in its parent folder); both can be
+  changed (Choose… picks the folder). LightCraft creates and opens it as File → New Library… does (the folder
+  must be new or empty; it is refused while another import runs), then imports the catalog into it. The library
+  left behind stays in File → Open Recent Library.
+- **Cancel** does nothing.
+
+The window opens on *Merge* when the open library has no photos (there is nothing to merge with) and on *Create a
+new library* when it has some.
+
+**Turning the question off.** Settings → General → Library → *When importing a Lightroom catalog*: *Ask where to
+import it* (the default) or *Always merge into the open library* (how imports always worked before). The window's
+*Don't ask again (always merge into the open library)* checkbox, offered with *Merge*, picks the second; the window
+says where to turn the question back on. The choice is an app setting (`ui.json`, `settings.lightroomImport`:
+`"ask"` or `"alwaysMerge"`); a settings file without it asks.
+
+A session with no library on disk (in memory, e.g. after Continue Without Saving) has nothing to put a new library
+next to: the catalog merges into it without asking, as before.
+
+**Scripts and agents.** The app command `file.importLightroom {path?, into?, name?, location?}` (control channel,
+`lightcraft-cli mcp --connect`) chooses without the window: `into: "open"` merges, `into: "new"` creates the library
+`name` (default: the catalog's name) in the folder `location` (default: the open library's parent folder; a full
+path), opens it and imports. Without `into` it shows the window (and returns `{asking: true, path, into}`, `into`
+being the choice the window opens with) or merges when the setting says so. A catalog path that doesn't exist is
+refused before a new library is made. The engine command `library.importLightroom` always imports into the library
+open now.
 
 Equivalent commands:
 
@@ -15,8 +49,8 @@ lightcraft-cli run --library "LightCraft Library" library.inspectLightroom path=
 lightcraft-cli run --library "LightCraft Library" library.importLightroom path="Lightroom Catalog.lrcat"
 ```
 
-Import adds records to the currently open LightCraft library; it does not create a separate
-folder named after the Lightroom catalog. The desktop result stays open until dismissed and
+The import itself (`library.importLightroom`, `lightcraft-cli run`) adds records to the currently open LightCraft
+library; only the desktop window above can make a new library for it first. The desktop result stays open until dismissed and
 shows the destination library, the number of records added, missing originals and warnings.
 **Show in Library** opens All Photos, clears filters and selects an imported record. Errors stay
 readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result

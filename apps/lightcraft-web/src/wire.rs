@@ -522,7 +522,7 @@ mod tests {
             }
         };
         frame(&mut watch, &mut index); // an empty filtered view: no render request yet
-        cache.clear(); // File ▸ Clear Preview Cache
+        cache.clear(); // File ▸ Discard Preview Cache
         frame(&mut watch, &mut index);
         // the filter is removed: the first thumbnail request (`Workers::try_start`)
         gone.extend(watch.observe(&cache, cache.generation(), &mut index));

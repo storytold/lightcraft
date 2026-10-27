@@ -161,11 +161,17 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(fl) = f.flag {
         add(format!("Flag: {}", format!("{fl:?}").to_lowercase()), json!({"flag": Null}));
     }
-    let mut labels = f.labels.clone();
-    labels.extend(f.label.filter(|l| !labels.contains(l)));
-    if !labels.is_empty() {
-        let names: Vec<String> = labels.iter().map(|l| cat.label_name(*l)).collect();
-        add(format!("Label: {}", names.join(" or ")), json!({"label": Null, "labels": []}));
+    if let Some(shown) = f.labels_shown() {
+        let or = |ls: &[lightcraft_catalog::ColorLabel]| ls.iter().map(|l| cat.label_name(*l)).collect::<Vec<_>>().join(" or ");
+        // empty: `label` and `labels` exclude each other, so name both constraints
+        let names = if shown.is_empty() {
+            // parenthesised when plural, so "Red and Yellow or Green" cannot read as "(Red and Yellow) or Green"
+            let plural = if f.labels.len() > 1 { format!("({})", or(&f.labels)) } else { or(&f.labels) };
+            format!("{} and {plural}", f.label.map(|l| cat.label_name(l)).unwrap_or_default())
+        } else {
+            or(&shown)
+        };
+        add(format!("Label: {names}"), json!({"label": Null, "labels": []}));
     }
     if let Some(k) = f.kind {
         let n = match k {
@@ -214,8 +220,9 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(rs) = f.rule_set.as_ref().filter(|r| !r.rules.is_empty()) {
         add(format!("Rules: {}", rs.describe_with(cat)), json!({"ruleSet": Null}));
     }
-    if !f.only.is_empty() {
-        add(format!("Only {} photos", f.only.len()), json!({"only": []}));
+    if f.only_none || !f.only.is_empty() {
+        let n = if f.only_none { 0 } else { f.only.len() };
+        add(format!("Only {n} photos"), json!({"only": [], "onlyNone": false}));
     }
     v
 }

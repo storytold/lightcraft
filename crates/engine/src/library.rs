@@ -558,7 +558,10 @@ impl Session {
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
             self.selection.active = self.selection.active.filter(|id| self.catalog.photo(*id).is_some());
         }
+        // not on Missing Photos: working that view out checks every original (minutes on a
+        // sleeping NAS), and the app checks them in the background once it runs
         if self.selection.active.is_none()
+            && self.source != LibrarySource::Missing
             && let Some(first) = self.visible_cloned().first()
         {
             self.selection = Selection::single(*first);

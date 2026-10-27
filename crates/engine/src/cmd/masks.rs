@@ -8,6 +8,18 @@ use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_p
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
+/// A colour-range mask compares every pixel against every sample, so render and export cost is
+/// pixels x samples. The interactive sampler stops at 5; automation (`mask.add`/`mask.update`)
+/// passed its `samples` array straight through, so a few hundred samples on a large render hung.
+const MAX_COLOR_RANGE_SAMPLES: usize = 64;
+
+/// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
+fn cap_color_range_samples(shape: &mut MaskShape) {
+    if let MaskShape::ColorRange { samples, .. } = shape {
+        samples.truncate(MAX_COLOR_RANGE_SAMPLES);
+    }
+}
+
 fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
     Ok(match kind {
         "brush" => MaskShape::Brush { strokes: vec![] },
@@ -35,7 +47,12 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             let samples: Vec<[f64; 3]> = p
                 .get("samples")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|s| Some([s.get(0)?.as_f64()?, s.get(1)?.as_f64()?, s.get(2)?.as_f64()?])).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| Some([s.get(0)?.as_f64()?, s.get(1)?.as_f64()?, s.get(2)?.as_f64()?]))
+                        .take(MAX_COLOR_RANGE_SAMPLES)
+                        .collect()
+                })
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
@@ -381,8 +398,9 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("mask.update", "Update Mask Shape", [], None, "{id?, component?: index (0), shape: MaskShape JSON}", has_active, |s, p| {
-            let shape: MaskShape =
+            let mut shape: MaskShape =
                 serde_json::from_value(p.get("shape").cloned().unwrap_or_default()).map_err(|e| bad("mask.update", e.to_string()))?;
+            cap_color_range_samples(&mut shape);
             let comp = optional_index(p, "component", "mask.update")?.unwrap_or(0);
             let mid = mask_id(p, s.active_mask, "mask.update")?;
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {
@@ -1122,4 +1140,31 @@ fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>> {
         .map(|q| q.as_f64().filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0) as f32))
         .collect::<Option<Vec<f32>>>()
         .ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))
+}
+
+#[cfg(test)]
+mod tests_color_range {
+    use super::*;
+
+    /// Automation (`mask.add`/`mask.update`) used to take any number of colour-range samples; render
+    /// cost is pixels x samples, so a few hundred hung a large render. The list is now capped.
+    #[test]
+    fn color_range_samples_are_capped() {
+        let samples: Vec<Value> = (0..1000).map(|i| json!([i as f64 / 1000.0, 0.1, 0.2])).collect();
+        let shape = shape_from("colorRange", &json!({ "samples": samples }), "mask.add").unwrap();
+        let MaskShape::ColorRange { samples, .. } = shape else { panic!("expected ColorRange") };
+        assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
+        // A reasonable request is unchanged.
+        let few = shape_from("colorRange", &json!({ "samples": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]] }), "mask.add").unwrap();
+        let MaskShape::ColorRange { samples, .. } = few else { panic!() };
+        assert_eq!(samples.len(), 2);
+        // mask.update deserializes the shape directly; it is capped the same way.
+        let mut shape = shape_from("colorRange", &json!({ "samples": [[0.1, 0.2, 0.3]] }), "mask.add").unwrap();
+        if let MaskShape::ColorRange { samples, .. } = &mut shape {
+            samples.resize(1000, samples[0]);
+        }
+        cap_color_range_samples(&mut shape);
+        let MaskShape::ColorRange { samples, .. } = shape else { panic!() };
+        assert_eq!(samples.len(), MAX_COLOR_RANGE_SAMPLES);
+    }
 }

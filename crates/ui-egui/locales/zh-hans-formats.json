@@ -227,6 +227,7 @@
   "Delete the keyword “{name}”?": "要删除关键字“{name}”吗？",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "将从 {count} 张照片中移除，其下的关键字也一并移除。撤销可恢复。{:.0}",
   "Create Keyword Tag Inside “{name}”…": "在“{name}”中创建关键字标记…",
+  "Inside: {names}": "其中：{names}",
   "“{parent}” has a “{name}” already. Merge the two?": "“{parent}”中已有“{name}”。要合并两者吗？",
   "There is a “{name}” at the top level already. Merge the two?": "顶层已有“{name}”。要合并两者吗？",
   "Added “{keyword}” to {n} photo{}": "已将“{keyword}”添加到 {n} 张照片{:.0}",
@@ -296,5 +297,13 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整个图库中重命名 {n} 张面孔。不会改动文件。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}”已经是另一个人。合并后成为一个人；撤销会再把他们分开。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已添加 {what} 合并（{mp}）：完整尺寸（{full}）所需的内存超出了这台电脑的内存",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）"
+  "Listing folders — folders: {folders}, files: {files}": "正在列出文件夹 — 文件夹：{folders}，文件：{files}",
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）",
+  "Drop to review {n} item{} for import": "松开鼠标以在导入前检查 {n} 个项目{:.0}",
+  "Drop to import {n} item{}": "松开鼠标以导入 {n} 个项目{:.0}",
+  "Drop to import {n} preset{}": "松开鼠标以导入 {n} 个预设{:.0}",
+  "Could not read {name}: {e}": "无法读取 {name}：{e}",
+  "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
 }

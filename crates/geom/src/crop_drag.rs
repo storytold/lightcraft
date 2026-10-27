@@ -6,7 +6,7 @@
 //! bounds decide how far the drag may go. [`drag_crop`] answers all three in one place so the app,
 //! CLI, control channel and MCP agree.
 
-use crate::{CropGeometry, Point, Rect};
+use crate::{Affine, CropGeometry, Point, Rect, Vec2};
 
 /// Smallest crop side, as a fraction of the image's shorter side.
 pub const MIN_CROP_FRACTION: f64 = 0.02;
@@ -109,11 +109,21 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
     let out = match (handle, aspect) {
         (CropHandle::Move, _) => {
             let slide = |cur: Rect, ax: f64, ay: f64| {
-                let t = bisect(0.0, 1.0, |t| feasible(cur.translate(crate::Vec2::new(ax * t, ay * t))));
-                cur.translate(crate::Vec2::new(ax * t, ay * t))
+                let t = bisect(0.0, 1.0, |t| feasible(cur.translate(Vec2::new(ax * t, ay * t))));
+                cur.translate(Vec2::new(ax * t, ay * t))
             };
-            let cur = slide(sr, dx, 0.0);
-            slide(cur, 0.0, dy)
+            // straightened, go to the nearest place that fits, so the frame slides along tilted edges (#2299)
+            let nearest = if base.angle != 0.0 {
+                let from = |r: Rect| nearest_move(r, base.angle, w, h, Vec2::new(dx, dy)).map(|v| r.translate(v)).filter(|r| feasible(*r));
+                // a frame at the tolerance's edge on opposite sides moves only once it is inside it
+                from(sr).or_else(|| shrunk_inside(sr, base.angle, w, h).and_then(from))
+            } else {
+                None
+            };
+            match nearest {
+                Some(r) => r,
+                None => slide(slide(sr, dx, 0.0), 0.0, dy),
+            }
         }
         (hd, None) => {
             let (mx0, mx1, my0, my1) = sides(hd);
@@ -202,6 +212,70 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
     if [rect.x0, rect.y0, rect.x1, rect.y1].iter().all(|v| v.is_finite()) { CropGeometry { rect, angle: base.angle } } else { start }
 }
 
+/// The translation (pixels) nearest `want` that keeps the frame `r` inside a `w × h` image turned by `angle` degrees.
+fn nearest_move(r: Rect, angle: f64, w: f64, h: f64, want: Vec2) -> Option<Vec2> {
+    let back = Affine::rotate_about(-angle.to_radians(), Point::new(w / 2.0, h / 2.0));
+    let (ex, ey) = (back.apply_vec(Vec2::new(1.0, 0.0)), back.apply_vec(Vec2::new(0.0, 1.0)));
+    let (nx, ny) = (Vec2::new(ex.x, ey.x), Vec2::new(ex.y, ey.y));
+    // never tighter than where the frame is, plus a slack so a zero-width strip survives rounding
+    let (sx, sy) = (1e-9 * w, 1e-9 * h);
+    let mut planes = Vec::with_capacity(16);
+    for c in r.corners() {
+        let q = back.apply(c);
+        for (n, b, s) in [(nx, w - q.x, sx), (-nx, q.x, sx), (ny, h - q.y, sy), (-ny, q.y, sy)] {
+            planes.push((n, b.max(0.0) + s));
+        }
+    }
+    if planes.iter().all(|(n, b)| n.dot(want) <= *b) {
+        return Some(want);
+    }
+    let lim = 4.0 * w.max(h);
+    let mut poly = vec![Vec2::new(-lim, -lim), Vec2::new(lim, -lim), Vec2::new(lim, lim), Vec2::new(-lim, lim)];
+    for (n, b) in &planes {
+        poly = clip_half_plane(&poly, *n, *b);
+    }
+    poly.iter()
+        .zip(poly.iter().cycle().skip(1))
+        .map(|(a, b)| {
+            let ab = *b - *a;
+            let l2 = ab.dot(ab);
+            let t = if l2 > 0.0 { ((want - *a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            *a + ab * t
+        })
+        .filter(|v| v.x.is_finite() && v.y.is_finite())
+        .min_by(|a, b| (*a - want).len().total_cmp(&(*b - want).len()))
+}
+
+/// `r` scaled about its centre by the largest factor down to `1 - 1e-5` that puts it exactly inside a `w × h` image
+/// turned by `angle` degrees.
+fn shrunk_inside(r: Rect, angle: f64, w: f64, h: f64) -> Option<Rect> {
+    let back = Affine::rotate_about(-angle.to_radians(), Point::new(w / 2.0, h / 2.0));
+    let scaled = |k: f64| Rect::from_center(r.center(), r.width() * k, r.height() * k);
+    let inside = |k: f64| {
+        scaled(k).corners().iter().all(|c| {
+            let q = back.apply(*c);
+            q.x >= 0.0 && q.y >= 0.0 && q.x <= w && q.y <= h
+        })
+    };
+    let lo = 1.0 - 1e-5;
+    inside(lo).then(|| scaled(bisect_range(lo, 1.0, inside)))
+}
+
+/// The part of the convex polygon `poly` where `n · v <= b`.
+fn clip_half_plane(poly: &[Vec2], n: Vec2, b: f64) -> Vec<Vec2> {
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    for (p, q) in poly.iter().zip(poly.iter().cycle().skip(1)) {
+        let (dp, dq) = (n.dot(*p) - b, n.dot(*q) - b);
+        if dp <= 0.0 {
+            out.push(*p);
+        }
+        if (dp <= 0.0) != (dq <= 0.0) {
+            out.push(*p + (*q - *p) * (dp / (dp - dq)));
+        }
+    }
+    out
+}
+
 /// Which sides a handle moves: (left, right, top, bottom).
 fn sides(h: CropHandle) -> (bool, bool, bool, bool) {
     use CropHandle::*;
@@ -259,225 +333,4 @@ fn bisect(lo: f64, hi: f64, ok: impl Fn(f64) -> bool) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use CropHandle::*;
-
-    const W: f64 = 600.0;
-    const H: f64 = 400.0;
-    const EPS: f64 = 1e-6;
-
-    fn geo(x0: f64, y0: f64, x1: f64, y1: f64) -> CropGeometry {
-        CropGeometry { rect: Rect::new(x0, y0, x1, y1), angle: 0.0 }
-    }
-    fn p(x: f64, y: f64) -> Point {
-        Point::new(x, y)
-    }
-    fn drag(g: CropGeometry, hd: CropHandle, from: Point, to: Point, aspect: Option<f64>) -> CropGeometry {
-        drag_crop(g, hd, from, to, W, H, aspect)
-    }
-    fn px_aspect(g: &CropGeometry) -> f64 {
-        g.rect.width() * W / (g.rect.height() * H)
-    }
-    fn near(a: f64, b: f64) -> bool {
-        (a - b).abs() < EPS
-    }
-
-    // Feature: dragging a crop handle
-    //   Scenario: a free corner drag inside the image
-    #[test]
-    fn given_free_crop_when_corner_dragged_inside_then_corner_follows_and_opposite_corner_stays() {
-        let g = drag(geo(0.2, 0.2, 0.8, 0.8), BottomRight, p(0.8, 0.8), p(0.9, 0.7), None);
-        assert!(near(g.rect.x0, 0.2) && near(g.rect.y0, 0.2));
-        assert!(near(g.rect.x1, 0.9) && near(g.rect.y1, 0.7));
-    }
-
-    //   Scenario: dragging past the right edge (the weird behaviour of issue 295)
-    #[test]
-    fn given_corner_dragged_past_image_edge_then_it_stops_at_the_edge_and_anchor_stays() {
-        let g = drag(geo(0.2, 0.2, 0.8, 0.8), BottomRight, p(0.8, 0.8), p(1.3, 0.7), None);
-        assert!(near(g.rect.x0, 0.2) && near(g.rect.y0, 0.2), "anchor moved: {:?}", g.rect);
-        assert!(near(g.rect.x1, 1.0), "stops at the edge: {:?}", g.rect);
-        assert!(near(g.rect.y1, 0.7), "other axis still follows the pointer: {:?}", g.rect);
-    }
-
-    #[test]
-    fn given_locked_aspect_when_corner_dragged_past_edge_then_ratio_and_anchor_hold() {
-        let a = 1.5;
-        let g = drag(geo(0.2, 0.2, 0.8, 0.2 + 0.6 * W / H / a), BottomRight, p(0.8, 0.6), p(1.4, 0.9), Some(a));
-        assert!(near(g.rect.x0, 0.2) && near(g.rect.y0, 0.2), "{:?}", g.rect);
-        assert!(near(px_aspect(&g), a), "{}", px_aspect(&g));
-        assert!(g.rect.x1 <= 1.0 + EPS && g.rect.y1 <= 1.0 + EPS);
-        assert!(g.rect.x1 > 0.95 || g.rect.y1 > 0.95, "grows until it touches an edge: {:?}", g.rect);
-    }
-
-    #[test]
-    fn given_locked_aspect_when_edge_dragged_then_ratio_holds_and_frame_grows_about_its_midline() {
-        let a = 2.0;
-        let start = geo(0.3, 0.3, 0.7, 0.3 + 0.4 * W / H / a);
-        let g = drag(start, Bottom, p(0.5, start.rect.y1), p(0.5, start.rect.y1 + 0.1), Some(a));
-        assert!(near(g.rect.y0, start.rect.y0), "opposite edge stays");
-        assert!(near(g.rect.center().x, start.rect.center().x), "grows symmetrically sideways");
-        assert!(near(px_aspect(&g), a));
-        assert!(g.rect.height() > start.rect.height());
-    }
-
-    #[test]
-    fn given_free_crop_when_edge_dragged_then_only_that_edge_moves() {
-        let g = drag(geo(0.2, 0.2, 0.8, 0.8), Left, p(0.2, 0.5), p(0.1, 0.9), None);
-        assert!(near(g.rect.x0, 0.1) && near(g.rect.y0, 0.2) && near(g.rect.x1, 0.8) && near(g.rect.y1, 0.8));
-    }
-
-    #[test]
-    fn given_move_past_edge_then_size_is_kept_and_frame_slides_along_the_edge() {
-        let start = geo(0.5, 0.25, 0.9, 0.65);
-        let g = drag(start, Move, p(0.7, 0.45), p(1.3, 0.55), None);
-        assert!(near(g.rect.width(), 0.4) && near(g.rect.height(), 0.4));
-        assert!(near(g.rect.x1, 1.0), "flush with the right edge: {:?}", g.rect);
-        assert!(near(g.rect.y0, 0.35), "still follows the pointer vertically: {:?}", g.rect);
-    }
-
-    #[test]
-    fn given_edge_dragged_across_the_opposite_edge_then_crop_keeps_a_minimum_size() {
-        let g = drag(geo(0.2, 0.2, 0.8, 0.8), Right, p(0.8, 0.5), p(-0.5, 0.5), None);
-        assert!(g.rect.width() * W >= MIN_CROP_FRACTION * H - EPS && g.rect.x1 > g.rect.x0);
-        assert!(near(g.rect.x0, 0.2));
-    }
-
-    #[test]
-    fn given_straightened_image_when_dragged_outside_then_crop_stays_inside_the_rotated_image() {
-        let start = crate::crop_fit_angle(W, H, 12.0, Some(1.5));
-        let c = start.rect.center();
-        for hd in [TopLeft, TopRight, BottomRight, BottomLeft, Top, Right, Bottom, Left, Move] {
-            for aspect in [None, Some(1.5)] {
-                let g = drag(start, hd, c, p(3.0, -3.0), aspect);
-                assert!(g.is_within_image(W, H), "{hd:?} {aspect:?}: {:?}", g.rect);
-                assert_eq!(g.angle, 12.0);
-            }
-        }
-    }
-
-    #[test]
-    fn given_hostile_numbers_then_the_start_crop_is_returned_not_a_panic() {
-        let s = geo(0.2, 0.2, 0.8, 0.8);
-        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert_eq!(drag(s, BottomRight, p(0.8, 0.8), p(bad, 0.5), None), s);
-        }
-        assert_eq!(drag_crop(s, BottomRight, p(0.8, 0.8), p(0.9, 0.9), 0.0, 400.0, None), s);
-        assert_eq!(drag(s, BottomRight, p(0.8, 0.8), p(0.9, 0.9), Some(f64::NAN)), s);
-        assert_eq!(drag(s, BottomRight, p(0.8, 0.8), p(0.9, 0.9), Some(-1.0)), s);
-    }
-
-    //   Scenario: a locked edge drag when the frame already touches the image edge (review finding)
-    #[test]
-    fn given_locked_frame_flush_with_the_top_when_right_edge_dragged_out_then_it_grows_sliding_down() {
-        let a = 1.5;
-        let start = geo(0.2, 0.0, 0.5, 0.3 * W / H * 0.0 + 0.3 * W / (a * H));
-        let g = drag(start, Right, p(0.5, 0.2), p(0.9, 0.2), Some(a));
-        assert!(near(g.rect.x0, 0.2), "anchor edge stays: {:?}", g.rect);
-        assert!(g.rect.width() > start.rect.width() + 0.05, "it must grow: {:?}", g.rect);
-        assert!(near(px_aspect(&g), a));
-        assert!(g.is_within_image(W, H));
-    }
-
-    #[test]
-    fn given_full_fit_straightened_crop_when_locked_edge_dragged_then_it_still_respects_the_image() {
-        let start = crate::crop_fit_angle(W, H, 20.0, Some(1.5));
-        let g = drag(start, Right, p(0.9, 0.5), p(1.5, 0.5), Some(1.5));
-        assert!(g.is_within_image(W, H) && near(px_aspect(&g), 1.5));
-    }
-
-    //   Scenario: extreme or hostile magnitudes
-    #[test]
-    fn given_an_extreme_locked_ratio_then_the_frame_can_still_be_moved() {
-        let start = geo(0.1, 0.4, 0.9, 0.4 + 0.8 * W / (60.0 * H));
-        let g = drag(start, Move, p(0.5, 0.4), p(0.5, 0.7), Some(60.0));
-        assert!(g.rect.y0 > 0.5, "moved: {:?}", g.rect);
-    }
-
-    #[test]
-    fn given_a_huge_finite_pointer_then_a_locked_corner_still_grows_to_the_edge() {
-        let a = 1.5;
-        let start = geo(0.2, 0.2, 0.5, 0.2 + 0.3 * W / (a * H));
-        let g = drag(start, BottomRight, p(0.5, 0.4), p(1e300, 1e300), Some(a));
-        assert!(g.rect.x1 > 0.95 || g.rect.y1 > 0.95, "{:?}", g.rect);
-        let g = drag(start, BottomRight, p(0.5, 0.4), p(1e300, 1e300), None);
-        assert!(near(g.rect.x1, 1.0) && near(g.rect.y1, 1.0), "{:?}", g.rect);
-    }
-
-    #[test]
-    fn given_an_unrotated_image_then_results_never_leave_the_unit_square() {
-        let g = drag(geo(0.2, 0.2, 0.8, 0.8), BottomRight, p(0.8, 0.8), p(5.0, 5.0), None);
-        assert!(g.rect.x1 <= 1.0 && g.rect.y1 <= 1.0 && g.rect.x0 >= 0.0 && g.rect.y0 >= 0.0, "{:?}", g.rect);
-    }
-
-    #[test]
-    fn handle_numbering_matches_the_overlay() {
-        assert_eq!(CropHandle::from_index(0), Some(TopLeft));
-        assert_eq!(CropHandle::from_index(6), Some(Bottom));
-        assert_eq!(CropHandle::from_index(8), Some(Move));
-        assert_eq!(CropHandle::from_index(9), None);
-        assert_eq!(CropHandle::from_name("bottomLeft"), Some(BottomLeft));
-        assert_eq!(CropHandle::from_name("nope"), None);
-    }
-
-    mod props {
-        use super::*;
-        use proptest::prelude::*;
-
-        fn any_handle() -> impl Strategy<Value = CropHandle> {
-            (0u8..9).prop_map(|i| CropHandle::from_index(i).unwrap_or(Move))
-        }
-
-        proptest! {
-            /// Whatever the pointer does, the crop stays valid; the anchor and the ratio hold.
-            #[test]
-            fn drag_is_always_inside_anchored_and_shaped(
-                angle in -45.0f64..45.0,
-                ratio in prop::option::of(0.3f64..4.0),
-                hd in any_handle(),
-                tx in -4.0f64..5.0, ty in -4.0f64..5.0,
-                shrink in 0.2f64..1.0,
-            ) {
-                let base = crate::crop_fit_angle(W, H, angle, ratio);
-                // a smaller start crop so there is room to move
-                let c = base.rect.center();
-                let start = CropGeometry { rect: Rect::from_center(c, base.rect.width() * shrink, base.rect.height() * shrink), angle };
-                prop_assume!(start.is_within_image(W, H));
-                let g = drag_crop(start, hd, c, p(tx, ty), W, H, ratio);
-                prop_assert!(g.is_within_image(W, H), "{:?} -> {:?}", start.rect, g.rect);
-                prop_assert!(g.rect.width() > 0.0 && g.rect.height() > 0.0);
-                let min = MIN_CROP_FRACTION * W.min(H) - 1e-6;
-                prop_assert!(g.rect.width() * W >= min.min(start.rect.width() * W) && g.rect.height() * H >= min.min(start.rect.height() * H), "min size {:?}", g.rect);
-                if let Some(a) = ratio {
-                    prop_assert!((px_aspect(&g) - a).abs() < 1e-6 * a.max(1.0), "ratio {a}: {}", px_aspect(&g));
-                }
-                // anchors: edges opposite the handle do not move
-                let (s, r) = (start.rect, g.rect);
-                let keep_l = matches!(hd, TopRight | BottomRight | Right);
-                let keep_r = matches!(hd, TopLeft | BottomLeft | Left);
-                let keep_t = matches!(hd, BottomLeft | BottomRight | Bottom);
-                let keep_b = matches!(hd, TopLeft | TopRight | Top);
-                {
-                    if keep_l { prop_assert!((r.x0 - s.x0).abs() < 1e-6, "x0"); }
-                    if keep_r { prop_assert!((r.x1 - s.x1).abs() < 1e-6, "x1"); }
-                    if keep_t { prop_assert!((r.y0 - s.y0).abs() < 1e-6, "y0"); }
-                    if keep_b { prop_assert!((r.y1 - s.y1).abs() < 1e-6, "y1"); }
-                }
-                if hd == Move {
-                    prop_assert!((r.width() - s.width()).abs() < 1e-9 && (r.height() - s.height()).abs() < 1e-9);
-                }
-            }
-
-            #[test]
-            fn drag_never_panics_on_arbitrary_numbers(
-                x0 in -2.0f64..3.0, y0 in -2.0f64..3.0, x1 in -2.0f64..3.0, y1 in -2.0f64..3.0,
-                angle in -90.0f64..90.0, tx in -1e9f64..1e9, ty in -1e9f64..1e9,
-                ratio in prop::option::of(-1.0f64..10.0), hd in any_handle(),
-            ) {
-                let g = drag_crop(CropGeometry { rect: Rect::new(x0, y0, x1, y1), angle }, hd, p(0.5, 0.5), p(tx, ty), W, H, ratio);
-                prop_assert!(g.rect.x0.is_finite() && g.rect.y1.is_finite());
-            }
-        }
-    }
-}
+mod tests;

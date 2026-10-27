@@ -1,0 +1,302 @@
+use super::frame::{field, num};
+use super::*;
+
+/// The Export dialog's watermark preview: the first exported photo, as wide as the dialog whatever
+/// its shape, with the watermark drawn on it as the file will have it at size `resize` (`None` =
+/// full size). On a worker thread, once per photo, catalog change and size step, the cached
+/// thumbnail comes first (at once, a little soft) and then a render at the preview's own pixel size
+/// replaces it. The watermark is redrawn on a copy only when it, the output size or the picture
+/// changes, which is quick at this size, so the preview follows the sliders.
+pub(super) fn watermark_preview(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    wm: &lightcraft_engine::export::Watermark,
+    resize: Option<lightcraft_engine::export::Resize>,
+) {
+    use std::hash::{Hash, Hasher};
+    // (pictures received so far: 1 the thumbnail, 2 the sharp render; the latest, or why none came)
+    type Base = std::sync::Arc<std::sync::Mutex<(u8, Option<Result<lightcraft_raster::Rgba8, String>>)>>;
+    type Shown = (u64, u8, lightcraft_engine::export::Watermark, usize, egui::TextureHandle);
+    let t = Tokens::get(ui.ctx());
+    let Some(&id) = app.session.selected().first() else { return };
+    let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
+    let (out_w, out_h) = lightcraft_engine::export::output_size(&photo, &lightcraft_engine::export::ExportOptions { resize, ..Default::default() });
+    let export_short = out_w.min(out_h);
+    // pixels across the dialog, in steps so a scroll bar or a point of layout doesn't re-render
+    let step = 128.0;
+    let px = ((ui.available_width() * ui.ctx().pixels_per_point() / step).ceil() * step).clamp(step, 2048.0) as usize;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (id, app.session.catalog.revision, px).hash(&mut h);
+    let key = h.finish();
+    let ctx = ui.ctx().clone();
+    let (base_id, shown_id) = (egui::Id::unique("export-wm-preview-base"), egui::Id::unique("export-wm-preview-shown"));
+    let base = match ctx.data(|d| d.get_temp::<(u64, Base)>(base_id)) {
+        Some((k, base)) if k == key => base,
+        _ => {
+            let base: Base = Default::default();
+            // the thumbnail, then as wide as the dialog (a tall photo up to three times that high)
+            let jobs: Vec<_> = [app.session.thumb_job(id, 512), app.session.render_job(id, px, px * 3, false, true)].into_iter().flatten().collect();
+            // the web build has no worker thread: a full render there would hold up the page
+            #[cfg(target_arch = "wasm32")]
+            let jobs: Vec<_> = jobs.into_iter().take(1).collect();
+            if jobs.is_empty() {
+                *base.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = (1, Some(Err("no such photo".into())));
+            } else {
+                let (out, repaint) = (base.clone(), ctx.clone());
+                let work = move || {
+                    for job in jobs {
+                        // (a panic in the render is its failure: `RenderJob::run`)
+                        let r = job.run().rendered.map(|r| r.image);
+                        let mut got = out.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        // a failed sharp render keeps the thumbnail
+                        if r.is_ok() || !matches!(got.1, Some(Ok(_))) {
+                            *got = (got.0.saturating_add(1), Some(r));
+                            repaint.request_repaint();
+                        }
+                    }
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Err(e) = std::thread::Builder::new().name("lc-watermark-preview".into()).spawn(work) {
+                    log::warn!("watermark preview: {e}");
+                }
+                #[cfg(target_arch = "wasm32")]
+                work();
+            }
+            ctx.data_mut(|d| d.insert_temp(base_id, (key, base.clone())));
+            base
+        }
+    };
+    let shown = ctx.data(|d| d.get_temp::<Shown>(shown_id));
+    let stage = base.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0;
+    let tex = match shown {
+        Some((k, g, w, s, tex)) if k == key && g == stage && &w == wm && s == export_short => tex,
+        _ => {
+            let photo_px = match &base.lock().unwrap_or_else(std::sync::PoisonError::into_inner).1 {
+                Some(Ok(img)) => Ok(img.clone()),
+                Some(Err(e)) => Err(Some(e.clone())),
+                None => Err(None),
+            };
+            let mut img = match photo_px {
+                Ok(img) => img,
+                Err(e) => {
+                    let note = if e.is_some() { "Preview unavailable" } else { "Loading preview…" };
+                    let r = ui
+                        .horizontal(|ui| {
+                            if e.is_none() {
+                                crate::progress::spinner(ui, 12.0);
+                            }
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim))
+                        })
+                        .inner;
+                    if let Some(e) = e {
+                        r.on_hover_text(e);
+                    }
+                    return;
+                }
+            };
+            lightcraft_engine::export::draw_watermark_preview(&mut img, wm, export_short);
+            // shown through the monitor profile like every other preview
+            if let Some(d) = app.renderer.display()
+                && let Err(e) = d.profile.from_srgb(&mut img)
+            {
+                log::warn!("display profile: {e}");
+            }
+            let color = std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
+            let tex = match shown {
+                Some((.., mut tex)) => {
+                    tex.set(color, egui::TextureOptions::LINEAR);
+                    tex
+                }
+                None => ctx.load_texture("export-wm-preview", color, egui::TextureOptions::LINEAR),
+            };
+            ctx.data_mut(|d| d.insert_temp(shown_id, (key, stage, wm.clone(), export_short, tex.clone())));
+            tex
+        }
+    };
+    let size = tex.size_vec2();
+    let scale = ui.available_width() / size.x.max(1.0);
+    let r = ui.vertical_centered(|ui| ui.add(egui::Image::new((tex.id(), size * scale)))).inner;
+    crate::widgets::register(ui, "image:exportWatermarkPreview", r.rect);
+}
+
+/// The Export dialog's choices as `app.export` params (without the folder).
+pub(super) fn export_dialog_params(
+    opts: &lightcraft_engine::export::ExportOptions,
+    full_size: bool,
+    resize: &lightcraft_engine::export::Resize,
+    limit_kb: u32,
+) -> serde_json::Value {
+    let o = lightcraft_engine::export::ExportOptions {
+        resize: (!full_size).then_some(*resize),
+        limit_kb: (limit_kb > 0).then_some(limit_kb),
+        ..opts.clone()
+    };
+    o.to_json()
+}
+
+// ------------------------------------------------------------------------------------------ dialog widgets
+
+/// Two columns of settings-group checkboxes (Copy Settings, Create Preset) plus All / None.
+pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
+    let key_of = |g: &SettingsGroup| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    ui.columns(2, |cols| {
+        for (i, g) in SettingsGroup::ALL.iter().enumerate() {
+            let key = key_of(g);
+            let mut on = groups.contains(&key);
+            let r = cols[i % 2].checkbox(&mut on, crate::i18n::tr(g.label()));
+            crate::widgets::register_response(format!("{tag}:{key}"), r.rect, &r);
+            if r.changed() {
+                if on {
+                    groups.push(key);
+                } else {
+                    groups.retain(|x| *x != key);
+                }
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let all = ui.small_button(crate::i18n::tr("All"));
+        crate::widgets::register(ui, format!("{tag}:all"), all.rect);
+        if all.clicked() {
+            *groups = SettingsGroup::ALL.iter().map(key_of).collect();
+        }
+        let none = ui.small_button(crate::i18n::tr("None"));
+        crate::widgets::register(ui, format!("{tag}:none"), none.rect);
+        if none.clicked() {
+            groups.clear();
+        }
+    });
+}
+
+/// Width of the label column in dialogs.
+pub(super) const LABEL_W: f32 = 78.0;
+
+const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, default: f64, step: f64) -> ControlSpec {
+    ControlSpec { id, label, section: Section::Light, min, max, default, step, decimals: 0, track: Track::Plain }
+}
+
+pub(super) const QUALITY: ControlSpec = spec("export.quality", "Quality", 1.0, 100.0, 90.0, 1.0);
+
+pub(super) const LIMIT_KB: ControlSpec = spec("export.limitKb", "Limit file size (KB, 0 = off)", 0.0, 20_000.0, 0.0, 10.0);
+
+const SIZE_PX: ControlSpec = spec("export.sizePx", "Pixels", 16.0, 20_000.0, 2048.0, 16.0);
+
+const SIZE_W: ControlSpec = spec("export.sizeW", "Width (px)", 16.0, 20_000.0, 2048.0, 16.0);
+
+const SIZE_H: ControlSpec = spec("export.sizeH", "Height (px)", 16.0, 20_000.0, 2048.0, 16.0);
+
+const SIZE_MP: ControlSpec = ControlSpec { decimals: 1, ..spec("export.sizeMp", "Megapixels", 0.1, 100.0, 12.0, 0.1) };
+
+const SIZE_PCT: ControlSpec = spec("export.sizePercent", "Percent", 1.0, 400.0, 50.0, 1.0);
+
+pub(super) const START_NUMBER: ControlSpec = spec("export.startNumber", "Start number", 1.0, 9999.0, 1.0, 1.0);
+
+const PPI: ControlSpec = spec("export.ppi", "Resolution (ppi)", 1.0, 1200.0, 240.0, 1.0);
+
+/// Image Sizing: full size, or a resize mode and its value(s), don't enlarge, ppi.
+pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::export::Resize, ppi: &mut u16) {
+    use lightcraft_engine::export::ResizeMode as R;
+    const MODES: [(R, &str); 8] = [
+        (R::LongEdge, "Long Edge"),
+        (R::ShortEdge, "Short Edge"),
+        (R::Width, "Width"),
+        (R::Height, "Height"),
+        (R::WidthHeight, "Width & Height"),
+        (R::Dimensions, "Dimensions"),
+        (R::Megapixels, "Megapixels"),
+        (R::Percent, "Percentage"),
+    ];
+    let r_full = ui.checkbox(full, crate::i18n::tr("Full size"));
+    crate::widgets::register(ui, "check:exportFullSize", r_full.rect);
+    if !*full {
+        field(ui, "Resize to", |ui| {
+            let cur = MODES.iter().find(|m| m.0 == r.mode).map_or("Long Edge", |m| m.1);
+            let before = r.mode;
+            let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
+                for (m, l) in MODES {
+                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
+                }
+            });
+            crate::widgets::name_combo(&c.response, crate::i18n::tr("Resize"));
+            crate::widgets::register(ui, "combo:exportResizeMode", c.response.rect);
+            if r.mode != before {
+                // a sensible value for the new unit
+                r.value = match r.mode {
+                    R::Megapixels => 12.0,
+                    R::Percent => 50.0,
+                    _ if matches!(before, R::Megapixels | R::Percent) => 2048.0,
+                    _ => r.value,
+                };
+                if matches!(r.mode, R::Dimensions | R::WidthHeight) && r.height == 0 {
+                    r.height = r.value as u32;
+                }
+            }
+        });
+        let mut v = r.value as f64;
+        let spec = match r.mode {
+            R::Megapixels => &SIZE_MP,
+            R::Percent => &SIZE_PCT,
+            R::Dimensions | R::WidthHeight => &SIZE_W,
+            _ => &SIZE_PX,
+        };
+        if num(ui, spec, &mut v) {
+            r.value = v as f32;
+        }
+        if matches!(r.mode, R::Dimensions | R::WidthHeight) {
+            let mut h = r.height as f64;
+            if num(ui, &SIZE_H, &mut h) {
+                r.height = h as u32;
+            }
+        }
+        let c = ui.checkbox(&mut r.dont_enlarge, crate::i18n::tr("Don't enlarge"));
+        crate::widgets::register(ui, "check:exportDontEnlarge", c.rect);
+    }
+    let mut p = *ppi as f64;
+    if num(ui, &PPI, &mut p) {
+        *ppi = p as u16;
+    }
+}
+
+/// All nine positions supported by both the text and graphic watermark renderer.
+/// Keep them in grid order so bottom-centre and edge-centre anchors are available in Export.
+pub(super) const WM_POSITIONS: [(lightcraft_engine::export::Anchor, &str); 9] = {
+    use lightcraft_engine::export::Anchor::*;
+    [(TopLeft, "↖"), (Top, "↑"), (TopRight, "↗"), (Left, "←"), (Center, "•"), (Right, "→"), (BottomLeft, "↙"), (Bottom, "↓"), (BottomRight, "↘")]
+};
+
+pub(super) const WM_IMAGE_WIDTH: ControlSpec = spec("export.watermarkImageWidth", "Width (% of photo)", 2.0, 100.0, 20.0, 1.0);
+
+pub(super) const WM_SIZE: ControlSpec = spec("export.watermarkSize", "Size (% of short edge)", 1.0, 15.0, 3.5, 0.5);
+
+pub(super) const WM_OPACITY: ControlSpec = spec("export.watermarkOpacity", "Opacity (%)", 5.0, 100.0, 70.0, 1.0);
+
+pub(super) const WM_INSET_X: ControlSpec =
+    ControlSpec { decimals: 1, ..spec("export.watermarkInsetX", "Horizontal inset (% of short edge)", 0.0, 40.0, 2.5, 0.5) };
+
+pub(super) const WM_INSET_Y: ControlSpec =
+    ControlSpec { decimals: 1, ..spec("export.watermarkInsetY", "Vertical inset (% of short edge)", 0.0, 40.0, 2.5, 0.5) };
+
+#[cfg(test)]
+mod watermark_position_tests {
+    use super::WM_POSITIONS;
+    use lightcraft_engine::export::Anchor;
+
+    #[test]
+    fn export_dialog_offers_every_rendered_anchor_exactly_once() {
+        let anchors = [
+            Anchor::TopLeft,
+            Anchor::Top,
+            Anchor::TopRight,
+            Anchor::Left,
+            Anchor::Center,
+            Anchor::Right,
+            Anchor::BottomLeft,
+            Anchor::Bottom,
+            Anchor::BottomRight,
+        ];
+        assert_eq!(WM_POSITIONS.len(), anchors.len());
+        for anchor in anchors {
+            assert_eq!(WM_POSITIONS.iter().filter(|(position, _)| *position == anchor).count(), 1);
+        }
+    }
+}

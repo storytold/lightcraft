@@ -17,6 +17,8 @@ pub(crate) struct Markers {
     pub sof: u8,
     /// Number of components in the first scan (< `components` for non-interleaved sequential files).
     pub first_scan_components: u8,
+    /// Number of APP1 segments: capped before the allocating decoders walk them again.
+    pub app1: u32,
     pub exif: Option<Vec<u8>>,
     /// Offset of the EXIF TIFF header within the file.
     pub exif_offset: usize,
@@ -83,6 +85,7 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
                 m.components = seg[5];
             }
             0xE1 => {
+                m.app1 = m.app1.saturating_add(1);
                 if seg.starts_with(b"Exif\0\0") && m.exif.is_none() {
                     m.exif = Some(seg[6..].to_vec());
                     m.exif_offset = start + 6;
@@ -120,6 +123,8 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     decode_with_fallback(bytes, opts, None)
 }
+
+const MAX_APP1: u32 = 128;
 
 /// Stored dimensions and EXIF orientation from the markers, without decoding the scan data. The
 /// file is refused, as a decode would refuse it, when it has no frame header, an unsupported frame
@@ -178,6 +183,11 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
         return Err(Error::Malformed(F, "no frame header".into()));
     }
     check_size(F, m.width as u64, m.height as u64, opts)?;
+    // The allocating decoders below parse the markers again, all of them: the count is capped so
+    // their quadratic/unbounded handling of APP1 metadata stays linear in file size.
+    if m.app1 > MAX_APP1 {
+        return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
     let scale_to = opts.max_size.filter(|&(mw, mh)| mw > 0 && mh > 0 && (m.width >= mw.saturating_mul(2) || m.height >= mh.saturating_mul(2)));
     // zune-jpeg handles the common cases fastest; jpeg-decoder covers DCT scaling, CMYK/YCCK,
     // 12-bit, non-interleaved sequential scans (which zune-jpeg 0.5 mis-decodes with subsampling)
@@ -185,9 +195,9 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
     let lossless = m.sof == 0xC3;
     let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
     let raw = if m.components == 4 || scale_to.is_some() || m.precision > 8 || non_interleaved || lossless {
-        decode_jpeg_decoder(bytes, &m, scale_to)?
+        decode_jpeg_decoder(bytes, &m, scale_to, opts)?
     } else {
-        decode_zune(bytes, &m)?
+        decode_zune(bytes, &m, opts)?
     };
     // A raw container may carry the colour declaration of an otherwise untagged preview.
     // Apply it before linearization/resizing; existing JPEG metadata always wins.
@@ -196,7 +206,7 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
     finish(F, raw, meta, (m.width, m.height), opts)
 }
 
-fn decode_zune(bytes: &[u8], m: &Markers) -> Result<Raw> {
+fn decode_zune(bytes: &[u8], m: &Markers, budget: &DecodeOptions) -> Result<Raw> {
     use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
@@ -207,6 +217,11 @@ fn decode_zune(bytes: &[u8], m: &Markers) -> Result<Raw> {
         ColorSpace::RGB
     });
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
+    // zune's `decode` allocates straight from the frame header it parses, with its own caps
+    // set in us: check that header against the same limits the other decoders honour first.
+    d.decode_headers().map_err(|e| Error::Malformed(F, e.to_string()))?;
+    let (zw, zh) = d.info().map(|i| (i.width as u64, i.height as u64)).ok_or_else(|| Error::Malformed(F, "no info".into()))?;
+    check_size(F, zw, zh, budget)?;
     let px = d.decode().map_err(|e| Error::Malformed(F, e.to_string()))?;
     let info = d.info().ok_or_else(|| Error::Malformed(F, "no info".into()))?;
     let (w, h) = (info.width as usize, info.height as usize);
@@ -217,10 +232,15 @@ fn decode_zune(bytes: &[u8], m: &Markers) -> Result<Raw> {
     Ok(Raw { width: w, height: h, model, alpha: false, premultiplied: false, buf: Buf::U8(px), bit_depth: 8 })
 }
 
-fn decode_jpeg_decoder(bytes: &[u8], m: &Markers, scale_to: Option<(u32, u32)>) -> Result<Raw> {
+fn decode_jpeg_decoder(bytes: &[u8], m: &Markers, scale_to: Option<(u32, u32)>, budget: &DecodeOptions) -> Result<Raw> {
     use jpeg_decoder::PixelFormat;
     let mut d = jpeg_decoder::Decoder::new(bytes);
     d.read_info().map_err(|e| Error::Malformed(F, e.to_string()))?;
+    // Its frame header is what a decode allocates from (progressive coefficient buffers follow the
+    // unscaled MCU grid): check it against the same limits the other decoders honour, before any
+    // DCT scale is requested.
+    let info = d.info().ok_or_else(|| Error::Malformed(F, "no info".into()))?;
+    check_size(F, info.width as u64, info.height as u64, budget)?;
     // `scale` is the DCT size, not a lossless resample: on a lossless frame it would cut the
     // output to the top-left of each plane. Those decode at full size; `finish` scales after.
     if let Some((mw, mh)) = scale_to.filter(|_| m.sof != 0xC3) {
@@ -369,11 +389,18 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
         return Err(Error::Malformed(F, "no frame header".into()));
     }
     check_size(F, m.width as u64, m.height as u64, &DecodeOptions::default())?;
+    if m.app1 > MAX_APP1 {
+        return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
     if !matches!(m.components, 1 | 3) || m.precision != 8 {
         return Err(Error::Malformed(F, "expected an 8-bit greyscale or RGB image".into()));
     }
     let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
-    let raw = if non_interleaved { decode_jpeg_decoder(bytes, &m, None)? } else { decode_zune(bytes, &m)? };
+    let raw = if non_interleaved {
+        decode_jpeg_decoder(bytes, &m, None, &DecodeOptions::default())?
+    } else {
+        decode_zune(bytes, &m, &DecodeOptions::default())?
+    };
     let ch = raw.model.channels();
     match raw.buf {
         Buf::U8(v) if v.len() >= raw.width * raw.height * ch => Ok((raw.width, raw.height, ch, v)),
@@ -513,7 +540,7 @@ mod tests {
     fn lossless_grayscale_samples_are_native_endian_and_left_justified() {
         let bytes = lossless_jpeg(1, 8, 12);
         let m = parse_markers(&bytes).unwrap();
-        let raw = decode_jpeg_decoder(&bytes, &m, None).unwrap();
+        let raw = decode_jpeg_decoder(&bytes, &m, None, &DecodeOptions::default()).unwrap();
         let Buf::U16(v) = &raw.buf else { panic!("expected 16-bit samples") };
         assert_eq!(v, &vec![2048u16 << 4; 8], "0x0800 native-endian, left-justified");
         assert_eq!((raw.model, raw.bit_depth), (Model::Gray, 16));
@@ -525,7 +552,7 @@ mod tests {
     fn lossless_high_precision_rgb_is_16_bit() {
         let bytes = lossless_jpeg(3, 2, 12);
         let m = parse_markers(&bytes).unwrap();
-        let raw = decode_jpeg_decoder(&bytes, &m, None).unwrap();
+        let raw = decode_jpeg_decoder(&bytes, &m, None, &DecodeOptions::default()).unwrap();
         let Buf::U16(v) = &raw.buf else { panic!("expected 16-bit samples") };
         assert_eq!(v, &vec![2048u16 << 4; 6]);
         assert_eq!(raw.model, Model::Rgb);
@@ -536,7 +563,7 @@ mod tests {
     fn lossless_high_precision_cmyk_is_16_bit() {
         let bytes = lossless_jpeg(4, 2, 12);
         let m = parse_markers(&bytes).unwrap();
-        let raw = decode_jpeg_decoder(&bytes, &m, None).unwrap();
+        let raw = decode_jpeg_decoder(&bytes, &m, None, &DecodeOptions::default()).unwrap();
         let Buf::U16(v) = &raw.buf else { panic!("expected 16-bit samples") };
         assert_eq!(v, &vec![2048u16 << 4; 8]);
         assert_eq!((raw.model, raw.bit_depth), (Model::Cmyk, 16));
@@ -550,5 +577,78 @@ mod tests {
         let d = crate::decode(&bytes, DecodeOptions::default()).unwrap();
         assert_eq!((d.width, d.height), (8, 1));
         assert_eq!(d.bit_depth, 8);
+    }
+
+    /// Rewrites an encoded file's frame-header dimensions: same tables and scan, a hostile
+    /// annotated size.
+    fn with_dims(bytes: &[u8], w: u16, h: u16) -> Vec<u8> {
+        let mut out = bytes.to_vec();
+        let mut p = 2usize;
+        while p + 1 < out.len() {
+            if out[p] != 0xFF {
+                p += 1;
+                continue;
+            }
+            match out[p + 1] {
+                0xC0..=0xCF if out[p + 1] != 0xC4 && out[p + 1] != 0xC8 && out[p + 1] != 0xCC => {
+                    out[p + 5..p + 7].copy_from_slice(&h.to_be_bytes());
+                    out[p + 7..p + 9].copy_from_slice(&w.to_be_bytes());
+                    return out;
+                }
+                0x01 | 0xD0..=0xD9 => p += 2,
+                0xFF => p += 1,
+                _ => {
+                    let Some(l) = out.get(p + 2..p + 4) else { return out };
+                    p += 2 + usize::from(u16::from_be_bytes([l[0], l[1]]));
+                }
+            }
+        }
+        out
+    }
+
+    /// A file claiming 65535×65535 must be refused for size before zune-jpeg allocates from
+    /// its frame header (4 GB+ of samples from roughly five hundred bytes of tables).
+    #[test]
+    fn zune_refuses_its_own_frame_header_over_the_budget() {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = vec![128u8; 32 * 24];
+        let jpeg = encode_jpeg(&EncodeImage::new(32, 24, 1, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let hostile = with_dims(&jpeg, 65535, 65535);
+        assert_ne!(hostile, jpeg);
+        match crate::decode(&hostile, DecodeOptions::default()) {
+            Err(Error::TooLarge(w, h)) => assert_eq!((w, h), (65535, 65535)),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// The jpeg-decoder branch (a 4-component file) is checked the same way: its own
+    /// `read_info` result is what a full-size decode allocates from.
+    #[test]
+    fn jpeg_decoder_refuses_its_own_frame_header_over_the_budget() {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = vec![128u8; 32 * 24 * 4];
+        let jpeg = encode_jpeg(&EncodeImage::new(32, 24, 4, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let hostile = with_dims(&jpeg, 65535, 65535);
+        match crate::decode(&hostile, DecodeOptions::default()) {
+            Err(Error::TooLarge(w, h)) => assert_eq!((w, h), (65535, 65535)),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Extended XMP is reassembled from every APP1 fragment: an unbounded count is quadratic
+    /// memory in a marker walk, so the count is capped.
+    #[test]
+    fn an_app1_flood_is_refused_before_the_decoders_rewalk_it() {
+        let mut b = vec![0xFF, 0xD8];
+        // a 1-component SOF0: 8-bit, 2×2, component (1, 0x11, Q0)
+        b.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 8, 0, 2, 0, 2, 1, 0x01, 0x11, 0x00]);
+        for _ in 0..200 {
+            b.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x02]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        match crate::decode(&b, DecodeOptions::default()) {
+            Err(Error::Malformed(F, m)) => assert!(m.contains("APP1"), "{m}"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

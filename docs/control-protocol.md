@@ -10,12 +10,26 @@
 ```
 
 Requests are answered on the UI thread between frames (timeout 60 s). A request is given up
-if the app has not started it and draws no frame for 5 s. The reply is then `{"ok": false, "error": "the app drew no frame for 5 s, …"}`,
+if the app has not started it and draws no frame for 5 s. Synthetic pointer input is fed one event
+per frame; the same 5 s limit is a delivery stall, restarted whenever the app consumes a batch, so a
+many-step drag on a slow frame is not cut off while an app that stops drawing still fails. The reply is then `{"ok": false, "error": "the app drew no frame for 5 s, …"}`,
 and the app never runs that request later, so a retry doesn't do it twice. This happens on
 Wayland when the window is on a hidden workspace or minimized: the compositor sends no frame
 callbacks, so the app's loop is paused. Keep the window on screen while you drive it, or use
 headless snapshots or `lightcraft-cli mcp` without `--connect`. A request that has already started
 (a long command blocks frames) still gets the full 60 s.
+
+Connections close after five minutes without incoming bytes while the server is waiting for
+input, including in the middle of an unfinished request line. This allows pauses between
+automation commands while releasing abandoned connection slots. An idle read timeout gets an
+`ok: false` error saying the connection is closing; incomplete input is never dispatched.
+This is a socket read inactivity limit, not a total connection lifetime: a peer that keeps
+sending bytes can keep it open. Waiting for an already-dispatched command's reply does not
+count as idle reading and retains the request timeout above.
+
+Reconnect before sending another request after an idle close. MCP connect mode detects closed
+connections before sending and reconnects; if a connection is lost after sending a request,
+its outcome remains unknown and the client must not blindly replay it.
 
 **Only requests are read.** Every line must be a JSON object with a string `method` (`id` and `params` are
 optional; blank lines are skipped). Anything else — text that isn't JSON, a JSON array or number, an object without
@@ -67,19 +81,20 @@ filmstrip is visible.
 | `ui.menu.tree` | — | The menu bar as shown (File … Help): items `{id, params?, label, shortcut?, enabled, checked?}`, separators, submenus — the model behind the native macOS menu bar and the in-window menus |
 | `ui.inspect` | — | UI state, window, `loupe` (`source`, `pending`, `failed` = why its render failed, else `null`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
 | `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
-| `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks) / `{id, toX?, toY?, dx?, dy?, steps?}` / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews) |
-| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points |
+| `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks; `count` is capped at 16) / `{id, toX?, toY?, dx?, dy?, steps?}` (steps are capped at 1000) / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews). `fx`/`fy` are fractions of the registered rect and may lie outside `[0,1]`; the resulting point must still be inside egui's clipped interaction rect, and a non-finite fraction or resolved point is rejected before any input is queued. Geometry comes from the latest completed layout; if the widget moves before the first event or before a press, or its latest clipped rect no longer contains the point, the request fails with an error instead of clicking another widget or retargeting. A target below an ordinary modal dialog may succeed as a no-op or a backdrop click, because egui routes that input to the dialog; a target covered by a non-modal overlay fails. The blocking library-problem/launch-list window is explicit: its dim takes the modal layer, but a background target fails instead of reporting a no-op success, and only that window's own controls (`button:library…`) pass. Its creation frame is shielded and redrawn with empty input like a prompt's, so background text/pointer input cannot act while the new modal areas settle. A quit prompt or settings notice is a real egui modal scope with a foreground backdrop. Only its own buttons (`button:quit…`, `button:noticeOk`) accept a `ui.clickWidget`; background targets fail, and background keystrokes, text/clipboard input, wheel/zoom input and AccessKit actions are dropped before panels see them. The prompt itself takes Tab/Shift+Tab, Enter/Space on the focused button, and Escape/Enter for the safe default Cancel; AccessKit Focus/Click works when targeted at a prompt button. Its first creation frame (including a Tasks→Unsaved or notice→next-notice transition) is shielded and redrawn with empty input, so a press/release in that frame, or a held press from before it, cannot act underneath it; a synthetic drag already in progress is canceled. Once settled, raw `ui.click`/`ui.drag`/`ui.pointer` and backdrop clicks are still delivered to the prompt backdrop as no-ops, and the prompt's own button clicks work normally. The area/layer check cannot see a different widget covering the point in the same layer. A `ui.clickWidget` whose widget disappears before its release also fails, after canceling the pointer press without a click or drag (the same rules apply when a click spans several host frames) |
+| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points (the same click and step caps apply) |
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
-| `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
+| `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press; while a prompt is up only its Tab/Shift+Tab, Enter, Space and Escape are delivered, every other key is dropped |
 | `ui.text` | `{text}` | Text input |
-| `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`). In the desktop app cut and copy write the system clipboard. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
-| `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
+| `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`). In the desktop app cut and copy write the system clipboard. Refused while a prompt or the blocking library window owns input, including a window in its creation frame. A `paste` without `text` queues egui's `RequestPaste` viewport command for the host: egui 0.37 gives that command no completion/correlation id, and egui-winit emits a later `Event::Paste` only for non-empty text (or a `PasteImage` fallback; asynchronous clipboard reads finish later), so the reply confirms the request was queued in egui, not that the host dispatched it or that it was delivered; a barrier created after the request can drop that later event. `paste` with `text` is synthetic and is canceled like other injected input. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
+| `ui.scroll` | `{dx, dy, source?, unit?, phase?, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms. `source` is `unknown` (default), `wheel`, `trackpad` or `momentum`; `unit` is `point` (default), `line` or `page`; `phase` is `move` (default), `start`, `end` or `cancel`. Wheel/line events drive the grid/filmstrip one-third wheel step and the loupe's notch zoom; trackpad/momentum phases drive kinetic scrolling and rubber-band boundaries. Invalid values are refused and queue nothing |
 | `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
 | `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
-| `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |
+| `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog (confirm runs its action; Synchronize Folder on a folder that is up to date answers `{"upToDate": true}` and starts nothing) |
 | `ui.resize` | `{width, height}` | Resize the window |
+| `ui.dropFiles` | `{paths: [..], hover?}` | Files dragged from the file manager. `hover: true` makes every following frame report `paths` as hovered over the window (the drop card appears, `ui.widgets` lists `dropOverlay`) until another `ui.dropFiles` replaces them; `{paths: [], hover: true}` ends the hover. Without `hover` the files are dropped: the hover ends and the next frame receives them as dropped files, exactly as an OS drop arrives (photos and folders open the import review, or import at once with Settings ▸ Import ▸ Import dropped files without review). An empty path stands for a file whose path the platform doesn't tell |
 | `ui.zoomFactor` | `{factor}` | Set the interface scale (0.5–3; egui's zoom keys are off, Cmd+= / Cmd+- zoom the photo) |
-| `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically. While the loupe still waits for a render, `ui.widgets {filter: "loupe:rendering"}` lists its "Rendering…" pill; `loupe:renderFailed` is the pill saying a render failed behind a stand-in; Compare and Reference panes have their own (`compare:rendering:<pane>`, `compare:renderFailed:<pane>`) |
+| `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. A `path` that did not exist when the request was admitted is written with create-new semantics and is never replaced if a file (including a newly imported original) appears there while the capture is queued; an existing ordinary file may be refreshed. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically. While the loupe still waits for a render, `ui.widgets {filter: "loupe:rendering"}` lists its "Rendering…" pill; `loupe:renderFailed` is the pill saying a render failed behind a stand-in; Compare and Reference panes have their own (`compare:rendering:<pane>`, `compare:renderFailed:<pane>`) |
 | `engine.execute {command: "app.export", params}` | export params (see `docs/mcp.md`), plus `preset`, `dir` / `path`, `ids`, `background`; `destinationMode: "sameAsOriginal"` writes each photo into its original's folder (+ `subfolder`) instead of `dir` | Writes the files and returns `{files}` (one `{path, width, height, bytes, sidecars}` per file, plus `gpuFallback` — why that render fell back from the GPU to the CPU — when it did; see `docs/gpu-pipeline.md`); with `background: true` (what the Export dialog and menus use) it returns `{background: true, total}` at once and the batch runs on a worker thread — poll `ui.inspect` → `export` |
 | `engine.execute {command: "activity.list"}` | — | The long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first: `{tasks: [{id, kind, label, done, total, unit, detail, cancellable, cancelling, ageMs}]}`; `total` 0 = not known yet; `unit` is `count`, `bytes` or `percent`; `label` is English (the app shows it translated) |
 | `engine.execute {command: "activity.cancel"}` | `{id}` or `{all: true}` | Asks the task (or every cancellable one) to stop at its next file or photo → `{cancelled: n}`; an unknown id (it may have just finished) or a task that can't be cancelled is an error |
@@ -122,6 +137,12 @@ x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when
 file, on a background job (activity kind `focus`); `wait: true` returns the run's counts when done. The app calls
 `focus.pump {pace}` every frame to drive it.
 
+With several photos selected, the Info panel's Show Metadata For is `view.infoSelectedPhotos {on?}` (no `on`, or
+`on: null`, toggles; any other value that is not true or false is refused; replies `{on}`;
+`settings.infoSelectedPhotos`): off (Target Photo) shows the active photo's values and saves edits to it alone, on (Selected Photos, the default)
+shows the values the selected photos share, leaves each text field and GPS where they differ empty with a Mixed hint,
+and shows Mixed as the Copyright Status when the statuses differ.
+
 The interface theme is `view.appearance {mode?: "auto" | "light" | "dark"}` (no mode: the next one,
 Auto → Light → Dark → Auto, like the top bar's `icon:appearance` button) and `view.theme {theme:
 "charcoal" | "midnight" | "silver" | "paper"}`, which picks a theme and fixes the mode to its family.
@@ -153,7 +174,42 @@ catalog, a missing drive), the session starts empty and in memory — never with
 to do: `ui.inspect` → `libraryProblem` is `{path, error, temporarySession, pendingImport}` (else `null`); its buttons
 are `button:libraryRetry`, `button:libraryChoose`, `button:libraryTemporary` (Continue Without Saving) and
 `button:libraryQuit`. A temporary session shows a banner (`indicator:temporarySession`, `button:libraryReopen`) and
-writes nothing. `app.openLibrary` opening a library ends it.
+writes nothing. `app.openLibrary` opening a library ends it. `pendingImport` counts the files waiting for a
+library: those given on the command line, and photos dropped on the window while it (or the launch list below) is
+up (desktop app); they are imported into the library that opens, or into the temporary session. Presets dropped
+then are refused with a toast.
+
+### Choosing the library at launch
+
+With Settings ▸ General ▸ At launch set to Ask me (`ui.set {"settings": {"atLaunch": "ask"}}`; `"last"`, the
+default, opens the last library), or Alt/Option held during the first 2 s after the window appears, the desktop app
+shows a window listing the recent libraries (issue #1290). `--library` and `LIGHTCRAFT_LIBRARY` skip it, and so does
+`--memory`; `lightcraft-cli` never shows it. `ui.inspect` → `libraryProblem.chooser` is `{libraries: [{path,
+lastOpened, available, checking, reason}], selected, libraryOpen}` (else `null`; `libraryOpen: true` when it was opened
+over the last library with Alt). Each library is checked read-only on a worker thread of its own, never on the UI
+thread (the folder and its catalog file are looked at, never locked or written, so a library another program has
+open shows as available and Open reports who has it in `libraryProblem.error`). `checking: true` until its check
+answers (the row says *Checking…*, then that the drive isn't answering after 5 s); `available` is `false` only
+once a check found a `reason`, so a row still checking can be opened. The selection starts on the last library and
+moves to the first one that can be opened once every check has answered, unless it was moved meanwhile. Each row is the widget `libraryRecent:<index>`; the buttons are `button:libraryOpen`,
+`button:libraryOpenAnother` (the folder dialog of `app.openLibrary`), `button:libraryNew` (`app.newLibrary`),
+`button:libraryForget` (Remove from List) and `button:libraryQuit`; `ui.key` ArrowUp / ArrowDown move the selection,
+Enter opens it and Escape quits (over an open library: closes the window and keeps it). `app.openLibrary {path}`
+opening a library ends it. While it shows, the settings are saved as usual (a removal is kept).
+
+`app.recentLibraries` returns `[{path, name, exists, checking, open, lastOpened}]`. `exists` is what the last
+background check found (`false`: moved, on a disconnected drive, not a folder or no longer a library; `null`: not
+checked yet, or the check couldn't tell, e.g. a folder that can't be listed, an unreadable catalog or a lookup that
+failed) and `checking` whether one
+is running: the command never looks at a folder itself. A failed open never marks a library missing (another program
+may have it). Recent libraries are checked in the
+background when the app starts (the first 8) and when the launch window opens; one not found is looked for again every
+30 s (a drive plugged back in), the others only when the window comes back to the front (a timer would wake external
+drives and shares). File ▸ Open Recent Library greys out only an entry a check found missing (not there, not a folder,
+no library in it); an unreadable catalog, a folder that refuses to be listed, a failed open or a lookup that failed
+(a share that timed out) doesn't grey it out. `lastOpened`: ISO 8601, `null` when not known; kept in `ui.json` →
+`settings.recentLibrariesOpened`. `{remove: path}` forgets one entry (an error if the list
+doesn't hold it) and `{clear: true}` (or `app.clearRecentLibraries`) all of them; nothing on disk is touched.
 
 ### Open Library on a Lightroom catalog
 
@@ -161,11 +217,28 @@ writes nothing. `app.openLibrary` opening a library ends it.
 folder (it holds a `*.lrcat`), one of its `*.lrdata` / `*.lrcat-data` folders or `Backups/`, the `.lrcat` itself or
 its `-wal` / `-shm` / `.lock` files, it keeps the library open now and returns `{opened: false, lightroomCatalog:
 <the .lrcat found, or null>, path}`; the window shows a dialog whose `button:dialogOk` (Import Lightroom Catalog…, or
-`ui.dialog.confirm`) runs `file.importLightroom` with that catalog (no catalog found: it asks for one) and
-`button:dialogCancel` (`ui.dialog.cancel`) does nothing. A folder that is a LightCraft library (`catalog.snap` / `catalog.log`) always
+`ui.dialog.confirm`) runs `file.importLightroom` with that catalog (no catalog found: it asks for one), which then
+asks where the catalog goes when `settings.lightroomImport` is `"ask"` (next section), and `button:dialogCancel` (`ui.dialog.cancel`) does nothing. A folder that is a LightCraft library (`catalog.snap` / `catalog.log`) always
 opens as one. With no library open (the library problem window) it is an error instead. The engine refuses the same
 places (`EngineError::LightroomCatalog`, so `lightcraft-cli --library` and `mcp --library` too). `library.importLightroom
 {status: true}` reports the catalog's `path` after the task ends as well as while it runs.
+
+### Import Lightroom Catalog: where the catalog goes
+
+`file.importLightroom {path?, into?, name?, location?}` (File ▸ Import Lightroom Catalog…, issue #2672). With `into`
+it acts without asking: `"open"` imports into the library open now (`library.importLightroom`); `"new"` creates the
+library `name` (default: the catalog's file name without `.lrcat`, or `Travel 2`… when taken) in the folder
+`location` (a full path; default: the open library's parent folder) under `app.newLibrary`'s rules, opens it and
+imports there, returning the import's start with `library: {path, name, photos}`. A catalog file that isn't there is
+refused before anything is made; so is a new library while an import runs. Without `into`, a library on disk with
+`settings.lightroomImport` `"ask"` (the default) opens a window and returns `{asking: true, path, into}` (`into`: the
+choice it opens with, `"open"` when the library is empty, else `"new"`). Its widgets:
+`radio:lightroomDestination-open`, `radio:lightroomDestination-new`, `field:lightroomLibraryName`,
+`field:lightroomLibraryLocation`, `button:lightroomLibraryChoose` (where there is a folder dialog), `check:lightroomDontAsk` (with Merge only; sets
+`"alwaysMerge"`), `button:dialogOk` / `ui.dialog.confirm` (which stays open on an error such as a folder that isn't
+empty) and `button:dialogCancel`. With `"alwaysMerge"` (`ui.set {"settings": {"lightroomImport": "alwaysMerge"}}`,
+or Settings ▸ General `button:settingsLightroomImport-0|1`), or in a session in memory, it imports into the open
+library without asking.
 
 ## External controllers
 
@@ -261,8 +334,9 @@ lightcraft-cli snapshot --library DIR --script tour.jsonl -o shot.png
 
 Headless screenshot dimensions must be finite and at least one logical point, with a finite,
 positive scale. Rounded output must be at least one pixel per edge, at most 16,384 pixels
-per edge and 64 million pixels in total. `snapshot` and `ui.resize` reject requests outside
-these limits before layout or rasterization; supplied resize dimensions must be numbers.
+per edge and 33,554,432 pixels in total (128 MiB of RGBA, the per-image screenshot
+budget). `snapshot` and `ui.resize` reject requests outside these limits before layout or
+rasterization; supplied resize dimensions must be numbers.
 An interface zoom (egui's zoom factor; the keyboard never changes it — ⌘= / ⌘− / ⌘0 zoom the
 photo, issue #566) changes text and control sizes while preserving the snapshot viewport's requested
 physical pixel dimensions. Later `ui.resize` requests use current egui points; validation
@@ -281,13 +355,29 @@ one pixel.
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
   (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
 
+## Import album picker
+
+In the Import Photos review, `albumPicker:import-album` opens the destination picker.
+`albumPickerFolder:<folder-id>:import-album` expands or folds a folder; it never chooses a destination.
+`albumPickerItem:<album-id>:import-album` selects a regular album. The picker follows sidebar order,
+opens the current choice's ancestors and shows its full path on the closed button. Smart albums
+are not import destinations. Type into `albumPickerSearch:import-album` to search folder/album paths;
+↑ / ↓ and Enter pick a search result, and Escape closes the picker while keeping the review open.
+If the chosen album is deleted while the review is open, the destination returns to None before
+confirmation instead of submitting the deleted ID.
+
+`importAlbum:none` clears the destination and any pending new album name. `importAlbum:new` keeps
+or initializes that name, edited through `field:importAlbumName`. Choosing an existing album clears
+the pending name. `ui.dialog.confirm` starts the same import into the selected album ID; engine
+`library.import` parameters `album` and `albumName` are unchanged.
+
 ## Panel docking
 
-Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences. These operations do not edit document contents.
+Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences as a craft-ui docking workspace (`docking`: `version`, `layout`, `hidden`, `saved`, `locked`); settings written before workspaces had a `version` load as version 1. These operations do not edit document contents.
 
 Panel IDs: `library`, `tools`, `presets`. The protected center is `canvas`.
 
-`ui.dock` accepts `operation` and `panel`. Operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
+`ui.dock` accepts `operation` and `panel`. Operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|tab|left|right|top|bottom|above|below`; `Center`, `Left`, `Right`, `Top` and `Bottom` also parse, while `tab`, `above` and `below` are lowercase only). Center and tab group with the target; side zones split beside it; above and below put the panel in a new group above or below the target's group. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout. Both commands return `{"docking": workspace}`.
 
 Invoke these UI commands through `engine.execute`, for example `{"command":"ui.dock","params":{"operation":"float","panel":"tools","rect":[100,100,320,440]}}`.
 

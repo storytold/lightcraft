@@ -283,6 +283,7 @@
   "Delete the effect preset “{name}”?": "Eliminare il preset effetto “{name}”?",
   "{n} raws can now be developed from their raw data": "Raw che ora si possono sviluppare dai loro dati raw: {n}",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "Removed “{name}” from {n} photos. Edit → Undo puts it back.",
+  "Inside: {names}": "Al suo interno: {names}",
   "Template preview: {name}": "Anteprima del modello: {name}",
   "{n} photos in view · {slides} slides · {time}": "Foto nella vista: {n} · diapositive: {slides} · {time}",
   "Applied {name}": "{name} applicato",
@@ -296,5 +297,13 @@
   "Already in “{}”": "Già in “{}”",
   "Move {n} photo{} to “{}”": "Sposta foto in “{1}” ({n}){0:.0}",
   "Move {n} photo{} to “{}”?": "Spostare le foto in “{1}” ({n})?{0:.0}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Foto spostate in “{1}”: {n}{0:.0}. Modifica → Annulla le riporta indietro."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Foto spostate in “{1}”: {n}{0:.0}. Modifica → Annulla le riporta indietro.",
+  "Listing folders — folders: {folders}, files: {files}": "Elenco delle cartelle — cartelle: {folders}, file: {files}",
+  "Drop to review {n} item{} for import": "Rilascia per rivedere prima dell'importazione (elementi: {n}){:.0}",
+  "Drop to import {n} item{}": "Rilascia per importare (elementi: {n}){:.0}",
+  "Drop to import {n} preset{}": "Rilascia per importare predefiniti: {n}{:.0}",
+  "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
+  "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
 }

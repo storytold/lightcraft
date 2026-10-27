@@ -6,7 +6,7 @@ zooms to it, so checking whether the subject is sharp takes one key while cullin
 
 ## Using it
 
-- **View ▸ Show Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
+- **View ▸ Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
   Detail, Compare and Survey. It follows Rotate, flips and the crop; a point cropped away is not drawn. Off by
   default; the choice is saved with the app's settings.
 - **View ▸ Zoom to Focus Point** (`view.zoomToFocus {on?}`, on by default): Toggle Zoom (Z or Space) zooms in
@@ -113,7 +113,7 @@ DMF (AF, then manual touch-up) keeps its point.
 - `crates/meta/src/focus_read.rs`: the header-only read; its tests check it against the whole-file read on intact,
   truncated and corrupted files and count what it reads.
 - `crates/engine/src/focus_scan.rs`: the background job (`photo.readFocusPoints`, `focus.pump`) and
-  `crates/engine/src/tests_focus_scan.rs`, with an opt-in comparison over real files
+  `crates/engine/src/tests/focus_scan.rs`, with an opt-in comparison over real files
   (`LIGHTCRAFT_FOCUS_FILES=<a list of paths>`); `crates/ui-egui/src/focus_scan.rs` drives it from the frame loop.
 - `crates/ui-egui/src/panels/detail.rs` (`focus_box`, `focus_pan`, `draw_focus_point`): mapping through the user's
-  rotation and crop, the overlay, and the zoom target; `crates/ui-egui/src/tests_focus_point.rs`.
+  rotation and crop, the overlay, and the zoom target; `crates/ui-egui/src/tests/focus_point.rs`.

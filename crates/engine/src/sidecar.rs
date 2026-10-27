@@ -27,8 +27,10 @@
 //! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
 //! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
 //! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
+//! Manual reads also accept the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`).
 
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -520,17 +522,76 @@ fn file_path(p: &Photo) -> Option<&str> {
     }
 }
 
-/// The XMP packet that describes a photo on disk: its sidecar, else (raw/DNG) the embedded XMP.
+/// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
-    if let Some(sc) = find_sidecar(original, naming)
-        && let Ok(s) = std::fs::read_to_string(&sc)
-    {
-        return Some((s, sc));
+    if let Some(sc) = find_sidecar(original, naming) {
+        // A discovered sidecar keeps precedence even when reading it fails.
+        return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
         let bytes = std::fs::read(original).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
+    }
+    if kind == MediaKind::Image {
+        let mut file = std::fs::File::open(original).ok()?;
+        let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
+        return Some((x, PathBuf::from(original)));
+    }
+    None
+}
+
+const JPEG_XMP_HEADER_SPAN: u64 = 16 * 1024 * 1024;
+const JPEG_XMP_HEADER_STEPS: usize = 4096;
+
+/// Read from SOI at the current position, stopping at the first standard XMP packet or SOS/EOI.
+/// The span includes SOI, segment headers and skipped payloads; each marker/fill step after SOI
+/// consumes one iteration. Only a complete APP1 payload (at most 65533 bytes) reaches the shared
+/// parser, in a single SOI+APP1 wrapper (at most 65539 bytes). This does not validate the whole JPEG.
+fn read_jpeg_xmp(reader: &mut (impl Read + Seek), header_span: u64, marker_steps: usize) -> Option<String> {
+    let mut header = reader.take(header_span);
+    let mut soi = [0; 2];
+    header.read_exact(&mut soi).ok()?;
+    if soi != [0xff, 0xd8] {
+        return None;
+    }
+    let mut filled = false;
+    for _ in 0..marker_steps {
+        if !filled {
+            let mut prefix = [0];
+            header.read_exact(&mut prefix).ok()?;
+            if prefix != [0xff] {
+                return None;
+            }
+        }
+        let mut code = [0];
+        header.read_exact(&mut code).ok()?;
+        let [marker] = code;
+        filled = marker == 0xff;
+        match marker {
+            0xff | 0xd8 | 0xd0..=0xd7 | 0x01 => continue,
+            0xd9 | 0xda => return None,
+            _ => {}
+        }
+        let mut length = [0; 2];
+        header.read_exact(&mut length).ok()?;
+        let payload_len = u16::from_be_bytes(length).checked_sub(2)?;
+        let remaining = header.limit().checked_sub(u64::from(payload_len))?;
+        if marker != 0xe1 {
+            // Seeking must spend the same span budget as reading, before the seek is attempted.
+            header.set_limit(remaining);
+            header.get_mut().seek(SeekFrom::Current(i64::from(payload_len))).ok()?;
+            continue;
+        }
+        let segment_len = 6usize.checked_add(usize::from(payload_len))?;
+        let [hi, lo] = length;
+        let mut segment = Vec::with_capacity(segment_len);
+        segment.extend_from_slice(&[0xff, 0xd8, 0xff, 0xe1, hi, lo]);
+        segment.resize(segment_len, 0);
+        header.read_exact(segment.get_mut(6..)?).ok()?;
+        if let Some(xmp) = lightcraft_meta::jpeg_segments(&segment).xmp {
+            return Some(xmp);
+        }
     }
     None
 }
@@ -1019,3 +1080,220 @@ mod tests_repair_provenance;
 #[cfg(test)]
 #[path = "sidecar/tests_stem_owners.rs"]
 mod tests_stem_owners;
+
+#[cfg(test)]
+mod jpeg_header_tests {
+    use super::{JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS, read_jpeg_xmp};
+    use std::io::{self, Cursor, Read, Seek, SeekFrom};
+
+    struct CountedReader {
+        cursor: Cursor<Vec<u8>>,
+        bytes_read: usize,
+        largest_read: usize,
+        seeks: usize,
+        chunk: usize,
+        read_error_at: Option<u64>,
+        seek_error: bool,
+    }
+
+    impl CountedReader {
+        fn new(bytes: Vec<u8>) -> Self {
+            Self { cursor: Cursor::new(bytes), bytes_read: 0, largest_read: 0, seeks: 0, chunk: usize::MAX, read_error_at: None, seek_error: false }
+        }
+    }
+
+    impl Read for CountedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.largest_read = self.largest_read.max(buf.len());
+            if self.read_error_at.is_some_and(|at| self.cursor.position() >= at) {
+                return Err(io::Error::other("injected header read failure"));
+            }
+            let len = buf.len().min(self.chunk);
+            let read = self.cursor.read(&mut buf[..len])?;
+            self.bytes_read += read;
+            Ok(read)
+        }
+    }
+
+    impl Seek for CountedReader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.seeks += 1;
+            if self.seek_error {
+                return Err(io::Error::other("injected header seek failure"));
+            }
+            self.cursor.seek(pos)
+        }
+    }
+
+    fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(payload.len() + 2).unwrap();
+        let mut bytes = vec![0xff, marker];
+        bytes.extend_from_slice(&len.to_be_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn packet(rating: i8) -> String {
+        lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { rating: Some(rating), ..Default::default() }, None)
+    }
+
+    fn xmp_segment(packet: &str) -> Vec<u8> {
+        let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        payload.extend_from_slice(packet.as_bytes());
+        segment(0xe1, &payload)
+    }
+
+    fn jpeg(packet: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(xmp_segment(packet));
+        bytes
+    }
+
+    #[test]
+    fn first_standard_packet_skips_other_segments_and_stops_before_tail() {
+        let first = packet(2);
+        let first_payload_len = xmp_segment(&first).len() - 4;
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[7; 17]));
+        bytes.extend(segment(0xe1, b"Exif\0\0tiny"));
+        let mut extended = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+        extended.extend_from_slice(&[0; 40]);
+        extended.extend_from_slice(b"not a standard packet");
+        bytes.extend(segment(0xe1, &extended));
+        bytes.extend(xmp_segment(&first));
+        let end = bytes.len();
+        bytes.extend(xmp_segment(&packet(5)));
+        bytes.extend_from_slice(&[0xff, 0xda, 0, 2]);
+        bytes.extend_from_slice(&[3; 128]);
+        let mut reader = CountedReader::new(bytes);
+        reader.read_error_at = Some(end as u64);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(first));
+        assert_eq!(reader.cursor.position(), end as u64, "later packets and image bytes are not read");
+        assert_eq!(reader.bytes_read, end - 17, "APP0 payload is skipped, not buffered");
+        assert_eq!(reader.seeks, 1);
+        assert_eq!(reader.largest_read, first_payload_len, "reads at most one complete APP1 payload at a time");
+    }
+
+    #[test]
+    fn stops_at_sos_or_eoi_without_reading_later_xmp() {
+        for stop in [0xda, 0xd9] {
+            let mut bytes = vec![0xff, 0xd8, 0xff, stop];
+            bytes.extend(xmp_segment(&packet(3)));
+            let mut reader = CountedReader::new(bytes);
+            reader.read_error_at = Some(4);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!((reader.bytes_read, reader.cursor.position(), reader.seeks), (4, 4, 0));
+        }
+    }
+
+    #[test]
+    fn rejects_incomplete_app1_even_when_partial_xmp_parses() {
+        let expected = packet(4);
+        let mut bytes = jpeg(&expected);
+        let declared = u16::from_be_bytes([bytes[4], bytes[5]]) + 7;
+        bytes[4..6].copy_from_slice(&declared.to_be_bytes());
+        let partial = lightcraft_meta::jpeg_segments(&bytes).xmp.unwrap();
+        assert_eq!(partial, expected, "the shared extractor tolerates a truncated declared payload");
+        assert_eq!(super::parse_sidecar(&partial, crate::crs::Target::Rendered).unwrap().rating, Some(4));
+        let len = bytes.len();
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!(reader.bytes_read, len);
+    }
+
+    #[test]
+    fn span_budget_counts_soi_headers_and_skipped_payloads() {
+        let expected = packet(3);
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[9; 23]));
+        bytes.extend(xmp_segment(&expected));
+        let end = bytes.len();
+        let mut exact = CountedReader::new(bytes.clone());
+        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(exact.cursor.position(), end as u64, "a complete early APP1 does not require EOI");
+        assert_eq!(exact.bytes_read, end - 23);
+        let mut short = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut short, (end - 1) as u64, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((short.bytes_read, short.cursor.position(), short.seeks), (10, 33, 1), "reject before APP1 payload read");
+        assert_eq!(short.largest_read, 2);
+    }
+
+    #[test]
+    fn span_budget_rejects_skip_before_seeking() {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[8; 18]));
+        bytes.extend(xmp_segment(&packet(1)));
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, 6, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.cursor.position(), reader.seeks), (6, 6, 0));
+    }
+
+    #[test]
+    fn marker_budget_counts_fill_and_standalone_markers() {
+        let expected = packet(1);
+        // Two fill steps, SOI, TEM, RST3, then APP1: six steps after the initial SOI.
+        let mut bytes = vec![0xff, 0xd8, 0xff, 0xff, 0xff, 0xd8, 0xff, 0x01, 0xff, 0xd3];
+        bytes.extend(xmp_segment(&expected));
+        for (steps, end) in [(0, 2), (5, 10)] {
+            let mut reader = CountedReader::new(bytes.clone());
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, steps), None);
+            assert_eq!((reader.bytes_read, reader.cursor.position()), (end, end as u64));
+        }
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, 6), Some(expected));
+    }
+
+    #[test]
+    fn rejects_invalid_headers_and_segment_lengths() {
+        for bytes in [
+            vec![],
+            vec![0xff],
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+            vec![0xff, 0xd8, 0, 0xe1, 0, 2],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 0],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 1],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 3],
+        ] {
+            let len = bytes.len();
+            let mut reader = CountedReader::new(bytes);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert!(reader.bytes_read <= len);
+        }
+    }
+
+    #[test]
+    fn propagates_read_and_seek_failures() {
+        for at in [0, 6] {
+            let mut reader = CountedReader::new(jpeg(&packet(4)));
+            reader.read_error_at = Some(at);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!(reader.bytes_read as u64, at);
+        }
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[1]));
+        bytes.extend(xmp_segment(&packet(4)));
+        let mut reader = CountedReader::new(bytes);
+        reader.seek_error = true;
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.seeks), (6, 1));
+    }
+
+    #[test]
+    fn handles_short_reads_without_bypassing_span_limit() {
+        let expected = packet(2);
+        let bytes = jpeg(&expected);
+        let end = bytes.len();
+        let mut exact = CountedReader::new(bytes.clone());
+        exact.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(exact.bytes_read, end);
+        for (span, read) in [(0, 0), (1, 1), (end - 1, 6)] {
+            let mut reader = CountedReader::new(bytes.clone());
+            reader.chunk = 1;
+            assert_eq!(read_jpeg_xmp(&mut reader, span as u64, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!(reader.bytes_read, read);
+            assert!(reader.cursor.position() <= span as u64);
+        }
+    }
+}

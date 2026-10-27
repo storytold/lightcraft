@@ -268,6 +268,7 @@
   "LightCraft stopped unexpectedly: {e}": "LightCraft stopped unexpectedly: {e}",
   "LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}": "LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "Removed “{name}” from {n} photos. Edit → Undo puts it back.",
+  "Inside: {names}": "შიგნით: {names}",
   "Renames {n} face{} across the library. The files are not changed.": "Renames {n} face{} across the library. The files are not changed.",
   "Saved template {name}": "Saved template {name}",
   "Skipped {problem}": "Skipped {problem}",
@@ -296,5 +297,13 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Listing folders — folders: {folders}, files: {files}": "საქაღალდეების ჩამოთვლა — საქაღალდეები: {folders}, ფაილები: {files}",
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Drop to review {n} item{} for import": "ჩააგდეთ იმპორტამდე გადასახედად (ელემენტები: {n}){:.0}",
+  "Drop to import {n} item{}": "ჩააგდეთ იმპორტისთვის (ელემენტები: {n}){:.0}",
+  "Drop to import {n} preset{}": "ჩააგდეთ პრესეტების იმპორტისთვის: {n}{:.0}",
+  "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
+  "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
 }

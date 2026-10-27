@@ -488,3 +488,39 @@ fn level_degrees_sign_matches_crop_angle() {
     let deg = crate::upright::level_degrees(&src, &SourceInfo::default(), &DevelopSettings::default()).expect("lines found");
     assert!((deg + 6.0).abs() < 0.5, "{deg}");
 }
+
+/// A "horizon" of `deg` degrees: sky above, below it bands of `band` px (0: one edge only).
+fn tilted_scene(deg: f32, band: f32) -> Rgb32f {
+    let (w, h) = (900usize, 600usize);
+    let t = deg.to_radians().tan();
+    Rgb32f::from_fn(w, h, |x, y| {
+        let yh = h as f32 / 2.0 + (x as f32 - w as f32 / 2.0) * t;
+        if (y as f32) < yh {
+            [0.6, 0.7, 0.9]
+        } else if band > 0.0 && (((y as f32 - yh) / band) as i32) % 2 == 1 {
+            [0.1, 0.2, 0.3]
+        } else {
+            [0.05, 0.1, 0.2]
+        }
+    })
+}
+
+/// Auto straighten acts on several agreeing lines only: one edge (the frame of a window, a branch)
+/// turned straight photos in a measurement on real ones, so it is left alone.
+#[test]
+fn auto_straighten_needs_more_than_one_line() {
+    let level = |src: &Rgb32f| crate::upright::level_degrees(src, &SourceInfo::default(), &DevelopSettings::default());
+    assert_eq!(level(&tilted_scene(4.0, 0.0)), None, "one edge");
+    let deg = level(&tilted_scene(4.0, 30.0)).expect("a horizon and the bands below it");
+    assert!((deg + 4.0).abs() < 0.5, "{deg}");
+}
+
+/// Auto straighten turns by at most `STRAIGHTEN_MAX_DEGREES`: larger "levels" came from texture
+/// (planks, a bird's wing) on photos that were straight.
+#[test]
+fn auto_straighten_leaves_steep_lines_alone() {
+    let level = |src: &Rgb32f| crate::upright::level_degrees(src, &SourceInfo::default(), &DevelopSettings::default());
+    assert_eq!(level(&tilted_scene(20.0, 30.0)), None, "20° is not a horizon to level");
+    let deg = level(&tilted_scene(8.0, 30.0)).expect("8° is");
+    assert!((deg + 8.0).abs() < 0.5, "{deg}");
+}

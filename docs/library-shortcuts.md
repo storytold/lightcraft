@@ -16,6 +16,11 @@ Select photos in Photo Grid or Square Grid, then use:
 | `` ` `` (backtick) | Cycle the flag: unflagged → pick → reject → unflagged |
 | `Cmd`/`Ctrl` + `↑` / `↓` | Raise / lower flag status (reject < unflagged < pick; stops at either end) |
 | `Shift` + `0`–`9`, `P`, `X` or `U` | Apply the action and select the next photo |
+| `\` (backslash) | Show / hide the Filter Bar |
+| ⌘K / Ctrl+K | Add Keywords: show the Keywords panel with the cursor in its Add keyword box |
+| ⌘L / Ctrl+L | Enable Filters: switch the filter off and on |
+| ⌘⌥⇧C / Ctrl+Alt+Shift+C | Copy Metadata: copy the active photo's metadata |
+| ⌘⌥⇧V / Ctrl+Alt+Shift+V | Paste Metadata: paste the copied metadata on the selected photos |
 
 Enter opens the active photo without changing the selection. Text fields, dialogs and open popups keep the key; a custom Enter binding takes precedence. Enter has no additional action in Detail.
 
@@ -38,6 +43,11 @@ step. AutoWrite uses the normal rating metadata path. In Detail, including Maski
 `[` / `]` keep resizing the brush and shifted brackets keep adjusting feather. Saved overrides,
 remapping and disabling the default brush bindings take precedence over their grid bracket actions.
 The separate Decrease Rating / Increase Rating commands can also be assigned in Help → Keyboard Shortcuts.
+
+`\` shows and hides the Filter Bar in Photo Grid and Square Grid, as in Lightroom Classic's Library; in
+Detail and in the full-screen preview (`F`) it keeps showing the original (Develop's Before / After key).
+View → Filter Bar (`Shift+F`) works in every view. A Show Original moved to another key keeps its meaning
+in the grids, and `\` given to another command runs that command.
 
 Flag cycling and raise/lower use each photo's own flag, so a mixed selection steps together without being made uniform. Adobe's shortcut list names the backtick "Cycle flag settings" but does not state the order; unflagged → pick → reject is LightCraft's choice. The key is the logical grave key, so it follows the keyboard layout (on layouts where it is a dead accent key, assign another key in Help → Keyboard Shortcuts to `photo.cycleFlag`).
 
@@ -76,7 +86,18 @@ Survey and Reference, and leave text fields alone, so the search box still types
 commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
 return `{"size"}`); the size is saved with the other interface settings.
 
-Public behaviour references, checked 2026-10-08 (thumbnail size: 2026-10-13):
+## Keyword sets
+
+`⌥1`–`⌥9` (`Alt+1`–`Alt+9` on Windows and Linux) add or remove the current keyword set's keywords on
+the selected photos. `⌥0` makes the next keyword set current and `⌥⇧0` the previous one (`Alt+0` /
+`Alt+Shift+0`), in the order of the Keywords panel's Keyword Set menu: Recent Keywords, then the saved
+sets. After the last set comes Recent Keywords again, and before Recent Keywords comes the last set;
+with no saved sets the keys leave Recent Keywords current. The shortcut list does not say what happens
+past either end; wrapping around is LightCraft's choice. The same steps are the Next / Previous
+Keyword Set commands (`keyword.nextSet`, `keyword.previousSet`), which return what `keyword.sets`
+returns, and both keys can be reassigned in Help → Keyboard Shortcuts.
+
+Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyword sets: 2026-10-24):
 
 - [Lightroom Classic keyboard shortcuts](https://helpx.adobe.com/lightroom-classic/help/keyboard-shortcuts.html)
 - [Lightroom Classic flagging, labelling and rating](https://helpx.adobe.com/lightroom-classic/help/flag-label-rate-photos.html)

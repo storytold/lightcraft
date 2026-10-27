@@ -9,7 +9,7 @@
 //! compressed length and CRC-32, then the strips' bytes. `key` says what the product was made from (the photo's
 //! content, the model, this code's version, the settings it depends on); a file with another key is stale.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 use lightcraft_raster::Rgb32f;
@@ -216,6 +216,10 @@ fn read_start(r: &mut impl Read) -> Result<Start, ProductError> {
         r.read_exact(&mut e)?;
         let l = u32::from_le_bytes([e[0], e[1], e[2], e[3]]) as usize;
         let c = u32::from_le_bytes([e[4], e[5], e[6], e[7]]);
+        // a strip never compresses to nothing (it has at least one row, so at least one deflated pixel)
+        if l == 0 {
+            return Err(ProductError::Format("a strip is empty".into()));
+        }
         // a strip never compresses to much more than its raw size
         if l > 12 * h.strip * h.width + 4096 {
             return Err(ProductError::Format("a strip is larger than it can be".into()));
@@ -305,7 +309,6 @@ pub fn read_window(path: &Path, key: &str, window: Option<Window>, factor: usize
     }
     // the picture rows and columns the blocks cover
     let (x_end, y_end) = if whole { (w.x + w.width, w.y + w.height) } else { (w.x + ow * factor, w.y + oh * factor) };
-    let mut out = Rgb32f { width: ow, height: oh, data: allocate(ow * oh, [0.0; 3])? };
     let lut = f16_table();
     let value = |raw: &[u8], c: usize, n: usize, i: usize| -> f32 {
         let (lo, hi) = (raw.get(2 * c * n + i).copied().unwrap_or(0), raw.get((2 * c + 1) * n + i).copied().unwrap_or(0));
@@ -318,6 +321,21 @@ pub fn read_window(path: &Path, key: &str, window: Option<Window>, factor: usize
     let strips: Vec<usize> = (0..table.len()).filter(|&s| wanted(s)).collect();
     // skip the strips before the first one wanted
     let skipped: usize = table.iter().take(strips.first().copied().unwrap_or(0)).map(|e| e.0).sum();
+    // The output is reserved only after the wanted strips' compressed bytes are present and match their checksums:
+    // a malformed cache whose strips are empty, damaged or short are rejected here, before the (large) result is
+    // allocated, not after. Reading them twice is cheap next to decoding them, and the fold below re-seeks here.
+    let strips_at = f.stream_position()?;
+    f.seek_relative(i64::try_from(skipped).map_err(|_| ProductError::Format("the file is too large".into()))?)?;
+    for &s in &strips {
+        let Some(&(len, expected)) = table.get(s) else { return Err(ProductError::Format("a strip is missing".into())) };
+        let mut packed = allocate(len, 0u8)?;
+        f.read_exact(&mut packed)?;
+        if crc(&packed) != expected {
+            return Err(ProductError::Format(format!("strip {s} is damaged")));
+        }
+    }
+    let mut out = Rgb32f { width: ow, height: oh, data: allocate(ow * oh, [0.0; 3])? };
+    f.seek(std::io::SeekFrom::Start(strips_at))?;
     f.seek_relative(i64::try_from(skipped).map_err(|_| ProductError::Format("the file is too large".into()))?)?;
     for group in strips.chunks(GROUP) {
         let mut packed = Vec::with_capacity(group.len());
@@ -419,6 +437,21 @@ mod tests {
         bytes.extend_from_slice(&header);
         std::fs::write(&p, bytes).unwrap();
         assert!(read_header_at(&p).is_err());
+        let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn an_empty_strip_entry_is_rejected_by_the_header() {
+        let p = temp("empty-strip");
+        let header = serde_json::to_vec(&Header { width: 16, height: 1, strip: STRIP_ROWS, key: "k".into() }).unwrap();
+        let mut bytes = Vec::from(MAGIC.as_slice());
+        bytes.extend_from_slice(&[VERSION, 0, 0, 0]);
+        bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&header);
+        // one strip with a zero-length entry: it has a row, so its deflated bytes are never empty
+        bytes.extend_from_slice(&[0; 8]);
+        std::fs::write(&p, bytes).unwrap();
+        assert!(matches!(read_header_at(&p), Err(ProductError::Format(why)) if why.contains("empty")));
         let _ = std::fs::remove_file(p);
     }
 

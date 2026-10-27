@@ -176,11 +176,17 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
-/// how to load the original at preview size, whether the photo takes the per-file camera look —
-/// `camera_preview::file_local_look`, [`lightcraft_catalog::Photo::fitted_look`]: only those
-/// proxies go stale when the fit changes).
+/// how to load the original at preview size, whether the photo can take a preview-fitted look:
+/// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
+/// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
 type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+
+/// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
+#[cfg(not(target_arch = "wasm32"))]
+fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
+    photo.fitted_look() || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+}
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
 /// refresh ([`refresh_stale_smart_previews`]), on their own threads, never write the same file at once.
@@ -205,15 +211,18 @@ struct SmartCounts {
     failed: Vec<Value>,
 }
 
-/// `source` if it reads the photo's original, else `None`: a cached source decoded from a smart
-/// preview (it has no decoder facts), a proxy standing in for an offline original, and the proxy
-/// fallback of a file source are not the original.
+/// `source` if it reads the photo's original, else `None`. A source decoded from a smart preview
+/// (it now carries the proxy's stored facts), a proxy standing in for an offline original, and the
+/// proxy fallback of a file source are not the original: refreshing a stale proxy from one of them
+/// would stamp its older look as current.
 #[cfg(not(target_arch = "wasm32"))]
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
-        SourceRef::File { path, max_edge, loader, denoise, .. } => Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise }),
-        SourceRef::Loaded(d) if d.info.is_some() => Some(SourceRef::Loaded(d)),
+        SourceRef::File { path, max_edge, loader, denoise, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
+        }
+        SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
     }
 }
@@ -252,10 +261,11 @@ fn smart_run(
             }
         } else {
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
-            // full drive) is (re)built, and so is one written by an older camera-look fit (see
-            // `camera_preview::LOOK_VERSION`) when its original can be read
+            // full drive) is (re)built, and so is one written by an older encoding or camera-look
+            // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
+            // original can be read
             let damaged = path.exists();
-            let stale = look && damaged && crate::smart::is_stale(&path);
+            let stale = damaged && crate::smart::is_stale_for(&path, look);
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
@@ -268,7 +278,10 @@ fn smart_run(
                 let r = source
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
-                    .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
+                    .and_then(|src| {
+                        let info = src.info_or(Default::default());
+                        crate::smart::encode(&src.image, Some(&info))
+                    })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
                         // Only create the leaf shard: do not recreate a missing external drive.
@@ -333,7 +346,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
         let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, ph.fitted_look()));
+        jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -360,14 +373,14 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-/// Bring smart previews written by an older camera-look fit up to date, once per fit version: when
-/// the smart previews folder has not been checked at this `LOOK_VERSION` (its marker,
-/// [`crate::smart::look_checked`]), a worker thread (the UI never waits on the drives) looks at the
-/// proxies of the raws that take the per-file camera look, the only ones the fit reaches (JPEG,
-/// PNG… proxies are never rebuilt), and rebuilds the stale ones from their originals. One whose
-/// original can't be read (offline) is kept as it is, still marked stale in its header: Build
-/// Smart Previews rebuilds it once the original is back. Only existing proxies are touched: none
-/// is built, and a missing folder is never created. Returns the thread, if started.
+/// Bring smart previews up to date, once per fit-and-encoding version: when the smart previews
+/// folder has not been checked at this build's versions (its marker, [`crate::smart::look_checked`]),
+/// a worker thread (the UI never waits on the drives) looks at the proxies of the photos on disk
+/// and rebuilds the stale ones from their originals — one whose stored pixels are an older encoding
+/// (every photo), or, for a raw that takes the per-file camera look or a DNG, one written by an older fit.
+/// One whose original can't be read (offline) is kept as it is, still marked stale in its header:
+/// Build Smart Previews rebuilds it once the original is back. Only existing proxies are touched:
+/// none is built, and a missing folder is never created. Returns the thread, if started.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::thread::JoinHandle<()>> {
     let dir = s.media.smart_dir.clone()?;
@@ -375,9 +388,11 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
-    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. }) && p.fitted_look()).collect();
-    let jobs: Vec<SmartJob> =
-        photos.iter().map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), true)).collect();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
+    let jobs: Vec<SmartJob> = photos
+        .iter()
+        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
         .spawn(move || refresh_stale(&dir, jobs))
@@ -391,7 +406,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
         .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, _)| crate::smart::is_stale(path))
+        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
@@ -548,7 +563,8 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source = SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None };
+        jobs[1].source =
+            SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None, reduced: None };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 

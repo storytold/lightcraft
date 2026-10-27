@@ -153,6 +153,30 @@ pub fn ui_command_ids(menus_rs: &str) -> Vec<String> {
     ids
 }
 
+/// The source of the UI menu module: `menus.rs` and every `.rs` file under `menus/`, so the
+/// tables are found in whichever file of the module holds them.
+pub fn menu_sources(ui_src: &Path) -> Result<String, String> {
+    let mut text = std::fs::read_to_string(ui_src.join("menus.rs")).map_err(|e| format!("menus.rs: {e}"))?;
+    let mut dirs = vec![ui_src.join("menus")];
+    let mut files = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    for path in files {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?);
+    }
+    Ok(text)
+}
+
 fn known(set: &BTreeSet<String>, id: &str) -> bool {
     match id.strip_suffix('*') {
         Some(prefix) => set.iter().any(|s| s.starts_with(prefix)),
@@ -314,7 +338,7 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     let path = root.join(DOC);
     let md = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let doc = parse(&md);
-    let menus = std::fs::read_to_string(root.join("crates/ui-egui/src/menus.rs")).map_err(|e| format!("menus.rs: {e}"))?;
+    let menus = menu_sources(&root.join("crates/ui-egui/src"))?;
     let mut commands = registry("commands")?;
     commands.extend(ui_command_ids(&menus));
     let controls = registry("controls")?;
@@ -510,8 +534,8 @@ old
     /// The real menu tables: both are found, so every language command is a known id.
     #[test]
     fn reads_the_language_commands_from_menus_rs() {
-        let menus = include_str!("../../crates/ui-egui/src/menus.rs");
-        let ids = ui_command_ids(menus);
+        let ui_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/ui-egui/src");
+        let ids = ui_command_ids(&menu_sources(&ui_src).unwrap());
         for id in ["view.detail", "app.language.english", "app.language.japanese", "app.language.simplifiedChinese", "app.language.portuguese"] {
             assert!(ids.iter().any(|known| known == id), "{id} not found");
         }

@@ -16,7 +16,7 @@ use lightcraft_raster::Rgba8;
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
-use crate::widgets::register;
+use crate::widgets::register_geometry;
 
 /// The longest side a layout image keeps (a screen never shows more of it).
 pub const MAX_SIDE: usize = 4096;
@@ -112,7 +112,7 @@ pub fn draw(app: &LightcraftApp, p: &egui::Painter, photo: Rect) {
         return;
     }
     let ctx = p.ctx().clone();
-    let id = egui::Id::new("loupe-layout-image");
+    let id = egui::Id::unique("loupe-layout-image");
     let file = (path.to_string(), li.revision);
     let mut cache = match ctx.data(|d| d.get_temp::<Cache>(id)) {
         Some(c) if c.file == file => c,
@@ -153,7 +153,7 @@ pub fn draw(app: &LightcraftApp, p: &egui::Painter, photo: Rect) {
         }
         let alpha = (li.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::from_white_alpha(alpha));
-        register(&ctx, "canvas:layoutImage", r.intersect(p.clip_rect()));
+        register_geometry(&ctx, "canvas:layoutImage", r.intersect(p.clip_rect()));
     }
     ctx.data_mut(|d| d.insert_temp(id, cache));
 }
@@ -173,7 +173,7 @@ fn note(p: &egui::Painter, why: &str) {
         p.galley(at, g, Color32::WHITE);
         y -= 3.0;
     }
-    register(p.ctx(), "canvas:layoutImageError", Rect::from_min_max(pos2(canvas.left(), y), pos2(canvas.left() + 360.0, canvas.bottom())));
+    register_geometry(p.ctx(), "canvas:layoutImageError", Rect::from_min_max(pos2(canvas.left(), y), pos2(canvas.left() + 360.0, canvas.bottom())));
 }
 
 #[cfg(test)]

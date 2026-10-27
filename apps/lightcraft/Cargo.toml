@@ -23,9 +23,12 @@ lightcraft-sysmem = { workspace = true }
 lightcraft-ui-egui = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11"] }
+# `clipboard` is a separate eframe feature in 0.37: without it egui-winit simulates an in-process
+# clipboard and cut/copy/paste, RequestPaste and the Wayland PRIMARY path are unavailable.
+eframe = { workspace = true, features = ["default_fonts", "clipboard", "wgpu", "glow", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 # probing the window's renderer before it opens (`window_gpu`)
 pollster = { workspace = true }
 log = { workspace = true }
@@ -52,3 +55,6 @@ objc2-foundation = { workspace = true }
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+craft-update = { workspace = true }

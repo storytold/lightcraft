@@ -1,6 +1,6 @@
 //! The slideshow (View ▸ Slideshow, ⌥⌘↩): the photos in view, full screen, played with the
 //! library's Playback settings (`slideshow.playback`: slide and fade durations, fade colour,
-//! random order, repeat, preparing previews in advance).
+//! random order, repeat, preparing previews in advance, manual slideshow).
 //!
 //! The timeline is [`lightcraft_engine::slideshow::Playback`] (no egui, tested on its own); this
 //! module renders the slides, draws the frame it asks for and the playback controls.
@@ -53,7 +53,7 @@ pub struct Run {
 }
 
 /// `view.slideshow {interval?, seed?, slideDuration?, fadeDuration?, fadeColor?, randomOrder?,
-/// repeat?, preparePreviews?}`: play the photos in view from the selected one with the library's
+/// repeat?, preparePreviews?, manual?}`: play the photos in view from the selected one with the library's
 /// playback settings; the keys given change them for this run only (`interval` = slideDuration,
 /// `seed` fixes the random order). The intro and ending screens that are on (`slideshow.titles`)
 /// play before the first photo and after the last one. With no photos in view there is nothing
@@ -127,7 +127,9 @@ pub fn state(play: &Playback, now: f64) -> Value {
         "fading": f.from.is_some(),
         "progress": f.progress,
         "waitingFor": play.waiting_for().map(|i| i.photo().map_or_else(|| json!(i.title().map(Title::id)), |p| json!(p.0))),
+        // (null in a manual slideshow: no slide is ever due)
         "remaining": play.remaining(now),
+        "manual": play.settings().manual,
     })
 }
 
@@ -154,7 +156,7 @@ pub fn ready(app: &LightcraftApp, item: Item) -> bool {
 }
 
 /// Advance a running slideshow (every frame, before drawing).
-pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let Some(run) = app.ui.slideshow.as_ref() else {
         app.renderer.release_slides(&[]);
         return;
@@ -163,7 +165,6 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         end(app);
         return;
     }
-    let now = ctx.input(|i| i.time);
     let mut play = run.play.clone();
     let t = play.tick(now, |id| ready(app, id));
     if let Some(run) = app.ui.slideshow.as_mut() {
@@ -174,7 +175,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let f = run.play.frame(now);
     if f.from.is_some() {
         ctx.request_repaint(); // a fade draws every frame
-    } else if !run.play.is_paused() {
+    } else if !run.play.is_paused() && !run.play.settings().manual {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(run.play.remaining(now).clamp(0.016, 120.0)));
     }
     if run.controls_until > now {
@@ -293,7 +294,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // (`ui.pointer` positions are relative to it)
     app.image_rect = Some(canvas);
     let Some(run) = app.ui.slideshow.as_ref() else { return };
-    let now = ui.input(|i| i.time);
+    let now = app.tick_now();
     let ppp = ui.ctx().pixels_per_point();
     let side = super::detail::texture_side(ui.ctx());
     let want = wanted(&run.play, now);
@@ -367,7 +368,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             draw(frame.current, 1.0);
         }
     }
-    register(ui.ctx(), "slideshow:canvas", canvas);
+    register(ui, "slideshow:canvas", canvas);
     controls(app, ui, canvas, now);
 }
 
