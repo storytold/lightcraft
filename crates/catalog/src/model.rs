@@ -535,6 +535,10 @@ impl Photo {
         };
         video_extension(&self.file_name) || path.is_some_and(video_extension)
     }
+    /// Media kind including legacy video records, without rewriting the stored catalog.
+    pub fn effective_kind(&self) -> MediaKind {
+        if self.is_video() { MediaKind::Video } else { self.kind }
+    }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();

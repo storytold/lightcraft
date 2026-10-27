@@ -2787,7 +2787,7 @@ fn a_file_arriving_beside_its_raws_stem_reads_its_own_sidecar() {
 }
 
 /// Helper to append a 4-byte-typed box with big-endian size to a byte buffer.
-fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
+pub(super) fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
     let size = (body.len() + 8) as u32;
     out.extend_from_slice(&size.to_be_bytes());
     out.extend_from_slice(fourcc);
@@ -2795,7 +2795,7 @@ fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
 }
 
 /// Construct a minimal synthetic MP4 byte stream containing ftyp and moov boxes for testing.
-fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creation_time: u32) -> Vec<u8> {
+pub(super) fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creation_time: u32) -> Vec<u8> {
     let mut out = Vec::new();
 
     let mut ftyp = Vec::new();
@@ -3010,14 +3010,18 @@ fn the_bounded_video_reader_skips_an_mdat_before_moov() {
     bytes.extend_from_slice(&((16 + payload.len()) as u64).to_be_bytes());
     bytes.extend_from_slice(&payload);
     bytes.extend_from_slice(&file[ftyp_len..]);
-    std::fs::write(src.join("clip.mp4"), &bytes).unwrap();
+    for name in ["clip.mp4", "clip.jpg", "clip.dng"] {
+        std::fs::write(src.join(name), &bytes).unwrap();
+    }
 
     let mut s = Session::new().with_fs();
     let candidates = crate::import::scan(&mut s, &[src.to_string_lossy().into_owned()]);
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].kind, lightcraft_catalog::MediaKind::Video);
-    assert_eq!(candidates[0].duration, Some(84.5));
-    assert!(candidates[0].error.is_none(), "{:?}", candidates[0].error);
+    assert_eq!(candidates.len(), 3);
+    for candidate in candidates {
+        assert_eq!(candidate.kind, lightcraft_catalog::MediaKind::Video);
+        assert_eq!(candidate.duration, Some(84.5));
+        assert!(candidate.error.is_none(), "{:?}", candidate.error);
+    }
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -3038,8 +3042,14 @@ fn a_moov_over_the_metadata_cap_is_refused_without_reading_it() {
     drop(f);
 
     let (_, probe) = crate::files::fs_hooks();
-    let err = probe(&path.to_string_lossy()).expect_err("a moov over the cap is an error");
-    assert!(err.contains("64MB"), "{err}");
+    for name in ["big.mp4", "big.jpg", "big.dng"] {
+        let renamed = src.join(name);
+        if renamed != path {
+            std::fs::hard_link(&path, &renamed).unwrap();
+        }
+        let err = probe(&renamed.to_string_lossy()).expect_err("a moov over the cap is an error whatever its extension");
+        assert!(err.contains("64MB"), "{err}");
+    }
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -3128,6 +3138,9 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     let face = lightcraft_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 };
     assert!(s.face_job(video, face, 256).is_none(), "no face tile of a video");
     assert_eq!(s.source_now(video, crate::media::SourceLevel::Thumb).unwrap_err(), "a video has no frame to sample");
+    assert_eq!(s.render_now(video, 64, 64).err().unwrap(), "a video has no frame to render");
+    assert_eq!(s.render_now(legacy, 64, 64).err().unwrap(), "a video has no frame to render");
+    assert_eq!(s.render_now(PhotoId(u64::MAX), 64, 64).err().unwrap(), "no such photo");
     assert!(s.thumb_job(legacy, 512).is_none(), "an old VIDEO entry gets no thumbnail decode either");
     assert!(s.render_job(legacy, 1600, 1600, false, true).is_none());
     assert!(s.face_job(legacy, face, 256).is_none());

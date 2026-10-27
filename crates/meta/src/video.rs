@@ -413,6 +413,128 @@ pub fn extract_video_xmp(bytes: &[u8]) -> Option<String> {
     None
 }
 
+/// Establish that a supported video has no embedded location before copying it unchanged.
+/// Unlike probing for display, incomplete boxes, exhausted budgets and malformed XMP fail closed.
+pub fn verify_video_location_absent(bytes: &[u8]) -> Result<(), String> {
+    let mut budget = MAX_BOXES;
+    verify_location_boxes(bytes, &mut budget, 0)?;
+    probe_video(bytes).ok_or("can't verify location: unreadable video")?;
+    Ok(())
+}
+
+fn verify_xmp_structure(packet: &str) -> Result<(), String> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(packet);
+    let (mut depth, mut roots) = (0usize, 0usize);
+    for _ in 0..200_000 {
+        let event = reader.read_event().map_err(|e| format!("can't verify video location: invalid XMP: {e}"))?;
+        match event {
+            Event::Start(_) | Event::Empty(_) => {
+                if depth == 0 {
+                    roots += 1;
+                    if roots > 1 {
+                        return Err("can't verify video location: multiple XMP roots".into());
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                    if depth > 64 {
+                        return Err("can't verify video location: XMP nesting limit exceeded".into());
+                    }
+                }
+            }
+            Event::End(_) => {
+                depth = depth.checked_sub(1).ok_or("can't verify video location: unexpected XMP end tag")?;
+            }
+            Event::DocType(_) => return Err("can't verify video location: unsupported XMP document type".into()),
+            Event::Text(text) if depth == 0 && !text.as_ref().iter().all(u8::is_ascii_whitespace) => {
+                return Err("can't verify video location: text outside the XMP root".into());
+            }
+            Event::CData(_) if depth == 0 => return Err("can't verify video location: text outside the XMP root".into()),
+            Event::Eof => {
+                return if roots == 1 && depth == 0 { Ok(()) } else { Err("can't verify video location: incomplete XMP".into()) };
+            }
+            _ => {}
+        }
+    }
+    Err("can't verify video location: XMP event limit exceeded".into())
+}
+
+fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), String> {
+    if depth > MAX_DEPTH {
+        return Err("can't verify video location: metadata nesting limit exceeded".into());
+    }
+    let mut at = 0usize;
+    while at < bytes.len() {
+        if *budget == 0 {
+            return Err("can't verify video location: metadata box limit exceeded".into());
+        }
+        let size = be32(bytes, at).ok_or("can't verify video location: truncated box header")?;
+        let (len, header) = match size {
+            0 => (bytes.len().saturating_sub(at), 8),
+            1 => (
+                be64(bytes, at.saturating_add(8)).and_then(|n| usize::try_from(n).ok()).ok_or("can't verify video location: invalid large box")?,
+                16,
+            ),
+            n => (n as usize, 8),
+        };
+        let end = at.checked_add(len).filter(|end| len >= header && *end <= bytes.len()).ok_or("can't verify video location: incomplete box")?;
+        let one = bytes.get(at..end).ok_or("can't verify video location: invalid box range")?;
+        let mut one_budget = 1;
+        let b = read_boxes(one, &mut one_budget).pop().ok_or("can't verify video location: malformed box")?;
+        *budget -= 1;
+        match &b.kind {
+            b"\xa9xyz" | b"loci" => {
+                return Err(
+                    "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                );
+            }
+            b"moov" | b"udta" | b"trak" | b"mdia" => verify_location_boxes(b.body, budget, depth + 1)?,
+            b"meta" => {
+                let body = b.body.get(4..).ok_or("can't verify video location: truncated metadata")?;
+                verify_location_boxes(body, budget, depth + 1)?;
+            }
+            b"keys" => {
+                let count = be32(b.body, 4).ok_or("can't verify video location: truncated metadata keys")?;
+                if count > 4096 {
+                    return Err("can't verify video location: metadata key limit exceeded".into());
+                }
+                let mut offset = 8usize;
+                for _ in 0..count {
+                    let n = be32(b.body, offset).filter(|n| *n >= 8).ok_or("can't verify video location: invalid metadata key")? as usize;
+                    let end = offset.checked_add(n).ok_or("can't verify video location: metadata key overflow")?;
+                    let key = b.body.get(offset.saturating_add(8)..end).ok_or("can't verify video location: truncated metadata key")?;
+                    if key == b"com.apple.quicktime.location.ISO6709" {
+                        return Err(
+                            "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip"
+                                .into(),
+                        );
+                    }
+                    offset = end;
+                }
+                if offset != b.body.len() {
+                    return Err("can't verify video location: trailing metadata key bytes".into());
+                }
+            }
+            b"XMP_" | b"uuid" if &b.kind == b"XMP_" || b.uuid == Some(XMP_UUID) => {
+                let packet = std::str::from_utf8(b.body).map_err(|_| "can't verify video location: invalid XMP encoding")?;
+                verify_xmp_structure(packet)?;
+                let xmp = crate::parse_xmp(packet).map_err(|e| format!("can't verify video location: invalid XMP: {e}"))?;
+                if xmp.metadata.gps.is_some()
+                    || xmp.properties.keys().any(|key| key.split('/').any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")))
+                {
+                    return Err(
+                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                    );
+                }
+            }
+            _ => {}
+        }
+        at = end;
+    }
+    Ok(())
+}
+
 /// Probe a video container file's bytes (MP4, QuickTime MOV, M4V) without decoding pixel streams:
 /// returns `Some(VideoMeta)` if valid video tracks and header boxes are found.
 pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
@@ -562,6 +684,53 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn location_verification_checks_every_packet_and_partial_gps() {
+        let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
+        assert!(verify_video_location_absent(&clean).is_ok());
+        let clean_xmp = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description/></rdf:RDF>"#;
+        let mut bytes = clean.clone();
+        write_box(&mut bytes, b"XMP_", clean_xmp);
+        assert!(verify_video_location_absent(&bytes).is_ok());
+        for attribute in [r#"e:GPSLatitude="37,46.494N""#, r#"e:GPSAltitude="100/1""#, r#"e:GPSLongitude="invalid""#] {
+            let xmp = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:e="http://ns.adobe.com/exif/1.0/" {attribute}/></rdf:RDF>"#
+            );
+            let mut located = bytes.clone();
+            let mut packet = XMP_UUID.to_vec();
+            packet.extend_from_slice(xmp.as_bytes());
+            write_box(&mut located, b"uuid", &packet);
+            assert!(verify_video_location_absent(&located).unwrap_err().contains("GPS"), "{attribute}");
+        }
+        write_box(&mut bytes, b"XMP_", b"<broken>");
+        assert!(verify_video_location_absent(&bytes).unwrap_err().contains("XMP"));
+    }
+
+    #[test]
+    fn location_verification_refuses_incomplete_or_excessive_metadata() {
+        let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
+        for tail in [&[0, 0, 0][..], &[0, 0, 0, 16, b'm', b'e', b't', b'a'][..]] {
+            let mut bytes = clean.clone();
+            bytes.extend_from_slice(tail);
+            assert!(verify_video_location_absent(&bytes).is_err());
+        }
+        let mut bytes = clean.clone();
+        for _ in 0..MAX_BOXES {
+            write_box(&mut bytes, b"free", b"");
+        }
+        assert!(verify_video_location_absent(&bytes).unwrap_err().contains("box limit"));
+        let mut nested = Vec::new();
+        write_box(&mut nested, b"loci", b"");
+        for _ in 0..=MAX_DEPTH {
+            let mut parent = Vec::new();
+            write_box(&mut parent, b"udta", &nested);
+            nested = parent;
+        }
+        let mut bytes = clean;
+        bytes.extend_from_slice(&nested);
+        assert!(verify_video_location_absent(&bytes).unwrap_err().contains("nesting limit"));
+    }
 
     /// Build a minimal synthetic MP4 file with `ftyp`, `moov`, `mvhd`, and a video `trak` (`tkhd` + `mdia`/`hdlr`).
     fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creation_time: u32) -> Vec<u8> {

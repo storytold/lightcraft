@@ -170,6 +170,11 @@ pub fn write_atomic_nosync(path: &Path, data: &[u8]) -> io::Result<()> {
     replace_with(path, false, &mut |w| w.write_all(data)).map(|_| ())
 }
 
+/// [`write_atomic_nosync`] with streamed content; a failed copy never replaces the target.
+pub fn write_atomic_nosync_with(path: &Path, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
+    replace_with(path, false, fill)
+}
+
 /// Temp file (synced when `sync`) renamed over `path`, then the folder synced when `sync`.
 fn replace_with(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
     let (tmp, n) = write_temp(path, sync, fill)?;

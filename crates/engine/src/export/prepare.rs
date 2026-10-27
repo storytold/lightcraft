@@ -37,6 +37,7 @@ pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoI
     match prepared.run()? {
         Ran::Exported(e) => Ok(e),
         Ran::Skipped(why) => Err(format!("{name}: {why}")),
+        Ran::Original { .. } => Err(format!("{name}: a streaming original requires a file destination")),
     }
 }
 
@@ -64,6 +65,8 @@ pub enum Ran {
     Exported(Exported),
     /// A photo the batch leaves out, and the warning its entry carries.
     Skipped(String),
+    /// An unchanged original handed to a host's streaming copier, without buffering its bytes.
+    Original { exported: Exported, source: String, remove_location: bool },
 }
 
 struct RenderWork {
@@ -88,6 +91,7 @@ enum Work {
         lossy_edge: Option<u32>,
         /// The original must not carry a location ([`removes_location`]).
         remove_location: bool,
+        video_size: Option<u64>,
         label: String,
         size: (usize, usize),
     },
@@ -163,7 +167,10 @@ fn prepare_guarded(
         };
         let dng = (o.format == ExportFormat::Dng).then_some(o.dng_compression);
         // the file's bytes; a DNG also decodes the raw data (16-bit samples) and writes it again
-        let weight = (p.file_size as usize).saturating_add(if dng.is_some() { full_px.saturating_mul(6) } else { 0 });
+        let file_weight = usize::try_from(p.file_size).unwrap_or(usize::MAX);
+        // A whole-clip allocation can outgrow its catalog size: serialize it at the export gate.
+        let file_weight = if p.is_video() { file_weight.max(crate::memory::budget().saturating_mul(2)) } else { file_weight };
+        let weight = file_weight.saturating_add(if dng.is_some() { full_px.saturating_mul(6) } else { 0 });
         let work = Work::File {
             path: path.clone(),
             read: session.media.file_bytes.clone(),
@@ -175,6 +182,7 @@ fn prepare_guarded(
                 u32::try_from(w.max(h)).unwrap_or(u32::MAX)
             }),
             remove_location: removes_location(p, &session.catalog, o),
+            video_size: p.is_video().then_some(p.file_size),
             label: p.file_name.clone(),
             size: (p.width as usize, p.height as usize),
         };
@@ -225,10 +233,34 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
     src_px.saturating_mul(12).saturating_add(out_px.saturating_mul(36))
 }
 
+/// Read a video without trusting a possibly stale catalog size or allowing growth to extend the
+/// allocation. Byte-returning exports check platform capacity and known physical RAM.
+fn read_video_original(path: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let size = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
+    crate::files::check_buffered_original_size(size).map_err(|e| format!("{path}: {e}"))?;
+    let len = usize::try_from(size).map_err(|_| format!("{path}: original is too large for this platform"))?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).map_err(|e| format!("{path}: can't allocate original: {e}"))?;
+    bytes.resize(len, 0);
+    file.read_exact(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    let mut extra = [0u8; 1];
+    if file.read(&mut extra).map_err(|e| format!("{path}: {e}"))? != 0 {
+        return Err(format!("{path}: original changed during export; retry when the file is no longer being written"));
+    }
+    Ok(bytes)
+}
+
 impl PreparedExport {
     /// Run the prepared export: the encoded bytes to write, or (for a video in a rendered
     /// format) the reason the batch leaves it out.
     pub fn run(self) -> Result<Ran, String> {
+        let _held = crate::memory::export_gate().acquire(self.weight);
+        self.run_with_copy(false)
+    }
+
+    pub(super) fn run_with_copy(self, streaming: bool) -> Result<Ran, String> {
         let file_name = self.file_name;
         match self.work {
             Work::Skip(why) => Ok(Ran::Skipped(why)),
@@ -247,14 +279,42 @@ impl PreparedExport {
                 };
                 Ok(Ran::Exported(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback }))
             }
-            Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
+            Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location, video_size } => {
+                let video = video_size.is_some();
+                if video && streaming {
+                    return Ok(Ran::Original {
+                        exported: Exported {
+                            file_name,
+                            bytes: Vec::new(),
+                            width: size.0,
+                            height: size.1,
+                            sidecars: vec![("xmp", packet.into_bytes())],
+                            gpu_fallback: None,
+                        },
+                        source: path,
+                        remove_location,
+                    });
+                }
                 let bytes = match &read {
-                    Some(r) => r(&path)?,
+                    Some(r) => {
+                        if let Some(size) = video_size {
+                            crate::files::check_buffered_original_size(size).map_err(|e| format!("{label}: {e}"))?;
+                        }
+                        let bytes = r(&path)?;
+                        if video {
+                            crate::files::check_buffered_original_size(bytes.len() as u64).map_err(|e| format!("{label}: {e}"))?;
+                        }
+                        bytes
+                    }
+                    None if video => read_video_original(&path)?,
                     None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
                     if remove_location {
+                        if video {
+                            lightcraft_meta::verify_video_location_absent(&bytes).map_err(|e| format!("{label}: {e}"))?;
+                        }
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
                         if !bytes.starts_with(b"8BPS") {

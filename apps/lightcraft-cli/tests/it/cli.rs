@@ -102,6 +102,44 @@ fn gradient_png(path: &std::path::Path) {
 }
 
 #[test]
+fn render_refuses_video_without_claiming_an_output_but_original_still_copies_it() {
+    let boxed = |kind: &[u8; 4], body: &[u8]| [(body.len() as u32 + 8).to_be_bytes().as_slice(), kind, body].concat();
+    let mut mvhd = [0; 20];
+    mvhd[12..16].copy_from_slice(&1000u32.to_be_bytes());
+    mvhd[16..20].copy_from_slice(&1000u32.to_be_bytes());
+    let mut tkhd = [0; 84];
+    tkhd[76..80].copy_from_slice(&(640u32 << 16).to_be_bytes());
+    tkhd[80..84].copy_from_slice(&(360u32 << 16).to_be_bytes());
+    let hdlr = [0u32.to_be_bytes().as_slice(), &0u32.to_be_bytes(), b"vide"].concat();
+    let mdia = boxed(b"mdia", &boxed(b"hdlr", &hdlr));
+    let trak = boxed(b"trak", &[boxed(b"tkhd", &tkhd), mdia].concat());
+    let moov = boxed(b"moov", &[boxed(b"mvhd", &mvhd), trak].concat());
+    let bytes = [boxed(b"ftyp", b"isom\0\0\0\0isom"), moov].concat();
+    for extension in ["mp4", "jpg"] {
+        let input = tmp(&format!("render-video-input.{extension}"));
+        let output = tmp(&format!("render-video-{extension}-output.jpg"));
+        std::fs::write(&input, &bytes).unwrap();
+        let result = Command::new(binary()).args(["render"]).arg(&input).arg("-o").arg(&output).output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "{stderr}");
+        assert!(stderr.contains("video") && stderr.contains("Original"), "{stderr}");
+        assert!(!stderr.contains("wrote "), "{stderr}");
+        assert!(!output.exists(), "a skipped video produced no image");
+
+        std::fs::write(&output, b"existing output").unwrap();
+        let result = Command::new(binary()).args(["render"]).arg(&input).arg("-o").arg(&output).output().unwrap();
+        assert!(!result.status.success());
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing output");
+
+        let original = tmp(&format!("render-video-{extension}-original.mp4"));
+        let result = Command::new(binary()).arg("render").arg(&input).arg("-o").arg(&original).args(["--opt", "format=original"]).output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert!(original.with_extension("xmp").exists());
+    }
+}
+
+#[test]
 fn calibrate_reads_raf_inputs_and_reports_bad_files() {
     let input = tmp("invalid.RAF");
     std::fs::write(&input, b"FUJIFILMCCD-RAW").unwrap();

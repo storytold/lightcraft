@@ -98,8 +98,22 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     a library folder: `catalog.lock`, issue #99). Use one tab at a time; a guard through the Web
     Locks API (`navigator.locks`) is still to do.
   - `originals/<content hash>`: the bytes of every imported photo. The catalog refers to them as
-    `web/<hash>/<file name>`; the main thread keeps recently used originals in memory (≤ 768 MB)
+    `web/<hash>/<file name>`; the main thread keeps recently used originals in memory
+    (half the application memory budget, by default 768 MiB)
     and loads the rest on demand (the active photo is prefetched).
+    Imports read one file at a time. Originals are stored as browser Blobs, avoiding IndexedDB's
+    serialized-buffer size ceiling. Videos are hashed in 1 MiB chunks;
+    only bounded container metadata enters WASM memory (64 MiB total, skipping movie payloads).
+    Original video downloads reuse those Blobs, with no clip-size limit. Remove Location accepts
+    verified location-free clips and refuses GPS-bearing or unverifiable metadata without downloading.
+    Whole-buffer originals, including images, are not limited by `app.memoryBudget`: it controls
+    cache retention and scheduling, not which files may be imported. A single active original may
+    exceed the cache target; other originals are evicted instead of rejecting it. Buffer transfers
+    use fallible allocation and the cache takes ownership without another full copy.
+    WASM's address-space and contiguous-buffer limits still apply, and allocation failures are
+    reported explicitly. Destination-backed video exports do not use that byte cache.
+    Library backups and restores also process original Blobs in chunks, so large clips remain
+    usable there within the existing 4 GB backup limit.
   - `thumbs/<key>.jpg` + `thumbs/index.json`: the rendered-thumbnail cache, with the desktop's
     budget (2 GB, least recently used pruned to 80 %).
 

@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** patch (video review: streamed Original copies and browser Blobs, cache-independent original buffering, content-based bounded probes and truthful CLI errors, location verification, legacy filtering; no playback, trim, edits, presets or transcoded export; headline numbers unchanged) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -301,7 +301,9 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
-| 2026-10-23 | minor | Video: MP4/MOV/M4V import and cataloguing (duration, dimensions, capture date, camera/GPS), grid format/duration badges and a loupe card; Video breadth and readiness 0% → 10%, remaining 25–45 → 20–40 h; headline numbers unchanged |
+| 2026-10-27 | patch | Original file admission is independent of cache budgets; physical/platform capacity and allocation checks replace the cache-derived threshold. Browser caching avoids the handoff copy. Breadth, readiness and hours unchanged |
+| 2026-10-27 | patch | Video review audit: content-based bounded probes, truthful CLI no-output errors and configurable buffering budgets without an arbitrary per-file limit. Breadth, readiness and hours unchanged |
+| 2026-10-27 | patch | Video: streamed Original copies and browser Blobs without a clip-size cap; location-free clips pass Remove Location verification, GPS-bearing or unverifiable metadata fails; legacy filtering fixed. Breadth, readiness, remaining work and hours unchanged || 2026-10-23 | minor | Video: MP4/MOV/M4V import and cataloguing (duration, dimensions, capture date, camera/GPS), grid format/duration badges and a loupe card; Video breadth and readiness 0% → 10%, remaining 25–45 → 20–40 h; headline numbers unchanged |
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |
 | 2026-10-19 | patch | Platforms: the Windows installer is no longer listed as unverified (the 0.9.1 x64 MSI is tested on Windows 11; a confirmation after uninstalling from Settings → Apps, #892, remains); #790 noted as fixed in 0.9.1; percentages and hours unchanged |

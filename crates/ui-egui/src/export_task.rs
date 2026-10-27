@@ -1,7 +1,7 @@
 //! Background export: the Export dialog, File → Export with Preset and Export with Previous hand
 //! their batch to a worker thread so the window stays responsive. Photos are prepared on the UI
 //! thread ([`lightcraft_engine::export::prepare_export`]: cheap, needs the session) and rendered,
-//! encoded and written on the worker (several side by side: [`run_batch`]); its row in the
+//! encoded and written on the worker (several side by side: [`run_batch_with_copy`]); its row in the
 //! activity stack shows the count, the file in progress and ✕ (issue #345).
 //!
 //! Needs [`crate::Services::write_shared`] (a thread-safe writer); without it (web) the batch runs
@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch_with_copy};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -44,6 +44,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
         return Err("an export is already running".into());
     }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
+    let copy = app.services.original_copy_shared.clone();
     let total = items.len();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -56,12 +57,23 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
-        let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
-            if let Ok(mut g) = p.lock() {
-                *g = (done, name.to_string());
-            }
-            !c.load(Ordering::Relaxed)
-        });
+        let mut copier = |from: &str, to: &str, remove: bool| copy.as_ref().ok_or("no Original copier")?(from, to, remove);
+        let can_copy = copy.is_some();
+        let r = run_batch_with_copy(
+            items,
+            &opts,
+            &to,
+            &mut w,
+            &|path| std::path::Path::new(path).exists(),
+            false,
+            &mut |done, name| {
+                if let Ok(mut g) = p.lock() {
+                    *g = (done, name.to_string());
+                }
+                !c.load(Ordering::Relaxed)
+            },
+            if can_copy { Some(&mut copier) } else { None },
+        );
         let r = r.map(|files| {
             if !after.is_none() {
                 // Photos can't be stopped once asked: no ✕ from here, before the last look at

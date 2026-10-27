@@ -107,7 +107,12 @@ pub struct ZipWriter {
 impl ZipWriter {
     /// The local header for `name` holding `data` (emit it, then `data`).
     pub fn entry(&mut self, name: &str, data: &[u8]) -> Result<Vec<u8>, String> {
-        let size = u32::try_from(data.len()).map_err(|_| format!("{name}: larger than 4 GB"))?;
+        self.entry_with_crc(name, data.len() as u64, crc32fast::hash(data))
+    }
+
+    /// A header for browser-managed content whose checksum was computed in bounded chunks.
+    pub fn entry_with_crc(&mut self, name: &str, size: u64, crc: u32) -> Result<Vec<u8>, String> {
+        let size = u32::try_from(size).map_err(|_| format!("{name}: larger than 4 GB"))?;
         let name_len = u16::try_from(name.len()).map_err(|_| format!("{name}: name too long"))?;
         if self.entries.len() >= usize::from(u16::MAX) {
             return Err("too many files for one backup".into());
@@ -117,7 +122,6 @@ impl ZipWriter {
             return Err("the library is too large for one backup file (4 GB)".into());
         }
         let offset = u32::try_from(self.offset).map_err(|_| "backup too large".to_string())?;
-        let crc = crc32fast::hash(data);
         let mut h = Vec::with_capacity(header_len as usize);
         u32le(&mut h, LOCAL_SIG);
         u16le(&mut h, 20); // version needed
@@ -245,10 +249,15 @@ pub fn data_offset(entry: &ZipEntry, local: &[u8]) -> Result<u64, String> {
 
 /// Check an entry's bytes.
 pub fn verify(entry: &ZipEntry, data: &[u8]) -> Result<(), String> {
+    verify_checksum(entry, data.len() as u64, crc32fast::hash(data))
+}
+
+/// Check a streamed entry without materialising all its bytes.
+pub fn verify_checksum(entry: &ZipEntry, size: u64, crc: u32) -> Result<(), String> {
     if entry.method != 0 {
         return Err(format!("{}: compressed entries are not supported (not a LightCraft backup?)", entry.name));
     }
-    if data.len() as u64 != entry.size || crc32fast::hash(data) != entry.crc {
+    if size != entry.size || crc != entry.crc {
         return Err(format!("{}: damaged (checksum mismatch)", entry.name));
     }
     Ok(())
@@ -282,6 +291,26 @@ mod tests {
         }
         out.extend(w.finish().unwrap());
         out
+    }
+
+    #[test]
+    fn streamed_entries_match_buffered_headers_and_validate_checksums() {
+        let data = b"streamed original";
+        let mut crc = crc32fast::Hasher::new();
+        for chunk in data.chunks(3) {
+            crc.update(chunk);
+        }
+        let checksum = crc.finalize();
+        let mut buffered = ZipWriter::default();
+        let mut streamed = ZipWriter::default();
+        assert_eq!(streamed.entry_with_crc("original.mp4", data.len() as u64, checksum).unwrap(), buffered.entry("original.mp4", data).unwrap());
+        assert_eq!(streamed.finish().unwrap(), buffered.finish().unwrap());
+        let entry = ZipEntry { name: "original.mp4".into(), crc: checksum, size: data.len() as u64, header: 0, method: 0 };
+        verify_checksum(&entry, data.len() as u64, checksum).unwrap();
+        assert!(verify_checksum(&entry, data.len() as u64 + 1, checksum).is_err());
+        assert!(verify_checksum(&entry, data.len() as u64, checksum ^ 1).is_err());
+        assert!(verify_checksum(&ZipEntry { method: 8, ..entry }, data.len() as u64, checksum).is_err());
+        assert!(ZipWriter::default().entry_with_crc("too-large.mp4", MAX_BYTES + 1, 0).is_err());
     }
 
     #[test]

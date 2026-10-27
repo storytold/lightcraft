@@ -552,7 +552,7 @@ pub fn default_export_dir() -> String {
 /// [`lightcraft_engine::export::ExportOptions::from_json`], plus `dir` (output folder) or `path`
 /// (exact output file, single photo), `ids` (default: the selection, else the active photo).
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
-    use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
+    use lightcraft_engine::export::{Destination, ExportOptions};
     let p = &app.session.export_params(p)?;
     // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
     let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
@@ -604,7 +604,21 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         crate::export_task::start(app, items, opts, to, after)?
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
-        let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        let copy = app.services.original_copy.as_mut();
+        let can_copy = copy.is_some();
+        let mut copy = copy;
+        let mut copier = |from: &str, to: &str, remove: bool| copy.as_mut().ok_or("no Original copier")?(from, to, remove);
+        let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
+        let files = lightcraft_engine::export::run_batch_with_copy(
+            items,
+            &opts,
+            &to,
+            &mut |path, bytes| w(path, bytes),
+            &|path| std::path::Path::new(path).exists(),
+            true,
+            &mut |_, _| true,
+            if can_copy { Some(&mut copier) } else { None },
+        )?;
         let mut out = json!({"files": files});
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and

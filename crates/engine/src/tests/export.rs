@@ -51,6 +51,182 @@ fn a_video_in_an_export_batch_is_skipped_with_a_warning() {
     assert!(err.contains("video") && !err.contains("no such photo"), "{err}");
 }
 
+/// Native QuickTime GPS is not visible to the generic metadata extractor used for images.
+fn video_with_native_gps(mdta: bool) -> Vec<u8> {
+    use super::import::{synthetic_mp4, write_test_box};
+    let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+    let moov_at = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+    let mut moov = bytes[moov_at + 8..].to_vec();
+    let location = b"+37.7749-122.4194/";
+    if mdta {
+        let key = b"com.apple.quicktime.location.ISO6709";
+        let mut keys = vec![0; 4];
+        keys.extend_from_slice(&1u32.to_be_bytes());
+        write_test_box(&mut keys, b"mdta", key);
+        let mut value = vec![0, 0, 0, 1, 0, 0, 0, 0];
+        value.extend_from_slice(location);
+        let mut data = Vec::new();
+        write_test_box(&mut data, b"data", &value);
+        let mut ilst = Vec::new();
+        write_test_box(&mut ilst, &1u32.to_be_bytes(), &data);
+        let mut meta = vec![0; 4];
+        write_test_box(&mut meta, b"keys", &keys);
+        write_test_box(&mut meta, b"ilst", &ilst);
+        write_test_box(&mut moov, b"meta", &meta);
+    } else {
+        let mut text = (location.len() as u16).to_be_bytes().to_vec();
+        text.extend_from_slice(&0u16.to_be_bytes());
+        text.extend_from_slice(location);
+        let mut udta = Vec::new();
+        write_test_box(&mut udta, b"\xa9xyz", &text);
+        write_test_box(&mut moov, b"udta", &udta);
+    }
+    bytes.truncate(moov_at);
+    write_test_box(&mut bytes, b"moov", &moov);
+    bytes
+}
+
+#[test]
+fn original_video_location_removal_refuses_native_gps_but_allows_location_free_clips() {
+    let dir = temp_dir("video-original-location");
+    for (index, bytes) in
+        [video_with_native_gps(false), video_with_native_gps(true), super::import::synthetic_mp4(1000, 1000, 640, 360, 0)].into_iter().enumerate()
+    {
+        let path = dir.join(format!("clip-{index}.mp4"));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let id = s.catalog.photos().next().unwrap().id;
+        if index < 2 {
+            assert!(lightcraft_meta::probe_video(&bytes).unwrap().metadata.gps.is_some());
+            assert!(lightcraft_meta::try_extract(&bytes).unwrap().gps.is_none(), "generic extraction cannot establish that a clip has no GPS");
+            assert!(s.catalog.photo(id).unwrap().meta.gps.is_some());
+        }
+        let original = ExportOptions::from_json(&json!({"format": "original", "removeLocation": false}));
+        assert_eq!(export_photo(&mut s, id, &original, 1).unwrap().bytes, bytes, "unrestricted Original remains byte-for-byte");
+        let private = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+        if index == 2 {
+            let exported = export_photo(&mut s, id, &private, 1).unwrap();
+            assert_eq!(exported.bytes, bytes);
+            assert_eq!(
+                crate::export::copy_original(path.to_str().unwrap(), dir.join("private.mp4").to_str().unwrap(), true).unwrap(),
+                bytes.len() as u64
+            );
+            continue;
+        }
+        let error = export_photo(&mut s, id, &private, 1).err().unwrap();
+        assert!(error.contains("can't remove embedded GPS") && error.contains("original video"), "{error}");
+        let items = crate::export::prepare_batch(&mut s, &[id], &private).unwrap();
+        let files = crate::export::run_batch(
+            items,
+            &private,
+            &Destination { dir: "out".into(), exact: None },
+            &mut |_, _| panic!("a private video must not be written"),
+            &|_| false,
+            false,
+            &mut |_, _| true,
+        )
+        .unwrap();
+        assert!(files[0]["error"].as_str().unwrap().contains("original video"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn original_video_buffers_ignore_cache_budgets_and_destination_backed_export_streams_large_clips() {
+    use crate::files::check_buffered_original_size;
+    let streamed_len = (crate::memory::budget() / 2) as u64 + 1;
+    assert!(check_buffered_original_size(streamed_len).is_ok(), "a cache budget does not limit original file size");
+    let dir = temp_dir("video-original-size");
+    let path = dir.join("growing.mp4");
+    std::fs::write(&path, super::import::synthetic_mp4(1000, 1000, 640, 360, 0)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let o = ExportOptions::from_json(&json!({"format": "original"}));
+    let prepared = crate::export::prepare_export(&mut s, id, &o, 1).unwrap();
+    // Complete a sparse mdat so the grown clip also passes strict privacy verification.
+    use std::io::{Seek, SeekFrom, Write};
+    let mut source = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    source.set_len(streamed_len).unwrap();
+    let original_len = s.catalog.photo(id).unwrap().file_size;
+    source.seek(SeekFrom::Start(original_len)).unwrap();
+    source.write_all(&0u32.to_be_bytes()).unwrap();
+    source.write_all(b"mdat").unwrap();
+    drop(source);
+    assert!(s.catalog.photo(id).unwrap().file_size < streamed_len, "the catalog size is deliberately stale");
+    match prepared.run().unwrap() {
+        crate::export::Ran::Exported(e) => assert_eq!(e.bytes.len() as u64, streamed_len),
+        _ => panic!("a buffered Original above the cache share must still export"),
+    }
+    if let Some(ram) = crate::memory::total_ram() {
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(ram as u64 + 1).unwrap();
+        let error = export_photo(&mut s, id, &o, 1).err().unwrap();
+        assert!(error.contains("physical RAM") && !error.contains("app.memoryBudget"), "{error}");
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(streamed_len).unwrap();
+    }
+    let destination = dir.join("large-copy.mp4").to_string_lossy().to_string();
+    let private = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+    let items = crate::export::prepare_batch(&mut s, &[id], &private).unwrap();
+    let files = crate::export::run_batch_with_copy(
+        items,
+        &private,
+        &Destination { dir: String::new(), exact: Some(destination.clone()) },
+        &mut crate::export::write_file,
+        &|p| std::path::Path::new(p).exists(),
+        true,
+        &mut |_, _| true,
+        Some(&mut crate::export::copy_original),
+    )
+    .unwrap();
+    assert_eq!(files[0]["bytes"], streamed_len);
+    assert_eq!(std::fs::metadata(&destination).unwrap().len(), streamed_len);
+    assert!(std::fs::metadata(std::path::Path::new(&destination).with_extension("xmp")).is_ok());
+    let mut a = std::fs::File::open(&path).unwrap();
+    let mut b = std::fs::File::open(&destination).unwrap();
+    use std::io::Read;
+    let (mut left, mut right) = ([0; 64 * 1024], [0; 64 * 1024]);
+    loop {
+        let n = a.read(&mut left).unwrap();
+        assert_eq!(b.read(&mut right).unwrap(), n);
+        assert_eq!(left[..n], right[..n]);
+        if n == 0 {
+            break;
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn streamed_original_video_checks_privacy_and_protects_existing_files() {
+    let dir = temp_dir("video-copy-privacy");
+    let source = dir.join("source.mp4");
+    let destination = dir.join("destination.mp4");
+    let location_free = super::import::synthetic_mp4(1000, 1000, 640, 360, 0);
+    let mut malformed = location_free.clone();
+    malformed.extend_from_slice(&[0, 0, 0]);
+    for bytes in [video_with_native_gps(false), video_with_native_gps(true), malformed] {
+        std::fs::write(&source, &bytes).unwrap();
+        std::fs::write(&destination, b"existing destination").unwrap();
+        assert!(crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), true).is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"existing destination");
+        crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), false).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+    }
+    std::fs::write(&source, &location_free).unwrap();
+    assert!(crate::export::copy_original(source.to_str().unwrap(), source.to_str().unwrap(), false).is_err());
+    assert_eq!(std::fs::read(&source).unwrap(), location_free);
+    std::fs::write(&destination, b"existing destination").unwrap();
+    {
+        let _failure = lightcraft_catalog::safe_file::fail_writes_after(4);
+        let error = crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), false).unwrap_err();
+        assert!(error.contains("injected"), "{error}");
+    }
+    assert_eq!(std::fs::read(&destination).unwrap(), b"existing destination");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "a failed stream leaves no temporary or partial output");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
     let mut s = Session::with_demo();

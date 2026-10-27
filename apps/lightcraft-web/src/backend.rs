@@ -171,8 +171,11 @@ impl Backend {
             Backend::Opfs(root) => {
                 let Some(h) = Self::opfs_file(root, path, false).await? else { return Ok(None) };
                 let file: web_sys::File = JsFuture::from(h.get_file()).await.map_err(err)?.unchecked_into();
+                if path.starts_with("originals/") {
+                    crate::store::check_original_size(file.size()).map_err(|e| format!("{path}: {e}"))?;
+                }
                 let buf = JsFuture::from(file.array_buffer()).await.map_err(err)?;
-                Ok(Some(Uint8Array::new(&buf).to_vec()))
+                crate::store::copy_browser_bytes(&Uint8Array::new(&buf)).map(Some)
             }
             Backend::Idb(db) => {
                 let (_tx, store) = Self::idb_store(db, false)?;
@@ -180,7 +183,68 @@ impl Backend {
                 if v.is_undefined() || v.is_null() {
                     return Ok(None);
                 }
-                Ok(Some(Uint8Array::new(&v).to_vec()))
+                if let Some(blob) = v.dyn_ref::<web_sys::Blob>() {
+                    if path.starts_with("originals/") {
+                        crate::store::check_original_size(blob.size())?;
+                    }
+                    let buffer = JsFuture::from(blob.array_buffer()).await.map_err(err)?;
+                    return crate::store::copy_browser_bytes(&Uint8Array::new(&buffer)).map(Some);
+                }
+                if path.starts_with("originals/") {
+                    let size = Reflect::get(&v, &"byteLength".into()).map_err(err)?.as_f64().ok_or("invalid stored original buffer")?;
+                    crate::store::check_original_size(size).map_err(|e| format!("{path}: {e}"))?;
+                }
+                crate::store::copy_browser_bytes(&Uint8Array::new(&v)).map(Some)
+            }
+        }
+    }
+
+    /// An original as a browser-managed Blob, without copying its payload into WASM memory.
+    pub async fn read_original_blob(&self, path: &str) -> Result<Option<web_sys::Blob>, String> {
+        match self {
+            Backend::Opfs(root) => {
+                let Some(h) = Self::opfs_file(root, path, false).await? else { return Ok(None) };
+                Ok(Some(JsFuture::from(h.get_file()).await.map_err(err)?.unchecked_into()))
+            }
+            Backend::Idb(db) => {
+                let (_tx, store) = Self::idb_store(db, false)?;
+                let value = idb_req(&store.get(&path.into()).map_err(err)?).await?;
+                if value.is_null() || value.is_undefined() {
+                    return Ok(None);
+                }
+                if let Some(blob) = value.dyn_ref::<web_sys::Blob>() {
+                    return Ok(Some(blob.clone()));
+                }
+                // Older builds stored Uint8Arrays instead of Blobs.
+                web_sys::Blob::new_with_u8_array_sequence(&js_sys::Array::of1(&value)).map(Some).map_err(err)
+            }
+        }
+    }
+
+    /// Store an original from its Blob without materialising the whole file in WASM.
+    pub async fn write_original_blob(&self, path: &str, blob: &web_sys::Blob) -> Result<(), String> {
+        match self {
+            Backend::Opfs(root) => {
+                let h = Self::opfs_file(root, path, true).await?.ok_or("can't create original")?;
+                let w: web_sys::FileSystemWritableFileStream = JsFuture::from(h.create_writable()).await.map_err(err)?.unchecked_into();
+                let result = match w.write_with_blob(blob) {
+                    Ok(promise) => JsFuture::from(promise).await.map(|_| ()).map_err(err),
+                    Err(e) => Err(err(e)),
+                };
+                match result {
+                    Ok(()) => JsFuture::from(w.close()).await.map(|_| ()).map_err(err),
+                    Err(e) => {
+                        if let Err(abort) = JsFuture::from(w.abort()).await {
+                            log::warn!("aborting original write: {abort:?}");
+                        }
+                        Err(e)
+                    }
+                }
+            }
+            Backend::Idb(db) => {
+                let (tx, store) = Self::idb_store(db, true)?;
+                store.put_with_key(blob, &path.into()).map_err(err)?;
+                idb_done(&tx).await
             }
         }
     }

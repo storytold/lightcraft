@@ -257,6 +257,22 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
+### Video exports respect memory and location privacy
+- Original video exports stream to disk without loading the clip into memory or imposing a
+  clip-size limit. Remove location info accepts verified location-free clips, but refuses clips
+  with native QuickTime or XMP GPS, or unverifiable metadata; it does not strip GPS from a video.
+- The browser stores and downloads videos as Blobs, hashes them in chunks and reads only bounded
+  metadata into WASM. Imports run one at a time and appear in the activity stack. Whole-buffer
+  originals and byte-returning APIs are independent of the cache budget: `app.memoryBudget`
+  controls cache retention and scheduling, not file admission. Platform buffer capacity, known
+  physical RAM and allocation failures are checked explicitly instead of imposing a cache-based
+  file-size restriction. The browser cache takes ownership without another full-buffer copy.
+  Image originals also use Blob storage, avoiding IndexedDB's serialized-buffer size ceiling.
+- Native video probing follows the container's contents, not its extension, so a clip named
+  `.jpg` or `.dng` also uses bounded metadata reads. The CLI reports a rendered video as an
+  explicit error without claiming that it wrote an output; Original copies still work.
+- The Videos filter, `kind:video` search and smart album rules also find legacy video records.
+  Direct rendering of a clip reports that it has no frame, rather than saying the photo is missing.
 
 ## 2026-10-24
 
