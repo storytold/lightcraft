@@ -340,7 +340,7 @@
   "Delete {n} Keywords…": "Eliminar {n} palabras clave…",
   "Delete {n} albums?": "¿Eliminar {n} álbumes?",
   "Delete {n} keywords?": "¿Eliminar {n} palabras clave?",
-  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Fotos que tienen alguna: {count}. Las palabras clave que contienen también se eliminan. Deshacer las recupera.",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Fotos que tienen alguna: {count}. También se eliminan las palabras clave que están debajo de ellas. Deshacer las recupera.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "¿Quitar {n} carpetas de la biblioteca? Fotos importadas de ellas: {count}.",
   "…and {n} more": "…y {n} más",
   "{n} keywords": "{n} palabras clave"
