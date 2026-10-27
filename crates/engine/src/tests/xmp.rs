@@ -288,6 +288,85 @@ fn a_crs_change_after_a_read_is_taken_with_auto_write_on() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar carrying only `xmp:Rating`.
+fn rating_sidecar(rating: u8) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="{rating}"/></rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// `onlyChanged` leaves out the photos whose sidecar says what the catalog has (no undo step), reads the
+/// ones it would change, and an untouched call behaves as before.
+#[test]
+fn read_only_changed_skips_photos_the_sidecar_does_not_change() {
+    let src = temp_dir("only-changed");
+    write_png(&src.join("same.png"), 1);
+    write_png(&src.join("moved.png"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id_of = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (same, moved) = (id_of(&s, "same.png"), id_of(&s, "moved.png"));
+    let both = json!({"ids": [same.0, moved.0], "onlyChanged": true});
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [same.0]})).unwrap();
+    std::fs::write(src.join("moved.xmp"), rating_sidecar(4)).unwrap();
+    let undo = s.undo.len();
+
+    let r = s.execute("photo.readMetadataFromFile", &both).unwrap();
+    let ids = |k: &str| r[k].as_array().unwrap().iter().map(|e| e["id"].as_u64().unwrap()).collect::<Vec<_>>();
+    assert_eq!((ids("read"), ids("unchanged")), (vec![moved.0], vec![same.0]), "{r}");
+    assert_eq!(s.catalog.photo(moved).unwrap().rating, 4);
+    assert_eq!(s.undo.len(), undo + 1, "one step, for the photo that changed");
+
+    // nothing left to change: no undo step at all
+    let r = s.execute("photo.readMetadataFromFile", &both).unwrap();
+    assert_eq!((r["read"].as_array().unwrap().len(), r["unchanged"].as_array().unwrap().len()), (0, 2), "{r}");
+    assert_eq!(s.undo.len(), undo + 1, "everything unchanged: nothing committed");
+
+    // without the flag the same read is a step and has no `unchanged`
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [same.0, moved.0]})).unwrap();
+    assert_eq!(r["read"].as_array().unwrap().len(), 2, "{r}");
+    assert!(r.get("unchanged").is_none(), "{r}");
+    assert_eq!(s.undo.len(), undo + 2);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// `onlyChanged` keeps issue #934's rule for the photos it reads: with auto-write on, the sidecar is not
+/// written back.
+#[test]
+fn read_only_changed_does_not_write_the_sidecar_back() {
+    let src = temp_dir("only-changed-autowrite");
+    write_png(&src.join("a.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let foreign = rating_sidecar(5);
+    std::fs::write(src.join("a.xmp"), &foreign).unwrap();
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0], "onlyChanged": true})).unwrap();
+    assert_eq!(r["read"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().rating, 5);
+    assert_eq!(std::fs::read_to_string(src.join("a.xmp")).unwrap(), foreign, "not written back");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Named `ids` need no selection; with neither, the call is refused cleanly.
+#[test]
+fn read_metadata_takes_explicit_ids_without_a_selection() {
+    let src = temp_dir("read-ids-no-selection");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    std::fs::write(src.join("a.xmp"), rating_sidecar(2)).unwrap();
+    s.selection = crate::Selection::default();
+    let err = s.execute("photo.readMetadataFromFile", &json!({"onlyChanged": true})).unwrap_err();
+    assert!(matches!(err, crate::EngineError::Disabled(..)), "{err:?}");
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0], "onlyChanged": true})).unwrap();
+    assert_eq!(r["read"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().rating, 2);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Lightroom's default profiles (`Adobe Standard`, `Adobe Color`) are named by nearly every sidecar
 /// and our own starting look stands in for them: importing one gives no camera-profile warning.
 #[test]
