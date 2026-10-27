@@ -88,7 +88,9 @@ archive is published by claiming its name with an exclusive create and renaming 
 still never replaces an existing archive.
 Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
 capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
-retained. Oldest managed archives are retired; legacy `.json` archives remain untouched.
+retained. Oldest managed archives are retired; legacy `.json` archives remain untouched. When an
+archive is saved but cleanup afterwards fails (a temporary file or an old archive that can't be
+removed), the report still names the archive and a separate warning names what was left behind.
 `Interop/lightroom-index.json` records imported identities. Unlike the archive it is required, and
 it is written after the photos are imported, so the importer checks its folder first: when
 `Interop` is a link or a file rather than a folder, or a folder in which a file can't be created
