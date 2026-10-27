@@ -1349,7 +1349,13 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
         std::fs::write(&source, native_catalog(&photo_tables((root, "")))).unwrap();
         let catalog = read(&source).unwrap();
         assert!(matches!(catalog.photos[0].original, Original::Refused(_)), "{root}: {:?}", catalog.photos[0]);
-        assert!(catalog.warnings.iter().any(|w| w.contains("not opened")), "{root}: {:?}", catalog.warnings);
+        // counted as `pathRefused`, not as missing (#2589)
+        assert!(
+            catalog.warnings.iter().any(|w| w.contains("not opened") && w.ends_with("its photos are not imported")),
+            "{root}: {:?}",
+            catalog.warnings
+        );
+        assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{root}: {:?}", catalog.warnings);
         let mut s = crate::Session::new();
         let probes = Arc::new(AtomicUsize::new(0));
         let calls = probes.clone();
@@ -1368,7 +1374,10 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
     let mut tables = photo_tables((dir.to_str().unwrap(), ""));
     tables[1].2[2] = SqlValue::Text(format!("{}/Photos/", dir.display()));
     std::fs::write(&source, native_catalog(&tables)).unwrap();
-    assert!(matches!(read(&source).unwrap().photos[0].original, Original::Refused(_)));
+    let catalog = read(&source).unwrap();
+    assert!(matches!(catalog.photos[0].original, Original::Refused(_)));
+    assert!(catalog.warnings.iter().any(|w| w.ends_with("it and its virtual copies are not imported")), "{:?}", catalog.warnings);
+    assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{:?}", catalog.warnings);
     // A root beside the catalog is followed.
     std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
     let catalog = read(&source).unwrap();
