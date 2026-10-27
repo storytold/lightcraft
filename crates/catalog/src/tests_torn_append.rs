@@ -266,3 +266,61 @@ fn resync_is_not_quadratic_in_line_length() {
     assert_eq!(j2.seq(), next_seq, "resync should have recovered the retried record after the fragment");
     assert_eq!(report.torn_fragments, 1, "resync should report exactly one torn fragment");
 }
+
+/// A retry record whose op body holds a nested `{"seq":` (a smart-album rule value such as
+/// `{"seq":1}` on a `title isEmpty` rule) shadows the record's own start marker: `rposition` in
+/// `resync` picks the nested occurrence, `decode_record` rejects the suffix, and `Journal::open`
+/// truncates the final line instead of replaying the retry — the valid operation is lost.
+#[test]
+fn resync_preserves_retry_record_with_nested_start_marker() {
+    let probe = MemStore::new();
+
+    let (mut j, mut c, _) = Journal::open(Box::new(probe.clone())).unwrap();
+    let add = add_photo(&mut c);
+    j.append(&apply(&mut c, vec![add])).unwrap();
+
+    let album_id = c.alloc_album_id();
+    let add_album = Op::AddAlbum {
+        album: Album {
+            smart: Some(Box::new(Filter::default())),
+            ..Album::new(album_id, "Smart")
+        },
+    };
+    j.append(&apply(&mut c, vec![add_album])).unwrap();
+
+    let retry_op = Op::SetAlbumRules {
+        id: album_id,
+        rules: Box::new(Filter {
+            rule_set: Some(RuleSet {
+                mode: Match::All,
+                rules: vec![Rule::Field {
+                    field: "title".into(),
+                    op: "isEmpty".into(),
+                    value: serde_json::json!({ "seq": 1 }),
+                }],
+            }),
+            ..Default::default()
+        }),
+    };
+    apply(&mut c, vec![retry_op.clone()]);
+
+    // Encode the retry exactly as the journal writes records, so `decode_record` accepts it once
+    // resync finds its real start: `seq` continues the log and the CRC matches the body.
+    let next_seq = j.seq() + 1;
+    let body = serde_json::to_string(&retry_op).unwrap();
+    let crc = crc32fast::hash(body.as_bytes());
+    let retry = format!("{{\"seq\":{next_seq},\"crc\":{crc},\"op\":{body}}}\n");
+
+    // A torn fragment glued to the retry on the final line. The outer record start sits right
+    // after the fragment, but the last `{"seq":` byte occurrence is the nested rule value.
+    let mut log = probe.get(LOG).unwrap();
+    log.extend_from_slice(b"torn fragment without a newline");
+    log.extend_from_slice(retry.as_bytes());
+    probe.set(LOG, log);
+
+    let (j2, loaded, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    assert_eq!(j2.seq(), next_seq, "resync should have recovered the retried record after the fragment");
+    assert_eq!(report.torn_fragments, 1, "resync should report exactly one torn fragment");
+    assert_eq!(report.torn_bytes, 0, "the valid retry record must not be truncated as torn");
+    assert_eq!(loaded.to_snapshot(), c.to_snapshot(), "the recovered smart-album rule should be preserved");
+}

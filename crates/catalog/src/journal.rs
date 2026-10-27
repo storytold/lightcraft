@@ -275,19 +275,33 @@ thread_local! {
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
-    // Only the retry record can follow a torn fragment, so only the LAST occurrence of the start
-    // marker can match; searching every occurrence made a hostile line quadratic in its length.
-    // Requiring i > 0 keeps the invariant that a fragment precedes the record.
-    let whole = std::str::from_utf8(line).ok();
-    let i = line.windows(START.len()).rposition(|w| w == START).filter(|&i| i > 0)?;
-    #[cfg(test)]
-    RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
-    let text = match &whole {
-        Some(t) => &t[i..],
-        None => std::str::from_utf8(&line[i..]).ok()?,
-    };
-    let rec = decode_record(text.trim_end_matches('\u{0D}'))?;
-    (rec.0 <= last.saturating_add(1)).then_some((i, rec))
+    // The retry record starts with the `{"seq":` marker, but that marker can also occur inside
+    // the op body (a smart-album rule value such as `{"seq":1}`); then the last occurrence is
+    // nested, not the record start, and decoding it rejects a valid retry. Scan marker
+    // occurrences from the end of the line and decode the first one that is a complete record
+    // continuing the log (`seq <= last + 1`). The number of decodes is bounded, so a hostile
+    // line of repeated markers stays linear instead of quadratic, and the fragment that
+    // precedes the record stays to its left (`i > 0`).
+    const MAX_DECODES: usize = 8;
+    let mut end = line.len();
+    let mut decodes = 0;
+    while decodes < MAX_DECODES {
+        decodes += 1;
+        let Some(i) = line[..end].windows(START.len()).rposition(|w| w == START) else { break };
+        if i == 0 {
+            break; // the record must follow a fragment
+        }
+        end = i;
+        let Ok(text) = std::str::from_utf8(&line[i..]) else { continue };
+        #[cfg(test)]
+        RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
+        if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}')) {
+            if seq <= last.saturating_add(1) {
+                return Some((i, (seq, op)));
+            }
+        }
+    }
+    None
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
