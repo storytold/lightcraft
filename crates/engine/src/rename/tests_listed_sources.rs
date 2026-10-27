@@ -6,13 +6,19 @@ use std::cell::Cell;
 /// The disk, counting the questions about `.xmp` names and the listings.
 struct Counting {
     can_list: bool,
+    /// `list_dir` returns every name whatever the budget (an override that breaks the contract).
+    ignores_budget: bool,
     xmp_asked: Cell<usize>,
     listings: Cell<usize>,
 }
 
 impl Counting {
     fn new(can_list: bool) -> Self {
-        Counting { can_list, xmp_asked: Cell::new(0), listings: Cell::new(0) }
+        Counting { can_list, ignores_budget: false, xmp_asked: Cell::new(0), listings: Cell::new(0) }
+    }
+
+    fn ignoring_the_budget() -> Self {
+        Counting { ignores_budget: true, ..Counting::new(true) }
     }
 }
 
@@ -43,6 +49,7 @@ impl MoveFs for Counting {
     }
     fn list_dir(&self, dir: &Path, budget: usize) -> Option<Vec<std::ffi::OsString>> {
         self.listings.set(self.listings.get() + 1);
+        let budget = if self.ignores_budget { usize::MAX } else { budget };
         if self.can_list { RealFs.list_dir(dir, budget) } else { None }
     }
 }
@@ -166,5 +173,29 @@ fn a_folder_past_the_listing_budget_is_not_listed_and_is_probed_photo_by_photo()
     }
     assert!(probing.xmp_asked.get() >= 12 * 4, "each photo is probed: {}", probing.xmp_asked.get());
     assert!(names_lower(&to).contains(&"p00.xmp".to_string()));
+    let _ = std::fs::remove_dir_all(from.parent().unwrap());
+}
+
+/// Given a `list_dir` override that returns more names than the budget it was given (the trait
+/// documents `None` then), when the listing is collected, then the folder is skipped: the budget
+/// neither underflows nor wraps, and the photos' sidecars are probed one by one as before.
+#[test]
+fn a_listing_larger_than_its_budget_is_skipped_not_counted_below_zero() {
+    let (from, to) = scratch("overlist");
+    let all = moves(&from, &to, 12);
+    for (src, _) in &all {
+        std::fs::write(src, b"x").unwrap();
+    }
+    std::fs::write(from.join("p00.XMP"), b"<x/>").unwrap();
+
+    let fs = Counting::ignoring_the_budget();
+    let listed = ListedSources::with_budget(&fs, &all, 5);
+    assert_eq!(fs.listings.get(), 1, "the folder was asked for");
+    assert!(listed.folders.borrow().is_empty(), "13 names against a budget of 5: not trusted");
+
+    for (a, b) in &all {
+        move_file_with(&listed, a, b).unwrap();
+    }
+    assert!(names_lower(&to).contains(&"p00.xmp".to_string()), "the sidecar still follows its photo");
     let _ = std::fs::remove_dir_all(from.parent().unwrap());
 }

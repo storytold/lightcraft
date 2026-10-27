@@ -252,7 +252,9 @@ impl<'a> ListedSources<'a> {
                 continue;
             }
             let Some(names) = inner.list_dir(dir, budget) else { continue };
-            budget -= names.len();
+            // (an override that lists more than the budget it was given breaks the contract: not trusted)
+            let Some(left) = budget.checked_sub(names.len()) else { continue };
+            budget = left;
             // (any name that is no ASCII text: the listing can't say what another name's other case is)
             let xmp: Option<HashSet<String>> = names
                 .iter()
