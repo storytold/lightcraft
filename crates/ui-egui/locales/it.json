@@ -2590,5 +2590,7 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "I tasti agiscono sulla barra laterale: le frecce spostano, Invio apre, digita per cercare, Esc torna alle foto",
+  "This row has no name to change": "Questa riga non ha un nome da cambiare"
 }

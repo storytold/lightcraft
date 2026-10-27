@@ -3692,5 +3692,7 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "კლავიშები გვერდით ზოლს მართავს: ისრები გადაადგილებს, Enter ხსნის, აკრიფეთ საძებნად, Esc ფოტოებს უბრუნდება",
+  "This row has no name to change": "ამ მწკრივს შესაცვლელი სახელი არ აქვს"
 }

@@ -2383,5 +2383,7 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Näppäimet toimivat sivupalkissa: nuolet liikuttavat, Enter avaa, kirjoita etsiäksesi, Esc palaa kuviin",
+  "This row has no name to change": "Tällä rivillä ei ole nimeä, jota voisi muuttaa"
 }
