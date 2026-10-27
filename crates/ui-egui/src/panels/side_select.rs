@@ -60,6 +60,8 @@ pub(crate) fn frame(app: &mut LightcraftApp) {
     let library = app.session.library_generation();
     if app.ui.side.library != Some(library) {
         app.ui.side = SideState { library: Some(library), ..Default::default() };
+        // (a keyword picked here is another library's: it may have one by the same name)
+        app.ui.keyword_list_selected = None;
     }
     // a keyword picked in the Keyword List that is gone since (deleted, merged away, undone) is
     // not picked any more. Looked up in the cached keyword tree, once per change to the library

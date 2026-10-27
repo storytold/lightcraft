@@ -368,6 +368,34 @@ fn what_was_chosen_is_forgotten_when_another_library_opens() {
     assert!(h.app.ui.side.albums.anchor.is_none());
 }
 
+/// A keyword picked in the Keyword List is not picked in another library that has the same keyword.
+#[test]
+fn a_keyword_picked_in_the_keyword_list_is_forgotten_when_another_library_opens() {
+    /// Gone with the test, however it ends.
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let mut h = app("keywords");
+    let here = Scratch(std::env::temp_dir().join(format!("lc-multi-select-keyword-a-{}", std::process::id())));
+    let there = Scratch(std::env::temp_dir().join(format!("lc-multi-select-keyword-b-{}", std::process::id())));
+    for dir in [&here, &there] {
+        let _ = std::fs::remove_dir_all(&dir.0);
+        h.app.session.open_library(&dir.0, false).unwrap();
+        h.settle(SETTLE);
+        run(&mut h, "keyword.create", json!({"name": "Sel Same"}));
+    }
+    // Given a keyword picked in the library that is open
+    h.app.ui.keyword_list_selected = Some("Sel Same".into());
+    // When the other library, which has a keyword by that name, opens
+    h.app.session.open_library(&here.0, false).unwrap();
+    h.settle(SETTLE);
+    // Then its row is not picked
+    assert_eq!(h.app.ui.keyword_list_selected, None);
+}
+
 /// "Show in Library" after a Lightroom import shows every photo: keywords chosen in the
 /// sidebar with Cmd+click are not left in the filter (dates go the same way: both lists are omitted from the default filter's JSON).
 #[test]
