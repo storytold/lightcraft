@@ -2,7 +2,7 @@
 
 use lightcraft_catalog::{Op, PhotoId, Version};
 use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
-use lightcraft_geom::{CropGeometry, CropHandle, MIN_CROP_FRACTION, Orientation, Point, Rect, crop_fit_angle, drag_crop};
+use lightcraft_geom::{CropGeometry, CropHandle, MIN_CROP_FRACTION, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
@@ -1007,7 +1007,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let aspect = match p.get("aspect") {
                     Some(Value::String(a)) if a == "toggle" => None,
                     Some(Value::String(a)) if a == "free" => None,
-                    Some(Value::String(a)) if a == "original" => Some(((w * 100.0) as u32, (h * 100.0) as u32)),
+                    Some(Value::String(a)) if a == "original" => Some(lightcraft_develop::Crop::original_aspect(w, h)),
                     Some(Value::String(a)) => {
                         let (x, y) = a.split_once('x').ok_or_else(|| bad("crop.aspect", "use WxH"))?;
                         let (x, y): (f64, f64) =
@@ -1152,7 +1152,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 // the whole settings: Paste Selected can paste a group the copy left out (#3056)
                 let settings = s.develop_of(id).unwrap_or_default();
-                let dims = photo_dims(s, id, settings.orientation);
+                let dims = s.oriented_dims(id, settings.orientation);
                 s.clipboard = Some(SettingsClipboard { settings, dims });
                 Ok(json!({"groups": s.copy_groups}))
             }
@@ -1171,7 +1171,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(|| s.copy_groups.clone());
                 let from = s.develop_of(prev).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&from, &groups);
-                let dims = photo_dims(s, prev, from.orientation);
+                let dims = s.oriented_dims(prev, from.orientation);
                 let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| *id != prev).collect();
                 let ops = ids
                     .iter()
@@ -1219,7 +1219,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_copy);
                 let d = s.develop_of(id).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&d, &groups);
-                let dims = photo_dims(s, id, d.orientation);
+                let dims = s.oriented_dims(id, d.orientation);
                 let ops = s
                     .selection
                     .ids
@@ -1338,6 +1338,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
             // `id` names the preset here: the photos are `ids`, else the selection
             let ids = s.targets(&json!({"ids": p.get("ids")}))?;
+            // a preset's crop is applied as stored: it has no source photo whose shape a refit
+            // could start from (unlike Paste and Sync, issue #3056)
             let ops = ids
                 .iter()
                 .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
