@@ -866,6 +866,8 @@ impl RawImage {
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
         let n = self.normalized()?;
+        // the demosaiced picture is the biggest buffer: refuse it with an error rather than abort on allocation
+        drop(lightcraft_raster::Rgb32f::try_new(n.width, n.height).map_err(|_| RawError::Limit("not enough memory to develop this raw"))?);
         let rgb = demosaic(&n, method);
         drop(n);
         Ok(self.finish_demosaiced(rgb))
