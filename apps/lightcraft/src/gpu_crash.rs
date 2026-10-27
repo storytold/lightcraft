@@ -18,7 +18,9 @@ pub(crate) fn window_files(in_memory: bool) -> window_gpu::Files {
 }
 
 /// Written while the GPU compute device is created, removed once that returned
-/// (`lightcraft_gpu::backend::set_init_marker`). Not with `LIGHTCRAFT_NO_PREFS` (tests, scripts).
+/// (`lightcraft_gpu::backend::set_init_marker`); still there after a quit while a creation that
+/// passed its time limit was stuck in the driver (#3068). Not with `LIGHTCRAFT_NO_PREFS` (tests,
+/// scripts).
 fn gpu_marker_path() -> Option<std::path::PathBuf> {
     if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
         return None;
@@ -50,7 +52,7 @@ pub(crate) fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: 
 
 pub(crate) fn gpu_crash_notice(what: &str) -> String {
     format!(
-        "LightCraft closed unexpectedly while starting the GPU last time ({what}), so GPU rendering is now off and photos render on the CPU. \
+        "LightCraft closed unexpectedly, or the graphics driver stopped responding, while starting the GPU last time ({what}), so GPU rendering is now off and photos render on the CPU. \
          To try the GPU again, turn on Settings ▸ Performance ▸ Use the GPU for rendering; to try another graphics backend, start LightCraft with \
          LIGHTCRAFT_GPU_BACKEND=dx12, vulkan or off (see docs/gpu-pipeline.md → Troubleshooting)."
     )

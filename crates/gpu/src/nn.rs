@@ -77,8 +77,8 @@ const CLOSING: &str = "LightCraft is closing";
 
 fn create_device() -> Result<Dev, String> {
     let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
-    // on a thread of its own, with a time limit (#3068, `init.rs`)
-    crate::backend::with_init_marker(backends, || crate::init::create("device creation", move || make_device(backends)))
+    // on a thread of its own, under the crash sentinel, with a time limit (#3068, `init.rs`)
+    crate::init::create(backends, move || make_device(backends))
 }
 
 fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
