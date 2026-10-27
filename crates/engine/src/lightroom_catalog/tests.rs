@@ -532,7 +532,7 @@ fn a_relocation_warning_names_the_set_as_the_user_renamed_it() {
     let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
     assert_eq!(album_named(&s, "Picks").parent, Some(travel));
     let w = warnings_naming(&r, "Picks");
-    assert!(w.len() == 1 && w[0].contains("inside “Keepers”") && w[0].ends_with("imported into “Trips”"), "{w:?}");
+    assert!(w.len() == 1 && w[0].contains("inside “Keepers”") && w[0].ends_with("imported into “Trips” (Lightroom collection 11)"), "{w:?}");
 }
 /// The album an earlier import made for a Lightroom set may no longer be a folder (here: an index that names a plain
 /// album). A collection in that set lands at the top level, and the warning says why without calling the set
@@ -552,7 +552,7 @@ fn a_set_whose_album_is_not_a_folder_puts_its_collections_at_the_top_level() {
     let w = warnings_naming(&r, "Keepers");
     assert_eq!(w.len(), 1, "{w:?}");
     assert!(w[0].contains("“Travel” is the album “Travel picks”") && w[0].contains("isn't a folder"), "{w:?}");
-    assert!(!w[0].contains("isn't a collection set") && w[0].ends_with("at the top level"), "{w:?}");
+    assert!(!w[0].contains("isn't a collection set") && w[0].ends_with("at the top level (Lightroom collection 10)"), "{w:?}");
 }
 /// Only the outermost set inside a plain collection moves; the sets and creations inside it keep their places.
 #[test]
@@ -573,7 +573,7 @@ fn sets_nested_under_a_plain_collection_keep_their_own_nesting() {
     assert_eq!(album_named(&s, "Poster").parent, Some(inner.id));
     assert_eq!(album_named(&s, "Poster").photos.len(), 1);
     let w = warnings_naming(&r, "Outer");
-    assert!(w.len() == 1 && w[0].contains("inside “Loose”") && w[0].ends_with("at the top level"), "{w:?}");
+    assert!(w.len() == 1 && w[0].contains("inside “Loose”") && w[0].ends_with("at the top level (Lightroom collection 13)"), "{w:?}");
     assert!(warnings_naming(&r, "Inner").is_empty() && warnings_naming(&r, "Poster").is_empty(), "{r}");
 }
 /// The album counter saturates: one at its end hands every collection the same id. The second collection used to be

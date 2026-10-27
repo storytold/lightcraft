@@ -1059,7 +1059,11 @@ fn stage_collections(
                 && !s.catalog.album(parent).is_some_and(|a| a.folder)
             {
                 album.parent = None;
-                warnings.push(format!("{}: its collection set could not be created first; imported at the top level", album.name));
+                warnings.push(format!(
+                    "{}: its collection set could not be created first; imported at the top level (Lightroom collection {})",
+                    album.name,
+                    number(collection, "id_local")
+                ));
             } else if moved {
                 let lr_parent = number(collection, "parent");
                 let why = match collections.get(&lr_parent) {
@@ -1078,7 +1082,8 @@ fn stage_collections(
                     (None, Some(r)) => format!("into “{}”", text(r, "name")),
                     (None, None) => "at the top level".to_string(),
                 };
-                warnings.push(format!("{}: {why}; imported {to}", album.name));
+                // the Lightroom id tells apart collections that share a name (#2165)
+                warnings.push(format!("{}: {why}; imported {to} (Lightroom collection {})", album.name, number(collection, "id_local")));
             }
             if album.folder {
                 added_folders.insert(id);
