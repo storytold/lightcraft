@@ -644,3 +644,52 @@ fn a_window_with_no_host_service_ignores_jobs() {
     h.step();
     assert_eq!(h.app.awake_told, None);
 }
+
+/// What `services.dock_badge` was told, in order.
+type Badges = std::rc::Rc<std::cell::RefCell<Vec<usize>>>;
+
+fn demo_with_dock_badge() -> (Headless, Badges) {
+    let badges = Badges::default();
+    let sink = badges.clone();
+    let dock_badge: crate::DockBadgeFn = Box::new(move |count| sink.borrow_mut().push(count));
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, dock_badge: Some(dock_badge), ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    badges.borrow_mut().clear();
+    (h, badges)
+}
+
+#[test]
+fn the_dock_badge_follows_the_number_of_running_jobs_and_clears_when_idle() {
+    let (mut h, badges) = demo_with_dock_badge();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(badges.borrow().is_empty(), "nothing runs: the host hears nothing");
+
+    let export = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    let import = h.app.session.activity.start("import", "Importing", Cancel::Yes);
+    h.step();
+    h.step();
+    assert_eq!(*badges.borrow(), [1, 2], "told on each change, not on every frame");
+
+    drop(export);
+    h.step();
+    drop(import);
+    h.step();
+    assert_eq!(*badges.borrow(), [1, 2, 1, 0]);
+}
+
+#[test]
+fn a_job_asked_to_stop_stays_in_the_dock_count_until_it_has_stopped() {
+    let (mut h, badges) = demo_with_dock_badge();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.app.session.activity.cancel(g.id()).unwrap();
+    h.step();
+    assert_eq!(*badges.borrow(), [1]);
+    drop(g);
+    h.step();
+    assert_eq!(*badges.borrow(), [1, 0]);
+}

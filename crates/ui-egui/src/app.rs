@@ -138,6 +138,7 @@ impl LightcraftApp {
             screen_profile: None,
             screen_profile_read: None,
             awake_told: None,
+            badge_told: 0,
             library_problem: None,
             library_window_input: Default::default(),
             alt_asks_for_library: false,
@@ -612,6 +613,7 @@ impl LightcraftApp {
     /// (the host exits anyway). The app renders nothing afterwards.
     pub fn shutdown(&mut self, timeout: std::time::Duration) -> bool {
         self.release_keep_awake();
+        self.release_dock_badge();
         lightcraft_engine::gpu::begin_shutdown();
         #[cfg(not(target_arch = "wasm32"))]
         let t0 = std::time::Instant::now();

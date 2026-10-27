@@ -86,11 +86,39 @@ impl LightcraftApp {
         }
     }
 
+    /// Tell the host how many jobs are running (`services.dock_badge`), when that changes. A job still stopping counts
+    /// until it has stopped, so the count is also looked at every second while it is above zero. Once the app is
+    /// shutting down the badge is gone for good ([`LightcraftApp::release_dock_badge`]).
+    pub(super) fn sync_dock_badge(&mut self, ctx: &egui::Context) {
+        if lightcraft_engine::gpu::shutting_down() {
+            return;
+        }
+        let Some(dock_badge) = self.services.dock_badge.as_mut() else { return };
+        let running = self.session.activity.running_jobs();
+        if running > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        if running != self.badge_told {
+            dock_badge(running);
+            self.badge_told = running;
+        }
+    }
+
+    /// Clear the badge the host was told about, if any (quitting).
+    pub(super) fn release_dock_badge(&mut self) {
+        if let Some(dock_badge) = self.services.dock_badge.as_mut()
+            && std::mem::take(&mut self.badge_told) != 0
+        {
+            dock_badge(0);
+        }
+    }
+
     /// Queues and timers. Each consumed queue is drained once per call; time-gated work uses the
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
         self.background_prep(ctx);
+        self.sync_dock_badge(ctx);
         self.sync_keep_awake(ctx);
         panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first

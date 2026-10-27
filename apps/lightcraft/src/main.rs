@@ -30,6 +30,8 @@ mod appearance;
 mod colord;
 mod control_server;
 mod dialog_filter;
+#[cfg(target_os = "macos")]
+mod dock_badge;
 mod editors;
 mod hdr_display;
 #[cfg(target_os = "macos")]

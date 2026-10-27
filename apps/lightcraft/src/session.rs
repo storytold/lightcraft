@@ -155,6 +155,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         keep_awake: Some(keep_awake::service()),
         #[cfg(not(target_os = "macos"))]
         keep_awake: None,
+        // macOS: the number of running jobs on the Dock icon
+        #[cfg(target_os = "macos")]
+        dock_badge: Some(dock_badge::service()),
+        #[cfg(not(target_os = "macos"))]
+        dock_badge: None,
         pick_display_profile: Some(Box::new(|| {
             let mut d = file_dialog()
                 .set_title(lightcraft_ui_egui::i18n::tr("Choose Monitor Profile"))

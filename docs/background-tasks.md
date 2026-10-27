@@ -12,7 +12,10 @@ the face scan and the checks of recent libraries and of raw files; neither does 
 the host when that changes (`Services::keep_awake`), and the app holds an `NSProcessInfo` activity (user initiated,
 idle system sleep disabled) with that reason until the last job ends, is cancelled or the app quits.
 `pmset -g assertions` lists it. A new `kind` that is background housekeeping rather than something the person asked for
-goes in `holds_awake` in `activity.rs`.
+goes in `started_by_person` in `activity.rs`, which also decides what the Dock badge counts.
+
+On macOS the Dock icon carries a badge with the number of running jobs the person started (`Activity::running_jobs`,
+`Services::dock_badge`), cleared when none is left. A job that was asked to stop counts until it has stopped.
 
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
