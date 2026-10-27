@@ -113,13 +113,17 @@ fn scenario(n: usize, view: ViewMode, local: bool, frames: usize) {
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.thumb_size = 160.0;
-    h.settle(Duration::from_secs(120));
+    if !h.settle(Duration::from_secs(120)) {
+        eprintln!("did not settle within {:?}: {}", Duration::from_secs(120), h.busy_description());
+    }
     // to the middle of the grid (and let the newly visible thumbnails fail / settle)
     if let Some(mid) = h.app.session.visible().get(n / 2).copied() {
         h.app.session.selection.active = Some(mid);
         h.app.session.selection.ids = vec![mid];
     }
-    h.settle(Duration::from_secs(120));
+    if !h.settle(Duration::from_secs(120)) {
+        eprintln!("did not settle within {:?}: {}", Duration::from_secs(120), h.busy_description());
+    }
     let setup = t0.elapsed();
     let stats0 = h.app.caches.grid_stats.clone();
     let mut frame_ms = Vec::with_capacity(frames);

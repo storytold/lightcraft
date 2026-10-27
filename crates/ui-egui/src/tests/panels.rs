@@ -18,7 +18,7 @@ fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
@@ -159,13 +159,13 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
     let mut h = demo([1400.0, 900.0], json!({"view": "detail", "right": "edit", "leftPanel": true, "rightWidth": 480.0, "leftWidth": 400.0}));
     assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
     h.request("ui.resize", json!({"width": 1000.0, "height": 800.0}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.resize");
     let (left, right) = (widget(&h, "panel:left_panel"), widget(&h, "panel:right_panel"));
     assert!(right.left() - left.right() >= MIN_PHOTO_WIDTH - 1.0, "{left:?} {right:?}");
     // the chosen widths come back when the window does
     assert_eq!((h.app.ui.left_width, h.app.ui.right_width), (400.0, 480.0));
     h.request("ui.resize", json!({"width": 1400.0, "height": 900.0}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.resize");
     assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
 }
 
@@ -267,7 +267,7 @@ fn the_sidebar_draws_its_sections_as_arranged() {
     assert!(has(&h, "sidebarEmpty:folders") && !has(&h, "sidebarEmpty:keywords"));
     let r = h.request("ui.set", json!({"sidebar": [{"id": "keywords"}, {"id": "byDate", "hidden": true}, {"id": "albums"}]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let drawn = sections_drawn(&h);
     assert_eq!(listed(&drawn), ["keywords", "albums", "folders"], "{drawn:?}");
     assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("source:date:")), "a hidden section draws no rows");
@@ -721,7 +721,7 @@ fn the_header_of_a_long_section_stays_in_sight() {
     assert!(h.app.widgets.iter().any(|(w, r)| w == "icon:albumNew" && pinned.contains_rect(*r)), "with its buttons");
     // folded from the pinned header: Albums' own header is what the sidebar shows now
     click(&mut h, "sidebarSectionPinned:albums");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after click sidebarSectionPinned:albums");
     assert!(h.app.ui.sidebar_section_collapsed("albums"));
     assert!(!has(&h, "sidebarSectionPinned:albums"), "a folded section has no rows to pin its header over");
     let own = header(&h, "albums");
@@ -890,7 +890,7 @@ fn the_keywords_header_creates_a_keyword() {
     h.step();
     assert!(has(&h, "source:keyword:zebra crossing"), "the new keyword is listed");
     // the sidebar scrolls to it: it is listed last, below what the panel shows
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let (row, panel) = (widget(&h, "source:keyword:zebra crossing"), widget(&h, "panel:left_panel"));
     assert!(panel.contains_rect(row), "the new keyword is in sight: {row:?} in {panel:?}");
 }
@@ -1512,7 +1512,7 @@ fn folders_app_prepared(paths: &[&str], size: [f32; 2], services: Services, prep
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
@@ -1879,7 +1879,7 @@ fn show_in_folders_scrolls_the_folder_into_view() {
     let mut h = folders_app_sized(&refs, [1400.0, 500.0]);
     activate(&mut h, "/pics/f59/a.jpg");
     h.app.run("app.showInFolders", json!({})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.showInFolders");
     let row = widget(&h, "source:libfolder:/pics/f59");
     assert!(row.top() >= widget(&h, "sidebarTitle").bottom() && row.bottom() <= 500.0, "in view: {row:?}");
 }
@@ -2144,7 +2144,7 @@ fn narrow_chain_of_folders_app(deep: &str, size: [f32; 2]) -> Headless {
     }
     let last = format!("libraryFolderToggle:{}", levels[levels.len() - 1]);
     assert!(h.step_until(T, |h| has(h, &last)), "{last} is drawn");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     h
 }
 
@@ -2207,7 +2207,7 @@ fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
     // a wide panel has room for full steps again
     let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a wide panel indents by the full step");
     let xs = chevron_xs(&h, deep);
     assert!(xs.windows(2).all(|w| (w[1] - w[0] - full).abs() < 0.5), "{xs:?}");
@@ -2284,7 +2284,7 @@ fn widening_the_sidebar_shows_more_of_a_long_name() {
     let narrow = widget(&h, &id).width();
     let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h.step();
     assert!(widget(&h, &id).width() > narrow + 100.0, "a wider panel shows more of it");
 }
@@ -2349,7 +2349,7 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     let (row, key) = (format!("source:date:{year}"), "date");
     let r = h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "recentlyDeleted"}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.source");
     assert!(h.app.session.visible().is_empty(), "nothing deleted in the demo");
     let r = h.request("ui.clickWidget", json!({"id": row}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -2444,7 +2444,7 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
     assert_eq!(h.app.session.execute("faces.gpu", &json!({})).unwrap()["cpuOnly"], true);
     let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "faces"}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.settings");
     // (the first request switches the widget list on, the next frame fills it)
     h.request("ui.widgets", json!({}), T);
     h.step();
@@ -2495,7 +2495,7 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     std::fs::write(dir.join("a.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
     let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     let vis = h.app.session.visible_cloned();
     assert_eq!(vis.len(), 1, "{vis:?}");
     let local = vis[0];
@@ -2544,7 +2544,7 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     let row = widget(&h, &format!("source:album:{album}"));
     let r = h.request("ui.drag", json!({"x": thumb.center().x, "y": thumb.center().y, "toX": row.center().x, "toY": row.center().y, "steps": 12}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.drag");
     assert!(h.app.session.catalog.album(album_id).unwrap().photos.is_empty(), "nothing invisible was added");
     assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
@@ -2672,7 +2672,7 @@ fn an_album_menu_imports_into_that_album() {
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     // the demo's top-level album and album folder, both shown in the sidebar
     let id_of = |name: &str| h.app.session.catalog.albums().find(|a| a.name == name).map(|a| a.id.0).expect(name);
     let (album, folder) = (id_of("Garden"), id_of("Travel 2026"));

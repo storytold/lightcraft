@@ -18,7 +18,7 @@ fn click_at(h: &mut Headless, pos: egui::Pos2) {
     h.app.synthetic.push(egui::Event::PointerMoved(pos));
     h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
 }
 
 /// The white-balance selector picks the same point of the photo whichever view of a side-by-side
@@ -38,10 +38,10 @@ fn wb_selector_picks_the_same_point_in_the_before_view() {
         h.app.ui.before_after = mode;
         h.app.ui.zoom = zoom;
         h.app.ui.pan = Default::default();
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.pan");
         let r = h.request("engine.execute", json!({"command": "tool.wbPicker"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after tool.wbPicker");
         (h.app.image_rect.expect("After view on screen"), h.app.canvas_rect.expect("canvas"))
     };
     for mode in [BeforeAfter::SideBySide, BeforeAfter::TopBottom] {
@@ -86,7 +86,7 @@ fn a_click_in_the_before_view_zooms_in_on_the_point_clicked() {
         h.app.ui.before_after = mode;
         h.app.ui.zoom = Zoom::Fit;
         h.app.ui.pan = Default::default();
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.pan");
         (h.app.image_rect.expect("After view on screen"), h.app.canvas_rect.expect("canvas"))
     };
     for mode in [BeforeAfter::SideBySide, BeforeAfter::TopBottom] {
@@ -155,9 +155,9 @@ fn animation_view(mode: BeforeAfter, zoom: Zoom) -> AnimationView {
     h.app.ui.zoom = zoom;
     h.app.ui.pan = (0.5, 0.5);
     h.app.ui.click_zoom = 300;
-    assert!(h.settle(SETTLE), "the single photo's source and Main render settle");
+    h.settled(SETTLE, "the single photo's source and Main render settle");
     h.app.ui.before_after = mode;
-    assert!(h.settle(SETTLE), "both pane renders settled");
+    h.settled(SETTLE, "both pane renders settled");
     let before_id = h.app.renderer.textures[&Slot::Before].tex.id();
     let before = h
         .view
@@ -233,7 +233,7 @@ fn check_click_animation(mode: BeforeAfter) {
         }
     }
     open.set(true);
-    assert!(h.settle(SETTLE));
+    h.settled(SETTLE, "after opening the render gate");
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn check_region_animation(mode: BeforeAfter) {
     assert!((h.app.image_rect.expect("settled image").width() - start.width() * 2.0).abs() < 1.0);
     assert_eq!(keys.len(), 1, "region requests use the final target throughout the animation: {keys:?}");
     open.set(true);
-    assert!(h.settle(SETTLE));
+    h.settled(SETTLE, "after opening the render gate");
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn zoomed_in_the_after_side_shows_the_edits() {
         h.app.ui.zoom = zoom;
         // (far enough from the middle of the photo that, zoomed in, it is off screen)
         h.app.ui.pan = (0.25, 0.75);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.pan");
         h.paint()
     };
     for zoom in [Zoom::Fit, Zoom::Percent(100.0), Zoom::Percent(400.0)] {
@@ -379,11 +379,11 @@ fn show_original_does_not_light_the_before_after_button() {
     let id = h.app.session.visible_cloned()[2];
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
     h.app.ui.view = ViewMode::Detail;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.view");
     assert_eq!(h.request("engine.execute", json!({"command": "view.showOriginal"}), T)["ok"], true);
     assert_eq!(h.app.ui.before_after, BeforeAfter::Original);
     assert!(!h.app.ui.before_after.is_layout(), "the button is dark while the original is shown");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.showOriginal");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:beforeAfter"}), T)["ok"], true);
     assert_eq!(h.app.ui.before_after, BeforeAfter::SideBySide, "a click on the dark button opens the layout");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:beforeAfter"}), T)["ok"], true);

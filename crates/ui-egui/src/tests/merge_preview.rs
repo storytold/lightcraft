@@ -21,7 +21,7 @@ fn click_at(h: &mut Headless, pos: egui::Pos2) {
     h.app.synthetic.push(egui::Event::PointerMoved(pos));
     press(h, pos, true);
     press(h, pos, false);
-    h.settle(T);
+    h.settled(T, "after the injected input");
 }
 
 #[test]
@@ -40,10 +40,10 @@ fn a_click_on_the_merge_preview_zooms_in_and_a_drag_pans() {
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
     session.execute("library.select", &json!({"ids": ids})).unwrap();
     let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     crate::merge::open(&mut h.app, "merge.hdr").unwrap();
     assert!(h.step_until(T, |h| h.app.merge.preview.is_some() && h.app.merge.preview_task.is_none()), "the preview rendered");
-    h.settle(T);
+    h.settled(T, "the UI");
     assert_eq!(h.app.merge.zoom, None, "the preview opens fitted");
 
     let area = rect(&h, "merge.preview");
@@ -64,7 +64,7 @@ fn a_click_on_the_merge_preview_zooms_in_and_a_drag_pans() {
         h.step();
     }
     press(&mut h, to, false);
-    h.settle(T);
+    h.settled(T, "after press");
     let (u2, v2) = h.app.merge.zoom.expect("still zoomed in after a drag");
     assert!(u2 > u + 0.01 && (v2 - v).abs() < 1e-3, "the drag panned right ({u}, {v}) → ({u2}, {v2})");
 

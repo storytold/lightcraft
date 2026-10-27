@@ -38,7 +38,7 @@ fn detail_with_focus(f: Option<FocusPoint>) -> (Headless, PhotoId) {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.set", json!({"view": "detail", "right": "info"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     (h, id)
 }
 
@@ -49,7 +49,7 @@ fn widget(h: &Headless, id: &str) -> Option<egui::Rect> {
 fn run(h: &mut Headless, cmd: &str, params: serde_json::Value) -> serde_json::Value {
     let r = h.request("engine.execute", json!({"command": cmd, "params": params}), T);
     assert_eq!(r["ok"], true, "{cmd}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after engine.execute");
     r["result"].clone()
 }
 
@@ -87,7 +87,7 @@ fn toggle_zoom_centres_on_the_focus_point() {
     assert_eq!(h.app.ui.zoom, Zoom::Fit);
     let r = h.request("ui.key", json!({"key": "z"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key z");
     assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "{:?}", h.app.ui.zoom);
     let (u, v) = h.app.ui.pan;
     assert!((u - 0.72).abs() < 1e-3 && (v - 0.23).abs() < 1e-3, "pan {u} {v}");

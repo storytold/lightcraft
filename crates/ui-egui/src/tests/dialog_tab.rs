@@ -16,7 +16,7 @@ fn demo_with_selection() -> Headless {
     let mut session = lightcraft_engine::Session::with_demo();
     session.selection.ids = session.catalog.photos().take(2).map(|p| p.id).collect();
     let mut h = Headless::new(LightcraftApp::new(session, Services::default()), [1400.0, 900.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     h
 }
 
@@ -105,7 +105,7 @@ fn the_name_still_takes_typing_and_enter_after_opening() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     key(&mut h, json!({"key": "Enter"}));
-    h.settle(T);
+    h.settled(T, "after key Enter");
     assert!(h.app.ui.dialog.is_none(), "Enter confirmed the dialog");
     assert!(h.app.session.catalog.albums().any(|a| a.name == "Holiday"), "the typed name made the album");
 }
@@ -134,7 +134,7 @@ fn a_click_on_a_check_box_leaves_return_confirming_the_name() {
     h.step();
     h.step();
     key(&mut h, json!({"key": "Enter"}));
-    h.settle(T);
+    h.settled(T, "after key Enter");
     assert!(h.app.ui.dialog.is_none(), "Enter confirmed the dialog after the click");
     assert!(h.app.session.catalog.albums().any(|a| a.name == "Trip"));
 }
