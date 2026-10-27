@@ -388,22 +388,47 @@ impl Headless {
         }
     }
 
+    /// What is still in progress, as `(what, how many)` with 0 for idle: renders, file-system
+    /// checks the sidebar waits for, background work, queued input. [`Self::busy`] and
+    /// [`Self::busy_description`] both read it, so they can't drift apart.
+    fn busy_counts(&self) -> [(&'static str, usize); 13] {
+        [
+            ("renders in flight", self.app.renderer.in_flight()),
+            ("file-system checks", crate::panels::left::fs_cached_running(&self.view.ctx)),
+            ("merge", usize::from(self.app.merge.busy())),
+            ("folder scan", usize::from(self.app.scan.is_some())),
+            ("sync", usize::from(self.app.sync.is_some())),
+            ("sync run", usize::from(self.app.sync_run.is_some())),
+            ("import", usize::from(self.app.import.is_some())),
+            ("export", usize::from(self.app.export.is_some())),
+            ("AI denoise", usize::from(self.app.session.denoise_busy())),
+            ("background tasks", usize::from(!self.app.tasks.is_empty())),
+            ("synthetic input events", self.app.synthetic.len()),
+            ("pending gestures", self.app.pending_gestures.len()),
+            ("queued input events", self.events.len()),
+        ]
+    }
+
     /// Is anything still in progress (renders, file-system checks the sidebar waits for, queued
     /// input)?
     pub fn busy(&self) -> bool {
-        self.app.renderer.in_flight() > 0
-            || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
-            || self.app.merge.busy()
-            || self.app.scan.is_some()
-            || self.app.sync.is_some()
-            || self.app.sync_run.is_some()
-            || self.app.import.is_some()
-            || self.app.export.is_some()
-            || self.app.session.denoise_busy()
-            || !self.app.tasks.is_empty()
-            || !self.app.synthetic.is_empty()
-            || !self.app.pending_gestures.is_empty()
-            || !self.events.is_empty()
+        self.busy_counts().iter().any(|&(_, n)| n > 0)
+    }
+
+    /// What keeps the session [`Self::busy`], for a person reading a timeout: for example
+    /// `renders in flight: 2, background tasks: [Import]`, or `nothing` when idle.
+    pub fn busy_description(&self) -> String {
+        let parts: Vec<String> = self
+            .busy_counts()
+            .iter()
+            .filter(|&&(_, n)| n > 0)
+            .map(|&(what, n)| match what {
+                "background tasks" => format!("{what}: {:?}", self.app.tasks.labels()),
+                _ if n == 1 => what.to_string(),
+                _ => format!("{what}: {n}"),
+            })
+            .collect();
+        if parts.is_empty() { "nothing".to_string() } else { parts.join(", ") }
     }
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
@@ -429,6 +454,17 @@ impl Headless {
         }
     }
 
+    /// [`Self::settle`], for tests: a timeout fails the test there and then, saying what it waited
+    /// for (`what`), where (the caller's line) and what was still busy, instead of carrying on with
+    /// an unsettled app and failing later at an unrelated assertion (issue #3063).
+    #[cfg(test)]
+    #[track_caller]
+    pub(crate) fn settled(&mut self, timeout: Duration, what: &str) {
+        if !self.settle(timeout) {
+            panic!("did not settle within {timeout:?} ({what}); still busy: {}", self.busy_description());
+        }
+    }
+
     /// Run frames until `done` holds or `timeout` passes (a render that finishes on a busy machine
     /// after a quiet spell, where [`Self::settle`] alone would stop too early). Returns `done`.
     pub fn step_until(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
@@ -448,9 +484,11 @@ impl Headless {
         self.view.paint(&HashMap::new())
     }
 
-    /// Settle, then render the current UI.
+    /// Settle, then render the current UI. A timeout still paints: the picture shows whatever is
+    /// on screen by then (a placeholder for a render that never finished), which is what a
+    /// snapshot of a stuck app should show.
     pub fn snapshot(&mut self, timeout: Duration) -> ColorImage {
-        self.settle(timeout);
+        let _ = self.settle(timeout);
         self.paint()
     }
 

@@ -281,6 +281,43 @@ fn demo(size: [f32; 2]) -> Headless {
     Headless::new(app, size, 1.0)
 }
 
+/// An empty session with a background task that runs until `release` is dropped.
+fn stuck(release: &mut Option<std::sync::mpsc::Sender<()>>) -> Headless {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default()), [640.0, 480.0], 1.0);
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    *release = Some(tx);
+    let started = crate::tasks::spawn(&mut h.app, "stuck", None, move || rx.recv().is_ok(), |_, _, _| {});
+    assert_eq!(started, Ok(()));
+    h
+}
+
+/// A settle that times out fails the test at once and says what it waited for and what was
+/// still busy (issue #3063), instead of letting the test carry on with an unsettled app.
+#[test]
+fn settled_fails_with_what_is_still_busy() {
+    let mut release = None;
+    let mut h = stuck(&mut release);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.settled(Duration::from_millis(200), "the stuck task")));
+    let message = failed.expect_err("a task that never ends can't settle");
+    let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.starts_with("did not settle within 200ms (the stuck task); still busy: "), "{message}");
+    assert!(message.contains("background tasks: [\"stuck\"]"), "{message}");
+}
+
+/// The description lists what `busy` reads, and an idle session says so and settles.
+#[test]
+fn busy_description_names_pending_work() {
+    let mut release = None;
+    let mut h = stuck(&mut release);
+    h.events.push(egui::Event::PointerGone);
+    assert!(h.busy());
+    assert_eq!(h.busy_description(), "background tasks: [\"stuck\"], queued input events");
+    drop(release.take());
+    h.settled(SETTLE, "the released task");
+    assert!(!h.busy());
+    assert_eq!(h.busy_description(), "nothing");
+}
+
 /// Agents cut, copy and paste in a text field as the system does for ⌘X / ⌘C / ⌘V
 /// (`ui.clipboard`), and `ui.inspect` → `copied` says what the UI last copied.
 #[test]
