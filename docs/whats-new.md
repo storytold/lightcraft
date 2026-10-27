@@ -293,6 +293,11 @@
 
 ## 2026-10-15
 
+### XMP sidecars and imports on an SMB share (macOS)
+- On a Mac, XMP sidecars weren't written next to photos on an SMB share, and an import that copies photos to a share
+  imported nothing ("Operation not supported"). These writes now fall back to a plain flush there, as the library's own
+  files do (issue #1407). Moving photos to a share, sidecar backups and slideshow exports get the same fix.
+
 ### Photo Merge takes each photo once
 - A merge that names the same photo more than once (through `ids` on the control channel, MCP or the CLI) now merges
   it once (issue #1947). Naming one photo three times no longer "merges" it with itself, and a long repeated list no

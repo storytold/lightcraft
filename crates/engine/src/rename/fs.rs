@@ -145,7 +145,7 @@ impl MoveFs for RealFs {
             let mut from = std::fs::File::open(a)?;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
             std::io::copy(&mut from, &mut f)?;
-            f.sync_all()
+            lightcraft_catalog::safe_file::sync_file(&f, false)
         })();
         let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));
         if placed.is_err() {

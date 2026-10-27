@@ -314,7 +314,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
         if injected(Fault::Corrupt) {
             out.write_all(b"!")?;
         }
-        out.sync_all()?;
+        lightcraft_catalog::safe_file::sync_file(&out, false)?;
         if let Ok(m) = fs::metadata(src).and_then(|m| m.modified()) {
             let _ = out.set_modified(m);
         }

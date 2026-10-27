@@ -437,7 +437,7 @@ fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&b) {
             Ok(mut f) => {
                 f.write_all(&bytes)?;
-                f.sync_all()?;
+                lightcraft_catalog::safe_file::sync_file(&f, false)?;
                 return Ok(b);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -1062,6 +1062,30 @@ mod tests {
             &mut v,
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+    }
+
+    /// Photos on an SMB share mounted by macOS (issue #1407), where the full flush fails with
+    /// ENOTSUP: an import copy, a move to another volume and a sidecar backup flush with a plain
+    /// `fsync` instead of failing.
+    #[test]
+    fn durable_writes_reach_a_share_without_a_full_flush() {
+        use crate::rename::MoveFs;
+        use lightcraft_catalog::safe_file::{full_sync_unsupported, plain_fsyncs_on_this_thread};
+        let d = crate::tests_xmp::temp_dir("no-full-flush");
+        let src = d.join("DSC_0001.NEF");
+        std::fs::write(&src, b"raw bytes").unwrap();
+        let before = plain_fsyncs_on_this_thread();
+        {
+            let _smb = full_sync_unsupported();
+            crate::import_move::copy_verified(&src, &d.join("imported.NEF"), None).unwrap();
+            crate::rename::RealFs.copy_no_replace(&src, &d.join("moved.NEF")).unwrap();
+            let b = backup(&src, "20261015").unwrap();
+            assert_eq!(std::fs::read(b).unwrap(), b"raw bytes");
+        }
+        assert_eq!(plain_fsyncs_on_this_thread() - before, 3, "each write falls back to fsync");
+        assert_eq!(std::fs::read(d.join("imported.NEF")).unwrap(), b"raw bytes");
+        assert_eq!(std::fs::read(d.join("moved.NEF")).unwrap(), b"raw bytes");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
 

@@ -3,9 +3,9 @@ name = "lightcraft-sysmem"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft sysmem (L0): returns freed allocator memory to the OS. The workspace's only crate allowed `unsafe` (one FFI call)."
+description = "LightCraft sysmem (L0): returns freed allocator memory to the OS, and a plain fsync on macOS. The workspace's only crate allowed `unsafe` (two FFI calls)."
 
-# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the single FFI
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the FFI
 # module below; every other crate root has `#![forbid(unsafe_code)]`. See AGENTS.md and craftrules
 # standards/never-crash.md ("isolated helper library crate").
 [lints.rust]

@@ -12,6 +12,7 @@ workspace = true
 lightcraft-develop = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-raw = { workspace = true }
+lightcraft-sysmem = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

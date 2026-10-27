@@ -24,6 +24,9 @@
 //!   links, an exclusive create that claims the name, then a rename over that placeholder).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
+//! - [`sync_file`] flushes a file to disk, with a plain `fsync` where the volume refuses the full
+//!   flush (an SMB share mounted by macOS, issue #1407). Every durable write goes through it: the
+//!   ones here, the catalog's and the engine's own (import copies, moves, sidecar backups).
 
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
@@ -34,6 +37,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 thread_local! {
     static FAIL_AFTER: Cell<Option<u64>> = const { Cell::new(None) };
     static SYNCS: Cell<u64> = const { Cell::new(0) };
+    static NO_FULL_SYNC: Cell<bool> = const { Cell::new(false) };
+    static PLAIN_FSYNCS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// How many file and folder syncs this module made **on the calling thread** (for tests: a
@@ -43,9 +48,65 @@ pub fn syncs_on_this_thread() -> u64 {
     SYNCS.with(Cell::get)
 }
 
-fn sync_file(f: &File) -> io::Result<()> {
+fn counted_sync(f: &File) -> io::Result<()> {
     SYNCS.with(|c| c.set(c.get() + 1));
-    f.sync_all()
+    sync_file(f, false)
+}
+
+/// Flush a file to disk: `sync_all`, or `sync_data` when `data_only`.
+///
+/// On macOS both are `F_FULLFSYNC`, which an SMB share refuses with ENOTSUP (issue #1407) while a
+/// plain `fsync` works there: that is the fallback. If it fails too, the write fails.
+pub fn sync_file(f: &File, data_only: bool) -> io::Result<()> {
+    let r = if NO_FULL_SYNC.with(Cell::get) {
+        Err(enotsup())
+    } else if data_only {
+        f.sync_data()
+    } else {
+        f.sync_all()
+    };
+    match r {
+        Err(e) if flush_unsupported(&e) => {
+            PLAIN_FSYNCS.with(|c| c.set(c.get() + 1));
+            lightcraft_sysmem::fsync(f)
+        }
+        r => r,
+    }
+}
+
+/// The volume can't flush a file to disk (ENOTSUP on macOS, `Unsupported` elsewhere).
+fn flush_unsupported(e: &io::Error) -> bool {
+    const ENOTSUP: i32 = 45;
+    e.kind() == io::ErrorKind::Unsupported || (cfg!(target_vendor = "apple") && e.raw_os_error() == Some(ENOTSUP))
+}
+
+/// What a volume without a full flush answers (macOS: ENOTSUP, os error 45, from `F_FULLFSYNC`).
+fn enotsup() -> io::Error {
+    if cfg!(target_vendor = "apple") { io::Error::from_raw_os_error(45) } else { io::Error::from(io::ErrorKind::Unsupported) }
+}
+
+/// How many plain `fsync` fallbacks [`sync_file`] made **on the calling thread** (for tests).
+#[doc(hidden)]
+pub fn plain_fsyncs_on_this_thread() -> u64 {
+    PLAIN_FSYNCS.with(Cell::get)
+}
+
+/// For tests (in any crate): while the guard lives, every full flush [`sync_file`] asks for on
+/// the calling thread fails as on an SMB share mounted by macOS (issue #1407).
+#[doc(hidden)]
+pub fn full_sync_unsupported() -> NoFullSync {
+    NO_FULL_SYNC.with(|c| c.set(true));
+    NoFullSync(())
+}
+
+/// Ends a [`full_sync_unsupported`] when dropped.
+#[doc(hidden)]
+pub struct NoFullSync(());
+
+impl Drop for NoFullSync {
+    fn drop(&mut self) {
+        NO_FULL_SYNC.with(|c| c.set(false));
+    }
 }
 
 /// Fault injection for tests (in any crate): while the returned guard lives, every write made by
@@ -103,7 +164,7 @@ fn parent_of(path: &Path) -> &Path {
 /// where NTFS journals the rename itself, so errors are ignored.
 pub fn sync_dir(dir: &Path) {
     if let Ok(d) = File::open(dir) {
-        let _ = sync_file(&d);
+        let _ = counted_sync(&d);
     }
 }
 
@@ -137,7 +198,7 @@ fn write_temp(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> i
         let n = w.n;
         let f = w.inner.into_inner().map_err(|e| e.into_error())?;
         if sync {
-            sync_file(&f)?;
+            counted_sync(&f)?;
         }
         Ok(n)
     })();
@@ -302,6 +363,25 @@ mod tests {
         let mut v: Vec<String> = fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         v.sort();
         v
+    }
+
+    /// A sidecar or a DNG on an SMB share mounted by macOS (issue #1407), where the full flush
+    /// fails with ENOTSUP: the file and its folder are flushed with a plain `fsync` instead, and
+    /// any other failure is still one.
+    #[test]
+    fn durable_writes_fall_back_to_fsync_without_a_full_flush() {
+        let d = temp("no-full-flush");
+        let before = plain_fsyncs_on_this_thread();
+        {
+            let _smb = full_sync_unsupported();
+            write_atomic(&d.join("DSC_0001.xmp"), b"<x/>").unwrap();
+        }
+        assert_eq!(plain_fsyncs_on_this_thread() - before, 2, "the file and its folder");
+        assert_eq!(names(&d), vec!["DSC_0001.xmp"]);
+        assert!(flush_unsupported(&enotsup()));
+        assert!(!flush_unsupported(&io::Error::from(io::ErrorKind::StorageFull)));
+        assert!(!flush_unsupported(&io::Error::from_raw_os_error(5)), "an I/O error is still one");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -6,8 +6,12 @@
 //! everything ever decoded. `malloc_zone_pressure_relief` (libSystem) returns those pages now.
 //! Elsewhere (glibc, Windows) blocks this large are unmapped when freed: nothing to do.
 //!
-//! This is LightCraft's only crate allowed `unsafe` (one FFI call, in `macos`). Its API is safe,
-//! and on failure or on other platforms it simply releases nothing.
+//! [`fsync`] is the plain POSIX `fsync`, which std doesn't offer on macOS: there `File::sync_all`
+//! and `sync_data` are `F_FULLFSYNC`, which SMB shares refuse with ENOTSUP while `fsync` works
+//! (issue #1407).
+//!
+//! This is LightCraft's only crate allowed `unsafe` (two FFI calls, in `macos`). Its API is safe;
+//! on failure or on other platforms `release_free_memory` simply releases nothing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 /// Return free allocator pages to the system. Returns the number of bytes released (always 0 on
@@ -24,10 +28,28 @@ pub fn release_free_memory() -> usize {
     }
 }
 
+/// Flush `file` to the storage device with a plain `fsync`. On macOS that is the libSystem call
+/// (std's `sync_all` is `F_FULLFSYNC`, which some volumes refuse); elsewhere it is `sync_all`.
+pub fn fsync(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::fsync(file)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        file.sync_all()
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos {
+    use std::os::fd::AsRawFd;
+
     unsafe extern "C" {
+        /// libSystem (unistd.h): flush the open file `fd` to the device. 0, or -1 and `errno`.
+        #[link_name = "fsync"]
+        fn c_fsync(fd: std::ffi::c_int) -> std::ffi::c_int;
         /// libSystem malloc: release free memory of `zone` (all zones when null) back to the
         /// system, up to `goal` bytes (0 = as much as possible). Returns the bytes released.
         fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
@@ -40,6 +62,20 @@ mod macos {
         // memory we own, takes no pointers we must keep alive, and has no failure mode beyond
         // releasing 0 bytes.
         unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) }
+    }
+
+    pub fn fsync(file: &std::fs::File) -> std::io::Result<()> {
+        loop {
+            // SAFETY: `fsync` (libSystem, unistd.h) takes a file descriptor by value and touches no
+            // memory of ours. The descriptor is open for the whole call: `file` is borrowed.
+            if unsafe { c_fsync(file.as_raw_fd()) } == 0 {
+                return Ok(());
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(e);
+            }
+        }
     }
 }
 
@@ -68,6 +104,21 @@ mod tests {
         // The allocator must still work normally afterwards.
         let again = vec![7u8; 16 << 20];
         assert_eq!(again[again.len() - 1], 7);
+    }
+
+    #[test]
+    fn fsync_flushes_an_open_file_and_reports_errors() {
+        use std::io::Write;
+        let p = std::env::temp_dir().join(format!("lc-sysmem-fsync-{}", std::process::id()));
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(b"data").unwrap();
+        super::fsync(&f).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"data");
+        let _ = std::fs::remove_file(&p);
+        // a directory opened read-only can be synced too; what fails is an error, not a panic
+        if let Ok(d) = std::fs::File::open(std::env::temp_dir()) {
+            let _ = super::fsync(&d);
+        }
     }
 
     #[test]
