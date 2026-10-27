@@ -22,6 +22,8 @@
 //!   and sync, plus a read-back check, and the file then appears under its final name **without
 //!   replacing anything** (a hard link, which fails on a taken name; where the volume has no hard
 //!   links, an exclusive create that claims the name, then a rename over that placeholder).
+//!   [`publish_new`] is that last step on its own, for a writer with its own temp file (the
+//!   Lightroom recovery archive).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   volume serial number + file index on Windows,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
@@ -35,6 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 thread_local! {
     static FAIL_AFTER: Cell<Option<u64>> = const { Cell::new(None) };
     static SYNCS: Cell<u64> = const { Cell::new(0) };
+    static NO_HARD_LINKS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// How many file and folder syncs this module made **on the calling thread** (for tests: a
@@ -65,6 +68,25 @@ pub struct FaultGuard(());
 impl Drop for FaultGuard {
     fn drop(&mut self) {
         FAIL_AFTER.with(|c| c.set(None));
+    }
+}
+
+/// Fault injection for tests (in any crate): while the returned guard lives, [`publish_new`]
+/// **on the calling thread** acts as on a volume without hard links (FAT/exFAT, some shares), so
+/// it takes the exclusive-create + rename fallback. Product code never calls it.
+#[doc(hidden)]
+pub fn without_hard_links() -> NoHardLinksGuard {
+    NO_HARD_LINKS.with(|c| c.set(true));
+    NoHardLinksGuard(())
+}
+
+/// Ends a [`without_hard_links`] when dropped.
+#[doc(hidden)]
+pub struct NoHardLinksGuard(());
+
+impl Drop for NoHardLinksGuard {
+    fn drop(&mut self) {
+        NO_HARD_LINKS.with(|c| c.set(false));
     }
 }
 
@@ -222,9 +244,12 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
     r
 }
 
-/// Give the complete temp file `tmp` the name `path`, unless that is taken.
-fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
-    match fs::hard_link(tmp, path) {
+/// Give the complete temp file `tmp` (in the same folder) the name `path`, unless that is taken
+/// (`AlreadyExists`): a hard link, or where the volume has none, [`publish_new_by_rename`]. After
+/// a hard link `tmp` is a second name of the file; after the fallback it is gone.
+pub fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
+    let linked = if NO_HARD_LINKS.with(Cell::get) { Err(io::Error::from(io::ErrorKind::Unsupported)) } else { fs::hard_link(tmp, path) };
+    match linked {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
         // no hard links on this volume (FAT/exFAT, some shares)
