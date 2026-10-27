@@ -258,6 +258,7 @@
   "{count} more warnings.": "Altri avvisi: {count}.",
   "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} foto del catalogo sono in Eliminate di recente di questa libreria e vi restano; ripristinale da Eliminate di recente per vederle.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} immagini del catalogo non sono state importate perché i loro record nel catalogo sono incompleti.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "{skipped} immagini del catalogo non sono state importate perché i loro record nel catalogo ne contraddicono altri (un ID immagine ripetuto o una copia virtuale di una copia virtuale).",
   "· {in_source} identical copies": "· copie identiche: {in_source}",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Unione {what} aggiunta a {mp}, la dimensione massima di un panorama (la dimensione piena è {full})",
   "{n} preset{}": "Preset: {n}{:.0}",
