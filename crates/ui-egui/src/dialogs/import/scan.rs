@@ -195,7 +195,14 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     if out.candidates.is_empty() {
-        app.toast(ctx, crate::i18n::tr("No photos found"));
+        // (what the scan left out is said here too: a scan that found no photos may have had folders it
+        // could not read, or files that are not photos, and the note is the same one the review shows)
+        let left_out = ImportDialog { scan_limited: out.truncated, unreadable: out.unreadable, unsupported: out.unsupported, ..Default::default() };
+        let text = match super::scan_note(&left_out) {
+            Some(note) => format!("{} · {note}", crate::i18n::tr("No photos found")),
+            None => crate::i18n::tr("No photos found").to_string(),
+        };
+        app.toast(ctx, text);
         return;
     }
     app.renderer.forget_imports();
