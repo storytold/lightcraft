@@ -36,6 +36,12 @@ fn cancelled() -> crate::EngineError {
 /// (one per unreadable record) can be many.
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
     let Some(dir) = archive_dir else { return Ok(None) };
+    // A linked `Interop` folder would take the import index outside the library. Refuse it here,
+    // before anything is imported, rather than import the photos and then fail at the index.
+    if dir.symlink_metadata().is_ok() {
+        crate::lightroom_archive::require_real_directory(dir)
+            .map_err(|e| crate::EngineError::Other(format!("cannot import into this library: {e}")))?;
+    }
     match crate::lightroom_archive::store_best_effort(dir, data) {
         Ok(Some(path)) => Ok(Some(path)),
         Ok(None) => {
@@ -589,7 +595,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let interop = dir.join("Interop");
-        std::fs::write(&interop, b"a file where the folder belongs").unwrap();
+        std::fs::create_dir_all(&interop).unwrap();
+        // one more entry than the archive scans (`MAX_SCAN`)
+        for i in 0..=1024 {
+            std::fs::write(interop.join(format!("other-{i}")), b"").unwrap();
+        }
         let mut data = empty_data();
         // more catalog warnings than the result window lists: the archive's must still be seen
         data.warnings = (0..10).map(|i| format!("record {i}: unreadable XMP")).collect();
@@ -625,10 +635,10 @@ mod tests {
         let e = LightroomArchiveFinalization { path: Some(path), bytes: Some(b"{}".to_vec()) }.finish().unwrap_err();
         assert!(e.to_string().contains("is a link or a file, not a folder"), "{e}");
         assert_eq!(std::fs::read(outside.join("lightroom-index.json")).unwrap(), b"not ours");
-        // the archive gives way with a warning, so the import goes on to this write: both refuse the link
+        // preparation refuses the link before anything is imported
         let mut data = empty_data();
-        assert_eq!(stage_archive(Some(&library.join("Interop")), &mut data).unwrap(), None);
-        assert!(data.warnings[0].contains("is a link or a file, not a folder"), "{}", data.warnings[0]);
+        let e = stage_archive(Some(&library.join("Interop")), &mut data).unwrap_err();
+        assert!(e.to_string().contains("is a link or a file, not a folder"), "{e}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
