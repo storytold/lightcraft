@@ -2,6 +2,15 @@
 
 ## 2026-10-30
 
+### A Lightroom catalog import says where every photo went
+- When a catalog import finishes, the message counts the catalog's photos (virtual copies included) and how many
+  were added, and also how many were already in the library, are in Recently Deleted, aren't a file type LightCraft
+  reads, have paths it doesn't open, or have incomplete catalog records, when there are any. The result window gives
+  each of these its own line, and the lines add up to the catalog's photos. Before, it gave only the photos added, so
+  an import of a large catalog seemed to lose photos, and re-importing one already in the library seemed to do
+  nothing. Photos on another computer or a device are no longer reported as missing originals for Find Missing
+  Photos, which had no record to relink them to.
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 
