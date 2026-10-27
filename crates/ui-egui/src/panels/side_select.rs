@@ -621,7 +621,9 @@ pub(crate) fn keyword_clip_items(app: &mut LightcraftApp, ui: &mut egui::Ui, key
 /// step. Only there while keywords are held, and not on one of them.
 pub(crate) fn keyword_paste_item(app: &mut LightcraftApp, ui: &mut egui::Ui, parent: &str) {
     let Some(SideClip::Keywords { keywords }) = app.ui.side.clip.clone() else { return };
-    let keywords: Vec<String> = keywords.into_iter().filter(|k| app.session.catalog.has_keyword(k)).collect();
+    // the cached tree, once per change to the library: never a pass over the photos per frame
+    let tree = app.caches.keyword_tree(&app.session.catalog);
+    let keywords: Vec<String> = keywords.into_iter().filter(|k| super::keyword_list::in_tree(&tree, k)).collect();
     if keywords.is_empty() {
         // every keyword held is gone (deleted, merged away): nothing to paste
         app.ui.side.clip = None;
