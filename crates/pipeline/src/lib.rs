@@ -398,6 +398,8 @@ pub struct Plan<'a> {
     pub eyes: Vec<redeye::EyeK>,
     /// The whole frame's dehaze airlight, for a windowed render (which can't see the whole frame).
     pub fixed_air: Option<f32>,
+    /// The luminance NR guide's floor, measured on the whole frame ([`local::frame_nr_floor`]) when luminance NR is on.
+    pub nr_floor: Option<f32>,
     /// A windowed render works on a larger window when spots reach into it (see
     /// [`spots::window_for_reads`]); this is the requested window inside the rendered one, which
     /// the result is cut to.
@@ -432,6 +434,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let px_per_long = frame.px_per_long(full_w);
     let mut fixed_air = None;
     let mut keep = None;
+    let full_frame = frame.clone();
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
@@ -453,6 +456,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // (an original reported smaller than the source is the source)
     let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
+    // the same for the whole frame and any window into it
+    let nr_floor = local::nr_params(s, detail_scale).0.map(|_| local::frame_nr_floor(src, info, s, &full_frame, full_w, full_h));
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
@@ -473,7 +478,23 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        detail_scale,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        nr_floor,
+        keep,
+        mattes: info.mattes.clone(),
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -592,7 +613,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             lin_cpu(&mut img, info, &plan);
-            local::denoise(&mut img, s, detail_scale);
+            local::denoise(&mut img, s, detail_scale, plan.nr_floor);
             Arc::new(img)
         }
     };

@@ -22,20 +22,6 @@ fn log_lum_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroup
     dst[i] = log_lum(rgb_a(i));
 }
 
-// `local::nr_guide_diffs` (a: image): |Y(x + 1) - Y(x)| of every P[2]-th horizontal neighbour pair, the pairs
-// counted row by row (P[1] - 1 per row, P[1] = width). P[0] = output count.
-@compute @workgroup_size(256)
-fn lum_diff_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
-    let k = lin_index(g, nw);
-    if (k >= pu(0u)) {
-        return;
-    }
-    let j = k * pu(2u);
-    let q = pu(1u) - 1u;
-    let i = (j / q) * pu(1u) + j % q;
-    dst[k] = abs(lum2020(rgb_a(i + 1u)) - lum2020(rgb_a(i)));
-}
-
 // `local::nr_guide`: log-luminance floored at P[1] (the luminance NR guide, #840).
 @compute @workgroup_size(256)
 fn log_lum_floor_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {

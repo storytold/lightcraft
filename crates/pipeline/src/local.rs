@@ -468,23 +468,24 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
 /// log-luminance, colour by a luminance-weighted blur (blur(rgb) / blur(Y)) re-applied at the original luminance.
-/// `scale`: output pixels per pixel of the original ([`nr_params`]).
-pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
+/// `scale`: output pixels per pixel of the original ([`nr_params`]). `floor`: the luminance guide's floor, the
+/// whole frame's ([`frame_nr_floor`]); `None` measures it on `img` ([`nr_floor_of`]).
+pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, floor: Option<f32>) {
     let (lum, col) = nr_params(s, scale);
-    apply_nr(img, lum, col);
+    apply_nr(img, lum, col, floor);
     // The image is signed up to here (`wb_gain`): later stages take it non-negative, as before (#840).
     clamp_negative(img);
 }
 
 /// Noise reduction with explicit parameters (see [`denoise`]).
-pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
+pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>, floor: Option<f32>) {
     let w = img.width;
     if let Some(nr) = lum {
         let _t = crate::profiling().then(std::time::Instant::now);
         // The guide is the log-luminance floored at the image's luminance noise (#840): signed noise near black would
         // put Y <= 0 at log's floor, and those outliers stiffen the guided filter (less smoothing). A floor at the
         // noise sigma also keeps the clipped tail of positive noise from doing the same in the deep shadows.
-        let l = nr_guide(img);
+        let l = nr_guide(img, floor.unwrap_or_else(|| nr_floor_of(img)));
         let f = guided(&l, nr.sigma, nr.eps);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
@@ -522,23 +523,44 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     }
 }
 
-/// The luminance NR guide: log-luminance floored at the luminance noise sigma ([`nr_guide_floor`]).
-fn nr_guide(img: &Rgb32f) -> Plane {
-    let y = img.map(luminance_2020);
-    let floor = nr_guide_floor(nr_guide_diffs(&y.data, img.width));
-    y.map(|v| (v.max(floor) / crate::tone::GREY).log2())
+/// The luminance NR guide: log-luminance floored at `floor`, the luminance noise sigma ([`nr_guide_floor`]).
+fn nr_guide(img: &Rgb32f, floor: f32) -> Plane {
+    img.map(luminance_2020).map(|v| (v.max(floor) / crate::tone::GREY).log2())
 }
 
-/// The luminance NR guide samples every `NR_FLOOR_STEP`-th horizontal neighbour pair for its noise floor.
-pub const NR_FLOOR_STEP: usize = 7;
+/// The luminance NR floor is measured on at most this many evenly spaced rows of the output frame: the same rows
+/// whether the render is of the whole frame or of a window into it ([`frame_nr_floor`]).
+pub const NR_FLOOR_ROWS: usize = 48;
 
-/// |Y(x + 1) - Y(x)| of every [`NR_FLOOR_STEP`]-th horizontal neighbour pair of a `w`-wide plane, counting the
-/// pairs row by row (`w - 1` per row).
-fn nr_guide_diffs(y: &[f32], w: usize) -> Vec<f32> {
-    if w < 2 {
-        return Vec::new();
-    }
-    y.chunks(w).flat_map(|r| r.windows(2).map(|p| (p[1] - p[0]).abs())).step_by(NR_FLOOR_STEP).collect()
+/// The rows of an `h`-tall frame the floor is measured on.
+pub fn nr_floor_rows(h: usize) -> Vec<usize> {
+    if h <= NR_FLOOR_ROWS { (0..h).collect() } else { (0..NR_FLOOR_ROWS).map(|i| (2 * i + 1) * h / (2 * NR_FLOOR_ROWS)).collect() }
+}
+
+/// |Y(x + 1) - Y(x)| of each horizontal neighbour pair of an image row.
+fn row_diffs(row: &[[f32; 3]]) -> impl Iterator<Item = f32> + '_ {
+    row.windows(2).map(|p| (luminance_2020(p[1]) - luminance_2020(p[0])).abs())
+}
+
+/// The floor of `img`'s luminance NR guide, measured on its own rows ([`nr_floor_rows`]).
+pub fn nr_floor_of(img: &Rgb32f) -> f32 {
+    let w = img.width;
+    nr_guide_floor(nr_floor_rows(img.height).into_iter().flat_map(|r| row_diffs(&img.data[r * w..(r + 1) * w])).collect())
+}
+
+/// The luminance NR floor of the whole output frame (`full_w × full_h`), measured on its rows ([`nr_floor_rows`]),
+/// sampled and white balanced as the image noise reduction sees: a windowed render must floor its guide at the
+/// frame's noise, not at that of the pixels it holds (the camera's local tone gain, if any, is left out).
+pub(crate) fn frame_nr_floor(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, full_w: usize, full_h: usize) -> f32 {
+    let diffs = nr_floor_rows(full_h)
+        .into_iter()
+        .flat_map(|y| {
+            let mut row = frame.window(full_w, full_h, crate::PixelWindow { x: 0, y, w: full_w, h: 1 }).sample(src, full_w, 1);
+            white_balance(&mut row, info, s);
+            row_diffs(&row.data).collect::<Vec<_>>()
+        })
+        .collect();
+    nr_guide_floor(diffs)
 }
 
 /// The floor of the luminance NR guide (#840): the luminance noise sigma, from the median absolute difference of
@@ -1056,7 +1078,7 @@ mod nr_tests {
         let (v0, m0) = var(&img);
         let mut s = DevelopSettings::default();
         s.detail.nr_luminance = 80.0;
-        denoise(&mut img, &s, 1.0);
+        denoise(&mut img, &s, 1.0, None);
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);
@@ -1081,7 +1103,7 @@ mod nr_tests {
         s.detail.nr_luminance = 0.0;
         s.detail.nr_color = 75.0;
         let (_, col) = nr_params(&s, 1.0);
-        apply_nr(&mut img, None, col);
+        apply_nr(&mut img, None, col, None);
         for c in 0..3 {
             let (a, b) = (mean(&before, c), mean(&img, c));
             assert!((b / a - 1.0).abs() < 0.02, "channel {c} mean {a} -> {b}");
@@ -1128,7 +1150,7 @@ mod nr_tests {
             let mut img = Rgb32f::from_fn(32, 32, |x, y| [0.004 + noise(x, y, 1), 0.004 + noise(x, y, 2), 0.002 + noise(x, y, 3)]);
             let mut s = DevelopSettings::default();
             s.detail.nr_color = nr_color;
-            denoise(&mut img, &s, 1.0);
+            denoise(&mut img, &s, 1.0, None);
             assert!(img.data.iter().all(|p| p.iter().all(|v| *v >= 0.0)), "nr_color {nr_color}");
         }
     }
@@ -1145,10 +1167,14 @@ mod nr_tests {
         };
         let (w, h) = (256, 128);
         let y: Vec<f32> = (0..w * h).map(|_| 0.002 + 0.01 * (-2.0 * u().ln()).sqrt() * (std::f32::consts::TAU * u()).cos()).collect();
-        let floor = nr_guide_floor(nr_guide_diffs(&y, w));
+        let img = Rgb32f::from_fn(w, h, |x, yy| [y[yy * w + x]; 3]);
+        let floor = nr_floor_of(&img);
         assert!((floor / 0.01 - 1.0).abs() < 0.05, "{floor}");
-        assert_eq!(nr_guide_floor(nr_guide_diffs(&[0.5; 9], 1)), 1e-7);
-        assert_eq!(nr_guide_floor(nr_guide_diffs(&[0.5; 64], 8)), 1e-7);
+        let rows = nr_floor_rows(128);
+        assert!(rows.len() == NR_FLOOR_ROWS && rows.windows(2).all(|r| r[0] < r[1]) && rows[NR_FLOOR_ROWS - 1] < 128, "{rows:?}");
+        assert_eq!(nr_floor_rows(5), [0, 1, 2, 3, 4]);
+        assert_eq!(nr_floor_of(&Rgb32f::from_fn(1, 9, |_, _| [0.5; 3])), 1e-7);
+        assert_eq!(nr_floor_of(&Rgb32f::from_fn(8, 8, |_, _| [0.5; 3])), 1e-7);
     }
 
     #[test]
@@ -1158,10 +1184,10 @@ mod nr_tests {
         let noise = |x: usize, y: usize, k: usize| (((x * 7919 + y * 104729 + k * 15485863) % 101) as f32 / 101.0 - 0.5) * 0.03;
         let img = Rgb32f::from_fn(32, 32, |x, y| [0.004 + noise(x, y, 1), 0.004 + noise(x, y, 2), 0.002 + noise(x, y, 3)]);
         let y = img.map(luminance_2020);
-        let floor = nr_guide_floor(nr_guide_diffs(&y.data, 32));
+        let floor = nr_floor_of(&img);
         assert!(floor > 1e-3, "{floor}");
         assert!(y.data.iter().any(|v| *v < 0.0));
-        let l = nr_guide(&img);
+        let l = nr_guide(&img, floor);
         let at_floor = (floor / crate::tone::GREY).log2();
         for (v, g) in y.data.iter().zip(&l.data) {
             assert!(*g >= at_floor);
@@ -1170,7 +1196,7 @@ mod nr_tests {
             }
         }
         let mut out = img.clone();
-        apply_nr(&mut out, Some(NrLum { sigma: 3.0, eps: 0.25, k: 1.0 }), None);
+        apply_nr(&mut out, Some(NrLum { sigma: 3.0, eps: 0.25, k: 1.0 }), None, None);
         for (a, b) in img.data.iter().zip(&out.data) {
             for c in 0..3 {
                 assert!(b[c].is_finite() && b[c] * a[c] >= 0.0, "{a:?} {b:?}");
@@ -1181,14 +1207,14 @@ mod nr_tests {
     #[test]
     fn colour_nr_leaves_a_flat_pixel_below_the_old_floor_alone() {
         let mut img = Rgb32f::from_fn(8, 8, |_, _| [1e-7; 3]);
-        apply_nr(&mut img, None, Some(NrColor { sigma: 2.0, t: 1.0 }));
+        apply_nr(&mut img, None, Some(NrColor { sigma: 2.0, t: 1.0 }), None);
         for p in &img.data {
             for v in p {
                 assert!((v / 1e-7 - 1.0).abs() < 1e-3, "{v}");
             }
         }
         let mut black = Rgb32f::from_fn(8, 8, |_, _| [0.0; 3]);
-        apply_nr(&mut black, None, Some(NrColor { sigma: 2.0, t: 1.0 }));
+        apply_nr(&mut black, None, Some(NrColor { sigma: 2.0, t: 1.0 }), None);
         assert!(black.data.iter().all(|p| *p == [0.0; 3]));
     }
 }

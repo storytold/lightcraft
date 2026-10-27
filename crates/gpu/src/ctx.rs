@@ -42,7 +42,6 @@ const MODULES: &[Module] = &[
         bindings: &[("a", false, "f32"), ("b", false, "f32"), ("c", false, "f32"), ("dst", true, "f32")],
         entries: &[
             "log_lum_k",
-            "lum_diff_k",
             "log_lum_floor_k",
             "dark_k",
             "guided_pre",
