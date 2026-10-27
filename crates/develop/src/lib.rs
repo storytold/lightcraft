@@ -470,4 +470,22 @@ mod tests {
         assert!(!s.masks.iter().any(|m| m.id == next), "{next}");
         assert_eq!(next, 2);
     }
+
+    /// Issue #3056 (review): a refitted crop keeps an explicit aspect lock, also on the whole photo,
+    /// and an "Original" lock follows the new photo's shape; the lock stays true to the crop.
+    #[test]
+    fn crop_refit_honours_the_aspect_lock() {
+        let (land, tall) = ((6000.0, 4000.0), (4000.0, 6000.0));
+        let three_two = Crop { aspect: Some((300, 200)), ..Crop::default() };
+        let r = three_two.refit(land, tall);
+        assert_eq!(r.aspect, Some((300, 200)));
+        assert!((r.geometry.rect_px(tall.0, tall.1).aspect() - 1.5).abs() < 1e-9, "{:?}", r.geometry);
+        let original = Crop { aspect: Some(Crop::original_aspect(land.0, land.1)), flip_h: true, ..Crop::default() };
+        let r = original.refit(land, tall);
+        assert_eq!(r.aspect, Some(Crop::original_aspect(tall.0, tall.1)));
+        assert_eq!(r.geometry, lightcraft_geom::CropGeometry::default());
+        assert!(r.flip_h);
+        // unlocked, the whole photo stays the whole photo
+        assert_eq!(Crop::default().refit(land, tall), Crop::default());
+    }
 }
