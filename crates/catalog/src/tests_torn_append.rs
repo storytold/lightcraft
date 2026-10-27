@@ -280,12 +280,7 @@ fn resync_preserves_retry_record_with_nested_start_marker() {
     j.append(&apply(&mut c, vec![add])).unwrap();
 
     let album_id = c.alloc_album_id();
-    let add_album = Op::AddAlbum {
-        album: Album {
-            smart: Some(Box::new(Filter::default())),
-            ..Album::new(album_id, "Smart")
-        },
-    };
+    let add_album = Op::AddAlbum { album: Album { smart: Some(Box::new(Filter::default())), ..Album::new(album_id, "Smart") } };
     j.append(&apply(&mut c, vec![add_album])).unwrap();
 
     let retry_op = Op::SetAlbumRules {
@@ -293,11 +288,7 @@ fn resync_preserves_retry_record_with_nested_start_marker() {
         rules: Box::new(Filter {
             rule_set: Some(RuleSet {
                 mode: Match::All,
-                rules: vec![Rule::Field {
-                    field: "title".into(),
-                    op: "isEmpty".into(),
-                    value: serde_json::json!({ "seq": 1 }),
-                }],
+                rules: vec![Rule::Field { field: "title".into(), op: "isEmpty".into(), value: serde_json::json!({ "seq": 1 }) }],
             }),
             ..Default::default()
         }),
