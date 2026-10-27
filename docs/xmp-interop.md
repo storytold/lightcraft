@@ -225,7 +225,7 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | other `Local*` sliders (`LocalGrain`…) | — | no counterpart in our masks: reported as `Mask: LocalGrain` when set (`LocalCurveRefineSaturation` 100 is neutral) |
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape). `Flipped="true"` means effect inside: in `MaskGroupBasedCorrections` with `Version` 2 (what Lightroom writes for an ordinary radial) and in the legacy `CircularGradientBasedCorrections` Radial Filter, whose default (no `Flipped`) is outside. A `MaskGroupBasedCorrections` radial without `Version` is inside whatever `Flipped` says, and its `Feather` is halved (Lightroom rescales it that way when it upgrades one). Inverting is `MaskInverted` |
-| `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |
+| `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `CenterWeight` is hardness (0 = fully soft, 1 = hard), converted to feather as `100 × (1 − CenterWeight)`; `Radius` retains the outer radius; `MaskValue` ≤ 0 erases (`0` is full-strength erasure, not zero density) |
 | `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed |
 | `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; a range at full strength at white (third `LumRange` value 1) stays open above our scene white; colour ranges are reported |
 | `MaskBlendMode` 0 / 1 / 2, `MaskInverted` | add / subtract / intersect, invert | |
@@ -233,6 +233,11 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 Applying a preset adds its masks to the photo's own (masks the photo already has are not added twice), and the Amount
 slider scales them. A sidecar's masks replace the photo's, because a sidecar holds the whole edit. Components we can't
 carry over are listed in `preset.import`'s `unmapped` as `Mask: <kind>`.
+
+Previously imported brush masks are not rewritten automatically. To refresh masks imported with reversed
+feathering or ineffective erase strokes, reread the original Lightroom XMP or replace the edits by reimporting
+the Lightroom catalog (`updateExisting=true`). A packet containing `lc:settings` restores those saved native
+settings instead of converting its `crs:` corrections again.
 
 ## Local adjustment presets (mask effects)
 
