@@ -11,12 +11,6 @@
 //! The rows say what they are as they are drawn ([`note_row`], [`note_open`]); a key acts on what
 //! the last frame drew, and what it asks of a row (choose, fold) is handed to that row when it is
 //! drawn next, so a key does exactly what the click on the row does.
-//!
-//! Nothing calls this yet: it is the tested core of Keyboard in Sidebar (LR-BEHAV-SIDEBAR-KEYS), and
-//! the next part of that feature starts it: the sidebar's rows say what they are through [`note_row`]
-//! and the rest, and the `view.sidebarKeys` command, its menu item and its shortcut turn the mode on.
-//! Until then the app's keys are what they were, and the module is not counted as dead code outside tests.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use egui::{Key, Rect};
 

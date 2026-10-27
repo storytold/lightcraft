@@ -29,7 +29,7 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
         // (the name carries the year, so two Marches in different years differ in a screen reader's list of triangles)
         tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"), &crate::i18n::date_group_label(key, false));
     }
-    if resp.clicked() {
+    if super::side_keys::chosen(ui, &resp) {
         let v = if sel { serde_json::Value::Null } else { json!(key) };
         browse_all_photos(app, !sel);
         let _ = app.run("library.filter", json!({"date": v}));

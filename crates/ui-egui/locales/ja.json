@@ -2426,5 +2426,6 @@
   "Next": "次へ",
   "Get Started": "始める",
   "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "キーはサイドバーにあります。矢印で移動、Enter で開く、入力で検索、Esc で写真に戻ります",
-  "This row has no name to change": "この行には変更できる名前がありません"
+  "This row has no name to change": "この行には変更できる名前がありません",
+  "Keyboard in Sidebar": "サイドバーでキーボードを使う"
 }

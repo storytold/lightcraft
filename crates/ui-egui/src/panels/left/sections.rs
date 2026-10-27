@@ -193,7 +193,14 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     let (interact, widget) = if pinned { ("sidebar-section-pinned", "sidebarSectionPinned") } else { ("sidebar-section", "sidebarSection") };
     let resp = ui.interact(r, ui.scope_id().with((interact, id)), Sense::click_and_drag());
     register(ui, format!("{widget}:{id}"), r);
-    let toggled = resp.clicked();
+    // (the pinned copy is the same header: the keys know the one in the list)
+    let keys = if pinned {
+        Default::default()
+    } else {
+        let open = !app.ui.sidebar.is_collapsed(section);
+        super::side_keys::note_row(app, ui, &format!("{widget}:{id}"), title, 0.0, true, Some(open), false, &resp)
+    };
+    let toggled = resp.clicked() || keys.chosen;
     if toggled {
         app.ui.sidebar.toggle_collapsed(section);
     }
@@ -214,6 +221,9 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     if hovered {
         let bar = Rect::from_min_max(r.min + vec2(8.0, 2.0), pos2((edge - 8.0).max(r.left() + 8.0), r.bottom() - 2.0));
         ui.painter().rect_filled(bar, 4.0, t.hover.gamma_multiply(0.6));
+    }
+    if keys.cursor {
+        super::side_keys::ring(ui, Rect::from_min_max(r.min + vec2(8.0, 2.0), pos2((edge - 8.0).max(r.left() + 8.0), r.bottom() - 2.0)));
     }
     let c = pos2(r.left() + 10.0, r.center().y);
     register(ui, format!("{widget}Chevron:{id}"), Rect::from_center_size(c, vec2(16.0, 16.0)));
