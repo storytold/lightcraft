@@ -39,12 +39,12 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
    ```
 
    The fields are the BCP-47 code (also the settings-file value), the **endonym** shown in the
-   Language menu, the ISO 15924 script (`Latn`, `Jpan`, `Hans`, `Hant`, `Kore`…), and the embedded
+   Settings language row, the ISO 15924 script (`Latn`, `Jpan`, `Hans`, `Hant`, `Kore`…), and the embedded
    catalog. `build.rs` picks up `<code>-formats.json` by name, so the macro and the format lookup
    follow automatically. Add the corresponding `app.language.<name>` entry to
    `LANGUAGE_COMMANDS` and `language_from_command` in `src/menus.rs`, and to the
-   `language_commands_cover_every_language` test. Settings read the locale table; menus and
-   the control channel share the language-command mapping.
+   `language_commands_cover_every_language` test. Settings read the locale table; the control
+   channel uses the language commands (they are in no menu).
 3. **Make sure the glyphs exist.** The script drives which craft-fonts faces the UI installs: a
    language whose script has no face in the build shows boxes (the test says so instead of failing).
    Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never here; a

@@ -2,7 +2,7 @@
 
 LightCraft 的界面支持英语、简体中文、繁体中文（台湾）和日语。语言设置保存在 `ui.json` 的 `language` 字段中。
 
-- 通过「编辑 → 语言」或「设置 → 一般 → 语言」切换，选择会保留到下次启动。
+- 通过「设置 → 一般 → 语言」切换，选择会保留到下次启动。
 - 已翻译的范围与 `zh-hant.json` 键集完全一致（1246 条），两份目录的键与键序一一对应。
 - 正文字重与半粗体都使用 SIL OFL 的 **Noto Sans CJK SC**（简体中文）与 BIZ UDPGothic（日语）。
   这些字体不在本仓库，而在 [storytold/craft-fonts](https://github.com/storytold/craft-fonts)；
