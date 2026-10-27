@@ -634,6 +634,28 @@ fn a_row_above_a_made_folder_stays_choosable_when_the_photos_beside_it_leave() {
     assert_eq!(s.source, LibrarySource::LibraryFolder, "the folder shown is still in the list, so the view stays");
 }
 
+/// A folder made inside a relative `parent` (as an agent or the CLI may give it) is made and
+/// listed under its absolute path, like the folders of an absolute one.
+#[test]
+fn a_folder_made_inside_a_relative_parent_is_listed_under_its_absolute_path() {
+    /// Removes the folder the test makes in the working folder, however the test ends.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let name = format!("lc-folders-relative-{}", std::process::id());
+    let made = std::path::absolute(".").unwrap().join(&name);
+    let _cleanup = Cleanup(made.clone());
+    let mut s = Session::new();
+    let r = s.execute("folder.create", &json!({"parent": ".", "name": name})).unwrap();
+    assert_eq!(std::path::Path::new(r["path"].as_str().unwrap()), made);
+    assert!(made.is_dir());
+    let rows = rows_for(&mut s, &made.to_string_lossy());
+    assert_eq!(rows.len(), 1, "the made folder is listed: {rows:?}");
+}
+
 #[test]
 fn a_made_folder_can_be_given_a_color_label_before_it_holds_a_photo() {
     let dir = Scratch::new("made-label");

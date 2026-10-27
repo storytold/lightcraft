@@ -405,7 +405,9 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
     if !Path::new(parent).is_dir() {
         return Err(bad(C, format!("{parent} is not a folder (offline, moved or deleted?)")));
     }
-    let path = Path::new(parent).join(name).to_string_lossy().to_string();
+    // (the library keeps absolute paths only: a relative `parent` is taken from the working folder)
+    let parent = std::path::absolute(parent).map_err(|e| bad(C, format!("{parent}: {e}")))?;
+    let path = parent.join(name).to_string_lossy().to_string();
     if Path::new(&path).exists() {
         return Err(bad(C, format!("{path} already exists: choose another name")));
     }
