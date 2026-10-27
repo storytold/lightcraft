@@ -680,6 +680,92 @@ fn pasted_crop_keeps_its_aspect_on_a_photo_of_another_shape() {
     assert!((r.aspect() - 1.0).abs() < 1e-6, "sync: {r:?}");
 }
 
+fn near(r: lightcraft_geom::Rect, want: [f64; 4]) -> bool {
+    [r.x0, r.y0, r.x1, r.y1].iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6)
+}
+
+/// Review of #3056: a 3:2 lock chosen on a 3:2 photo crops nothing, yet it is a lock: pasted onto a
+/// portrait photo it gives a centred 3:2 crop and keeps the lock, while an "Original" lock takes the
+/// portrait's own shape (and becomes its Original lock).
+#[test]
+fn pasted_crop_keeps_an_explicit_aspect_lock_that_crops_nothing() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.aspect", &json!({"aspect": "3x2"})).unwrap();
+    let d = s.develop_of(a).unwrap();
+    assert_eq!((d.crop.geometry.rect, d.crop.aspect), (lightcraft_geom::Rect::UNIT, Some((300, 200))), "3:2 on 6000 × 4000");
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [tall.0], "groups": ["crop"]})).unwrap();
+    let d = s.develop_of(tall).unwrap();
+    assert!(near(d.crop.geometry.rect, [0.0, 1.0 / 3.6, 1.0, 1.0 - 1.0 / 3.6]), "a centred 3:2 band: {:?}", d.crop);
+    assert_eq!(d.crop.aspect, Some((300, 200)), "the lock is kept");
+    assert!((crop_px(&s, tall).aspect() - 1.5).abs() < 1e-9);
+
+    s.execute("crop.aspect", &json!({"aspect": "original"})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().crop.aspect, Some((600_000, 400_000)));
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [tall.0], "groups": ["crop"]})).unwrap();
+    let d = s.develop_of(tall).unwrap();
+    assert_eq!((d.crop.geometry.rect, d.crop.aspect), (lightcraft_geom::Rect::UNIT, Some((400_000, 600_000))), "Original: the whole portrait");
+}
+
+/// The Crop group carries the orientation: the target's shape is the one it has after the paste. A
+/// crop from a landscape photo turned upright lands as it is on another landscape photo (turned
+/// upright by the same paste), not refitted to the target's old landscape shape.
+#[test]
+fn pasted_crop_refits_to_the_orientation_it_carries() {
+    let mut s = demo();
+    let (a, b, _) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("photo.rotateRight", &json!({"ids": [a.0]})).unwrap();
+    // a square on the upright 4000 × 6000 frame
+    s.execute("crop.set", &json!({"rect": [0.2, 0.1, 0.8, 0.5]})).unwrap();
+    let src = s.develop_of(a).unwrap();
+    assert!(src.orientation.swaps_axes());
+    assert!((crop_px(&s, a).aspect() - 1.0).abs() < 1e-9);
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b.0], "groups": ["crop"]})).unwrap();
+    let d = s.develop_of(b).unwrap();
+    assert_eq!(d.orientation, src.orientation);
+    assert_eq!(d.crop, src.crop, "same shape once turned: the crop as it is");
+}
+
+/// Paste Settings from Previous refits a crop as Paste does.
+#[test]
+fn paste_from_previous_refits_the_crop() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.7, 0.8]})).unwrap();
+    s.execute("library.select", &json!({"ids": [tall.0]})).unwrap();
+    s.execute("develop.pastePrevious", &json!({"groups": ["crop"]})).unwrap();
+    let r = crop_px(&s, tall);
+    assert!((r.aspect() - 1.0).abs() < 1e-6, "the square stays square: {r:?}");
+}
+
+/// Auto Sync carries a crop as Sync Settings does: refitted to each photo's shape, not as the same
+/// normalized rectangle (which stretches it).
+#[test]
+fn auto_sync_refits_a_crop_like_sync() {
+    let crop_of_tall = |auto: bool| {
+        let mut s = demo();
+        let (a, _, tall) = photos_by_shape(&mut s);
+        s.execute("library.select", &json!({"ids": [a.0, tall.0], "active": a.0})).unwrap();
+        if auto {
+            s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+        }
+        s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.7, 0.8]})).unwrap();
+        if !auto {
+            s.execute("develop.sync", &json!({"groups": ["crop"]})).unwrap();
+        }
+        (s.develop_of(tall).unwrap().crop, crop_px(&s, tall))
+    };
+    let (synced, auto) = (crop_of_tall(false), crop_of_tall(true));
+    assert!((auto.1.aspect() - 1.0).abs() < 1e-6, "the square stays square: {:?}", auto.1);
+    assert_eq!(auto.0, synced.0);
+}
+
 /// A crop of no size (or a hair wide), as a sidecar can set it, made the render's
 /// samplers read at infinite coordinates and its blurs ask for sigmas of millions of pixels: with a
 /// healing spot and masks on, render workers panicked (an i32 square in the blur, a bilinear

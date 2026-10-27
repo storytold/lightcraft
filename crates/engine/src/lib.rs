@@ -990,8 +990,9 @@ impl Session {
     /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`, as asked,
     /// before its crop is fitted) over to the other selected photos: only the settings that changed;
     /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
-    /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
-    /// photo's own crop: the active photo's fitted crop is never copied over another's.
+    /// (Sync doesn't carry it either), nor history / snapshot restores. A changed crop is refitted to
+    /// each photo's shape as Sync does ([`lightcraft_develop::Crop::refit`]). Constrain Crop then fits
+    /// each photo's own crop: the active photo's fitted crop is never copied over another's.
     fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
         if !self.auto_sync
             || self.active() != Some(id)
@@ -1026,10 +1027,27 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                // a changed crop takes this photo's shape, as Sync and Paste give it (issue #3056)
+                if let Some(c) = delta.get("crop")
+                    && (c.get("geometry").is_some() || c.get("aspect").is_some())
+                    && let (Some(from), Some(to)) = (self.oriented_dims(id, new.orientation), self.oriented_dims(x, synced.orientation))
+                {
+                    let fit = new.crop.refit(from, to);
+                    synced.crop.geometry = fit.geometry;
+                    synced.crop.aspect = fit.aspect;
+                }
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
+    }
+
+    /// Photo `id`'s size as oriented with `orientation`; `None` when the catalog doesn't know it.
+    pub(crate) fn oriented_dims(&self, id: PhotoId, orientation: lightcraft_geom::Orientation) -> Option<(f64, f64)> {
+        let p = self.catalog.photo(id)?;
+        let (w, h) = (p.width as f64, p.height as f64);
+        (w > 0.0 && h > 0.0).then_some(if orientation.swaps_axes() { (h, w) } else { (w, h) })
     }
 
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
