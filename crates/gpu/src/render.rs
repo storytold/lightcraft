@@ -850,8 +850,20 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let mut img = img;
     if let Some(nr) = lum {
+        // the guide's floor: the luminance noise sigma, from sampled neighbour differences, as on the CPU
+        let floor = if w < 2 {
+            local::nr_guide_floor(Vec::new())
+        } else {
+            let step = local::NR_FLOOR_STEP;
+            let m = (h * (w - 1)).div_ceil(step);
+            let d = cx.gpu.buffer(m);
+            map(cx, "lum_diff_k", m, &[w as u32, step as u32], [Some(&img), None, None], &d);
+            let floor = local::nr_guide_floor(cx.read(&d, m));
+            cx.flush();
+            floor
+        };
         let l = cx.gpu.buffer(n);
-        map(cx, "log_lum_pos_k", n, &[], [Some(&img), None, None], &l);
+        map(cx, "log_lum_floor_k", n, &[floor.to_bits()], [Some(&img), None, None], &l);
         let f = guided(cx, &l, w, h, nr.sigma, nr.eps);
         let out = cx.gpu.buffer(n * 3);
         map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);

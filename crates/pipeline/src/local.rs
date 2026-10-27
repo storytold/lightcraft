@@ -481,9 +481,10 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     let w = img.width;
     if let Some(nr) = lum {
         let _t = crate::profiling().then(std::time::Instant::now);
-        // The guide is the log-luminance of the pixel clamped to zero, as the image was before #840: signed noise near
-        // black would put Y <= 0 at log's floor, and those outliers stiffen the guided filter (less smoothing).
-        let l = img.map(|c| log_lum(c.map(|v| v.max(0.0))));
+        // The guide is the log-luminance floored at the image's luminance noise (#840): signed noise near black would
+        // put Y <= 0 at log's floor, and those outliers stiffen the guided filter (less smoothing). A floor at the
+        // noise sigma also keeps the clipped tail of positive noise from doing the same in the deep shadows.
+        let l = nr_guide(img);
         let f = guided(&l, nr.sigma, nr.eps);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
@@ -519,6 +520,37 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
             eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
         }
     }
+}
+
+/// The luminance NR guide: log-luminance floored at the luminance noise sigma ([`nr_guide_floor`]).
+fn nr_guide(img: &Rgb32f) -> Plane {
+    let y = img.map(luminance_2020);
+    let floor = nr_guide_floor(nr_guide_diffs(&y.data, img.width));
+    y.map(|v| (v.max(floor) / crate::tone::GREY).log2())
+}
+
+/// The luminance NR guide samples every `NR_FLOOR_STEP`-th horizontal neighbour pair for its noise floor.
+pub const NR_FLOOR_STEP: usize = 7;
+
+/// |Y(x + 1) - Y(x)| of every [`NR_FLOOR_STEP`]-th horizontal neighbour pair of a `w`-wide plane, counting the
+/// pairs row by row (`w - 1` per row).
+fn nr_guide_diffs(y: &[f32], w: usize) -> Vec<f32> {
+    if w < 2 {
+        return Vec::new();
+    }
+    y.chunks(w).flat_map(|r| r.windows(2).map(|p| (p[1] - p[0]).abs())).step_by(NR_FLOOR_STEP).collect()
+}
+
+/// The floor of the luminance NR guide (#840): the luminance noise sigma, from the median absolute difference of
+/// horizontal neighbours (`diffs`): median * 1.4826 / sqrt 2 (Gaussian noise; the difference of two pixels has
+/// sqrt 2 times their sigma). Never below 1e-7, `log_lum`'s floor.
+pub fn nr_guide_floor(mut diffs: Vec<f32>) -> f32 {
+    if diffs.is_empty() {
+        return 1e-7;
+    }
+    let m = diffs.len() / 2;
+    let med = *diffs.select_nth_unstable_by(m, |a, b| a.total_cmp(b)).1;
+    (med * 1.4826 / std::f32::consts::SQRT_2).max(1e-7)
 }
 
 /// How much of the multiplicative (ratio) form colour NR uses, from blur(Y) / blur(|Y|) (1 where the neighbourhood's
@@ -1102,24 +1134,46 @@ mod nr_tests {
     }
 
     #[test]
-    fn luminance_nr_guide_is_the_clamped_image() {
-        // Signed noise near black (#840) must not reach log's floor: the luminance gain at a pixel is what it is
-        // with the image clamped to zero, so the smoothing strength matches the clamped image.
+    fn luminance_nr_guide_floor_is_the_noise_sigma() {
+        // Gaussian luminance noise of sigma 0.01 around 0.002 (most of it signed): the floor measures that sigma.
+        let mut s = 0x2545_f491_4f6c_dd1du64;
+        let mut u = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            ((s >> 40) as f32 + 0.5) / (1u64 << 24) as f32
+        };
+        let (w, h) = (256, 128);
+        let y: Vec<f32> = (0..w * h).map(|_| 0.002 + 0.01 * (-2.0 * u().ln()).sqrt() * (std::f32::consts::TAU * u()).cos()).collect();
+        let floor = nr_guide_floor(nr_guide_diffs(&y, w));
+        assert!((floor / 0.01 - 1.0).abs() < 0.05, "{floor}");
+        assert_eq!(nr_guide_floor(nr_guide_diffs(&[0.5; 9], 1)), 1e-7);
+        assert_eq!(nr_guide_floor(nr_guide_diffs(&[0.5; 64], 8)), 1e-7);
+    }
+
+    #[test]
+    fn luminance_nr_guide_is_floored_at_the_noise() {
+        // Signed noise near black (#840) must not reach log's floor: pixels below the noise floor (zero and negative
+        // ones among them) all get the floor's guide value, and luminance NR stays finite and keeps their sign.
         let noise = |x: usize, y: usize, k: usize| (((x * 7919 + y * 104729 + k * 15485863) % 101) as f32 / 101.0 - 0.5) * 0.03;
-        let signed = Rgb32f::from_fn(32, 32, |x, y| [0.004 + noise(x, y, 1), 0.004 + noise(x, y, 2), 0.002 + noise(x, y, 3)]);
-        assert!(signed.data.iter().any(|p| luminance_2020(*p) < 0.0));
-        let clamped = signed.map(|c| c.map(|v| v.max(0.0)));
-        let nr = || Some(NrLum { sigma: 3.0, eps: 0.25, k: 1.0 });
-        let (mut a, mut b) = (signed.clone(), clamped.clone());
-        apply_nr(&mut a, nr(), None);
-        apply_nr(&mut b, nr(), None);
-        for i in 0..a.data.len() {
+        let img = Rgb32f::from_fn(32, 32, |x, y| [0.004 + noise(x, y, 1), 0.004 + noise(x, y, 2), 0.002 + noise(x, y, 3)]);
+        let y = img.map(luminance_2020);
+        let floor = nr_guide_floor(nr_guide_diffs(&y.data, 32));
+        assert!(floor > 1e-3, "{floor}");
+        assert!(y.data.iter().any(|v| *v < 0.0));
+        let l = nr_guide(&img);
+        let at_floor = (floor / crate::tone::GREY).log2();
+        for (v, g) in y.data.iter().zip(&l.data) {
+            assert!(*g >= at_floor);
+            if *v <= floor {
+                assert_eq!(*g, at_floor);
+            }
+        }
+        let mut out = img.clone();
+        apply_nr(&mut out, Some(NrLum { sigma: 3.0, eps: 0.25, k: 1.0 }), None);
+        for (a, b) in img.data.iter().zip(&out.data) {
             for c in 0..3 {
-                // same gain g on both: a = signed * g, b = clamped * g
-                let (s0, c0) = (signed.data[i][c], clamped.data[i][c]);
-                if c0 > 1e-4 && s0 == c0 {
-                    assert!((a.data[i][c] / b.data[i][c] - 1.0).abs() < 1e-4, "{i} {c}");
-                }
+                assert!(b[c].is_finite() && b[c] * a[c] >= 0.0, "{a:?} {b:?}");
             }
         }
     }
