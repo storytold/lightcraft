@@ -236,10 +236,11 @@ pub fn cgroup_memory_at(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> C
     memory_of(&cgroup_dirs(fs_root, mountinfo, own), true)
 }
 
-/// The directories whose memory files bind this process, deepest first within each hierarchy:
-/// for the cgroup v2 entry (`0::/path`) and a v1 entry with the `memory` controller
-/// (`N:cpuset,memory:/path`), the cgroup's directory in the matching mount and each parent up to
-/// the mount point.
+/// The directories whose memory files bind this process: for the cgroup v2 entry (`0::/path`)
+/// and a v1 entry with the `memory` controller (`N:cpuset,memory:/path`), the cgroup's directory
+/// and each parent up to the mount point, deepest first, in every mount of that hierarchy that
+/// shows the cgroup ([`views`]). A cgroup seen through two mounts (a bind mount of a subtree beside
+/// the whole hierarchy) is listed once.
 fn cgroup_dirs(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> Vec<CgroupDir> {
     let mounts = match mountinfo {
         Some(info) => cgroup_mounts(info),
@@ -249,6 +250,7 @@ fn cgroup_dirs(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> Vec<Cgroup
         ],
     };
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for line in own.lines() {
         let mut fields = line.trim().splitn(3, ':');
         let (Some(_id), Some(controllers), Some(path)) = (fields.next(), fields.next(), fields.next()) else {
@@ -261,43 +263,66 @@ fn cgroup_dirs(fs_root: &Path, mountinfo: Option<&str>, own: &str) -> Vec<Cgroup
         } else {
             continue;
         };
-        let Some((mount, rel)) = locate(&mounts, v1, path) else {
-            continue;
-        };
-        let Some(point) = plain_components(&mount.mount_point) else {
-            continue;
-        };
-        let mut base = fs_root.to_path_buf();
-        base.extend(point);
-        out.extend(ancestors(&base, &rel).into_iter().map(|path| CgroupDir { path, v1 }));
+        for view in views(&mounts, v1, path) {
+            let Some(point) = plain_components(&view.mount.mount_point) else {
+                continue;
+            };
+            let mut base = fs_root.to_path_buf();
+            base.extend(point);
+            for (up, dir) in ancestors(&base, &view.rel).into_iter().enumerate() {
+                // the cgroup this directory shows: the mount's root, then `rel` less `up` levels
+                let cgroup = match &view.root {
+                    Some(root) => {
+                        let rel = view.rel.iter().take(view.rel.len().saturating_sub(up));
+                        let parts: Vec<&str> = root.iter().map(String::as_str).chain(rel.map(String::as_str)).collect();
+                        format!("/{}", parts.join("/"))
+                    }
+                    // a root that isn't a plain path: known only by where it is mounted
+                    None => format!("mount:{}", dir.display()),
+                };
+                if seen.insert((v1, cgroup)) {
+                    out.push(CgroupDir { path: dir, v1 });
+                }
+            }
+        }
     }
     out
 }
 
-/// The mount of the right version that shows the cgroup `path`, and `path` relative to that
-/// mount's root: the mount whose root contains `path` most closely, else the first one (its mount
-/// point alone: a membership path outside every mount's root, as a container without a cgroup
-/// namespace sees the host's path, leaves only the mount's top to read).
-fn locate<'m>(mounts: &'m [CgroupMount], v1: bool, path: &str) -> Option<(&'m CgroupMount, Vec<String>)> {
+/// The cgroup `path` as one mount shows it.
+struct View<'m> {
+    mount: &'m CgroupMount,
+    /// The cgroup at the mount point (the mount's root), when it is a plain path.
+    root: Option<Vec<String>>,
+    /// `path` below the mount's root (at most [`MAX_DEPTH`] components).
+    rel: Vec<String>,
+}
+
+/// Every mount of the right version whose root holds the cgroup `path`, with `path` relative to
+/// it: a limit on an ancestor binds even when a closer mount (a bind mount of a subtree) shows
+/// the cgroup too, so each is read. When no mount's root holds `path` (a container without a
+/// cgroup namespace sees the host's path), the first mount's top alone.
+fn views<'m>(mounts: &'m [CgroupMount], v1: bool, path: &str) -> Vec<View<'m>> {
     let own = plain_components(path);
+    let owned = |parts: &[&str]| parts.iter().map(|p| (*p).to_owned()).collect::<Vec<String>>();
+    let mut out = Vec::new();
     let mut fallback = None;
-    let mut best: Option<(&CgroupMount, usize)> = None;
     for mount in mounts.iter().filter(|m| m.v1 == v1) {
         fallback = fallback.or(Some(mount));
         let (Some(own), Some(root)) = (own.as_ref(), plain_components(&mount.root)) else {
             continue;
         };
-        if own.starts_with(&root) && best.is_none_or(|(_, len)| root.len() > len) {
-            best = Some((mount, root.len()));
+        if own.starts_with(&root) {
+            let rel = own.get(root.len()..).unwrap_or_default().iter().take(MAX_DEPTH).map(|p| (*p).to_owned()).collect();
+            out.push(View { mount, root: Some(owned(&root)), rel });
         }
     }
-    match best {
-        Some((mount, skip)) => {
-            let rel = own.unwrap_or_default().into_iter().skip(skip).take(MAX_DEPTH).map(str::to_owned).collect();
-            Some((mount, rel))
-        }
-        None => fallback.map(|m| (m, Vec::new())),
+    if out.is_empty()
+        && let Some(mount) = fallback
+    {
+        out.push(View { mount, root: plain_components(&mount.root).map(|r| owned(&r)), rel: Vec::new() });
     }
+    out
 }
 
 /// The non-empty components of a `/`-separated path, or `None` if any is `.` or `..` (never
@@ -699,16 +724,49 @@ mod tests {
     }
 
     #[test]
-    fn the_mount_whose_root_holds_the_path_most_closely_wins() {
+    fn every_mount_whose_root_holds_the_path_is_read() {
         let s = Scratch::new("mi-several");
         s.write_at("a/memory.max", &(8 * GIB).to_string());
-        s.write_at("b/x/memory.max", &(2 * GIB).to_string());
+        // /b shows cgroup /p, so /b/x is the same cgroup as /a/p/x
+        for x in ["a/p/x", "b/x"] {
+            s.write_at(&format!("{x}/memory.max"), &(2 * GIB).to_string());
+        }
         s.write_at("c/memory.max", &GIB.to_string());
         let info = [mount(30, "/", "/a", "cgroup2", "rw"), mount(31, "/p", "/b", "cgroup2", "rw"), mount(32, "/q", "/c", "cgroup2", "rw")].concat();
-        // /p/x is under the roots of /a (as /a/p/x, absent: its top /a has 8 GiB) and of /b (/b/x)
-        let dirs = cgroup_dirs(&s.0, Some(&info), "0::/p/x\n");
-        assert_eq!(dirs.first().map(|d| d.path.clone()), Some(s.0.join("b/x")));
-        assert_eq!(cgroup_memory_at(&s.0, Some(&info), "0::/p/x\n").limit, Some(2 * GIB));
+        // /p/x is under the roots of /a (as /a/p/x) and of /b (as /b/x), not of /c (root /q)
+        let dirs: Vec<PathBuf> = cgroup_dirs(&s.0, Some(&info), "0::/p/x\n").into_iter().map(|d| d.path).collect();
+        let expected: Vec<PathBuf> = ["a/p/x", "a/p", "a"].iter().map(|d| s.0.join(d)).collect();
+        assert_eq!(dirs, expected, "/p/x and /p are read once, through the first mount that shows them");
+        assert_eq!(cgroup_memory_at(&s.0, Some(&info), "0::/p/x\n").limit, Some(2 * GIB), "/c's 1 GiB is another cgroup");
+        let dirs: Vec<PathBuf> =
+            cgroup_dirs(&s.0, Some(&[mount(31, "/p", "/b", "cgroup2", "rw"), mount(30, "/", "/a", "cgroup2", "rw")].concat()), "0::/p/x\n")
+                .into_iter()
+                .map(|d| d.path)
+                .collect();
+        let expected: Vec<PathBuf> = ["b/x", "b", "a"].iter().map(|d| s.0.join(d)).collect();
+        assert_eq!(dirs, expected, "the other order: /a shows only / that /b doesn't");
+    }
+
+    #[test]
+    fn a_bind_mounted_subtree_does_not_hide_an_ancestor_limit() {
+        // The whole hierarchy at /sys/fs/cgroup and /p/c bind-mounted at /mnt/c: /p's 1 GiB binds
+        // the process in /p/c/child although /p/c (seen at /mnt/c, closest) says 4 GiB.
+        let s = Scratch::new("mi-bind");
+        s.write("p/memory.max", &GIB.to_string());
+        s.write("p/memory.current", &(GIB / 2).to_string());
+        for c in ["sys/fs/cgroup/p/c", "mnt/c"] {
+            s.write_at(&format!("{c}/memory.max"), &(4 * GIB).to_string());
+            s.write_at(&format!("{c}/memory.current"), &(GIB / 4).to_string());
+            s.write_at(&format!("{c}/child/memory.max"), "max");
+        }
+        let full = mount(30, "/", "/sys/fs/cgroup", "cgroup2", "rw");
+        let bind = mount(31, "/p/c", "/mnt/c", "cgroup2", "rw");
+        let own = "0::/p/c/child\n";
+        for info in [format!("{full}{bind}"), format!("{bind}{full}")] {
+            assert_eq!(cgroup_memory_at(&s.0, Some(&info), own), CgroupMemory { limit: Some(GIB), headroom: Some(GIB / 2) }, "{info}");
+            // /p/c/child, /p/c, /p and / once each
+            assert_eq!(cgroup_dirs(&s.0, Some(&info), own).len(), 4, "{info}");
+        }
     }
 
     #[test]
