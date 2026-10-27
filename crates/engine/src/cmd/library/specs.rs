@@ -3,7 +3,7 @@ use super::gps::parse_gps;
 use super::import::{import_batch_done, import_params, list_auto_import_folder};
 use super::selection::{
     album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_targets, has_library, mark_deleted,
-    opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
+    mark_deleted_with, opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
 };
 use super::{
     Album, AlbumId, ColorLabel, CommandSpec, CopyrightStatus, Filter, Flag, GroupBy, LibrarySource, Op, PhotoId, Result, Selection, Sort, SortKey,
@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
                         let ids = s.catalog.query(&f, &Sort::default());
-                        if ids.is_empty() {
+                        if ids.is_empty() && !s.catalog.holds_made_folder(path) {
                             return Err(bad("library.source", format!("{path}: no photo in the library was imported from it")));
                         }
                         if covers_other_disks(s, path, &ids) {
@@ -119,7 +119,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Library Folders",
             [],
             None,
-            "{} → [{name, path, count, own, volume, selectable, label?, children}] the disks and the folders the library's photos were imported from, with photo counts (subfolders included in `count`); show one with library.source {kind: libraryFolder, path} (rows with selectable false only open)",
+            "{} → [{name, path, count, own, volume, selectable, label?, children}] the disks and the folders the library's photos were imported from (and the folders made with folder.create, empty), with photo counts (subfolders included in `count`); show one with library.source {kind: libraryFolder, path} (rows with selectable false only open)",
             always,
             |s, _| Ok(serde_json::to_value(s.catalog.folder_tree()).unwrap_or_default())
         ),
@@ -144,13 +144,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
                 let ids = s.catalog.query(&f, &Sort::default());
-                if ids.is_empty() {
+                // a folder made through LightCraft leaves the list too (undo brings the row back)
+                let unmade = s.catalog.folders_unmade_ops(path, bool_or(p, "disk", false));
+                if ids.is_empty() && unmade.is_empty() {
                     return Err(bad(C, format!("{path}: no photo in the library was imported from it")));
                 }
                 if covers_other_disks(s, path, &ids) && !bool_or(p, "disk", false) {
                     return Err(bad(C, format!("{path} holds whole disks: pass `disk: true` to remove everything on them")));
                 }
-                mark_deleted(s, &ids, "Remove Folder from Library")?;
+                mark_deleted_with(s, &ids, unmade, "Remove Folder from Library")?;
                 if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.filter.library_folder = None;
                 }
@@ -191,7 +193,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 // taking a label off always works, also once the folder's photos are gone
                 let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
-                if label.is_some() && s.catalog.query(&f, &Sort::default()).is_empty() {
+                if label.is_some() && !s.catalog.holds_made_folder(path) && s.catalog.query(&f, &Sort::default()).is_empty() {
                     return Err(bad(C, format!("{path}: no photo in the library was imported from it")));
                 }
                 if label.is_none() && s.catalog.folder_record(path).is_none() {
