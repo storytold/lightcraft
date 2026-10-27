@@ -871,12 +871,43 @@ fn imports_into_a_library_on_a_volume_without_hard_links() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The recovery archive is best-effort: when it can't be saved (here `Interop` is a symlink, which
-/// the archive refuses) the import still goes on, with a warning naming the folder.
-#[cfg(unix)]
+/// The recovery archive is best-effort: when it can't be saved (here `Interop` holds more entries
+/// than the archive scans) the import still goes on, with a warning naming the folder.
 #[test]
 fn an_archive_that_cannot_be_saved_warns_and_the_import_proceeds() {
     let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-archive-refused-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let interop = library.join("Interop");
+    std::fs::create_dir_all(&interop).unwrap();
+    // one more entry than the archive scans (`MAX_SCAN`)
+    for i in 0..=1024 {
+        std::fs::write(interop.join(format!("other-{i}")), b"").unwrap();
+    }
+    let report = import(&mut s, &source, false).unwrap();
+    assert_eq!(report["imported"], 1);
+    assert_eq!(report["archive"], Value::Null);
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap().starts_with(&format!("Lightroom source archive not saved in {}", interop.display()))),
+        "{warnings:?}"
+    );
+    assert!(interop.join("lightroom-index.json").is_file(), "re-import mapping is still saved");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A linked `Interop` folder gets neither the archive nor the import index: both would land
+/// outside the library. The photos are still imported; the index write says why it failed.
+#[cfg(unix)]
+#[test]
+fn a_linked_interop_folder_gets_neither_the_archive_nor_the_index() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-interop-linked-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
     let source = dir.join("source.lrcat");
@@ -886,15 +917,10 @@ fn an_archive_that_cannot_be_saved_warns_and_the_import_proceeds() {
     s.open_library(&library, false).unwrap();
     let interop = library.join("Interop");
     std::os::unix::fs::symlink(dir.join("elsewhere"), &interop).unwrap();
-    let report = import(&mut s, &source, false).unwrap();
-    assert_eq!(report["imported"], 1);
-    assert_eq!(report["archive"], Value::Null);
-    let warnings = report["warnings"].as_array().unwrap();
-    assert!(
-        warnings.iter().any(|w| w.as_str().unwrap().starts_with(&format!("Lightroom source archive not saved in {}", interop.display()))),
-        "{warnings:?}"
-    );
-    assert!(dir.join("elsewhere").join("lightroom-index.json").is_file(), "re-import mapping is still saved");
+    let e = import(&mut s, &source, false).unwrap_err();
+    assert!(e.to_string().contains(&format!("{} is a link or a file, not a folder", interop.display())), "{e}");
+    assert_eq!(s.catalog.photos().count(), 1, "the photos are imported before the index is written");
+    assert_eq!(std::fs::read_dir(dir.join("elsewhere")).unwrap().count(), 0, "nothing is written through the link");
     s.close_library().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
