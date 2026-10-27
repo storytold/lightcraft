@@ -919,7 +919,7 @@ fn a_linked_interop_folder_gets_neither_the_archive_nor_the_index() {
     std::os::unix::fs::symlink(dir.join("elsewhere"), &interop).unwrap();
     let e = import(&mut s, &source, false).unwrap_err();
     assert!(e.to_string().contains(&format!("{} is a link or a file, not a folder", interop.display())), "{e}");
-    assert_eq!(s.catalog.photos().count(), 1, "the photos are imported before the index is written");
+    assert_eq!(s.catalog.photos().count(), 0, "refused before anything is imported, so a retry can't duplicate");
     assert_eq!(std::fs::read_dir(dir.join("elsewhere")).unwrap().count(), 0, "nothing is written through the link");
     s.close_library().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
