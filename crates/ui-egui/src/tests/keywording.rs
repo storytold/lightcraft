@@ -26,14 +26,14 @@ fn two_selected() -> (Headless, Vec<u64>) {
         let r = h.request(method, params, T);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
     (h, ids)
 }
 
 fn ask(h: &mut Headless, method: &str, params: serde_json::Value) {
     let r = h.request(method, params.clone(), T);
     assert_eq!(r["ok"], true, "{method} {params}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 fn has(h: &Headless, id: &str) -> bool {
@@ -273,7 +273,7 @@ fn chips_wrap_whole_inside_the_panel() {
         T,
     );
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setMeta");
     let panel = h.app.widgets.iter().find(|(w, _)| w == "panel:right_panel").map(|(_, r)| *r).expect("the right panel");
     let chips: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordChip:")).cloned().collect();
     assert!(chips.len() >= 6, "{chips:?}");
@@ -308,7 +308,7 @@ fn the_active_photo_alone_is_the_selection() {
 fn a_keyword_shows_that_one_inside_it_is_applied() {
     let (mut h, ids) = two_selected();
     ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["travel|Italy|Rome"]}}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setMeta");
     // folded: `travel` is the only row of the three, and says there is something inside
     assert!(has(&h, "keywordRow:travel") && !has(&h, "keywordRow:travel|Italy"), "folded");
     assert!(has(&h, "keywordInside:travel"));
@@ -318,17 +318,17 @@ fn a_keyword_shows_that_one_inside_it_is_applied() {
     assert!(rect(&h, "keywordCheck:travel").contains_rect(rect(&h, "keywordInside:travel")));
     // opened down to it: each level above has the dot, the keyword itself the tick
     h.app.ui.keyword_list_open.extend(["travel".to_string(), "travel|italy".to_string()]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(has(&h, "keywordInside:travel") && has(&h, "keywordInside:travel|Italy"));
     assert!(has(&h, "keywordRow:travel|Italy|Rome") && !has(&h, "keywordInside:travel|Italy|Rome"));
     // a keyword the selection has itself shows its own state: the tick, or the dash when only some photos have it
     ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["travel"]}}));
     ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[0]], "addKeywords": ["travel|Italy"]}}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setMeta");
     assert!(!has(&h, "keywordInside:travel") && !has(&h, "keywordInside:travel|Italy"));
     // with nothing selected nothing is applied, inside or not
     ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": []}}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     assert!(has(&h, "keywordRow:travel") && !h.app.widgets.iter().any(|(w, _)| w.starts_with("keywordInside:")));
 }
 
@@ -400,7 +400,7 @@ fn grouped_keywords_share_a_line_naming_their_parent() {
     let whole = rect(&h, "keywordChip:Places|Italy|Rome").width();
 
     h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.settings.keyword_chips");
     let heading = rect(&h, "keywordGroup:Places|Italy");
     let (rome, venice) = (rect(&h, "keywordChip:Places|Italy|Rome"), rect(&h, "keywordChip:Places|Italy|Venice"));
     assert!(rome.top() >= heading.bottom(), "under its heading: {rome:?} {heading:?}");
@@ -428,7 +428,7 @@ fn a_long_grouped_list_is_shortened_until_asked_for() {
     let list_before = rect(&h, "field:keywordFilter").top();
 
     h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.settings.keyword_chips");
     assert_eq!(count(&h, "keywordChip:"), 7, "a heading and seven chips");
     assert!(has(&h, "keywordChipsMore") && !has(&h, "keywordChipsFewer"));
     assert!(rect(&h, "field:keywordFilter").top() < list_before - 80.0, "{} from {list_before}", rect(&h, "field:keywordFilter").top());
@@ -467,7 +467,7 @@ fn a_selection_without_keywords_says_so() {
     give(&mut h, &ids, &[]);
     assert!(has(&h, "keywordChipsEmpty"));
     h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.settings.keyword_chips");
     assert!(has(&h, "keywordChipsEmpty"));
 }
 
@@ -504,7 +504,7 @@ fn grouped_suggestions_name_the_keyword_alone() {
     ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[0]], "addKeywords": ["Places|Portugal|Lisbon"]}}));
     let whole = rect(&h, "kwSuggest:Places|Portugal|Lisbon").width();
     h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.settings.keyword_chips");
     assert!(rect(&h, "kwSuggest:Places|Portugal|Lisbon").width() < whole);
     ask(&mut h, "ui.clickWidget", json!({"id": "kwSuggest:Places|Portugal|Lisbon"}));
     assert!(ids.iter().all(|id| keywords_of(&h, *id).iter().any(|k| k == "Places|Portugal|Lisbon")));
@@ -701,7 +701,7 @@ fn any_name_fits_the_panel() {
     give(&mut h, &ids, &keywords);
     for layout in [crate::state::KeywordChips::Paths, crate::state::KeywordChips::Grouped] {
         h.app.ui.settings.keyword_chips = layout;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.settings.keyword_chips");
         let panel = rect(&h, "panel:right_panel");
         let chips: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("keywordChip:")).cloned().collect();
         assert_eq!(chips.len(), keywords.len(), "{layout:?}");
@@ -895,7 +895,7 @@ fn an_offer_out_of_sight_is_not_taken() {
             assert_eq!(r["ok"], true, "{r}");
         }
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Enter");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert!(none_has(&h, &ids, "Places|Portugal|Lisbon"), "{:?}", keywords_of(&h, ids[0]));
 }

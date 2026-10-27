@@ -165,7 +165,7 @@ fn view_menu_lists_modes_and_themes_with_checks() {
 #[test]
 fn the_top_bar_button_and_settings_cards_drive_the_mode() {
     let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
-    h.settle(Duration::from_secs(60));
+    h.settled(Duration::from_secs(60), "the new session");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:appearance"}), T)["ok"], true);
     h.step();
     assert_eq!(h.app.ui.settings.appearance_mode, AppearanceMode::Auto);

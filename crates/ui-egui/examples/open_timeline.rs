@@ -19,12 +19,16 @@ fn main() {
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let cmd = |h: &mut Headless, c: &str| req(h, "engine.execute", json!({"command": c}))["result"].clone();
     cmd(&mut h, "view.photoGrid");
-    h.settle(Duration::from_secs(60));
+    if !h.settle(Duration::from_secs(60)) {
+        eprintln!("did not settle within {:?}: {}", Duration::from_secs(60), h.busy_description());
+    }
     cmd(&mut h, "library.selectNone");
     let r = cmd(&mut h, "library.next");
     eprintln!("{:9.1} first: {r}", ms());
     let first = r["active"].as_u64().unwrap_or(1);
-    h.settle(Duration::from_secs(60));
+    if !h.settle(Duration::from_secs(60)) {
+        eprintln!("did not settle within {:?}: {}", Duration::from_secs(60), h.busy_description());
+    }
     let gpu = req(&mut h, "ui.inspect", json!({}))["result"]["perf"]["gpu"].clone();
     eprintln!("{:9.1} grid settled, gpu {gpu}", ms());
     // what the loupe shows, every frame, until `photo` is rendered for good
@@ -55,7 +59,9 @@ fn main() {
     cmd(&mut h, "view.detail");
     let open = watch(&mut h, "open", first);
     let t = ms();
-    h.settle(Duration::from_secs(60));
+    if !h.settle(Duration::from_secs(60)) {
+        eprintln!("did not settle within {:?}: {}", Duration::from_secs(60), h.busy_description());
+    }
     eprintln!("{:9.1} neighbours prefetched after {:.0} ms", ms(), ms() - t);
     // step towards the side that has photos (the sort may put the first one last)
     let mut dir = "library.next";
@@ -69,6 +75,8 @@ fn main() {
     let step1 = watch(&mut h, "next (prefetched)", n1);
     let n2 = cmd(&mut h, dir)["active"].as_u64().unwrap_or(0);
     let step2 = watch(&mut h, "next at once", n2);
-    h.settle(Duration::from_secs(60));
+    if !h.settle(Duration::from_secs(60)) {
+        eprintln!("did not settle within {:?}: {}", Duration::from_secs(60), h.busy_description());
+    }
     eprintln!("{:9.1} summary: open {open:.0} ms, next prefetched {step1:.0} ms, next at once {step2:.0} ms", ms());
 }

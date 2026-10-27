@@ -472,7 +472,7 @@ fn a_refused_backup_from_the_menu_shows_why() {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
     let t = std::time::Duration::from_secs(30);
-    h.settle(t);
+    h.settled(t, "the new session");
     for id in ["menu:File", "menuitem:file.backupLibrary"] {
         let r = h.request("ui.clickWidget", json!({"id": id}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
@@ -707,7 +707,7 @@ fn native_menu_commands_respect_the_blocking_window_policy() {
     use crate::state::Dialog;
 
     let mut h = crate::headless::Headless::new(app(), [1000.0, 760.0], 1.0);
-    h.settle(std::time::Duration::from_secs(20));
+    h.settled(std::time::Duration::from_secs(20), "the new session");
     h.app.ui.view = ViewMode::PhotoGrid;
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
 
