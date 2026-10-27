@@ -281,6 +281,7 @@
   "{count} more warnings.": "Mais {count} avisos.",
   "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} fotos do catálogo estão em Excluídos recentemente desta biblioteca e continuam lá; restaure-as de Excluídos recentemente para vê-las.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} imagens do catálogo não foram importadas porque seus registros no catálogo estão incompletos.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "{skipped} imagens do catálogo não foram importadas porque seus registros no catálogo contradizem outros (um ID de imagem repetido ou uma cópia virtual de uma cópia virtual).",
   "{photos} catalog records processed; {collections} collections.": "{photos} registros do catálogo processados; {collections} coleções.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originais estão ausentes. Seus registros no catálogo estão disponíveis; use Encontrar fotos ausentes para vinculá-los novamente.",
   "Applied {name}": "{name} aplicado",

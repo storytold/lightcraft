@@ -275,6 +275,7 @@
   "{count} more warnings.": "Další varování: {count}.",
   "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "Fotografie katalogu v nedávno odstraněných této knihovny: {in_trash}. Zůstávají tam; chcete-li je vidět, obnovte je z nedávno odstraněných.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Neimportované obrázky katalogu: {skipped}. Jejich záznamy v katalogu jsou neúplné.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "Neimportované obrázky katalogu: {skipped}. Jejich záznamy v katalogu odporují jiným (opakované ID obrázku nebo virtuální kopie virtuální kopie).",
   "{photos} catalog records processed; {collections} collections.": "Zpracováno záznamů katalogu: {photos}; kolekcí: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Chybějící originály: {missing}. Jejich záznamy jsou v katalogu dostupné; použijte Najít chybějící fotografie a znovu je propojte.",
   "Applied {name}": "Použito: {name}",

@@ -37,7 +37,10 @@ impl FileSource {
             return Err("catalog exceeds 16 GiB import limit".into());
         }
         let mut header = vec![0; 100];
-        file.read_exact(&mut header).map_err(|e| format!("cannot read SQLite header: {e}"))?;
+        file.read_exact(&mut header).map_err(|e| match e.kind() {
+            std::io::ErrorKind::UnexpectedEof => "it is too short to be a SQLite database".to_string(),
+            _ => format!("cannot read SQLite header: {e}"),
+        })?;
         let source = Self { file: Mutex::new(file), path: path.into(), before, header };
         source.ensure_unchanged()?;
         Ok(source)

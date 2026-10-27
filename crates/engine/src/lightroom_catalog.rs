@@ -15,12 +15,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 type Row = BTreeMap<String, Value>;
-const COMMAND: &str = "library.importLightroom";
 /// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
 const MAX_FILE: u64 = 1 << 32;
+/// Deepest keyword or collection hierarchy followed; a deeper chain is cut there.
+const MAX_DEPTH: usize = 64;
 
-fn error(why: impl Into<String>) -> crate::EngineError {
-    crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
+/// The catalog at `path` can't be read (it is missing, not allowed, too large or changing): an
+/// error naming it, not "invalid parameters".
+fn unreadable(path: &Path, why: impl std::fmt::Display) -> crate::EngineError {
+    crate::EngineError::Other(format!("the Lightroom catalog {} can't be read: {why}", path.display()))
+}
+
+/// The catalog at `path` is read but isn't a whole catalog (its database or a table it needs is
+/// broken): an error naming it.
+fn damaged(path: &Path, why: impl std::fmt::Display) -> crate::EngineError {
+    crate::EngineError::Other(format!("the Lightroom catalog {} is damaged: {why}", path.display()))
 }
 
 fn text<'a>(r: &'a Row, k: &str) -> &'a str {
@@ -49,14 +58,18 @@ struct Reader {
     tables: Vec<LiveTable>,
 }
 impl Reader {
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
-        let Some(t) = self.tables.iter().find(|t| t.name == name) else {
-            return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
-        };
-        let columns = t.column_names.as_ref().ok_or_else(|| format!("cannot read {name} columns"))?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("{name}: {e:?}"))?;
+    fn has(&self, name: &str) -> bool {
+        self.tables.iter().any(|t| t.name == name)
+    }
+
+    /// The rows of table `name` (none when it is not in the catalog); an error says what is wrong
+    /// with the table, the caller names it.
+    fn table(&self, name: &str) -> Result<Vec<Row>, String> {
+        let Some(t) = self.tables.iter().find(|t| t.name == name) else { return Ok(Vec::new()) };
+        let columns = t.column_names.as_ref().ok_or("cannot read its columns")?;
+        let rows = self.db.read_table(t.rootpage, columns.len())?;
         if rows.len() > 1_000_000 {
-            return Err(format!("{name}: more than one million records"));
+            return Err("more than one million records".into());
         }
         Ok(rows
             .into_iter()
@@ -78,22 +91,19 @@ impl Reader {
             .collect())
     }
 
-    fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
-        match self.table(name, false) {
-            Ok(rows) => Ok(rows),
-            Err(error) => {
-                warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
-                Ok(Vec::new())
-            }
-        }
+    fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Vec<Row> {
+        self.table(name).unwrap_or_else(|error| {
+            warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
+            Vec::new()
+        })
     }
 
     fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
-        let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
+        let columns = t.column_names.as_ref().ok_or("cannot read its columns")?;
+        let rows = self.db.read_table(t.rootpage, columns.len())?;
         if rows.len() > 1_000_000 {
-            return Err("Adobe_AdditionalMetadata: more than one million records".into());
+            return Err("more than one million records".into());
         }
         let mut warnings = Vec::new();
         let mut out = Vec::with_capacity(rows.len());
@@ -195,7 +205,8 @@ pub struct SkippedImage {
     pub reason: SkipReason,
 }
 
-/// Why a catalog image was not imported. Lightroom leaves such records behind and ignores them.
+/// Why a catalog image was not imported. Lightroom leaves incomplete records behind and ignores
+/// them; contradictory ones come from a damaged catalog. Either costs that image, not the import.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkipReason {
@@ -209,6 +220,12 @@ pub enum SkipReason {
     IncompletePath,
     /// A virtual copy whose master was skipped.
     MasterSkipped,
+    /// A virtual copy whose master is not in the catalog.
+    MissingMaster,
+    /// A virtual copy whose master is itself a virtual copy (or the copy itself).
+    MasterIsCopy,
+    /// An image whose id an earlier image of the catalog has: the first one is imported.
+    DuplicateId,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -217,24 +234,27 @@ pub(crate) struct ImportIndex {
     pub(crate) collections: BTreeMap<String, u64>,
 }
 
+/// The library's record of earlier imports (`Interop/lightroom-index.json`; none yet: empty). An
+/// error names the file: it is the library's, not the catalog's.
 pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
     match path {
         Some(path) => {
+            let failed = |why: String| crate::EngineError::Other(format!("can't read the Lightroom import index {}: {why}", path.display()));
             let file = match std::fs::File::open(path) {
                 Ok(file) => file,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ImportIndex::default()),
-                Err(e) => return Err(error(e.to_string())),
+                Err(e) => return Err(failed(e.to_string())),
             };
-            if file.metadata().map_err(|e| error(e.to_string()))?.len() > 16 * 1024 * 1024 {
-                return Err(error("Lightroom import index exceeds 16 MiB"));
+            if file.metadata().map_err(|e| failed(e.to_string()))?.len() > 16 * 1024 * 1024 {
+                return Err(failed("it exceeds 16 MiB".into()));
             }
             let mut bytes = Vec::new();
             use std::io::Read;
-            file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| error(e.to_string()))?;
+            file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| failed(e.to_string()))?;
             if bytes.len() > 16 * 1024 * 1024 {
-                return Err(error("Lightroom import index exceeds 16 MiB"));
+                return Err(failed("it exceeds 16 MiB".into()));
             }
-            serde_json::from_slice(&bytes).map_err(|e| error(format!("invalid Lightroom import index: {e}")))
+            serde_json::from_slice(&bytes).map_err(|e| failed(format!("it is damaged: {e}")))
         }
         None => Ok(ImportIndex::default()),
     }
@@ -249,45 +269,113 @@ fn identity(data: &CatalogImport, photo: &CatalogPhoto) -> String {
     if photo.uuid.is_empty() { format!("{}:{}", key(&data.source), photo.source_id) } else { photo.uuid.clone() }
 }
 
-fn validate(data: &CatalogImport) -> Result<(), String> {
-    let photos: HashMap<_, _> = data.photos.iter().map(|p| (p.source_id, p)).collect();
-    if photos.len() != data.photos.len() {
-        return Err("duplicate source photo ids".into());
+/// Leave out the catalog's contradictory records, so one bad record costs that record and not the
+/// import (#1588). An image with an id an earlier image has, and a virtual copy whose master is not
+/// in the catalog or is itself a virtual copy, are skipped and listed in `skipped`. A collection
+/// hierarchy that loops or is deeper than [`MAX_DEPTH`] is cut, the collection where it is cut
+/// going to the top level with a warning.
+///
+/// Called where the catalog is read and again where its photos become records, so neither route
+/// can keep one; the second pass finds nothing.
+pub(crate) fn skip_inconsistent_records(data: &mut CatalogImport) {
+    let mut skipped = Vec::new();
+    let mut seen = HashSet::new();
+    data.photos.retain(|p| {
+        if seen.insert(p.source_id) {
+            return true;
+        }
+        skipped.push(SkippedImage { image: p.source_id, reason: SkipReason::DuplicateId });
+        false
+    });
+    // whether each image is a virtual copy (`masterImage` is 0 for a master)
+    let is_copy: HashMap<i64, bool> = data.photos.iter().map(|p| (p.source_id, number(&p.image, "masterImage") != 0)).collect();
+    data.photos.retain(|p| {
+        let master = number(&p.image, "masterImage");
+        let reason = match is_copy.get(&master) {
+            _ if master == 0 => return true,
+            Some(false) => return true,
+            Some(true) => SkipReason::MasterIsCopy,
+            None => SkipReason::MissingMaster,
+        };
+        skipped.push(SkippedImage { image: p.source_id, reason });
+        false
+    });
+    data.skipped.extend(skipped);
+    let cut = collection_cuts(&data.collections);
+    if cut.is_empty() {
+        return;
     }
-    for photo in &data.photos {
-        let master = number(&photo.image, "masterImage");
-        if master != 0
-            && (master == photo.source_id
-                || !photos.contains_key(&master)
-                || photos.get(&master).is_some_and(|p| number(&p.image, "masterImage") != 0))
-        {
-            return Err(format!("invalid virtual copy master for {}", photo.source_id));
+    for collection in &mut data.collections {
+        if let Some(why) = cut.get(&number(collection, "id_local")) {
+            collection.insert("parent".into(), json!(0));
+            data.warnings.push(format!("collection “{}”: {why}; imported at the top level", text(collection, "name")));
         }
     }
-    let collections: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), r)).collect();
-    for id in collections.keys() {
-        let mut seen = HashSet::new();
-        let mut at = *id;
-        while let Some(r) = collections.get(&at) {
-            if seen.len() >= 64 || !seen.insert(at) {
-                return Err("cyclic or overly deep collection hierarchy".into());
-            }
-            at = number(r, "parent");
-            if at == 0 {
-                break;
-            }
-        }
-    }
-    Ok(())
 }
 
-pub(crate) fn validate_for_job(data: &CatalogImport) -> Result<(), String> {
-    validate(data)
+/// The collections whose parent link must go for the hierarchy to be a tree no deeper than
+/// [`MAX_DEPTH`], and why. A loop is cut at its oldest collection (the lowest id: Lightroom numbers
+/// records as they are made, so it is most likely the loop's real top); a chain too deep is cut
+/// every [`MAX_DEPTH`] levels from its top, the collection there going to the top level. Each
+/// chain is followed once.
+fn collection_cuts(collections: &[Row]) -> HashMap<i64, &'static str> {
+    let mut parents: HashMap<i64, i64> = collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let ids: Vec<i64> = collections.iter().map(|r| number(r, "id_local")).filter(|id| *id != 0).collect();
+    let mut cut = HashMap::new();
+    // loops: a collection met again on the chain being followed closes one
+    let mut done = HashSet::new();
+    for &start in &ids {
+        let mut chain = Vec::new();
+        let mut on_chain = HashMap::new();
+        let mut at = start;
+        while at != 0 && !done.contains(&at) {
+            let Some(&parent) = parents.get(&at) else { break };
+            if let Some(&i) = on_chain.get(&at) {
+                if let Some(&top) = chain.get(i..).and_then(|looped: &[i64]| looped.iter().min()) {
+                    parents.insert(top, 0);
+                    cut.insert(top, "its parent collections form a loop");
+                }
+                break;
+            }
+            on_chain.insert(at, chain.len());
+            chain.push(at);
+            at = parent;
+        }
+        done.extend(chain);
+    }
+    // depth from the top, now that no chain loops (bounded all the same)
+    let mut depth: HashMap<i64, usize> = HashMap::new();
+    for &start in &ids {
+        let mut chain = Vec::new();
+        let mut at = start;
+        let top = loop {
+            if let Some(&known) = depth.get(&at) {
+                break known + 1;
+            }
+            match parents.get(&at) {
+                Some(&parent) if at != 0 && chain.len() <= ids.len() => {
+                    chain.push(at);
+                    at = parent;
+                }
+                // `chain`'s last collection is at the top level
+                _ => break 0,
+            }
+        };
+        for (i, id) in chain.into_iter().rev().enumerate() {
+            depth.insert(id, top + i);
+        }
+    }
+    for (id, d) in depth {
+        if d > 0 && d.is_multiple_of(MAX_DEPTH) {
+            cut.insert(id, "it is nested more than 64 collections deep");
+        }
+    }
+    cut
 }
 
 fn bytes(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let len = f.metadata().map_err(|e| e.to_string())?.len();
     if len > MAX_FILE {
         return Err("catalog or WAL exceeds 4 GiB import limit".into());
@@ -429,7 +517,7 @@ fn original_path(root: &str, folder: &str, name: &str, catalog: &Path) -> (Strin
 }
 
 /// Inspect `.lrcat` plus committed WAL pages without modifying either source file.
-pub fn read(path: &Path) -> Result<CatalogImport, String> {
+pub fn read(path: &Path) -> crate::Result<CatalogImport> {
     let cancel = AtomicBool::new(false);
     let total = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
@@ -437,47 +525,58 @@ pub fn read(path: &Path) -> Result<CatalogImport, String> {
 }
 
 /// Read a Lightroom Classic catalog for import, counting the tables read in `total` / `done` and
-/// stopping when `cancel` is set. Images whose catalog records are incomplete are left out and
-/// listed in [`CatalogImport::skipped`] instead of failing the read.
-pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize, done: &AtomicUsize) -> Result<CatalogImport, String> {
+/// stopping when `cancel` is set ([`crate::EngineError::Cancelled`]). A bad record costs that
+/// record, not the read: images whose records are incomplete or contradictory are left out and
+/// listed in [`CatalogImport::skipped`], a looping keyword or collection hierarchy is cut with a
+/// warning. Only a catalog that can't be read, or whose database or required tables are broken,
+/// is an error, naming the file.
+pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize, done: &AtomicUsize) -> crate::Result<CatalogImport> {
     // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
-    let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let before = std::fs::metadata(path).map_err(|e| unreadable(path, e))?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
-    let main = FileSource::open(path)?;
+    let main = FileSource::open(path).map_err(|e| unreadable(path, e))?;
+    let wal_error = |e: String| format!("its write-ahead log {}: {e}", wal_path.display());
     let wal = match std::fs::metadata(&wal_path) {
-        Ok(_) => bytes(&wal_path)?,
+        Ok(_) => bytes(&wal_path).map_err(|e| unreadable(path, wal_error(e)))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(unreadable(path, wal_error(e.to_string()))),
     };
-    let wal_len = committed_wal_len(main.header(), &wal)?;
+    let wal_len = committed_wal_len(main.header(), &wal).map_err(|e| damaged(path, wal_error(e)))?;
     ensure_read_active(cancel)?;
-    let db = Database::open_file_with_wal(main, &wal[..wal_len]).map_err(|e| format!("invalid SQLite catalog: {e:?}"))?;
-    let after = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let db = Database::open_file_with_wal(main, &wal[..wal_len]).map_err(|e| damaged(path, format!("not a readable SQLite database: {e}")))?;
+    let after = std::fs::metadata(path).map_err(|e| unreadable(path, e))?;
     let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() || wal_before != wal_after {
-        return Err("catalog changed during reading; close Lightroom and retry".into());
+        return Err(unreadable(path, "it changed during reading; close Lightroom and retry"));
     }
-    let reader = Reader { tables: db.live_tables()?, db };
+    let reader = Reader { tables: db.live_tables().map_err(|e| damaged(path, e))?, db };
     let mut warnings = Vec::new();
-    let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
+    // a table every catalog has: without it, or with it broken, there is nothing to import
+    let table = |name: &str| -> crate::Result<Vec<Row>> {
         ensure_read_active(cancel)?;
-        let rows = reader.table(name, required)?;
+        if !reader.has(name) {
+            return Err(crate::EngineError::Other(format!(
+                "{} is not a Lightroom Classic catalog (or is damaged): it has no {name} table",
+                path.display()
+            )));
+        }
+        let rows = reader.table(name).map_err(|e| damaged(path, format!("table {name} can't be read: {e}")))?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
-    let optional_table = |name: &str, warnings: &mut Vec<String>| -> Result<Vec<Row>, String> {
+    let optional_table = |name: &str, warnings: &mut Vec<String>| -> crate::Result<Vec<Row>> {
         ensure_read_active(cancel)?;
-        let rows = reader.optional_table(name, warnings)?;
+        let rows = reader.optional_table(name, warnings);
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
-    let roots: HashMap<_, _> = table("AgLibraryRootFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let folders: HashMap<_, _> = table("AgLibraryFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let files: HashMap<_, _> = table("AgLibraryFile", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let roots: HashMap<_, _> = table("AgLibraryRootFolder")?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let folders: HashMap<_, _> = table("AgLibraryFolder")?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
+    let files: HashMap<_, _> = table("AgLibraryFile")?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
         .into_iter()
         .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
@@ -495,23 +594,19 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let metadata: HashMap<_, _> = metadata_rows.into_iter().map(|r| (number(&r, "image"), r)).collect();
     let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
+    // keywords whose looping hierarchy was reported, so the warning comes once per keyword
+    let mut looped = HashSet::new();
     for r in optional_table("AgLibraryKeywordImage", &mut warnings)? {
         ensure_read_active(cancel)?;
-        let mut parts = Vec::new();
-        let mut at = number(&r, "tag");
-        let mut seen = HashSet::new();
-        while at != 0 {
-            if parts.len() >= 64 || !seen.insert(at) {
-                return Err("cyclic or overly deep keyword hierarchy".into());
-            }
-            let Some(k) = keyword_rows.get(&at) else { break };
-            let name = text(k, "name");
-            if !name.is_empty() {
-                parts.push(name.to_string());
-            }
-            at = number(k, "parent");
+        let tag = number(&r, "tag");
+        let (parts, cut) = keyword_path(tag, &keyword_rows);
+        if cut && looped.insert(tag) {
+            let name = keyword_rows.get(&tag).map_or("", |k| text(k, "name"));
+            warnings.push(format!(
+                "keyword “{name}”: its parent keywords form a loop or are nested more than 64 deep; imported as “{}”",
+                parts.join("|")
+            ));
         }
-        parts.reverse();
         if !parts.is_empty() {
             keywords.entry(number(&r, "image")).or_default().push(parts.join("|"));
         }
@@ -559,7 +654,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     // these behind and ignores them); they and their virtual copies are skipped and reported
     // instead of failing the import
     let mut orphans = HashSet::new();
-    for image in table("Adobe_images", true)? {
+    for image in table("Adobe_images")? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
         let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
@@ -612,13 +707,38 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     }
     drop_copies_of(&mut out, &orphans);
     refuse_non_media(&mut out);
+    skip_inconsistent_records(&mut out);
     ensure_read_active(cancel)?;
-    reader.db.ensure_unchanged()?;
+    reader.db.ensure_unchanged().map_err(|e| unreadable(path, e))?;
     let wal_after = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     if wal_before != wal_after {
-        return Err("catalog changed during reading; close Lightroom and retry".into());
+        return Err(unreadable(path, "it changed during reading; close Lightroom and retry"));
     }
     Ok(out)
+}
+
+/// A keyword's path from the top of its hierarchy (`Travel|Goa`), and whether its parent chain had
+/// to be cut: when it loops, the path stops before the first keyword that comes again; when it is
+/// deeper than [`MAX_DEPTH`], at that depth.
+fn keyword_path(tag: i64, keywords: &HashMap<i64, Row>) -> (Vec<String>, bool) {
+    let mut parts = Vec::new();
+    let mut seen = HashSet::new();
+    let mut at = tag;
+    let mut cut = false;
+    while at != 0 {
+        if seen.len() >= MAX_DEPTH || !seen.insert(at) {
+            cut = true;
+            break;
+        }
+        let Some(k) = keywords.get(&at) else { break };
+        let name = text(k, "name");
+        if !name.is_empty() {
+            parts.push(name.to_string());
+        }
+        at = number(k, "parent");
+    }
+    parts.reverse();
+    (parts, cut)
 }
 
 /// Drop the virtual copies whose master was skipped, adding them to the skipped images: a copy has
@@ -691,8 +811,8 @@ pub(crate) fn refuse_non_media(data: &mut CatalogImport) {
     data.warnings.extend(warnings);
 }
 
-fn ensure_read_active(cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) { Err("Lightroom import cancelled".into()) } else { Ok(()) }
+fn ensure_read_active(cancel: &AtomicBool) -> crate::Result<()> {
+    if cancel.load(Ordering::Relaxed) { Err(crate::EngineError::Cancelled("Lightroom import cancelled".into())) } else { Ok(()) }
 }
 
 fn mapped_settings(
@@ -903,8 +1023,10 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
     let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let mut index = load_index(index_path.as_deref())?;
-    let archive_path =
-        archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map(|stored| stored.path).map_err(error)).transpose()?;
+    let archive_path = archive_dir
+        .as_ref()
+        .map(|dir| crate::lightroom_archive::store(dir, &data).map(|stored| stored.path).map_err(crate::EngineError::Other))
+        .transpose()?;
     let undo0 = s.undo.len();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
@@ -921,8 +1043,8 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
         apply_prepared(s, data, ApplyPrepared { update_existing, files, index: &mut index, archive_path, missing_sources: &missing_sources, undo0 })?;
     if let Some(path) = index_path {
         s.persist()?;
-        let bytes = serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?;
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))?;
+        let bytes = serde_json::to_vec(&applied.index).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| crate::EngineError::Other(e.to_string()))?;
     }
     Ok(applied.report)
 }
@@ -1019,9 +1141,10 @@ fn stage_collections(
 /// (added, missing, failed, warnings and skipped images).
 pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, context: ApplyPrepared<'_>) -> crate::Result<AppliedImport> {
     let ApplyPrepared { update_existing, files, index, archive_path, missing_sources, undo0 } = context;
-    // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
+    // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135),
+    // nor a contradictory one (#1588)
     refuse_non_media(&mut data);
-    validate(&data).map_err(error)?;
+    skip_inconsistent_records(&mut data);
     let mut warnings = data.warnings.clone();
     let duplicates: HashMap<_, _> =
         files.duplicates.iter().filter_map(|d| d.existing.map(|id| (key(&d.path), (PhotoId(id), d.file.as_deref())))).collect();
@@ -1046,6 +1169,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let refused: HashSet<_> = data.photos.iter().filter(|p| matches!(p.original, Original::Refused(_))).map(|p| p.source_id).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
+    // virtual copies whose master didn't become a record (`skip_inconsistent_records` leaves none)
+    let mut masterless = Vec::new();
     for src in photos {
         let master = number(&src.image, "masterImage");
         if master == 0 && missing_sources.contains(&key(&src.path)) {
@@ -1069,12 +1194,13 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             }
             (**id).clone()
         } else if master != 0 {
-            let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
-            let mut p = planned
-                .get(&master_id)
-                .cloned()
-                .or_else(|| s.catalog.photo(master_id).map(|p| (**p).clone()))
-                .ok_or_else(|| error("virtual copy master is unavailable"))?;
+            let master_record =
+                ids.get(&master).copied().and_then(|id| planned.get(&id).cloned().or_else(|| s.catalog.photo(id).map(|p| (**p).clone())));
+            let Some(mut p) = master_record else {
+                masterless.push(SkippedImage { image: src.source_id, reason: SkipReason::MissingMaster });
+                continue;
+            };
+            let master_id = p.id;
             p.id = s.catalog.alloc_photo_id();
             p.copy_of = Some(master_id);
             p.copy_name = Some(text(&src.image, "copyName").to_string());
@@ -1241,6 +1367,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
+    data.skipped.extend(masterless);
     let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings);
     if !ops.is_empty() {
         s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
