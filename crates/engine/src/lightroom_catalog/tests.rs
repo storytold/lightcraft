@@ -867,6 +867,9 @@ fn imports_into_a_library_on_a_volume_without_hard_links() {
     assert_eq!(archive, library.join("Interop").join("lightroom-import-0.lca"));
     assert!(std::fs::read(archive).unwrap().starts_with(b"LC-LRARCH"));
     assert!(library.join("Interop").join("lightroom-index.json").is_file());
+    let mut names: Vec<_> = std::fs::read_dir(library.join("Interop")).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    names.sort();
+    assert_eq!(names, ["lightroom-import-0.lca", "lightroom-index.json"], "the writability probe leaves nothing behind");
     s.close_library().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -903,7 +906,7 @@ fn an_archive_that_cannot_be_saved_warns_and_the_import_proceeds() {
 }
 
 /// A linked `Interop` folder gets neither the archive nor the import index: both would land
-/// outside the library. The photos are still imported; the index write says why it failed.
+/// outside the library. The import is refused before any photo is imported.
 #[cfg(unix)]
 #[test]
 fn a_linked_interop_folder_gets_neither_the_archive_nor_the_index() {
@@ -921,6 +924,41 @@ fn a_linked_interop_folder_gets_neither_the_archive_nor_the_index() {
     assert!(e.to_string().contains(&format!("{} is a link or a file, not a folder", interop.display())), "{e}");
     assert_eq!(s.catalog.photos().count(), 0, "refused before anything is imported, so a retry can't duplicate");
     assert_eq!(std::fs::read_dir(dir.join("elsewhere")).unwrap().count(), 0, "nothing is written through the link");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An `Interop` folder that can't be written to would let the photos be imported and then fail
+/// at the import index, after the import was saved (a retry could duplicate virtual copies). It is
+/// refused before any photo is imported, with an error naming the folder.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_interop_folder_is_refused_before_anything_is_imported() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-interop-readonly-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let interop = library.join("Interop");
+    std::fs::create_dir_all(&interop).unwrap();
+    std::fs::set_permissions(&interop, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // root (some containers) ignores folder permissions: there is nothing to refuse
+    if std::fs::write(interop.join("root-check"), b"").is_ok() {
+        std::fs::set_permissions(&interop, std::fs::Permissions::from_mode(0o755)).unwrap();
+        s.close_library().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        lightcraft_testkit::skip!(System, "folder permissions are not enforced for this user (root)");
+        return;
+    }
+    let e = import(&mut s, &source, false).unwrap_err();
+    std::fs::set_permissions(&interop, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(e.to_string().contains(&format!("the Lightroom import index can't be written in {}", interop.display())), "{e}");
+    assert_eq!(s.catalog.photos().count(), 0, "refused before anything is imported, so a retry can't duplicate");
+    assert_eq!(std::fs::read_dir(&interop).unwrap().count(), 0, "nothing was written");
     s.close_library().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
