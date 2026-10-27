@@ -141,7 +141,7 @@
   "Created folder “{name}” in “{parent}”": "Kansio ”{name}” luotu kohteeseen ”{parent}”",
   "On {have} of {of} selected photos": "{have} / {of} valitulla kuvalla",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Maalataan ”{k}”: napsauta kuvia lisätäksesi tai poistaaksesi sen · Esc lopettaa",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Liitä kuviin: {n}{:.0} — vain kopioidut asetukset liitetään",
+  "Paste into {n} photo{}": "Liitä kuviin: {n}{:.0}",
   "Preset: {name}": "Esiasetus: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Vain esikatselu — muokataan kameran upotettua JPEG-kuvaa ({})",
   "Preview only — {}": "Vain esikatselu — {}",

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Paste Selected Settings pastes the crop and Remove
+- Copy Edit Settings still leaves Crop, Remove, Masking and Red Eye out by default, as Lightroom does, so a plain
+  Paste doesn't change them. Ticking one of them in Paste Selected Settings (⇧⌘V) now pastes it from the copied photo;
+  before, a group the copy had left out was silently skipped.
+- A crop pasted, pasted from the previous photo or synced onto a photo of another shape keeps its aspect ratio, angle,
+  relative size and centre instead of being stretched; on a photo of the same shape it is pasted as it is.
+
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
