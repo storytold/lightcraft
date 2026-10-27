@@ -23,15 +23,35 @@ pub fn target_origin(own: &str, parent: Option<&str>, allowed: Option<&str>) -> 
     {
         return Some(own.to_string());
     }
-    let allowed = allowed?.trim();
-    is_origin(allowed).then(|| allowed.to_string())
+    canonical_origin(allowed?.trim())
 }
 
-/// True for a serialised URL origin: `http(s)://host[:port]` with no path, query, fragment or
-/// credentials.
+/// `s` as a browser serialises an origin (lowercase scheme and host, no default port), or `None`
+/// when it isn't one [`is_origin`] accepts. `MessageEvent.origin` is compared with this string
+/// exactly, so `https://Files.Example:443` must become `https://files.example` to ever match.
+pub fn canonical_origin(s: &str) -> Option<String> {
+    if !is_origin(s) {
+        return None;
+    }
+    let (scheme, rest) = s.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    let (host, port) = match rest.split_once(':') {
+        Some((h, p)) => (h, Some(p.parse::<u16>().ok()?)),
+        None => (rest, None),
+    };
+    let host = host.to_ascii_lowercase();
+    match (scheme.as_str(), port) {
+        ("https", Some(443)) | ("http", Some(80)) | (_, None) => Some(format!("{scheme}://{host}")),
+        (_, Some(port)) => Some(format!("{scheme}://{host}:{port}")),
+    }
+}
+
+/// True for a URL origin: `http(s)://host[:port]` with no path, query, fragment or credentials,
+/// and only in forms whose browser serialisation [`canonical_origin`] can produce: an ASCII host
+/// (an IDN must be given in punycode, `xn--…`), and a numeric host only as a dotted-decimal IPv4.
 pub fn is_origin(s: &str) -> bool {
     let Some((scheme, rest)) = s.split_once("://") else { return false };
-    if !matches!(scheme, "http" | "https") || rest.is_empty() {
+    if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")) || rest.is_empty() {
         return false;
     }
     // IPv6 literals aren't accepted; name the host instead.
@@ -42,8 +62,18 @@ pub fn is_origin(s: &str) -> bool {
         Some((h, p)) => (h, Some(p)),
         None => (rest, None),
     };
-    if host.is_empty() {
+    if host.is_empty() || !host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_')) {
         return false;
+    }
+    // Browsers rewrite numeric hosts (`0x7f.1`, `127.1`, `010.0.0.1`) to dotted decimal; accept
+    // only the form they would produce.
+    let last = host.trim_end_matches('.').rsplit('.').next().unwrap_or("");
+    if last.bytes().all(|b| b.is_ascii_digit()) || last.to_ascii_lowercase().starts_with("0x") {
+        let parts: Vec<&str> = host.split('.').collect();
+        let decimal = |p: &&str| !p.is_empty() && (*p == "0" || !p.starts_with('0')) && p.parse::<u8>().is_ok();
+        if parts.len() != 4 || !parts.iter().all(decimal) {
+            return false;
+        }
     }
     match port {
         Some(p) => p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok(),
@@ -161,6 +191,41 @@ mod tests {
         for bad in
             ["*", "null", "files.example", "https://files.example/", "https://a@files.example", "javascript://x", "https://", "https://x:99999"]
         {
+            assert_eq!(target_origin(OWN, None, Some(bad)), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn host_origin_is_stored_as_the_browser_serialises_it() {
+        // `MessageEvent.origin` is lowercase with no default port; the stored origin must match it.
+        for (given, stored) in [
+            ("https://Files.Example", "https://files.example"),
+            ("HTTPS://FILES.EXAMPLE", "https://files.example"),
+            ("https://files.example:443", "https://files.example"),
+            ("http://files.example:80", "http://files.example"),
+            ("http://files.example:443", "http://files.example:443"),
+            ("https://files.example:80", "https://files.example:80"),
+            ("https://files.example:08443", "https://files.example:8443"),
+            ("https://xn--bcher-kva.example", "https://xn--bcher-kva.example"),
+            ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+            ("  https://Files.Example:443  ", "https://files.example"),
+        ] {
+            assert_eq!(target_origin(OWN, None, Some(given)).as_deref(), Some(stored), "{given}");
+        }
+    }
+
+    #[test]
+    fn host_origin_a_browser_would_serialise_differently_is_refused() {
+        for bad in [
+            "https://b\u{fc}cher.example",
+            "https://files.example:",
+            "https://0x7f.0.0.1",
+            "https://127.1",
+            "https://010.0.0.1",
+            "https://256.0.0.1",
+            "https://files%2eexample",
+            "https://[::1]",
+        ] {
             assert_eq!(target_origin(OWN, None, Some(bad)), None, "{bad}");
         }
     }
