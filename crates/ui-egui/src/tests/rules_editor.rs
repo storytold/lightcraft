@@ -20,14 +20,14 @@ fn editor(rules: serde_json::Value) -> Headless {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     let r = h.request("engine.execute", json!({"command": "dialog.newSmartAlbum", "params": {}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dialog.newSmartAlbum");
     h.app.ui.dialog = None;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.dialog");
     let r = h.request("engine.execute", json!({"command": "dialog.smartAlbum", "params": {"name": "Dates"}}), T);
     assert_eq!(r["ok"], true, "{r}");
     let Some(crate::state::Dialog::SmartRules { rules: r, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     *r = serde_json::from_value(json!({"rules": rules})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     h
 }
 
@@ -42,7 +42,7 @@ fn has(h: &Headless, id: &str) -> bool {
 fn request(h: &mut Headless, method: &str, id: &str) {
     let r = h.request(method, json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{method} {id}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 fn rule_count(h: &Headless) -> usize {

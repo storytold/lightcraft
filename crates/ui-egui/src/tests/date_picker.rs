@@ -19,14 +19,14 @@ fn editor(rules: serde_json::Value) -> Headless {
     assert_eq!(r["ok"], true, "{r}");
     let Some(crate::state::Dialog::SmartRules { rules: r, .. }) = &mut h.app.ui.dialog else { panic!("no rule editor") };
     *r = serde_json::from_value(json!({"rules": rules})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     h
 }
 
 fn click(h: &mut Headless, id: &str) {
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
 }
 
 fn has(h: &Headless, id: &str) -> bool {
@@ -83,7 +83,7 @@ fn between_dates_stay_in_order() {
 fn an_unreadable_date_opens_on_this_month() {
     let mut h = editor(json!([{"field": "captureDate", "op": "after", "value": "banana"}]));
     h.app.session.clock = Box::new(|| "2026-10-09T12:00:00".to_string());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting session.clock");
     click(&mut h, "datePicker:rules-0");
     assert!(has(&h, "datePickerCell:2026-10-09:rules-0"));
     assert_eq!(value(&h, 0), json!("banana"), "opening doesn't change the rule");
@@ -97,7 +97,7 @@ fn escape_closes_only_the_calendar() {
     assert!(has(&h, "datePickerCell:2026-01-20:rules-0"));
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert!(!has(&h, "datePickerCell:2026-01-20:rules-0"), "the calendar closed");
     assert!(h.app.ui.dialog.is_some(), "the editor stays open");
 }
@@ -110,7 +110,7 @@ fn escape_closes_only_a_dropdown() {
     assert!(has(&h, "ruleFieldItem:rating:rules-0"));
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert!(!has(&h, "ruleFieldItem:rating:rules-0"), "the menu closed");
     assert!(h.app.ui.dialog.is_some(), "the editor stays open");
 }

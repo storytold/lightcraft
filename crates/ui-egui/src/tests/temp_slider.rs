@@ -33,7 +33,7 @@ fn edit_panel(raw: bool) -> Headless {
     assert_eq!(h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), T)["ok"], true);
     assert_eq!(h.request("ui.set", json!({"view": "detail", "right": "edit"}), T)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string(), "color".to_string()];
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.open_sections");
     h
 }
 
@@ -66,7 +66,7 @@ fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
 fn set(h: &mut Headless, control: &str, value: f64) {
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
 }
 
 /// The thumb sits where Lightroom puts it (within 1 % of the model fitted to Lightroom's positions), clicking or
@@ -82,7 +82,7 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
     }
     set(&mut h, "wb.temp", 4850.0);
     assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:wb.temp", "fx": 0.5}), T)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking slider:wb.temp");
     assert_eq!(develop(&h).wb.temp, 7000.0, "a click in the middle of the track");
     // drag from As Shot on a Z 6II NEF (about 4850 K, 28 % along the track) to the middle
     set(&mut h, "wb.temp", 4850.0);
@@ -90,11 +90,11 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
     let from = track.left() + thumb(&h, "wb.temp") * track.width();
     let r = h.request("ui.drag", json!({"x": from, "y": track.center().y, "toX": track.center().x, "toY": track.center().y, "steps": 12}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.drag");
     let k = develop(&h).wb.temp;
     assert!((k - 7000.0).abs() <= 50.0, "dragged to the middle: {k} K");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:wb.temp", "fx": 1.0}), T)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking slider:wb.temp");
     assert_eq!(develop(&h).wb.temp, 50000.0);
 }
 
@@ -105,7 +105,7 @@ fn other_sliders_stay_linear() {
     set(&mut h, "light.exposure", 1.0);
     assert!((thumb(&h, "light.exposure") - 0.6).abs() < 0.005, "+1.00 of −5…+5 at 60 %");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure", "fx": 0.75}), T)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking slider:light.exposure");
     assert!((develop(&h).light.exposure - 2.5).abs() < 0.011, "{}", develop(&h).light.exposure);
 }
 
@@ -116,7 +116,7 @@ fn the_relative_temp_slider_stays_linear() {
     assert!(h.app.widgets.iter().all(|(w, _)| w != "slider:wb.temp"), "a JPEG has the relative scale");
     assert!((thumb(&h, "wb.tempRel") - 0.5).abs() < 0.005, "as shot in the middle");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:wb.tempRel", "fx": 0.75}), T)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking slider:wb.tempRel");
     assert!((thumb(&h, "wb.tempRel") - 0.75).abs() < 0.005, "the thumb where it was clicked");
     // +50 on the relative scale: 40 mired warmer than 6500 K
     let k = develop(&h).wb.temp;

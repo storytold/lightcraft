@@ -15,7 +15,7 @@ fn app() -> Headless {
     // Profile import needs no photos. Avoid unrelated demo renders while testing its notice.
     let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    assert!(h.settle(SETTLE), "the empty library settles before importing profiles");
+    h.settled(SETTLE, "the empty library settles before importing profiles");
     h
 }
 

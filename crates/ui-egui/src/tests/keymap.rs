@@ -19,7 +19,7 @@ fn demo() -> Headless {
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
@@ -176,11 +176,11 @@ fn clipboard_events_run_the_copy_and_paste_shortcuts() {
     let mut h = demo();
     assert!(h.app.session.clipboard.is_none());
     h.events.push(egui::Event::Copy);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert!(h.app.session.clipboard.is_some(), "Ctrl+C copied the edit settings");
     let shift_cmd = egui::Modifiers::SHIFT | egui::Modifiers::COMMAND;
     h.events.extend([egui::Event::ModifiersChanged(shift_cmd), egui::Event::Paste("text".into())]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert!(matches!(h.app.ui.dialog, Some(Dialog::PasteSettings { .. })), "⇧Ctrl+V: {:?}", h.app.ui.dialog);
 }
 
@@ -190,10 +190,10 @@ fn clipboard_events_run_the_copy_and_paste_shortcuts() {
 fn shift_insert_pastes_plainly() {
     let mut h = demo();
     h.events.push(egui::Event::Copy);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     let undo = h.app.session.undo.len();
     h.events.extend([egui::Event::ModifiersChanged(egui::Modifiers::SHIFT), egui::Event::Paste("text".into())]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert_eq!(h.app.ui.dialog, None, "no Paste Selected Settings");
     assert_eq!(h.app.session.undo.len(), undo + 1, "the settings were pasted");
 }
@@ -217,7 +217,7 @@ fn cmd_alt_shift_c_and_v_copy_and_paste_metadata() {
         p["key"] = json!(k);
         let r = h.request("ui.key", p, T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.key");
     };
 
     h.app.run("library.select", json!({"ids": [a.0]})).unwrap();
@@ -233,11 +233,11 @@ fn cmd_alt_shift_c_and_v_copy_and_paste_metadata() {
     let all = egui::Modifiers::COMMAND | egui::Modifiers::ALT | egui::Modifiers::SHIFT;
     h.app.run("library.select", json!({"ids": [a.0]})).unwrap();
     h.events.extend([egui::Event::ModifiersChanged(all), egui::Event::Copy]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert!(h.app.session.meta_clipboard.is_some(), "the Copy event with ⌥⇧ held copied the metadata");
     h.app.run("library.select", json!({"ids": [b.0]})).unwrap();
     h.events.extend([egui::Event::ModifiersChanged(all), egui::Event::Paste("text".into())]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     assert_eq!(title(&h, b), "Dawn", "the Paste event with ⌥⇧ held pasted the metadata");
     assert!(h.app.session.clipboard.is_none(), "no edit settings were copied");
     assert_eq!(h.app.ui.dialog, None, "no Paste Selected Settings");
@@ -254,7 +254,7 @@ fn opening_numeric_release_keeps_keys_in_the_editor() {
         h.app.run("app.setShortcut", json!({"id": "photo.increaseRating", "shortcut": "Enter"})).unwrap();
         let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["light"], "histogram": false}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.settle(SETTLE));
+        h.settled(SETTLE, "after ui.set");
         assert!(h.app.fonts_ready);
         assert!(h.app.recording_shortcut.is_none() && h.app.ui.name_edit.is_none());
         assert!(h.app.native_shortcuts.is_empty() && h.app.synthetic.is_empty() && h.events.is_empty());

@@ -26,7 +26,7 @@ fn open(h: &mut Headless, id: &str) {
 fn information_dialogs_end_with_one_close() {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new session");
     for id in ["app.systemInfo", "dialog.allMetadata", "app.whatsNew"] {
         open(&mut h, id);
         assert!(!has(&h, "button:dialogCancel"), "{id}: a Cancel button, though there is nothing to confirm");

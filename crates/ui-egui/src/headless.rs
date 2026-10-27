@@ -433,6 +433,7 @@ impl Headless {
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
     /// a row, or `timeout` passes. Returns whether it settled.
+    #[must_use = "`false` means it timed out with work still pending; tests use `settled`"]
     pub fn settle(&mut self, timeout: Duration) -> bool {
         let t0 = Instant::now();
         let mut quiet = 0;

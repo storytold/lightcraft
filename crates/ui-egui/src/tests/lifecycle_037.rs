@@ -1179,7 +1179,7 @@ fn an_overlay_that_appears_after_the_press_cancels_the_release() {
     assert!(h.app.quit_prompt.is_some(), "the prompt was not activated");
     // Remove the overlay: the same target is clickable again (a positive control after refusal).
     h.app.quit_prompt = None;
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles after the overlay");
+    h.settled(Duration::from_secs(60), "the Settings dialog settles after the overlay");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -1268,7 +1268,7 @@ fn a_nonprompt_overlay_that_appears_after_the_press_cancels_the_release() {
     );
     assert!(h.app.library_problem.is_some(), "the overlay was not activated");
     h.app.library_problem = None;
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles after the overlay");
+    h.settled(Duration::from_secs(60), "Settings settles after the overlay");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -1289,7 +1289,7 @@ fn a_library_problem_overlay_blocks_a_control_click_in_settings() {
     let id = "check:settings.confirmDelete";
     let before = h.app.ui.settings.confirm_delete;
     h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/no/such/library", "test error"));
-    assert!(h.settle(Duration::from_secs(60)), "the library problem window settles");
+    h.settled(Duration::from_secs(60), "the library problem window settles");
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == "button:libraryRetry"), "the library window is laid out");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], false, "{r}");
@@ -1300,7 +1300,7 @@ fn a_library_problem_overlay_blocks_a_control_click_in_settings() {
     assert!(h.app.library_problem.is_some(), "the overlay was not activated");
     // Positive control: the same control works once the covering window is gone.
     h.app.library_problem = None;
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles after the overlay");
+    h.settled(Duration::from_secs(60), "Settings settles after the overlay");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -2194,13 +2194,13 @@ fn hover_widget_refuses_clipped_and_covered_targets() {
     // The library window is a non-modal overlay (its dim is the modal layer). A target below it
     // must be refused before a pointer move is queued, then work again after the window closes.
     h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/no/such/library", "test error"));
-    assert!(h.settle(Duration::from_secs(60)), "the library window settles");
+    h.settled(Duration::from_secs(60), "the library window settles");
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == "button:libraryRetry"), "the library window is laid out");
     let r = h.request("ui.hoverWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["error"].as_str().unwrap_or_default().contains(id), "{r}");
     h.app.library_problem = None;
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles after the overlay");
+    h.settled(Duration::from_secs(60), "Settings settles after the overlay");
     let r = h.request("ui.hoverWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "the same hover works once the overlay is gone: {r}");
 }
@@ -2212,7 +2212,7 @@ fn hover_widget_refuses_clipped_and_covered_targets() {
 fn a_system_paste_under_a_new_barrier_is_refused() {
     let mut h = Headless::new(app(), [1200.0, 760.0], 1.0);
     let t = Duration::from_secs(20);
-    h.settle(Duration::from_secs(60));
+    h.settled(Duration::from_secs(60), "the new session");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": "field:search"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.view.clipboard = "blocked".into();

@@ -15,7 +15,7 @@ fn demo(size: [f32; 2]) -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
     // let the first renders finish (a render still running at exit can crash in GPU teardown)
-    h.settle(T);
+    h.settled(T, "the new session");
     h
 }
 
@@ -27,7 +27,7 @@ fn open(h: &mut Headless, command: &str) {
     let r = h.request("engine.execute", json!({"command": command, "params": {}}), T);
     assert_eq!(r["ok"], true, "{command}: {r}");
     assert!(h.app.ui.dialog.is_some(), "{command} opens a dialog");
-    h.settle(T);
+    h.settled(T, "after engine.execute");
 }
 
 /// The dialog lies inside the window, and so do its buttons (`button:dialogCancel` when it has one).
@@ -54,7 +54,7 @@ fn export_dialog(size: [f32; 2]) -> Headless {
         *resize = lightcraft_engine::export::Resize::long_edge(64);
         *dir = "/lc-test-out".into();
     }
-    h.settle(T);
+    h.settled(T, "the UI");
     h
 }
 
@@ -121,7 +121,7 @@ fn long_dialogs_fit_a_short_window() {
         open(&mut h, command);
         assert_fits(&h, command);
         h.app.ui.dialog = None;
-        h.settle(T);
+        h.settled(T, "after setting ui.dialog");
     }
 }
 

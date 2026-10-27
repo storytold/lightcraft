@@ -238,7 +238,7 @@ fn an_unrelated_open_dialog_does_not_own_the_launch_list_or_its_barrier() {
         [1200.0, 900.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     assert!(h.app.run("app.settings", json!({})).is_ok(), "Settings opens first");
     h.step();
     let mut problem = LibraryProblem::choose(&settings);
@@ -281,7 +281,7 @@ fn the_launch_list_still_quits_on_escape_without_a_notice() {
 fn creation_frame_drops_background_text(problem: LibraryProblem, button: &str) {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 760.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     let r = h.request("ui.clickWidget", json!({"id": "field:search"}), T);
     assert_eq!(r["ok"], true, "the search field takes focus: {r}");
     let r = h.request("ui.text", json!({"text": "base"}), T);
@@ -328,7 +328,7 @@ fn creation_after_raw_input_cancels_injected_text(problem: LibraryProblem) {
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     let (tx, rx) = std::sync::mpsc::channel();
     h.app.admit_gesture(&h.view.ctx.clone(), "ui.text".into(), json!({"text": "leak"}), tx).expect("the text gesture is admitted");
     h.step(); // resolve: one Text event is queued
@@ -363,7 +363,7 @@ fn alt_launch_creation_after_raw_input_cancels_an_injected_gesture() {
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     let (tx, rx) = std::sync::mpsc::channel();
     h.app.admit_gesture(&h.view.ctx.clone(), "ui.text".into(), json!({"text": "leak"}), tx).expect("the text gesture is admitted");
     h.step();
@@ -412,7 +412,7 @@ fn a_held_background_press_is_released_when_a_library_window_appears_after_raw_i
 fn a_library_window_first_seen_after_begin_pass_drops_background_input() {
     let mut h =
         Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() }), [800.0, 600.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the UI");
     let _ = pass_log(&mut h);
     let at = egui::pos2(30.0, 40.0);
     h.events.extend([
@@ -452,7 +452,7 @@ fn a_library_window_first_seen_after_begin_pass_drops_background_input() {
 fn touch_release_clears_egui_touch_state_when_the_library_window_appears_after_begin_pass(phase: egui::TouchPhase) {
     let mut h =
         Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() }), [800.0, 600.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the UI");
     let at = egui::pos2(30.0, 40.0);
     let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
     h.events.push(touch(egui::TouchPhase::Start));
@@ -522,7 +522,7 @@ fn a_notice_dismissal_shields_the_library_windows_first_return_frame() {
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     let photo = select_first_photo(&mut h);
     let before = rating(&h, photo);
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
@@ -567,7 +567,7 @@ fn a_library_window_created_under_a_notice_shields_the_first_frame_after_dismiss
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     let photo = select_first_photo(&mut h);
     let before = rating(&h, photo);
     h.app.notices.push("The settings file could not be read and was reset.".into());
@@ -607,11 +607,11 @@ fn closing_the_new_library_dialog_shields_the_launch_lists_first_return_frame() 
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     let photo = select_first_photo(&mut h);
     let before = rating(&h, photo);
     h.app.library_problem = Some(LibraryProblem::choose(&settings));
-    h.settle(T);
+    h.settled(T, "after setting library_problem");
     assert!(has(&h, "button:libraryOpen"), "the launch list is settled");
     assert!(h.app.run("app.newLibrary", json!({})).is_ok(), "New Library opens its name prompt");
     h.step();
@@ -655,7 +655,7 @@ fn the_banner_reopen_shields_the_first_input_frame() {
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     let photo = select_first_photo(&mut h);
     let before = rating(&h, photo);
     h.app.library_problem = Some(LibraryProblem { dismissed: true, ..LibraryProblem::new("/no/such/library", "a test error") });
@@ -708,9 +708,9 @@ fn clipboard_pastes_into_the_launch_lists_own_text_prompt() {
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     h.app.library_problem = Some(LibraryProblem::choose(&settings));
-    h.settle(T);
+    h.settled(T, "after setting library_problem");
     assert!(h.app.run("app.newLibrary", json!({})).is_ok(), "New Library opens its name prompt");
     h.step();
     h.step();
@@ -735,7 +735,7 @@ fn clipboard_pastes_into_the_launch_lists_own_text_prompt() {
 fn a_settled_library_window_keeps_a_background_dialogs_text_draft_unchanged() {
     let files = SyntheticLibrary::new("library-text-draft");
     let mut h = Headless::new(files.app(), [1200.0, 760.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     h.app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: "Trip".into(), folder: false, parent: None, include_selected: false });
     for _ in 0..4 {
         h.step();
@@ -788,9 +788,9 @@ fn typing_reaches_the_launch_lists_own_new_library_prompt() {
         [1200.0, 760.0],
         1.0,
     );
-    h.settle(T);
+    h.settled(T, "the new session");
     h.app.library_problem = Some(LibraryProblem::choose(&settings));
-    h.settle(T);
+    h.settled(T, "after setting library_problem");
     assert!(h.app.run("app.newLibrary", json!({})).is_ok(), "New Library opens its name prompt");
     h.step();
     h.step();

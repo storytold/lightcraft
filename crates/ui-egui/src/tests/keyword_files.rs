@@ -13,7 +13,7 @@ const SETTLE: Duration = Duration::from_secs(120);
 
 fn app(library: &SyntheticLibrary) -> Headless {
     let mut h = Headless::new(library.app(), [1200.0, 800.0], 1.0);
-    assert!(h.settle(SETTLE), "keyword fixture did not settle");
+    h.settled(SETTLE, "keyword fixture did not settle");
     h
 }
 

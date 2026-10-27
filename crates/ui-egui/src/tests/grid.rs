@@ -42,7 +42,7 @@ fn grid(view: ViewMode) -> Headless {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.thumb_size = 160.0;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.thumb_size");
     h
 }
 
@@ -53,7 +53,7 @@ fn widget(h: &Headless, id: &str) -> Option<egui::Rect> {
 fn select(h: &mut Headless, id: PhotoId) {
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
 }
 
 /// The photo's cell is drawn inside the grid's canvas.
@@ -110,7 +110,7 @@ fn grid_headers_selection_scrolling_stacks_and_shape_changes() {
     assert!(widget(&h, "stack:2002").is_some(), "stack member badge drawn");
     // keyboard: the next photo becomes active and stays in view
     h.request("ui.key", json!({"key": "right"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key right");
     let next = vis[i + 1];
     assert_eq!(h.app.session.selection.active, Some(next));
     assert!(on_screen(&h, next));
@@ -125,7 +125,7 @@ fn grid_headers_selection_scrolling_stacks_and_shape_changes() {
     let layouts = h.app.caches.grid_stats.layout_builds;
     let r = h.request("engine.execute", json!({"command": "photo.rotateRight", "params": {"ids": [landscape.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.rotateRight");
     assert!(h.app.caches.grid_stats.layout_builds > layouts, "a shape change re-lays the grid");
     let after = widget(&h, &format!("thumb:{}", landscape.0)).unwrap();
     assert!(after.height() > after.width(), "{after:?}");
@@ -223,7 +223,7 @@ fn double_clicking_a_stack_badge_toggles_the_stack_once() {
     select(&mut h, top);
     let r = h.request("engine.execute", json!({"command": "stack.toggle", "params": {"ids": [top.0]}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after stack.toggle");
     assert!(collapsed(&h));
     for want in [false, true] {
         let badge = widget(&h, &format!("stack:{}", top.0)).expect("stack badge drawn").center();
@@ -233,7 +233,7 @@ fn double_clicking_a_stack_badge_toggles_the_stack_once() {
         let moved = widget(&h, &format!("stack:{}", top.0)).expect("stack badge drawn");
         assert!(moved.contains(badge), "the badge moved from under the pointer: {moved:?}");
         click_at(&mut h, badge);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after click_at");
         assert_eq!(collapsed(&h), want, "a double-click toggles the stack once");
         assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a double-click on the badge doesn't open the photo");
         // the next double-click is apart from this one
@@ -243,7 +243,7 @@ fn double_clicking_a_stack_badge_toggles_the_stack_once() {
     }
     let badge = widget(&h, &format!("stack:{}", top.0)).unwrap().center();
     click_at(&mut h, badge);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after click_at");
     assert!(!collapsed(&h), "a single click toggles it");
 }
 
@@ -261,7 +261,7 @@ fn grid_stack_badge_toggles_a_stack_that_is_not_selected() {
     assert!(widget(&h, &format!("stack:{}", top.0)).is_some(), "badge drawn");
     let r = h.request("ui.clickWidget", json!({"id": format!("stack:{}", top.0)}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     assert!(h.app.session.catalog.stack_of(top).unwrap().collapsed, "a click on an unselected stack's badge toggles it");
     assert_eq!((h.app.session.selection.ids.clone(), h.app.session.selection.active), (vec![loose], Some(loose)), "and leaves the selection alone");
 }

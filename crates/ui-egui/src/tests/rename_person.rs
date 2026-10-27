@@ -15,7 +15,7 @@ fn demo() -> Headless {
     let services = Services { png: None, write_shared: Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(()))), ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
-    h.settle(T);
+    h.settled(T, "the new session");
     h
 }
 
@@ -56,7 +56,7 @@ fn right_click(h: &mut Headless, id: &str) {
 fn open_people(h: &mut Headless) {
     let r = h.request("engine.execute", json!({"command": "view.people"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(T);
+    h.settled(T, "after view.people");
     h.step();
 }
 

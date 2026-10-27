@@ -23,7 +23,7 @@ fn demo() -> Headless {
     if !h.app.ui.flyout_open("grading") {
         h.app.ui.toggle_flyout("grading");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h
 }
 
