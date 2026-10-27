@@ -292,7 +292,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Folder on Disk",
             [],
             None,
-            "{parent, name} — create a folder on disk inside `parent` (refused if the name is taken); one undo step (undo removes it again while it is empty) → {path}",
+            "{parent, name} — create a folder on disk inside `parent` (refused if the name is taken); it has a row in library.folders at once, with count 0, and keeps it as photos come and go; one undo step (undo removes the folder and its row again while it is empty) → {path}",
             always,
             create_folder
         ),
@@ -393,7 +393,8 @@ fn folder_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
     str_param(p, key).map(|x| x.trim_end_matches(['/', '\\'])).filter(|x| !x.is_empty())
 }
 
-/// `folder.create`: a new folder on disk inside `parent`; undo removes it while it is empty.
+/// `folder.create`: a new folder on disk inside `parent`, listed in the library's folders at once
+/// (empty, see [`lightcraft_catalog::FolderRecord::made`]); undo removes it while it is empty.
 fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "folder.create";
     let parent = folder_param(p, "parent").ok_or_else(|| bad(C, "missing parent"))?;
@@ -410,7 +411,8 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
     }
     folder_on_disk("", &path).map_err(|e| bad(C, e))?;
     let undo = crate::FolderMove { from: path.clone(), to: String::new() };
-    if let Err(e) = s.commit_with_folder(&format!("Create Folder “{name}”"), Op::Batch { ops: vec![] }, undo) {
+    let record = s.catalog.folder_made_op(&path);
+    if let Err(e) = s.commit_with_folder(&format!("Create Folder “{name}”"), record, undo) {
         let _ = remove_empty_folder(&path);
         return Err(e);
     }
