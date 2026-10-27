@@ -625,6 +625,7 @@ fn a_task_waiting_in_line_has_no_row_and_starts_when_the_lane_frees() {
         }
     }
     assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build)), "the waiting build started");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
 }
 
 /// Given a build that ended and a build waiting behind it, when a command starts the waiting one before the frame that
@@ -651,6 +652,7 @@ fn a_build_replaced_by_the_one_waiting_behind_it_is_still_announced() {
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("Previews ready for 2 photos"), "{toast}");
     assert!(h.app.session.take_unreported_builds().is_empty());
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
 }
 
 /// Given a build that ended and a build waiting behind it, when the frame starts the waiting one, then the same frame
@@ -679,4 +681,5 @@ fn the_frame_that_starts_a_waiting_build_asks_for_the_next_one() {
     h.app.tick_preview_builds(&ctx);
     assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build started");
     assert!(ctx.has_requested_repaint(), "and the frame asked to look at it again");
+    assert!(h.step_until(T, |h| h.app.session.activity.list().is_empty()), "the started build ends");
 }
