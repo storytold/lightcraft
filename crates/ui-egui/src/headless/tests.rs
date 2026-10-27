@@ -4815,6 +4815,47 @@ fn the_loupe_says_rendering_while_an_edit_renders() {
     assert!(!h.app.renderer.is_pending(Slot::Main));
 }
 
+/// With the Before view on, stepping to an edited photo showed its stand-ins (the cached
+/// render, the thumbnail), which carry the edits, until the Before render landed: the edits
+/// flashed up first (issue #2248). The Before side waits for its own render.
+#[test]
+fn the_before_view_does_not_flash_the_edits_of_the_next_photo() {
+    use crate::render::Slot;
+    use std::{cell::Cell, rc::Rc};
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    h.settle(SETTLE);
+    let first = h.app.session.active().expect("a photo is open").0;
+    let other = h.app.session.visible_cloned().get(1).copied().expect("a second photo").0;
+    let select = |h: &mut Headless, id: u64| {
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id], "active": id}}), t);
+    };
+    select(&mut h, other);
+    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 2.0}}), t);
+    h.settle(SETTLE);
+    select(&mut h, first);
+    h.request("ui.set", json!({"beforeAfter": "original"}), t);
+    h.settle(SETTLE);
+    assert!(h.app.renderer.thumb(lightcraft_catalog::PhotoId(other)).is_some(), "the edited photo has a thumbnail");
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(super::RenderGate::new(open.clone())));
+    select(&mut h, other);
+    for _ in 0..12 {
+        h.step();
+    }
+    assert!(h.app.renderer.is_pending(Slot::Before), "the Before render is held");
+    assert_eq!(h.app.loupe_shown.map(|l| (l.0.0, l.1)), Some((other, "none")), "no edited stand-in under the Before label");
+    let says = |h: &Headless| h.painted_text().iter().any(|text| text == "Rendering…");
+    assert!(says(&h), "the empty Before side says it is rendering");
+    // View Options' Show message when loading or rendering photos covers it too
+    h.app.ui.settings.loupe_messages = false;
+    h.step();
+    assert!(!says(&h), "no message while it is off");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| h.app.loupe_shown.is_some_and(|l| l.1 == "render")), "the Before render lands");
+}
+
 /// View Options' Show message when loading or rendering photos (on by default): turned off in
 /// the window, the loupe does not say "Rendering…" while an edit renders; `view.viewOptions
 /// {loupeMessages}` turns it back on for an agent (refusing a value that is not true or false).

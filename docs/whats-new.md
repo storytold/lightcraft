@@ -247,6 +247,11 @@
 
 ## 2026-10-18
 
+### The Before view no longer flashes the next photo's edits
+- With the Before view on (`\`), stepping to an edited photo showed its edits for a moment before the Before render
+  arrived (issue #2248). The Before side now waits for its own render and says "Rendering…" meanwhile. A photo with no
+  edits still shows its stand-in at once.
+
 ### Thumbnails of Lightroom HDR and panorama merges in a second
 - Grid and filmstrip thumbnails of DNGs that Lightroom merged (HDR, Panorama, HDR Panorama) now develop from the
   small copies of the raw image Lightroom keeps inside the file (256 to 2048 px), not from the whole merge. A 23836 ×

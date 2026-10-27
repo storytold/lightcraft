@@ -406,12 +406,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     let p = ui.painter_at(canvas);
+    // the stand-ins show the photo's current edits: the Before side waits for its own render
+    // unless they are its Before as well (issue #2248)
+    let edited = app.session.catalog.photo(id).is_some_and(|p| *p.develop != app.session.before_settings(p));
     // what a view slot shows: its own render of this photo, else the stand-ins (no blank frame
     // between photos, and the full render replaces them in place)
     let draw = |slot: Slot, r: Rect, clip: Rect| -> &'static str {
         let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
         let (tex, what) = if let Some(t) = mine(slot) {
             (t, "render")
+        } else if slot == Slot::Before && edited {
+            return "none";
         } else if let Some(t) = mine(Slot::Preview) {
             (t, t.quick.map(quick_name).unwrap_or("preview"))
         } else if let Some(t) = app.renderer.thumb(id) {
@@ -447,6 +452,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         p.text(label_at(img_rect, main_area), Align2::LEFT_CENTER, crate::i18n::tr("After"), t.font(12.0), t.text_dim);
     } else if show_before {
         shown = draw(Slot::Before, img_rect, canvas);
+        if shown == "none" {
+            // "Rendering…" only with View Options' Show message when loading or rendering photos
+            let say = match app.renderer.failure_of(Slot::Before, id) {
+                Some(_) => Some(crate::i18n::tr("This photo can't be opened")),
+                None => app.ui.settings.loupe_messages.then(|| crate::i18n::tr("Rendering…")),
+            };
+            if let Some(say) = say {
+                p.text(canvas.center(), Align2::CENTER_CENTER, say, t.font(13.0), t.text_dim);
+            }
+        }
         // on the photo itself, so it gets the hover label's dark pill to stay readable over light
         // pictures; painted after the window renders below, which would cover it zoomed in
         let g = p.layout_no_wrap(crate::i18n::tr("Before").to_string(), t.font(12.0), Color32::WHITE);
