@@ -89,9 +89,12 @@ still never replaces an existing archive.
 Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
 capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
 retained. Oldest managed archives are retired; legacy `.json` archives remain untouched.
-`Interop/lightroom-index.json` records imported identities. When `Interop` is a link or a file
-rather than a folder, the import is refused before anything changes, so nothing lands outside the
-library (the index write checks the folder again). Source catalogs and originals are never overwritten.
+`Interop/lightroom-index.json` records imported identities. Unlike the archive it is required, and
+it is written after the photos are imported, so the importer checks its folder first: when
+`Interop` is a link or a file rather than a folder, or a folder in which a file can't be created
+(read-only, no permission), the import is refused before anything changes, with an error naming
+the folder. Nothing lands outside the library, and a retry can't duplicate virtual copies (the index
+write checks the folder again). Source catalogs and originals are never overwritten.
 
 Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
 loading the whole `.lrcat`. Database files are capped at 16 GiB and 16,777,216 pages; the WAL

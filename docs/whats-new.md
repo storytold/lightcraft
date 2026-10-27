@@ -6,8 +6,9 @@
 - Importing a Lightroom catalog into a library on an exFAT or FAT drive (or a network share without hard links) no
   longer fails with "cannot atomically publish archive: Operation not supported": the recovery archive in the
   library's `Interop` folder is saved another way that still never replaces an existing archive. When the archive
-  can't be saved at all, the import goes on and warns, naming the folder, as documented; a failed import-index write
-  now names the file instead of reporting "invalid parameters".
+  can't be saved at all, the import goes on and warns, naming the folder, as documented. An `Interop` folder that can't
+  be written to at all (or is a link) is refused before any photo is imported, naming it, since the import index must
+  be saved there; a failed import-index write now names the file instead of reporting "invalid parameters".
 
 ### Lens distortion correction for the Sony A7 III
 - Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like

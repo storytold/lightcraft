@@ -30,18 +30,18 @@ fn cancelled() -> crate::EngineError {
     crate::EngineError::Cancelled(error("Lightroom import cancelled").to_string())
 }
 
-/// Save the recovery archive. It is best-effort: nothing reads it back during import, so a folder
-/// it can't be written to costs the archive (with a warning naming the folder), not the import.
+/// Save the recovery archive. It is best-effort: nothing reads it back during import, so an archive
+/// that can't be saved costs the archive (with a warning naming the folder), not the import. A
+/// folder that can't be written to at all is refused first, for the import index's sake.
 /// That warning goes first: the result window lists only the first few, and catalog warnings
 /// (one per unreadable record) can be many.
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
     let Some(dir) = archive_dir else { return Ok(None) };
-    // A linked `Interop` folder would take the import index outside the library. Refuse it here,
-    // before anything is imported, rather than import the photos and then fail at the index.
-    if dir.symlink_metadata().is_ok() {
-        crate::lightroom_archive::require_real_directory(dir)
-            .map_err(|e| crate::EngineError::Other(format!("cannot import into this library: {e}")))?;
-    }
+    // The import index, unlike the archive, is required, and it is written only after the photos
+    // are imported. Refuse here, before anything changes, a folder it can't be written to (a link
+    // would take it outside the library), rather than import and then fail, where a retry could
+    // duplicate virtual copies.
+    require_index_folder(dir).map_err(|e| crate::EngineError::Other(format!("cannot import into this library: {e}")))?;
     match crate::lightroom_archive::store_best_effort(dir, data) {
         Ok(Some(path)) => Ok(Some(path)),
         Ok(None) => {
@@ -53,6 +53,33 @@ fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate:
             Ok(None)
         }
     }
+}
+
+/// Check that `lightroom-index.json` can be written in `dir` (creating the folder, as the archive
+/// would): a real folder, not a link or a file, in which a file can be created and removed. The
+/// probe is a plain exclusive create, never a hard link, so volumes without them (exFAT, #3114) pass.
+fn require_index_folder(dir: &Path) -> Result<(), String> {
+    if let Err(e) = std::fs::symlink_metadata(dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("cannot read {}: {e}", dir.display()));
+        }
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create the folder {}: {e}", dir.display()))?;
+    }
+    crate::lightroom_archive::require_real_directory(dir)?;
+    let unwritable = |e: std::io::Error| format!("the Lightroom import index can't be written in {} ({e}); make the folder writable", dir.display());
+    let pid = std::process::id();
+    for slot in 0..64 {
+        let probe = dir.join(format!(".lightroom-index-probe-{pid}-{slot}.tmp"));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(file) => {
+                drop(file);
+                return std::fs::remove_file(&probe).map_err(unwritable);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(unwritable(e)),
+        }
+    }
+    Err(format!("no free name to check that {} is writable", dir.display()))
 }
 
 /// Memory identity of the library which owns a prepared completion.
