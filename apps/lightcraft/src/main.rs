@@ -41,6 +41,8 @@ mod profile_file;
 mod screen_profile;
 #[cfg(windows)]
 mod win_screen_profile;
+#[cfg(target_os = "macos")]
+mod traffic_lights;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
@@ -164,6 +166,16 @@ impl eframe::App for App {
             std::process::exit(0);
         }
         self.0.logic(ctx);
+        // AppKit lays the traffic lights out for its own 28 pt title bar and resets that on resize,
+        // full screen and appearance changes: keep them centred on our taller top bar, at the
+        // height it was drawn at last frame (egui points; AppKit's are `zoom_factor` times as many).
+        // No bar drawn (the full-screen photo preview): leave them where they are.
+        #[cfg(target_os = "macos")]
+        if self.0.integrated_titlebar
+            && let Some((_, bar)) = self.0.widgets.iter().find(|(id, _)| id == "region:titlebar")
+        {
+            traffic_lights::centre_on_bar(bar.height() * ctx.zoom_factor());
+        }
         self.1.tick(&mut self.0, ctx);
     }
     /// Forwards the host's raw-input pass to the app's hook before egui processes it, keeping
