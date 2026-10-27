@@ -252,6 +252,11 @@
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
 
+### `--no-update-check` for throwaway copies
+- Starting LightCraft with `--no-update-check` skips the look for a newer release at start, so a throwaway copy (a test
+  or scripted run) makes no request to GitHub and never opens the update prompt. Help ▸ Check for Updates… still
+  checks when you ask; without the option nothing changes.
+
 ## 2026-10-29
 
 ### A dialog no longer dims the macOS title bar
