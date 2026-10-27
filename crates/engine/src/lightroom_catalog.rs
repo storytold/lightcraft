@@ -613,8 +613,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
             None => absolute.to_string(),
         };
         if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(document)) {
-            warnings
-                .push(format!("root folder {}: {resolved} is not opened: {why}; its photos are listed as missing and not added", text(root, "name")));
+            warnings.push(format!("root folder {}: {resolved} is not opened: {why}; its photos are not imported", text(root, "name")));
             refused_roots.insert(id);
         }
         root_paths.insert(id, resolved);
@@ -669,7 +668,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         if let Original::Refused(why) = &original
             && !refused_roots.contains(&root_id)
         {
-            out.warnings.push(format!("image {id}: {photo_path} is not opened: {why}; listed as missing and not added"));
+            out.warnings.push(format!("image {id}: {photo_path} is not opened: {why}; it and its virtual copies are not imported"));
         }
         let packet = match xmp(metadata.get(&id).and_then(|r| r.get("xmp"))) {
             Ok(s) => s,
