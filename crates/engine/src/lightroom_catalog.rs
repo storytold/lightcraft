@@ -962,6 +962,7 @@ fn stage_collections(
         albums.insert(number(collection, "id_local"), id);
     }
     let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let collections: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), r)).collect();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
     for member in &data.members {
         grouped_members.entry(number(member, "collection")).or_default().push(member);
@@ -979,10 +980,20 @@ fn stage_collections(
         }
         depth
     });
+    // Collections whose albums are folders: a collection set, or an earlier import's album when it is a folder.
+    let sets: HashSet<i64> = albums
+        .iter()
+        .filter(|(lr, id)| match s.catalog.album(**id) {
+            Some(album) => album.folder,
+            None => collections.get(*lr).is_some_and(|r| text(r, "creationId").contains("group")),
+        })
+        .map(|(lr, _)| *lr)
+        .collect();
+    let mut added = HashSet::new();
+    let mut added_folders = HashSet::new();
     for collection in ordered {
         let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
         let mut album = Album::new(id, text(collection, "name"));
-        album.parent = albums.get(&number(collection, "parent")).copied();
         album.folder = text(collection, "creationId").contains("group");
         if text(collection, "creationId").contains("smart") {
             warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
@@ -1007,7 +1018,25 @@ fn stage_collections(
                 }
                 ops.push(Op::SetAlbumPhotos { id, photos });
             }
-        } else {
+        } else if added.insert(id) {
+            let (set, moved) = collection_parent(collection, &collections, &sets);
+            album.parent = set.and_then(|set| albums.get(&set).copied());
+            // `AddAlbum` rejects a parent that isn't a folder yet, and that would roll back the whole batch: every
+            // album and every catalog-only photo. `collection_parent` already prevents it; this keeps a bug there
+            // (or a cycle `validate` missed) from doing so.
+            if let Some(parent) = album.parent
+                && !added_folders.contains(&parent)
+                && !s.catalog.album(parent).is_some_and(|a| a.folder)
+            {
+                album.parent = None;
+                warnings.push(format!("{}: its collection set could not be created first; imported at the top level", album.name));
+            } else if let Some(moved) = moved {
+                let to = set.and_then(|set| collections.get(&set)).map_or("at the top level".to_string(), |r| format!("into “{}”", text(r, "name")));
+                warnings.push(format!("{}: {moved}; imported {to}", album.name));
+            }
+            if album.folder {
+                added_folders.insert(id);
+            }
             ops.push(Op::AddAlbum { album });
         }
     }
@@ -1249,6 +1278,31 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// The collection set a Lightroom collection's album goes into (`None`: the top level), and why that isn't its
+/// Lightroom parent when it isn't. A LightCraft album nests only in a folder, but Lightroom also keeps a print, book,
+/// slideshow or web gallery (or, in an odd catalog, a collection) inside a plain or smart collection, and a parent can
+/// be system-only (not imported) or gone from the catalog. Such an album joins the nearest collection set above it.
+fn collection_parent(collection: &Row, collections: &HashMap<i64, &Row>, sets: &HashSet<i64>) -> (Option<i64>, Option<String>) {
+    let parent = number(collection, "parent");
+    if parent == 0 || sets.contains(&parent) {
+        return ((parent != 0).then_some(parent), None);
+    }
+    let moved = match collections.get(&parent) {
+        Some(r) => format!("Lightroom keeps it inside “{}”, which isn't a collection set", text(r, "name")),
+        None => "its parent collection isn't in the catalog".to_string(),
+    };
+    let mut at = parent;
+    let mut seen = HashSet::from([number(collection, "id_local")]);
+    while at != 0 && !sets.contains(&at) {
+        // `validate` rejects cycles and deep chains; stop at the top level if one got here anyway.
+        if seen.len() > 64 || !seen.insert(at) {
+            return (None, Some(moved));
+        }
+        at = collections.get(&at).map_or(0, |r| number(r, "parent"));
+    }
+    ((at != 0).then_some(at), Some(moved))
 }
 
 #[cfg(test)]
