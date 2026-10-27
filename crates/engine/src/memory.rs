@@ -35,7 +35,8 @@ pub fn default_budget() -> usize {
 
 /// Physical memory (bytes), when the platform tells us without native calls.
 pub(crate) fn total_ram() -> Option<usize> {
-    #[cfg(target_os = "linux")]
+    // (Android is `target_os = "android"`, not "linux", and has /proc/meminfo too)
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let s = std::fs::read_to_string("/proc/meminfo").ok()?;
         let kb: usize = s.lines().find(|l| l.starts_with("MemTotal:"))?.split_whitespace().nth(1)?.parse().ok()?;
@@ -51,7 +52,7 @@ pub(crate) fn total_ram() -> Option<usize> {
         let out = std::process::Command::new("/sbin/sysctl").args(["-n", "hw.physmem"]).output().ok()?;
         String::from_utf8_lossy(&out.stdout).trim().parse().ok()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd")))]
     {
         None
     }

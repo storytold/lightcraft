@@ -55,6 +55,10 @@ pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 }
 
 pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let add = match crate::panels::compact::stacked_row(ui, RichText::new(crate::i18n::tr(label)).color(t.text_label), add) {
+        Ok(r) => return r,
+        Err(add) => add,
+    };
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);

@@ -315,7 +315,8 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32,
         p.rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
     }
     let mut hit = Hit::Nothing;
-    if more && hovered {
+    // (a finger can't hover: there the check and × always show)
+    if more && (hovered || crate::widgets::touch_screen(ui.ctx())) {
         // a check at the bottom right says a click confirms; × hides and ↑ names all above this score
         let badge = Rect::from_min_size(pos2(r.right() - 28.0, r.bottom() - 28.0), vec2(24.0, 24.0));
         p.circle_filled(badge.center(), 12.0, Color32::from_rgba_unmultiplied(30, 30, 30, 220));

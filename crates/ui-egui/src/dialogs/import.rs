@@ -26,12 +26,12 @@ mod scan;
 mod tags;
 mod task;
 
-#[cfg(test)]
-pub(crate) use body::grid_height;
-#[cfg(test)]
-use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
+pub use body::Footer;
+pub(crate) use body::window_size;
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
-pub(crate) use body::{DIALOG_SIZE, note_dialog_bottom};
+#[cfg(test)]
+#[cfg(test)]
+use body::{badge_rect, dup_counts};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
 pub use scan::{ScanTask, browse, open, poll_scan, running};
@@ -229,19 +229,6 @@ impl ImportDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grid_height_follows_the_window() {
-        // the grid takes what the options and buttons leave, in whole points
-        assert_eq!(grid_height(700.0, 300.0, 142.0), 400.0);
-        assert_eq!(grid_height(1000.5, 300.0, 142.0), 700.0);
-        // never less than one row of thumbnails
-        assert_eq!(grid_height(200.0, 300.0, 142.0), 142.0);
-        // a bad measurement doesn't take the grid away or make it endless
-        assert_eq!(grid_height(700.0, -50.0, 142.0), 700.0);
-        assert_eq!(grid_height(700.0, f32::NAN, 142.0), 700.0);
-        assert_eq!(grid_height(f32::INFINITY, 300.0, 142.0), DIALOG_SIZE[1] - DEFAULT_BELOW_GRID);
-    }
 
     /// Six candidates, all checked; candidate 3 is a duplicate (unchecked, not importable).
     fn dialog() -> ImportDialog {

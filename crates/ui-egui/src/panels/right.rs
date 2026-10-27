@@ -87,6 +87,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Activity => activity(app, ui, id),
                 RightPanel::None => {}
             }
+            super::compact::keep_focus_visible(ui);
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
     });

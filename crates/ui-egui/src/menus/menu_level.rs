@@ -63,6 +63,35 @@ pub fn level_room(screen: Rect, bar_bottom: Option<f32>, depth: usize, anchor: O
     if room.is_finite() { room.max(4.0 * ARROW) } else { 4.0 * ARROW }
 }
 
+/// The level of the context menu being drawn (1, or deeper inside its submenus), while it is:
+/// [`crate::widgets::context_menu`] and [`crate::widgets::menu_button`] bound every level of a
+/// context menu by the window like the menu bar's, so a menu taller than the screen (a photo's, on
+/// a phone) scrolls instead of running off it, with a finger too.
+fn context_depth_id() -> Id {
+    Id::unique("lc-context-menu-depth")
+}
+
+/// The depth of the context-menu level being drawn, if one is.
+pub fn context_depth(ctx: &egui::Context) -> Option<usize> {
+    ctx.data(|d| d.get_temp::<usize>(context_depth_id()))
+}
+
+/// Draw a context menu's level at `depth` ([`level`], no menu bar above it), its depth known to the
+/// submenus drawn in it.
+pub fn context_level<R>(ui: &mut Ui, depth: usize, rows: impl FnOnce(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let outer = context_depth(&ctx);
+    ctx.data_mut(|d| d.insert_temp(context_depth_id(), depth));
+    let inner = level(ui, depth, None, rows);
+    ctx.data_mut(|d| match outer {
+        Some(o) => {
+            d.insert_temp(context_depth_id(), o);
+        }
+        None => d.remove::<usize>(context_depth_id()),
+    });
+    inner
+}
+
 /// Is the pointer over `rect` on this ui's layer (not under a submenu drawn on top)?
 fn pointer_on(ui: &Ui, rect: Rect) -> bool {
     ui.ctx().pointer_hover_pos().is_some_and(|p| rect.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id()))
@@ -71,8 +100,9 @@ fn pointer_on(ui: &Ui, rect: Rect) -> bool {
 /// Draw one level of a menu, bounded by the window: when its rows don't fit the room below the
 /// menu bar they scroll, with scroll arrows at the top and bottom. `depth` is 1 for a top-level
 /// menu; `bar_bottom` is where the menu bar ends. The level's rect is registered as
-/// `menu-level:<depth>` for the control channel and tests.
-pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOnce(&mut Ui)) {
+/// `menu-level:<depth>` and its rows' (scrolled) rect as `menu-rows:<depth>`, for the control
+/// channel and tests.
+pub fn level<R>(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOnce(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let screen = ctx.content_rect();
     // The menu frame's margin and stroke around the rows.
@@ -102,15 +132,18 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
     if let Some(y) = scroll_to {
         area = area.vertical_scroll_offset(y);
     }
-    let out = area.show(ui, rows);
+    let egui::scroll_area::ScrollAreaOutput { inner, state, content_size, inner_rect, .. } = area.show(ui, rows);
     let down = over.then(|| ui.allocate_exact_size(vec2(0.0, ARROW), Sense::hover()).0);
-    ctx.data_mut(|d| d.insert_temp(key, out.content_size.y));
+    ctx.data_mut(|d| d.insert_temp(key, content_size.y));
     crate::widgets::register(ui, format!("menu-level:{depth}"), ui.min_rect());
-    let (Some(up), Some(down)) = (up, down) else { return };
+    // all of its rows, scrolled out of view or not
+    let rows = Rect::from_min_size(inner_rect.min - state.clamped_offset(), content_size);
+    crate::widgets::register(ui, format!("menu-rows:{depth}"), rows);
+    let (Some(up), Some(down)) = (up, down) else { return inner };
     let t = crate::theme::Tokens::get(&ctx);
     let x = ui.min_rect().x_range();
-    let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
-    let offset = out.state.clamped_offset().y;
+    let max = (content_size.y - inner_rect.height()).max(0.0);
+    let offset = state.clamped_offset().y;
     let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
     let mut target = offset;
     for (strip, dir, live) in [(up, -1.0, offset > 0.5), (down, 1.0, offset < max - 0.5)] {
@@ -143,6 +176,7 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
         ctx.data_mut(|d| d.insert_temp(key.with("scroll-to"), target));
         ctx.request_repaint();
     }
+    inner
 }
 
 #[cfg(test)]

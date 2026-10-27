@@ -54,7 +54,9 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     // row under the plot
     let hdr = hist.as_ref().and_then(|h| h.hdr);
     let legend = if hdr.is_some() { 26.0 } else { 0.0 };
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
+    // lower in the compact layout's sheet, which has little height for the sliders
+    let h = if crate::panels::compact::is_compact(ui.ctx()) { 64.0 } else { 118.0 };
+    let (r, resp) = ui.allocate_exact_size(vec2(w, h + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui, "histogram", r);
     let p = ui.painter();

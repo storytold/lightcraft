@@ -17,6 +17,7 @@ pub mod export_task;
 mod focus_scan;
 mod frame_rate;
 pub mod headless;
+pub mod hid;
 pub mod i18n;
 pub mod icons;
 pub mod lightroom_import;
@@ -25,6 +26,7 @@ pub mod menus;
 mod model_setup;
 pub mod panels;
 pub mod pick;
+pub mod prefs;
 pub mod recheck;
 pub mod region;
 pub mod reload;
@@ -41,6 +43,8 @@ pub mod window_place;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+use tests::model_setup as tests_model_setup;
 #[cfg(test)]
 use tests::panels as tests_panels;
 #[cfg(test)]
@@ -234,6 +238,10 @@ pub struct LightcraftApp {
     /// The host's last reported physical modifier state (`ModifiersChanged`), restored after a
     /// synthetic gesture releases instead of unconditionally announcing `NONE`.
     host_mods: egui::Modifiers,
+    /// Native file dialogs up for buttons inside dialogs (`pick::ask_field`), by button.
+    pub(crate) field_picks: Vec<(String, Receiver<Vec<String>>)>,
+    /// A lifted finger's `PointerGone`, held back to the next frame (see [`defer_touch_pointer_gone`]).
+    pointer_gone_deferred: bool,
     styled: bool,
     /// The language the installed fonts were built for: the CJK fallback order follows the UI
     /// language's script, so switching language reinstalls them.
@@ -619,4 +627,20 @@ pub struct Caches {
     pub grid: panels::grid::GridCache,
     /// What the grid did on its frames (benchmarks and tests check unchanged frames stay cheap).
     pub grid_stats: panels::grid::GridStats,
+}
+
+/// egui-winit reports a lifted finger (or pencil) as a button release and a `PointerGone` in the
+/// same frame, so in the frame where the tap becomes a click the pointer has no position, and
+/// whatever checks where a click landed by hover misses taps: egui's menus close after a click on
+/// an item only when it's hovered, so a tapped submenu item left the menu open. Hold a
+/// `PointerGone` that follows a release back to the next frame (`deferred`); the caller repaints.
+pub(crate) fn defer_touch_pointer_gone(deferred: &mut bool, raw: &mut egui::RawInput) {
+    if std::mem::take(deferred) {
+        raw.events.insert(0, egui::Event::PointerGone);
+    }
+    let Some(release) = raw.events.iter().rposition(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. })) else { return };
+    if let Some(gone) = raw.events.iter().rposition(|e| matches!(e, egui::Event::PointerGone)).filter(|g| *g > release) {
+        raw.events.remove(gone);
+        *deferred = true;
+    }
 }

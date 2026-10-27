@@ -33,6 +33,7 @@ mod lightroom_folder;
 mod mask_effects;
 mod merge;
 mod move_to_share;
+mod moved_library;
 mod organize;
 mod persist;
 mod prefs;
@@ -47,6 +48,7 @@ mod slideshow_export;
 mod spots;
 mod sync;
 mod view_follow;
+mod working_cap;
 pub(super) mod xmp;
 
 fn demo() -> Session {

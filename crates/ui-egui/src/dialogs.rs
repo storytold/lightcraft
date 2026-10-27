@@ -167,9 +167,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     }
     .to_string();
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
-    // The import review can be resized (its photo grid takes the room); it keeps a window id of its
-    // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
-    // rather than growing the window when the options below the grid get taller (e.g. Copy).
+    // The import review takes most of the screen (its photo grid and options column scroll on
+    // their own) and can be resized on the desktop; it keeps a window id of its own so the size
+    // it is given doesn't carry over to the other dialogs.
     let import = matches!(dlg, Dialog::Import { .. });
     // The Print dialog sizes itself to the window and scrolls its settings column on its own.
     let print = matches!(dlg, Dialog::Print);
@@ -192,16 +192,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let mut body_h = None;
     // before the window: drawing it closes a dropdown the click lands outside of
     let popup_was_open = egui::Popup::is_any_open(ctx);
-    let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
+    let window = egui::Window::new(crate::i18n::tr(&title))
+        .id(window_id)
         .collapsible(false)
-        .resizable(import)
-        .vscroll(import)
-        .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
+        .resizable(import && !crate::panels::compact::is_compact(ctx))
         .frame(frame)
         .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
         .min_width(widest)
         .default_width(match dlg {
-            Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
@@ -210,7 +208,18 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
-        })
+        });
+    let window = if import {
+        // inside the frame's margins and title bar
+        let area = ctx.content_rect().shrink(8.0);
+        let size = crate::import::window_size(area.size()) - egui::vec2(32.0, 64.0);
+        let window = window.vscroll(false).constrain_to(area).max_size(area.size() - egui::vec2(32.0, 64.0));
+        if crate::panels::compact::is_compact(ctx) { window.fixed_size(size) } else { window.default_size(size) }
+    } else {
+        crate::panels::compact::dialog(ctx, window)
+    };
+    let mut import_pressed = None;
+    let shown = window
         .show(ctx, |ui| {
             // Disabled, not skipped: the dialog keeps its layout and state, but a raw event in the
             // first prompt frame cannot toggle a checkbox or press a button underneath it. The
@@ -863,10 +872,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                         if graphic {
                             field(ui, "Graphic", |ui| {
                                 trailing_button_row(ui, |ui| {
-                                    if app.services.pick_files.is_some()
+                                    if crate::pick::can_ask_field(app, app.services.pick_files.is_some())
                                         && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
-                                        && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
                                     {
+                                        let req = crate::pick::PickRequest::file(crate::i18n::tr("Graphic"), crate::i18n::tr("Photos"), WM_GRAPHICS);
+                                        crate::pick::ask_field(app, "exportWmChoose", req, |s| s.pick_files.as_mut().map(|pick| pick()));
+                                    }
+                                    if let Some(f) = crate::pick::field_answer(app, ui.ctx(), "exportWmChoose").and_then(|p| p.into_iter().next()) {
                                         wm.image = f;
                                     }
                                     crate::widgets::named(ui.add(egui::TextEdit::singleline(&mut wm.image).hint_text("logo.png").desired_width(ui.available_width())), crate::i18n::tr("Image"));
@@ -1021,7 +1033,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     });
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
-                Dialog::Import { opts } => crate::import::body(app, ui, opts),
+                Dialog::Import { opts } => import_pressed = crate::import::body(app, ui, opts),
                 // (Settings is never taller than `body_max`, so the scroll area round it never
                 // scrolls: its tab bar stays put and its pages scroll by themselves)
                 Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),
@@ -1211,7 +1223,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     );
                 }
                 Dialog::About => {
-                    ui.set_min_width(680.0);
+                    // (the phone's width on a phone, as Settings does)
+                    ui.set_min_width(crate::panels::compact::dialog_width(ui.ctx(), 680.0, 16.0));
                     let tab_id = egui::Id::unique("about_tab");
                     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
                     ui.horizontal(|ui| {
@@ -1263,6 +1276,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 Dialog::ViewOptions => crate::panels::settings::view_options(app, ui, &t),
                 Dialog::Print => crate::print_view::body(app, ui, &t),
             });
+            // (the import review draws its own buttons, beside or under its photos)
+            if import {
+                return;
+            }
             ui.add_space(4.0);
             // the confirm on the right with Cancel to its left (macOS and GNOME's order), filled with
             // the accent when it is the dialog's primary action. The row spans the width the window
@@ -1285,14 +1302,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     Dialog::LightroomResult { .. } => "Close",
                     _ => "Cancel",
                 };
-                let add_label;
                 let ok = match &dlg {
-                    Dialog::Import { opts } => {
-                        let n = opts.selected_paths().len();
-                        let verb = if opts.copy && opts.move_files { "Move" } else { "Import" };
-                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
-                        add_label.as_str()
-                    }
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
                     Dialog::ContactSheet { .. } => "Choose PDF…",
                     Dialog::SlideshowExport { .. } => "Export…",
@@ -1374,11 +1384,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     }
                 }
             });
-            if import {
-                crate::import::note_dialog_bottom(ui);
-            }
+            // compact layout: a text field the soft keyboard just covered scrolls back into view
+            crate::panels::compact::keep_focus_visible(ui);
             content_w = ui.min_rect().width();
         });
+    match import_pressed {
+        Some(crate::import::Footer::Cancel) => close = true,
+        Some(crate::import::Footer::Import) => confirm = true,
+        None => {}
+    }
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
@@ -1495,3 +1509,6 @@ const BACKDROP_SHOWN: &str = "dialog-backdrop-shown";
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
     matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
 }
+
+/// What a graphic watermark can be (a logo; PNG keeps its transparency).
+const WM_GRAPHICS: &[&str] = &["png", "jpg", "jpeg", "webp", "tif", "tiff"];

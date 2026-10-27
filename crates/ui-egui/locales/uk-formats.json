@@ -4,6 +4,8 @@
   " · {:.0}% clipped": " · {:.0}% відсічено",
   " · {failed} couldn't be rendered": " · не вдалося відтворити: {failed}",
   " · {skipped} skipped (file exists)": " · пропущено: {skipped} (файл існує)",
+  " · {reduced} made smaller to fit this device's memory": " · зменшено, щоб вміститися в пам’ять цього пристрою: {reduced}",
+  "Photos · {n}": "Фото · {n}",
   " · {} duplicate{} skipped": " · дублікатів пропущено: {}{:.0}",
   " · {} failed: {}": " · помилок: {}: {}",
   " · {} moved": " · переміщено: {}",

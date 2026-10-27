@@ -1,7 +1,6 @@
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, SourceLevel};
 use super::*;
-
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

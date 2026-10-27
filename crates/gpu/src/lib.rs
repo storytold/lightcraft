@@ -43,6 +43,8 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+mod tiled;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::GpuStages;
@@ -483,6 +485,54 @@ pub fn try_render(
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
+        guarded(gpu, ext.as_deref(), |fault| render::render(gpu, src, info, s, req, ext.as_deref(), fault))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, stages);
+        Err(Fallback::NotTried)
+    }
+}
+
+/// Memory a tiled GPU render ([`render_tiled`]) with `opts` needs beyond the source and the
+/// output: the device's own (kernels, buffer pool) and each tile's buffers, which on unified-memory
+/// devices (Apple silicon, phones) count in the process's footprint. Measured on an Apple M3 Max
+/// (48 MP export: ~0.4 GB, plus ~180 bytes a region pixel; the CPU's tiles need ~80).
+pub fn tiled_working_bytes(opts: &lightcraft_pipeline::tiled::TileOptions) -> usize {
+    (400 << 20) + opts.region_px * 180
+}
+
+/// Render `src` with `s` on the GPU tile by tile ([`lightcraft_pipeline::tiled::TilePlan`] with
+/// `opts`): every device buffer is one tile's size, and the source is resampled per tile on the
+/// CPU, never uploaded whole. For full-size exports within a memory cap. `None`: render on the
+/// CPU instead (no GPU, settings that can't be tiled, a device failure).
+pub fn render_tiled(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    opts: &lightcraft_pipeline::tiled::TileOptions,
+) -> Option<Rendered> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if !enabled() || req.depth != lightcraft_pipeline::OutputDepth::U8 || req.proof.is_some() {
+            return None;
+        }
+        let gpu = device()?;
+        guarded(gpu, None, |fault| tiled::render_tiled(gpu, src, info, s, req, opts, fault)).ok()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, opts);
+        None
+    }
+}
+
+/// Run a GPU render inside error scopes, turning device errors, panics and recorded failures
+/// into [`Fallback::Failed`] (with the reason recorded; see [`last_fallback`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn guarded(gpu: &ctx::Gpu, ext: Option<&GpuStages>, f: impl FnOnce(Option<Fault>) -> Option<Rendered>) -> Result<Rendered, Fallback> {
+    {
         let fault = take_fault();
         // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
         let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
@@ -490,7 +540,7 @@ pub fn try_render(
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
             let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(fault)));
             (r, errors.pop())
         };
         // An error the device raised explains the readback failures that follow it; a buffer
@@ -507,7 +557,7 @@ pub fn try_render(
             }
             (Ok(r), Some(f)) => {
                 // the view's cached device stages may hold results of the failed passes
-                if let Some(e) = &ext {
+                if let Some(e) = ext {
                     e.clear();
                 }
                 let what = match &r {
@@ -542,11 +592,6 @@ pub fn try_render(
         };
         record_fallback(reason.clone());
         Err(Fallback::Failed(reason))
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (src, info, s, req, stages);
-        Err(Fallback::NotTried)
     }
 }
 

@@ -367,6 +367,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             crate::panels::compare::set_photo(app, lightcraft_catalog::PhotoId(id), p.get("side").and_then(Value::as_str))
         }
         "compare.makeSelect" => crate::panels::compare::make_select(app),
+        "compare.previous" => crate::panels::compare::compare_step(app, -1),
+        "compare.next" => crate::panels::compare::compare_step(app, 1),
+        "view.selectMode" => {
+            // {on?: bool}: toggles without
+            app.ui.select_mode = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.select_mode);
+            if app.ui.select_mode {
+                app.toast(&ctx, crate::i18n::tr("Tap photos to add them to the selection or take them out"));
+            }
+            Ok(json!({"selectMode": app.ui.select_mode}))
+        }
         "view.autoAdvance" => {
             app.ui.auto_advance = !app.ui.auto_advance;
             app.toast(&ctx, crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
@@ -409,7 +419,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let now = app.tick_now();
             let r = crate::panels::slideshow::start(app, p, now);
             if r.is_ok() {
-                app.toast(&ctx, crate::i18n::tr("Slideshow · Space pauses · Esc ends"));
+                app.toast(
+                    &ctx,
+                    crate::i18n::tr(if crate::widgets::touch_screen(&ctx) {
+                        "Slideshow · Pause and Exit are at the top right"
+                    } else {
+                        "Slideshow · Space pauses · Esc ends"
+                    }),
+                );
             }
             r
         }
@@ -1090,7 +1107,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = tool.into();
-                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                    let r = app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string());
+                    if r.is_ok() {
+                        app.ui.draw_mask = app.session.active_mask;
+                    }
+                    return Some(r);
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;
@@ -1271,7 +1292,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
             let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);
-            let dir = prev.get("dir").and_then(Value::as_str).map(str::to_string).unwrap_or_else(crate::control::default_export_dir);
+            // a host with its own export folder (mobile) always uses it: sandbox paths change between installs
+            let dir = prev
+                .get("dir")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|_| app.services.export_dir.is_none())
+                .unwrap_or_else(|| crate::control::default_export_dir(&app.services));
             // stored settings: a depth the format lacks (saved before #1952) opens at the format's own
             let opts = lightcraft_engine::export::ExportOptions::from_json(&lightcraft_engine::export::ExportOptions::known_keys_only(&prev));
             // no previous export: 2048 px long edge; a previous full-size export: full size
@@ -1288,7 +1315,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.faceModel" => {
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(x) => Some(x.to_string()),
-                None => app.services.pick_model_file.as_mut().and_then(|f| f().into_iter().next()),
+                None => {
+                    let req = PickRequest::file(crate::i18n::tr("Add a Face Recognition Model"), crate::i18n::tr("Face models (ONNX)"), &["onnx"]);
+                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_model_file.as_mut().map(|f| f())) {
+                        Picked::Now(paths) => paths.into_iter().next(),
+                        Picked::Later | Picked::Unavailable => None,
+                    }
+                }
             };
             match path {
                 Some(path) => crate::panels::faces::open_dialog(app, &path),
@@ -1635,6 +1668,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             match path {
                 Some(path) => {
                     let r = crate::import::open(app, vec![path]);
+                    // mobile hosts: copy in (only the scan just started; an error means another
+                    // scan is running)
+                    if r.is_ok()
+                        && app.services.import_copies
+                        && let Some(t) = &mut app.scan
+                    {
+                        t.copy = true;
+                    }
                     import_into_album(app, p, r)
                 }
                 None => Ok(Value::Null),

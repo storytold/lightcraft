@@ -4,6 +4,8 @@
   " · {:.0}% clipped": " · {:.0}% écrêté",
   " · {failed} couldn't be rendered": " · {failed} impossible(s) à afficher",
   " · {skipped} skipped (file exists)": " · {skipped} ignoré(s) (le fichier existe)",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} réduit(s) pour tenir dans la mémoire de cet appareil",
+  "Photos · {n}": "Photos · {n}",
   " · {} duplicate{} skipped": " · {} doublon{} ignoré(s)",
   " · {} failed: {}": " · {} échec(s) : {}",
   " · {} moved": " · {} déplacé(s)",

@@ -346,7 +346,7 @@ fn snapshot_subcommand_renders_the_ui_headlessly() {
     )
     .unwrap();
     let o = Command::new(binary())
-        .args(["snapshot", "--demo", "--script", script.to_str().unwrap(), "-o", a.to_str().unwrap(), "--size", "640x400"])
+        .args(["snapshot", "--demo", "--script", script.to_str().unwrap(), "-o", a.to_str().unwrap(), "--size", "640x520"])
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
@@ -355,7 +355,8 @@ fn snapshot_subcommand_renders_the_ui_headlessly() {
     assert!(replies.iter().all(|r| r["ok"] == true), "{replies:?}");
     for (p, dimmed) in [(&a, false), (&b, true)] {
         let d = lightcraft_codecs::decode(&std::fs::read(p).unwrap(), Default::default()).unwrap();
-        assert_eq!((d.width, d.height), (640, 400));
+        // (520 tall: a shorter window gets the compact layout, where the dialog fills the screen)
+        assert_eq!((d.width, d.height), (640, 520));
         // the export dialog dims everything around it
         assert_eq!(mean(p) < mean(&a) - 2.0, dimmed, "{}", p.display());
     }

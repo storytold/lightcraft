@@ -1,7 +1,7 @@
 //! The Detail (loupe) view: the developed photo, before/after, zoom & pan, the filmstrip, and the
 //! on-canvas tools (crop, brush/gradient masks, remove spots, white-balance picker).
 
-use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{DevelopSettings, MaskShape};
 use lightcraft_geom::{Affine, Point};
@@ -93,6 +93,12 @@ pub enum Gesture {
         handle: u8,
         original_shape: MaskShape,
     },
+    /// Drawing a just-created linear / radial gradient (`mask`'s first component) from `a`.
+    DrawMask {
+        mask: u32,
+        a: Point,
+        original_shape: MaskShape,
+    },
     /// Guided Upright: a guide being drawn from `a` (normalized transformed coordinates).
     Guide {
         a: Point,
@@ -130,8 +136,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let fullscreen = app.ui.fullscreen;
-    let show_film = app.ui.filmstrip && !fullscreen;
-    let film_h = if show_film { t.film_h } else { 0.0 };
+    // compact layout: the edit sheet takes the filmstrip's place
+    let compact = super::compact::is_compact(ui.ctx());
+    let show_film = app.ui.filmstrip && !fullscreen && !(compact && super::compact::sheet_open(app));
+    let film_h = if show_film { film_height(ui.ctx(), full) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
     if show_film {
@@ -166,7 +174,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // two views (before, after): side by side or stacked
     let split = matches!(app.ui.before_after, BeforeAfter::SideBySide | BeforeAfter::TopBottom);
     let split_view = matches!(app.ui.before_after, BeforeAfter::Split | BeforeAfter::SplitTopBottom);
-    let areas: Vec<Rect> = match app.ui.before_after {
+    // a phone held upright: Left/Right stacks the two (side by side, each would be a sliver)
+    let before_after = match app.ui.before_after {
+        BeforeAfter::SideBySide if compact && area.height() > area.width() => BeforeAfter::TopBottom,
+        b => b,
+    };
+    let areas: Vec<Rect> = match before_after {
         BeforeAfter::SideBySide => {
             let half = area.width() / 2.0 - 6.0;
             vec![
@@ -201,7 +214,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let display_aspect = visible_texture_aspect.filter(|a| !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
     let resp = ui.interact(canvas, egui::Id::unique("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
-    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
+    // a touch swipe to the next / previous photo drags the photo along
+    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan).translate(vec2(swipe_offset(ui.ctx()), 0.0));
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
     let mut navigating = false;
@@ -209,6 +223,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let view_img = in_pane(view_area, img_rect);
         if navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img) {
             navigating = true;
+            cancel_swipe(ui.ctx());
             target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
             img_rect = target_rect;
             break;
@@ -659,9 +674,9 @@ const PREFETCH_PRIORITY: u32 = 4;
 /// Targeted adjustment tool: dragging up/down on the photo raises/lowers the tone-curve region or
 /// the colour-mixer bands under the press point (`develop.targeted`, one call per whole step, all
 /// in one interaction = one undo step).
-fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap, target: &str) {
+fn targeted_drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, target: &str) {
     if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
     {
         let _ = app.run("develop.beginInteraction", json!({"label": "Targeted Adjustment"}));
         app.gesture = Some(Gesture::Targeted { at: map.norm(q), acc: 0.0 });
@@ -782,7 +797,7 @@ fn general_interaction(
         return;
     }
     if let Some(target) = app.ui.tool.strip_prefix("tat:").map(str::to_string) {
-        targeted_drag(app, resp, map, &target);
+        targeted_drag(app, ui, resp, map, &target);
         return;
     }
     if app.ui.tool == "colorRange" {
@@ -803,6 +818,9 @@ fn general_interaction(
     }
     // click toggles Fit ↔ the chosen click-zoom ratio at the clicked point; drag pans when zoomed
     let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
+    if !zoomed && swipe(app, ui, resp, canvas) {
+        return;
+    }
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
@@ -820,6 +838,66 @@ fn general_interaction(
     }
     let _ = (native, aspect);
 }
+
+/// One finger dragged sideways across the photo at Fit: the photo follows it, and letting go past
+/// a sixth of the canvas (at least 60 pt) shows the next or previous photo. Touch only (a mouse
+/// drag at Fit stays a no-op). True while a swipe is in progress.
+fn swipe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, canvas: Rect) -> bool {
+    let id = egui::Id::unique("loupe-swipe");
+    let moved_id = id.with("moved");
+    if resp.drag_stopped() {
+        // the pointer may be gone already: decide from the movement stored while dragging
+        let Some(moved) = ui.ctx().data_mut(|d| d.remove_temp::<Vec2>(moved_id)) else { return false };
+        ui.ctx().data_mut(|d| d.remove::<f32>(id));
+        if moved.x.abs() > (canvas.width() / 6.0).max(60.0) && moved.x.abs() > moved.y.abs() * 1.5 {
+            let _ = app.run(if moved.x < 0.0 { "library.next" } else { "library.previous" }, json!({}));
+        }
+        return true;
+    }
+    let swiping = ui.ctx().data(|d| d.get_temp::<Vec2>(moved_id)).is_some();
+    if !(resp.drag_started() && ui.input(|i| i.any_touches()) || resp.dragged() && swiping) {
+        return false;
+    }
+    let Some(moved) = ui.input(|i| i.pointer.interact_pos().zip(i.pointer.press_origin()).map(|(p, o)| p - o)) else { return swiping };
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(moved_id, moved);
+        d.insert_temp(id, if moved.x.abs() > moved.y.abs() { moved.x } else { 0.0 });
+    });
+    true
+}
+
+/// The filmstrip's height under a view `full` tall: the compact layout's is lower in a short
+/// window (a phone in landscape), with smaller cells.
+pub(crate) fn film_height(ctx: &egui::Context, full: Rect) -> f32 {
+    let t = Tokens::get(ctx);
+    if super::compact::is_compact(ctx) { (full.height() * 0.24).clamp(FILM_MIN_H, t.film_h) } else { t.film_h }
+}
+
+/// How far a touch swipe has dragged the photo sideways (0 when none is in progress).
+fn swipe_offset(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("loupe-swipe"))).unwrap_or(0.0)
+}
+
+/// Drop a swipe in progress (a pinch or two-finger pan took over).
+fn cancel_swipe(ctx: &egui::Context) {
+    let id = egui::Id::unique("loupe-swipe");
+    ctx.data_mut(|d| {
+        d.remove::<f32>(id);
+        d.remove::<Vec2>(id.with("moved"));
+    });
+}
+
+/// The first points of a brush or spot stroke whose first position is `n`: the press point too
+/// when the stroke began as a drag (the pointer is past the drag threshold by then).
+pub(super) fn stroke_start(ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, n: Point) -> Vec<Point> {
+    match ui.input(|i| i.pointer.press_origin()).filter(|_| resp.drag_started()).map(|q| map.norm(q)) {
+        Some(o) if o != n => vec![o, n],
+        _ => vec![n],
+    }
+}
+
+/// The filmstrip's lowest height (the compact layout's, in a short window).
+const FILM_MIN_H: f32 = 84.0;
 
 #[cfg(test)]
 mod tests {

@@ -298,6 +298,8 @@
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}, resolusi maksimum untuk panorama (resolusi penuhnya {full})",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} diperkecil agar muat di memori perangkat ini",
+  "Photos · {n}": "Foto · {n}",
   "Added {n} photo{}": "{n} foto ditambahkan{:.0}",
   "Could not read {name}: {e}": "Tidak dapat membaca {name}: {e}",
   "Drop to import {n} item{}": "Jatuhkan untuk mengimpor {n} item{:.0}",

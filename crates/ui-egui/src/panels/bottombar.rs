@@ -70,12 +70,26 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             }
                         });
                     }
+                    select_mode_button(app, ui);
                 })
                 .response
                 .rect
                 .right();
             centre(app, ui, full, left_end + 12.0, right_start - 12.0);
         });
+}
+
+/// On a touch screen in the grid: Select (Edit ▸ Select Several: taps add and remove photos, as
+/// ⌘-clicks do), Done while it's on.
+pub fn select_mode_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if !crate::widgets::touch_screen(ui.ctx()) || !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+        return;
+    }
+    ui.add_space(6.0);
+    let on = app.ui.select_mode;
+    if crate::widgets::text_button(ui, "selectMode", if on { "Done" } else { "Select" }, on).clicked() {
+        let _ = app.run("view.selectMode", json!({}));
+    }
 }
 
 /// Five 19-point stars, three 22-point flags, seven 3-point gaps, a 6-point group gap
@@ -167,7 +181,9 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     }
 }
 
-/// The right-hand group (zoom, view toggles or thumbnail size); returns its left edge.
+/// The right-hand group (zoom, view toggles or thumbnail size); returns its left edge. Where there
+/// is no room (an iPad in portrait with My Photos open) Before/After, Face boxes and Click 1:1 are
+/// left out first: they are in the View menu too.
 fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zoom: bool) -> f32 {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(
@@ -193,12 +209,16 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
     if app.ui.view == ViewMode::Survey {
         // no zoom or thumbnail size in Survey
     } else if matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
-        if icon_button(&mut child, "beforeAfter", Icon::BeforeAfter, vec2(30.0, 30.0), app.ui.before_after.is_layout(), true, "Before/After (Y)")
-            .clicked()
+        // Before/After only with room for it, Filmstrip and the zoom menu
+        if child.available_width() >= 36.0 + 36.0 + 10.0 + 64.0
+            && icon_button(&mut child, "beforeAfter", Icon::BeforeAfter, vec2(30.0, 30.0), app.ui.before_after.is_layout(), true, "Before/After (Y)")
+                .clicked()
         {
             let _ = app.run("view.beforeAfter", json!({}));
         }
+        // room left for Face boxes and what has to follow it (Filmstrip, the zoom menu)
         if app.ui.view == ViewMode::Detail
+            && child.available_width() >= 36.0 + 36.0 + 10.0 + 64.0
             && icon_button(&mut child, "faceBoxes", Icon::FaceBox, vec2(30.0, 30.0), app.ui.face_boxes, true, "Face boxes").clicked()
         {
             let _ = app.run("view.faceBoxes", json!({}));
@@ -228,7 +248,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
                 }
             }
         });
-        if !compact_zoom {
+        if !compact_zoom && child.available_width() >= 6.0 + 90.0 {
             child.add_space(6.0);
             let cz = crate::widgets::dropdown(
                 &mut child,
@@ -268,7 +288,7 @@ fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub(crate) fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use lightcraft_catalog::GroupBy;
     use lightcraft_catalog::SortKey::*;
     let cur = app.session.sort;

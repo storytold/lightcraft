@@ -65,9 +65,11 @@ impl LightcraftApp {
             drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
+            field_picks: vec![],
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             host_mods: egui::Modifiers::NONE,
+            pointer_gone_deferred: false,
             styled: false,
             font_language: i18n::Locale::En,
             chinese_font: None,
@@ -325,6 +327,25 @@ impl LightcraftApp {
         Ok(())
     }
 
+    /// A finger has no Esc or F: on a touch screen, full screen shows Exit in the top-right corner of
+    /// the safe area. (A slideshow has its own controls, which a tap brings up.)
+    fn fullscreen_touch_controls(&mut self, ctx: &egui::Context) {
+        if !widgets::touch_screen(ctx) || self.ui.slideshow.is_some() {
+            return;
+        }
+        // (anchored within the content rect: inside the safe area)
+        egui::Area::new(egui::Id::unique("fullscreen-touch")).anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0]).order(egui::Order::Foreground).show(
+            ctx,
+            |ui| {
+                egui::Frame::NONE.fill(egui::Color32::from_black_alpha(170)).corner_radius(6.0).inner_margin(6.0).show(ui, |ui| {
+                    if widgets::text_button(ui, "fullscreenExit", "Exit", false).clicked() {
+                        self.ui.fullscreen = false;
+                    }
+                });
+            },
+        );
+    }
+
     /// Advance a running slideshow, but not while the window is hidden: in 0.36 `i.time` froze
     /// there, and a minimized show must not keep waking the event loop or requesting full-size
     /// slide renders overnight. Playback is auto-paused on hide and resumed on unhide with the
@@ -409,6 +430,19 @@ impl LightcraftApp {
             (Some(_), true) => ctx.request_repaint_after(std::time::Duration::from_secs(2)), // retry
             (None, false) => {}
         }
+    }
+
+    /// A double tap on an Apple Pencil (the shells call this when the system's preferred action is
+    /// to switch to the eraser): while painting a mask, the brush switches between Add and Erase.
+    /// Returns whether it did anything.
+    pub fn pencil_tap(&mut self, ctx: &egui::Context) -> bool {
+        if self.ui.tool != "brush" {
+            return false;
+        }
+        self.ui.brush_erase = !self.ui.brush_erase;
+        let mode = if self.ui.brush_erase { "Brush: Erase" } else { "Brush: Add" };
+        self.toast(ctx, i18n::tr(mode));
+        true
     }
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
@@ -541,6 +575,10 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if self.pointer_gone_deferred {
+            // the next frame delivers the held-back `PointerGone`
+            ctx.request_repaint();
+        }
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and
@@ -586,6 +624,21 @@ impl LightcraftApp {
     /// Lay out the whole window: input/setup for the known UI phase, then presentation, then the
     /// frame bookkeeping. A hidden `run_logic` never reaches this.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // inside the safe area (iOS: clear of the status bar, Dynamic Island and home indicator;
+        // the insets are zero elsewhere), in the compact layout when that is narrow
+        let content = ui.ctx().content_rect();
+        widgets::note_pointer(ui.ctx());
+        panels::compact::update(self, &ui.ctx().clone(), content);
+        if content != ui.max_rect() {
+            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::Tokens::get(ui.ctx()).chrome);
+        }
+        // always the same child, insets or not: widget ids (and with them text focus) stay put
+        // when the insets change, as when the soft keyboard comes up
+        let mut inner = ui.new_child(egui::UiBuilder::new().id_salt("safe-area").max_rect(content));
+        self.layout(&mut inner);
+    }
+
+    fn layout(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {

@@ -59,6 +59,17 @@ impl Default for MediaCache {
             full_capacity: 1,
             on_screen: None,
             preview_capacity: 0,
+            // a host sets it (phones); LIGHTCRAFT_MAX_WORKING_MP tries a cap anywhere
+            max_working_pixels: std::env::var("LIGHTCRAFT_MAX_WORKING_MP")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .map_or(0, |mp| mp * 1_000_000),
+            max_tiled_pixels: env_mp("LIGHTCRAFT_MAX_TILED_MP"),
+            max_gpu_tiled_pixels: if std::env::var_os("LIGHTCRAFT_MAX_GPU_TILED_MP").is_some() {
+                env_mp("LIGHTCRAFT_MAX_GPU_TILED_MP")
+            } else {
+                env_mp("LIGHTCRAFT_MAX_TILED_MP")
+            },
             budget,
             file_loader: None,
             reduced_loader: None,
@@ -287,26 +298,39 @@ impl MediaCache {
     /// How to load photo `p` at `level`: from the cache when its source is there, else from its file (with its denoised
     /// picture beside it when it has one), its smart preview or the demo scene.
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_with(p, level, true)
+        self.source_ref_with(p, level, true, self.max_working_pixels)
+    }
+
+    /// [`Self::source_ref`], with a full-resolution original decoded within `max_pixels` instead
+    /// of the working cap (a tiled export's). A decoded source in memory that is smaller than
+    /// that isn't used.
+    pub fn source_ref_within(&mut self, p: &Photo, level: SourceLevel, max_pixels: usize) -> SourceRef {
+        self.source_ref_with(p, level, true, max_pixels)
     }
 
     /// [`Self::source_ref`] that never takes a decoded source from memory: for a job that needs something the cached
     /// one lacks (an export, whose denoised picture is made when it runs).
     pub fn source_ref_uncached(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_with(p, level, false)
+        self.source_ref_with(p, level, false, self.max_working_pixels)
     }
 
-    fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        let mut r = self.source_ref_plain(p, level, cached);
+    fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool, max_pixels: usize) -> SourceRef {
+        let mut r = self.source_ref_plain(p, level, cached, max_pixels);
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
         r
     }
 
-    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
+    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, max_pixels: usize) -> SourceRef {
+        let full_edge = capped_edge(p.width as usize, p.height as usize, max_pixels);
+        let wanted = full_edge.min(p.width.max(p.height) as usize);
         if cached && let Some(a) = self.get_source(p.id, level) {
-            return SourceRef::Loaded(Box::new(a));
+            let long = a.image.width.max(a.image.height);
+            // (decoders may trim a few pixels off the header's size)
+            if level != SourceLevel::Full || !matches!(p.source, Source::File { .. }) || long * 10 >= wanted * 9 {
+                return SourceRef::Loaded(Box::new(a));
+            }
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
         // with a denoised picture, which the thumbnail would lose
@@ -320,6 +344,8 @@ impl MediaCache {
         // Procedural scenes have a nominal size: "full" is that size, not unbounded.
         let max_edge = level.max_edge().min(match (&p.source, level) {
             (Source::Demo { .. }, SourceLevel::Full) => p.width.max(p.height).max(1) as usize,
+            // within the host's working-resolution cap
+            (Source::File { .. }, SourceLevel::Full) => full_edge,
             _ => usize::MAX,
         });
         // the original is offline: its smart preview, when there is one. Only cached answers are
@@ -362,4 +388,9 @@ impl MediaCache {
             }
         }
     }
+}
+
+/// Megapixels from environment variable `var`, in pixels (0 when unset or not a number).
+fn env_mp(var: &str) -> usize {
+    std::env::var(var).ok().and_then(|v| v.trim().parse::<usize>().ok()).map_or(0, |mp| mp * 1_000_000)
 }

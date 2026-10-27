@@ -61,7 +61,13 @@ pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
 }
 
 pub(crate) fn check(app: &mut LightcraftApp) -> Result<Value, String> {
-    #[cfg(not(target_arch = "wasm32"))]
+    // the iOS and Android apps are updated by the store (or the device) they were installed from
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = app;
+        Err("this app is updated by the store or device it was installed from".into())
+    }
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
     {
         app.updates_rt.check_requested = true;
         if let Some(ctx) = &app.updates_rt.repaint {

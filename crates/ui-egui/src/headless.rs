@@ -25,7 +25,7 @@ use crate::{ControlRequest, LightcraftApp};
 /// Background behind the panels (eframe's default clear colour, made opaque).
 const CLEAR: Color32 = Color32::from_rgb(12, 12, 12);
 /// Simulated frame interval (deterministic animation time).
-const FRAME_DT: f64 = 1.0 / 60.0;
+pub(crate) const FRAME_DT: f64 = 1.0 / 60.0;
 
 /// Validate the scaled screenshot dimensions before layout or pixel allocation.
 pub fn viewport_pixels(size: [f32; 2], pixels_per_point: f32) -> Result<[usize; 2], String> {
@@ -240,6 +240,9 @@ impl HeadlessView {
     }
 }
 
+/// How long [`Headless::request`] waits for a widget it is asked to click, drag or hover.
+const WIDGET_WAIT: Duration = Duration::from_secs(5);
+
 /// A windowless app session: the app's `logic` + `ui` driven frame by frame into a
 /// [`HeadlessView`], with control-protocol requests answered by the shared handler.
 pub struct Headless {
@@ -256,6 +259,8 @@ pub struct Headless {
     pub(crate) time: f64,
     frames: u64,
     pub(crate) events: Vec<egui::Event>,
+    /// Safe-area insets to report on the next frame (a phone's notch, or its soft keyboard).
+    safe_area: Option<egui::SafeAreaInsets>,
     control: Sender<ControlRequest>,
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
@@ -269,6 +274,57 @@ pub struct Headless {
     /// create a prompt after the host input was already filtered for the previous frame.
     #[cfg(test)]
     after_raw_input_hook: Option<Box<dyn FnMut(&mut LightcraftApp)>>,
+    /// Tests: one headless app at a time per test process (see [`serial`]). Last, so it's
+    /// released after the app is gone.
+    #[cfg(test)]
+    _serial: serial::Guard,
+}
+
+/// The ui-egui tests drive whole apps, and parallel tests in one process share the engine's
+/// process-wide memory gate and the CPU with each other's render pools: background work (grid
+/// thumbnails) starved behind other tests' renders for minutes and `settle` timed out. One
+/// headless app at a time is deterministic, and faster too (the suite ran in 87 s serially
+/// against 117 s in parallel). Re-entrant: a test may hold two apps.
+#[cfg(test)]
+mod serial {
+    use std::sync::{Condvar, Mutex};
+    use std::thread::ThreadId;
+
+    static OWNER: Mutex<Option<(ThreadId, usize)>> = Mutex::new(None);
+    static FREED: Condvar = Condvar::new();
+
+    pub struct Guard;
+
+    pub fn lock() -> Guard {
+        let me = std::thread::current().id();
+        let mut owner = OWNER.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match owner.as_mut() {
+                None => {
+                    *owner = Some((me, 1));
+                    return Guard;
+                }
+                Some((t, n)) if *t == me => {
+                    *n += 1;
+                    return Guard;
+                }
+                Some(_) => owner = FREED.wait(owner).unwrap_or_else(|e| e.into_inner()),
+            }
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let mut owner = OWNER.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, n)) = owner.as_mut() {
+                *n -= 1;
+                if *n == 0 {
+                    *owner = None;
+                    FREED.notify_all();
+                }
+            }
+        }
+    }
 }
 
 /// A headless run (`lightcraft-cli snapshot`, tests) is a one-shot process: however it ends, it
@@ -286,6 +342,8 @@ impl Headless {
     /// Invalid dimensions fall back to 1600×1000 at scale 1; external callers can use
     /// [`viewport_pixels`] to reject them before constructing the session.
     pub fn new(app: LightcraftApp, size: [f32; 2], pixels_per_point: f32) -> Self {
+        #[cfg(test)]
+        let serial = serial::lock();
         let (size, pixels_per_point) = if viewport_pixels(size, pixels_per_point).is_ok() {
             (egui::Vec2::from(size), pixels_per_point)
         } else {
@@ -304,8 +362,11 @@ impl Headless {
             time: 0.0,
             frames: 0,
             events: vec![],
+            safe_area: None,
             control: tx,
             quit: false,
+            #[cfg(test)]
+            _serial: serial,
             window_maximized: false,
             window_commands: vec![],
             last_cursor: egui::CursorIcon::Default,
@@ -342,12 +403,24 @@ impl Headless {
     }
 
     /// Run one frame.
+    /// Queue raw input for the next [`Self::step`] (touch gestures, which the control protocol
+    /// has no requests for).
+    pub fn input(&mut self, events: impl IntoIterator<Item = egui::Event>) {
+        self.events.extend(events);
+    }
+
+    /// Report these safe-area insets from the next frame on (egui keeps them until changed).
+    pub fn set_safe_area(&mut self, insets: egui::SafeAreaInsets) {
+        self.safe_area = Some(insets);
+    }
+
     pub fn step(&mut self) {
         (self.size, self.pixels_per_point) = bounded_viewport(self.size, self.pixels_per_point);
         let mut raw = HeadlessView::raw_input(self.size, self.pixels_per_point, self.time, std::mem::take(&mut self.events));
         raw.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.window_maximized);
         raw.max_texture_side = (self.reported_texture_side != Some(self.max_texture_side)).then_some(self.max_texture_side);
         self.reported_texture_side = Some(self.max_texture_side);
+        raw.safe_area_insets = self.safe_area.take();
         // A headless run's timers follow its simulated clock, not the host's wall clock.
         self.app.set_simulated_clock(Some(self.time));
         self.app.raw_input_hook(&self.view.ctx, &mut raw);
@@ -385,6 +458,27 @@ impl Headless {
                 ViewportCommand::StartDrag | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => self.window_commands.push(c),
                 _ => {}
             }
+        }
+    }
+
+    /// Run frames until widget `id` is on screen and holds still (lists that fill in from the disk
+    /// or expand take a few frames, more on a loaded machine; rows above it can still arrive),
+    /// at most `timeout`. Returns whether it showed up.
+    pub fn wait_for_widget(&mut self, id: &str, timeout: Duration) -> bool {
+        let t0 = Instant::now();
+        let mut last = None;
+        loop {
+            let now = self.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r);
+            // rows above it may still come in from the disk (the Local section's folders)
+            let listing = crate::panels::left::fs_cached_running(&self.view.ctx) > 0;
+            if now.is_some() && now == last && !listing {
+                return true;
+            }
+            if t0.elapsed() > timeout {
+                return now.is_some();
+            }
+            last = now;
+            self.step();
         }
     }
 
@@ -469,6 +563,13 @@ impl Headless {
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
+        // a widget to click, drag or hover may need a few more frames to show up (a list filled
+        // in from the disk, an expanding level): wait a little for it (absent ones stay errors)
+        if matches!(method, "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget")
+            && let Some(id) = params.get("id").and_then(Value::as_str)
+        {
+            self.wait_for_widget(id, timeout.min(WIDGET_WAIT));
+        }
         let (req, rx) = ControlRequest::new(method, params);
         if self.control.send(req).is_err() {
             return json!({"ok": false, "error": "control channel closed"});

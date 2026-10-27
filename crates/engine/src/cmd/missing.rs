@@ -51,6 +51,41 @@ pub fn is_missing(cat: &Catalog, avail: &crate::availability::Availability, id: 
     !cfg!(target_arch = "wasm32") && cat.photo(id).and_then(|p| checked_path(p)).is_some_and(|f| avail.is_offline(f))
 }
 
+/// Photos whose files were inside this library when it was somewhere else: the library folder
+/// was moved or copied (or, on iOS, the app's container path changed with a reinstall or an
+/// update), and photos kept in it (`Originals/`, or a mobile app's picked copies) still point at
+/// the old place. A photo qualifies when its path runs through a folder named like the library
+/// (`<anything>/<library name>/<rest>`) that isn't `dir`, its file is gone from there, and
+/// `<dir>/<rest>` is a file of the size the library knows (when it knows one). Returns
+/// (id, new path).
+///
+/// Only paths that name the library are checked on disk, so a library that hasn't moved costs
+/// no file-system calls.
+pub fn plan_moved_library(cat: &Catalog, dir: &Path) -> Vec<(PhotoId, String)> {
+    let Some(name) = dir.file_name() else { return Vec::new() };
+    let mut found = Vec::new();
+    for p in cat.photos() {
+        let Some(path) = checked_path(p) else { continue };
+        let old = Path::new(path);
+        if old.starts_with(dir) {
+            continue;
+        }
+        // the last component named like the library, and what follows it
+        let parts: Vec<_> = old.components().collect();
+        let Some(i) = parts.iter().rposition(|c| c.as_os_str() == name) else { continue };
+        let rest: std::path::PathBuf = parts[i + 1..].iter().collect();
+        if rest.as_os_str().is_empty() {
+            continue;
+        }
+        let new = dir.join(&rest);
+        let fits = std::fs::metadata(&new).is_ok_and(|m| m.is_file() && (p.file_size == 0 || m.len() == p.file_size));
+        if fits && !old.exists() {
+            found.push((p.id, new.to_string_lossy().to_string()));
+        }
+    }
+    found
+}
+
 pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
     let file_name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     Op::Relink { id, file_name, source: Source::File { path: path.to_string() }, format: None }

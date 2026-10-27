@@ -80,7 +80,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("compare.swap", "Swap Compare Photos", None, "View"),
     ("compare.set", "Show in Compare", None, ""),
     ("compare.makeSelect", "Make Candidate the Select", None, "View"),
+    // ← / → in Compare; menu items for touch screens, which have no arrow keys
+    ("compare.previous", "Previous Candidate", None, "View"),
+    ("compare.next", "Next Candidate", None, "View"),
     ("view.autoAdvance", "Auto Advance", None, "Photo"),
+    ("view.selectMode", "Select Several", None, "Edit"),
     ("view.filmstrip", "Filmstrip", Some("/"), "View"),
     ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "View"),
     ("view.rightPanel", "Right Panel", None, "View"),

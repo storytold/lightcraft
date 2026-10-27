@@ -466,6 +466,8 @@ impl Session {
             cache: None,
             stages: None,
             view_cache: None,
+            tiled: false,
+            tiled_gpu: false,
             display: None,
             slide: None,
             preview_cut: None,

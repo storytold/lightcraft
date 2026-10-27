@@ -18,6 +18,8 @@ use crate::widgets::register;
 
 /// How long a read of the model list is reused (it is a few small files, but not for every frame).
 const REFRESH_SECS: f64 = 1.5;
+/// What Install from file… picks: the model, and (from a document picker) its manifest.
+const MODEL_FILES: &[&str] = &["onnx", "json"];
 /// Cache limits offered (GB).
 const CACHE_LIMITS: [u32; 6] = [5, 10, 20, 50, 100, 250];
 
@@ -246,6 +248,53 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
     }
 }
 
+/// The `.onnx` among picked files, paired with the picked manifest: a document picker's copies
+/// of two files need not share a folder, and one that keeps its copies in one folder numbers a
+/// second pick (`model-1.onnx`, `denoise-model-1.json`) beside the first pick's
+/// `denoise-model.json`. So unless the picked manifest already is the model's
+/// `denoise-model.json`, both go into a new folder of their own beside the model's copy (linked,
+/// or copied where links aren't possible) and that model is the one inspected. The picked files
+/// themselves are never changed. `Err` is why the model can't be used.
+fn model_beside_manifest(paths: &[String]) -> Result<String, String> {
+    use std::path::Path;
+    let has_ext = |p: &&String, ext: &str| Path::new(p.as_str()).extension().is_some_and(|e| e.eq_ignore_ascii_case(ext));
+    let Some(model) = paths.iter().find(|p| has_ext(p, "onnx")) else {
+        return Err(tr("Choose the model's .onnx file.").to_string());
+    };
+    let model_path = Path::new(model);
+    let beside = model_path.with_file_name("denoise-model.json");
+    let Some(manifest) = paths.iter().find(|p| has_ext(p, "json")).filter(|m| Path::new(m.as_str()) != beside) else {
+        return Ok(model.clone());
+    };
+    let (Some(dir), Some(name)) = (model_path.parent(), model_path.file_name()) else {
+        return Err(format!("{model}: not a file"));
+    };
+    let pair = fresh_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let link = |from: &Path, to: &Path| std::fs::hard_link(from, to).or_else(|_| std::fs::copy(from, to).map(|_| ()));
+    let paired = pair.join(name);
+    if let Err(e) = link(model_path, &paired).and_then(|()| link(Path::new(manifest), &pair.join("denoise-model.json"))) {
+        let _ = std::fs::remove_dir_all(&pair);
+        log::warn!("denoise model: could not pair {model} with {manifest}: {e}");
+        return Err(format!("{}: {e}", pair.display()));
+    }
+    Ok(paired.display().to_string())
+}
+
+/// A new, empty folder in `dir` (`denoise-model-<time>[-n]`).
+fn fresh_dir(dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let mut last = None;
+    for n in 0..100 {
+        let p = dir.join(if n == 0 { format!("denoise-model-{stamp}") } else { format!("denoise-model-{stamp}-{n}") });
+        match std::fs::create_dir(&p) {
+            Ok(()) => return Ok(p),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free folder name")))
+}
+
 /// The Settings ▸ Denoise tab.
 pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
@@ -272,28 +321,44 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
     heading(ui, t, "Models");
+    // the desktop's file dialog picks the .onnx (its manifest is beside it); a phone's document
+    // picker (`Services::picker`) hands over copies, so both files are picked together
+    let synchronous = app.services.pick_denoise_model.is_some();
     let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
     let r = crate::button::Button::new("Install from file…")
-        .enabled(runtime && app.services.pick_denoise_model.is_some())
+        .enabled(runtime && crate::pick::can_ask_field(app, synchronous))
         .busy(installing)
         .widget("denoise:installFile")
         .show(ui);
-    if r.clicked()
-        && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
-    {
-        match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
-            Ok(info) => {
-                app.caches.denoise.rejected = None;
-                app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
-            }
-            Err(e) => app.caches.denoise.rejected = Some(plain(&e)),
+    if r.clicked() {
+        let req = crate::pick::PickRequest::files(Some(tr("Install from file…").to_string()), tr("Denoise model"), MODEL_FILES);
+        crate::pick::ask_field(app, "denoiseInstallFile", req, |s| s.pick_denoise_model.as_mut().map(|f| f()));
+    }
+    if let Some(paths) = crate::pick::field_answer(app, ui.ctx(), "denoiseInstallFile") {
+        match model_beside_manifest(&paths) {
+            Ok(path) => match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
+                Ok(info) => {
+                    app.caches.denoise.rejected = None;
+                    app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+                }
+                Err(e) => app.caches.denoise.rejected = Some(plain(&e)),
+            },
+            Err(why) => app.caches.denoise.rejected = Some(why),
         }
     }
     if let Some(why) = &app.caches.denoise.rejected {
         hint(ui, t, why);
     }
     if all.is_empty() {
-        hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");
+        if synchronous {
+            hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");
+        } else {
+            hint(
+                ui,
+                t,
+                "Install your own ONNX model: choose its .onnx file and its denoise-model.json together. This build offers no model downloads.",
+            );
+        }
     }
     if let Some(job) = downloads.iter().find(|d| d["id"] == "local-install") {
         match job["state"].as_str() {
@@ -742,4 +807,47 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         "The model is kept on this computer only. LightCraft never uploads or shares it."
     };
     ui.label(RichText::new(tr(closing)).font(t.font(11.5)).color(t.text_dim));
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::model_beside_manifest;
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("lc-denoise-pick-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A second pick into the same folder is numbered beside the first pick's manifest: the
+    /// model inspected must come with the manifest picked with it, not that stale one.
+    #[test]
+    fn a_second_pick_is_paired_with_its_own_manifest() {
+        let d = dir("second");
+        std::fs::write(d.join("model.onnx"), b"first").unwrap();
+        std::fs::write(d.join("denoise-model.json"), b"{\"id\":\"first\"}").unwrap();
+        std::fs::write(d.join("model-1.onnx"), b"second").unwrap();
+        std::fs::write(d.join("denoise-model-1.json"), b"{\"id\":\"second\"}").unwrap();
+        let picked = [d.join("model-1.onnx"), d.join("denoise-model-1.json")].map(|p| p.display().to_string());
+        let model = std::path::PathBuf::from(model_beside_manifest(&picked).unwrap());
+        assert_ne!(model.parent(), Some(d.as_path()), "a folder of its own");
+        assert_eq!(std::fs::read(&model).unwrap(), b"second");
+        assert_eq!(std::fs::read(model.with_file_name("denoise-model.json")).unwrap(), b"{\"id\":\"second\"}");
+        assert_eq!(std::fs::read(d.join("denoise-model.json")).unwrap(), b"{\"id\":\"first\"}", "the first pick is left alone");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A manifest already beside the model (the desktop's file dialog) is used where it is.
+    #[test]
+    fn a_manifest_beside_the_model_is_used_in_place() {
+        let d = dir("beside");
+        std::fs::write(d.join("model.onnx"), b"m").unwrap();
+        std::fs::write(d.join("denoise-model.json"), b"{}").unwrap();
+        let model = d.join("model.onnx").display().to_string();
+        assert_eq!(model_beside_manifest(std::slice::from_ref(&model)).unwrap(), model);
+        assert_eq!(model_beside_manifest(&[model.clone(), d.join("denoise-model.json").display().to_string()]).unwrap(), model);
+        assert!(model_beside_manifest(&[d.join("denoise-model.json").display().to_string()]).is_err(), "no model picked");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

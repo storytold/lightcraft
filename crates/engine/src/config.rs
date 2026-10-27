@@ -108,9 +108,19 @@ fn ensure_writable(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The face models' folder inside a settings folder: `<config>/models`.
+fn face_models_in(config: &Path) -> PathBuf {
+    config.join("models")
+}
+
+/// The denoise models' folder inside a settings folder: `<config>/denoise-models`.
+fn denoise_models_in(config: &Path) -> PathBuf {
+    config.join("denoise-models")
+}
+
 /// Where face models are kept: `$LIGHTCRAFT_FACE_MODELS` if set, else `<config>/models`.
 pub fn default_face_models_dir() -> Option<PathBuf> {
-    std::env::var_os("LIGHTCRAFT_FACE_MODELS").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("models")))
+    std::env::var_os("LIGHTCRAFT_FACE_MODELS").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config_dir().as_deref().map(face_models_in))
 }
 
 /// Where opt-in denoise models are kept: `$LIGHTCRAFT_DENOISE_MODELS` if set, else `<config>/denoise-models`.
@@ -118,7 +128,7 @@ pub fn default_denoise_models_dir() -> Option<PathBuf> {
     std::env::var_os("LIGHTCRAFT_DENOISE_MODELS")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| config_dir().map(|d| d.join("denoise-models")))
+        .or_else(|| config_dir().as_deref().map(denoise_models_in))
 }
 
 /// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else `<config>/models/sam3`.
@@ -149,6 +159,15 @@ impl Session {
     /// Keep denoise models in the shared default folder ([`default_denoise_models_dir`]).
     pub fn with_default_denoise_models(mut self) -> Self {
         self.set_denoise_models_dir(default_denoise_models_dir());
+        self
+    }
+
+    /// Keep face and denoise models in `dir`, laid out as in the settings folder (`models/`,
+    /// `denoise-models/`): for hosts whose app data folder is not [`config_dir`], such as the iOS
+    /// and Android apps (their sandbox has no `$HOME`-based settings folder).
+    pub fn with_models_in(mut self, dir: &Path) -> Self {
+        self.face_models_dir = Some(face_models_in(dir));
+        self.set_denoise_models_dir(Some(denoise_models_in(dir)));
         self
     }
 
@@ -275,5 +294,18 @@ mod tests {
         assert_eq!(sam3_dir(None, Some(config.clone())), fallback);
         assert_eq!(sam3_dir(Some(std::ffi::OsString::new()), Some(config)), fallback);
         assert_eq!(sam3_dir(None, None), None);
+    }
+
+    /// The mobile apps keep models in their sandbox's data folder: without one, Settings ▸ Faces and
+    /// ▸ Denoise said "This build has nowhere to keep … models" on an iPad.
+    #[test]
+    fn models_in_gives_face_and_denoise_models_a_folder() {
+        let dir = std::env::temp_dir().join("lightcraft-models-in-test-never-created");
+        let mut s = Session::new().with_models_in(&dir);
+        let faces = s.execute("faces.models.list", &serde_json::json!({})).unwrap();
+        assert_eq!(faces["dir"], dir.join("models").display().to_string());
+        let denoise = s.execute("denoise.models.list", &serde_json::json!({})).unwrap();
+        assert_eq!(denoise["dir"], dir.join("denoise-models").display().to_string());
+        assert!(!dir.exists(), "listing makes no folders");
     }
 }

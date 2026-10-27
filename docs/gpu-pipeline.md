@@ -145,7 +145,8 @@ walks the drive.
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
   command (runtime preference; `ui.inspect` → `perf.gpu` shows the adapter), a buffer larger than
-  the device's storage-buffer limit, or a render the device did not complete correctly (see
+  the device's storage-buffer limit in a render that can't be tiled (see Tiles below), or a render
+  the device did not complete correctly (see
   [Limits, failures and the CPU fallback](#limits-failures-and-the-cpu-fallback)).
 - wasm32: the crate compiles to the CPU fallback (WebGPU needs asynchronous device creation and a
   device shared with the canvas — open item below).
@@ -204,11 +205,23 @@ cannot vouch for:
 - **Limits.** The device is created with the adapter's limits; every buffer is checked against
   `min(max_storage_buffer_binding_size, max_buffer_size)` when it is created. A render with a
   buffer over the limit (24 MP RGB f32 = 275 MiB; a 128 MiB WebGPU-default device; many masks)
-  falls back for that render, without a device error. Dispatches stay under 65535 workgroups per
-  dimension (`groups1` folds 1-D kernels onto two axes). Exports over the limit are not tiled:
-  most stages need neighbourhoods tens to hundreds of pixels wide (guided filters at clarity /
-  base radius, dehaze dark channel) and some need global values (airlight percentile), so tiles
-  would need wide overlaps and a two-pass plan — the CPU renders those exports instead.
+  is rendered in tiles instead (below); one that can't be tiled falls back for that render,
+  without a device error. Dispatches stay under 65535 workgroups per dimension (`groups1` folds
+  1-D kernels onto two axes).
+- **Tiles.** `crates/gpu/src/tiled.rs` drives the CPU's tile plan
+  (`lightcraft_pipeline::tiled::TilePlan`) with the same kernels: each tile's region (core plus a
+  halo covering the filters' reach) is resampled on the CPU, one region ahead on another thread,
+  and uploaded, so no device buffer is larger than one region and the source is never uploaded
+  whole. A first pass gathers the whole-image values (the fast guided filters' subsampled grids,
+  the dehaze airlight) from each core's read-back log luminance / dark channel; the second
+  upsamples the grids' coefficients with the region's share of the bilinear taps and finishes the
+  region (the vignette is placed by `VIG_GW/GH/X0/Y0`), and only the core's rows are read back.
+  All regions have one size (moved inwards at the edges), so the buffer pool reuses them exactly.
+  Used for renders over the buffer limit (regions of up to 4 MP that fit it) and, through
+  `lightcraft_gpu::render_tiled`, for full-size exports within a memory cap (phones:
+  `MediaCache::max_gpu_tiled_pixels`). Spot removal, Refine Edges, Auto Mask brushes, subject
+  masks, downscaling renders and overlays aren't tiled. Equivalence: `tests/tiled.rs` (max 1 LSB
+  against the CPU's whole render; same bounds as below).
 - **Sanity checks on the result.** The output buffer is cleared before the per-pixel stage, which
   writes alpha 255 everywhere: any pixel without it means work did not run, and the GPU is not used
   again (`incomplete image`). An entirely black result (n ≥ 4096 pixels) is re-rendered on the CPU
@@ -217,7 +230,8 @@ cannot vouch for:
 
 | failure | this render | later renders |
 |---|---|---|
-| buffer over the device limit | CPU | GPU |
+| buffer over the device limit, render that can be tiled | GPU, in tiles | GPU |
+| buffer over the device limit, render that can't be tiled | CPU | GPU |
 | out of device memory | CPU (buffer pool emptied) | GPU |
 | entirely black result | CPU | GPU |
 | validation / internal error, device lost, readback failure or timeout, incomplete image, panic | CPU | CPU (whole process) |
@@ -289,6 +303,17 @@ so CPU numbers are pessimistic; the GPU numbers are less affected):
 | per-pixel stage 1920×1280, + vibrance/saturation | 53–65 ms | 5 ms |
 | export render 6000×4000 | 1037–1414 ms | 291–330 ms |
 
+Tiled, `lightcraft-cli render` (decode, render, encode) on an Apple M3 Max, peak footprint:
+
+| export | CPU whole | GPU whole | CPU tiles | GPU tiles | GPU, 128 MiB limit |
+|---|---|---|---|---|---|
+| 48 MP JPEG, shadows + clarity | 1.3 s, 3.0 GB | 0.6 s, 3.5 GB | 1.7 s, 1.3 GB | 1.1 s, 1.9 GB | 1.3 s, 2.2 GB |
+| same + dehaze | 1.5 s, 3.6 GB | 0.7 s, 4.2 GB | 5.6 s, 1.2 GB | 2.8 s, 1.9 GB | 2.6 s, 2.3 GB |
+| 60 MP DNG, shadows + clarity | 5.6 s, 6.7 GB | 4.0 s, 6.9 GB | 7.0 s, 1.8 GB | 5.1 s, 2.5 GB | 5.3 s, 3.2 GB |
+| same + dehaze | 3.6 s, 7.4 GB | 2.8 s, 6.9 GB | 32 s, 1.6 GB | 7.6 s, 2.4 GB | 5.4 s, 3.3 GB |
+
+(The machine was shared; single runs.) GPU tiles cost ~0.4 GB plus ~180 bytes a region pixel
+more than CPU tiles (device, buffer pool), `lightcraft_gpu::tiled_working_bytes`.
 On Windows (Radeon 780M iGPU, DX12), a full-size JPEG export of the same raw with heavy edits (NR 30
 / 25, clarity, texture, dehaze, sharpening, highlights / shadows) took 3.6–4.0 s on the GPU against
 1.9–2.0 s on the CPU: the horizontal box pass had each thread slide a running sum over 16 pixels, so
@@ -347,9 +372,9 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   reading back); share the device with eframe.
 - WebGPU in the browser build (async init, single device per canvas).
 - Defringe and spot removal kernels; Sky/Subject heuristics (replaced by the segmenter in M12).
-- Tiling for sources / outputs beyond the buffer limit (24 MP+ on WebGPU-default limits, 60 MP+
-  on most desktop adapters; these render on the CPU now): tile with overlap equal to the largest
-  filter radius, with global values (airlight) from a first pass.
+- Tiling the settings tiles decline (spot removal, Refine Edges, Auto Mask, subject masks) and
+  downscaling renders (a tiled prefilter); a summed-area or downsampled dark channel to shrink
+  dehaze's ~3σ halo, which makes tiles overlap heavily.
 - Integrated GPUs much slower than the CPU (issue #78's GT1): a measured per-device choice of the
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area

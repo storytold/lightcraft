@@ -412,6 +412,36 @@ impl LibraryProblem {
     }
 }
 
+/// Open the library at `dir` in a session from `fresh` (seeded with the demo photos when it is
+/// new and `seed_demo`), for a host that has no recovery flow of its own (the mobile shells). When
+/// it can't be opened the session is a fresh, empty one and the problem is returned, for
+/// [`LightcraftApp::library_problem`]: the window then says so before anything can be edited, as
+/// on the desktop, instead of a silent session whose changes are lost on exit.
+pub fn open_or_problem(
+    fresh: impl Fn() -> lightcraft_engine::Session,
+    dir: &std::path::Path,
+    seed_demo: bool,
+) -> (lightcraft_engine::Session, Option<LibraryProblem>) {
+    let mut s = fresh();
+    let t0 = std::time::Instant::now();
+    match s.open_library(dir, seed_demo) {
+        Ok(r) => {
+            let replayed = r.replayed;
+            log::info!(
+                "library {}: {} photos, {replayed} log records replayed ({:.1} ms)",
+                dir.display(),
+                s.catalog.len(),
+                t0.elapsed().as_secs_f64() * 1e3
+            );
+            (s, None)
+        }
+        Err(e) => {
+            log::error!("can't open library {}: {e}", dir.display());
+            (fresh(), Some(LibraryProblem::new(dir.to_string_lossy(), e.to_string())))
+        }
+    }
+}
+
 /// The row first selected: the last library opened if it can be opened, else the first one that
 /// can, else the first row.
 fn initial_selection(libraries: &[RecentLibrary], last: &str) -> Option<usize> {
@@ -1026,7 +1056,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         .default_width(460.0)
         .show(ctx, |ui| {
             // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-            ui.set_width(440.0);
+            ui.set_width(super::compact::dialog_width(ui.ctx(), 440.0, 18.0));
             ui.spacing_mut().item_spacing.y = 8.0;
             if problem.path.is_empty() {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));
@@ -1286,5 +1316,31 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.library_window_input.begin_transition();
         clear_focus(ui.ctx());
         ui.ctx().request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    #[test]
+    fn a_library_that_cant_be_opened_is_reported_not_left_silent() {
+        // a file where the library folder should be: it can't be opened or created
+        let dir = std::env::temp_dir().join(format!("lc-open-or-problem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::write(&dir, b"not a folder").unwrap();
+        let (s, problem) = open_or_problem(|| lightcraft_engine::Session::new().with_fs(), &dir, true);
+        let problem = problem.expect("the problem is reported");
+        assert_eq!(problem.path, dir.to_string_lossy());
+        assert!(!problem.error.is_empty());
+        assert!(s.library.is_none() && s.catalog.is_empty(), "a fresh, empty session: no demo photos, nothing saved");
+        let _ = std::fs::remove_file(&dir);
+        // a folder that can be: opened, no problem
+        let ok = std::env::temp_dir().join(format!("lc-open-or-problem-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ok);
+        let (s, problem) = open_or_problem(|| lightcraft_engine::Session::new().with_fs(), &ok, false);
+        assert!(problem.is_none() && s.library.is_some());
+        drop(s);
+        let _ = std::fs::remove_dir_all(&ok);
     }
 }

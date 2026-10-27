@@ -155,6 +155,13 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
             }
         }
     }
+    // mobile: no editor to launch; the share sheet opens the copies in another app
+    if app.services.open_with.is_none()
+        && let Some(share) = app.services.share.as_mut()
+    {
+        let paths: Vec<String> = copies.iter().map(|(p, _)| p.clone()).collect();
+        share(&paths);
+    }
     let mut r = r;
     if let Some(o) = r.as_object_mut() {
         o.insert("failed".into(), json!(failed));

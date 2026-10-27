@@ -70,17 +70,18 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
         }
     };
 
-    // the output itself is over the limit: refused up front, the GPU stays in use
+    // far over the limit (even a tile is too big): refused up front, the GPU stays in use
     lightcraft_gpu::inject_fault(Fault::Limit(1 << 20));
     let why = failed("output over the limit");
     assert!(why.contains("limit"), "{why}");
     assert!(lightcraft_gpu::available(), "a limit is no device failure");
 
-    // the output fits but the mask planes (4 masks: 4 planes in one buffer) don't: caught when the
-    // buffer is created, without a device error, and the GPU stays in use
+    // the output fits but the mask planes (4 masks: 4 planes in one buffer) don't: rendered in
+    // tiles that fit, still on the GPU
     lightcraft_gpu::inject_fault(Fault::Limit((w * h * 3 * 4 + 1024) as u64));
-    let why = failed("mask planes over the limit");
-    assert!(why.contains("exceeds"), "{why}");
+    let g = lightcraft_gpu::render(&src, &info, &s, &req, None).unwrap_or_else(|| panic!("tiled: {:?}", lightcraft_gpu::last_fallback()));
+    let d = mean_abs_diff(&cpu, &g.image);
+    assert!(d < 0.5, "tiled GPU render differs from the CPU by {d:.3} LSB");
     assert!(lightcraft_gpu::available(), "{:?}", lightcraft_gpu::unavailable_reason());
     ok("after the limit faults");
 

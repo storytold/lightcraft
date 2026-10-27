@@ -2211,6 +2211,36 @@ fn a_background_export_holds_photos_while_it_writes() {
     let _ = std::fs::remove_dir_all(&out);
 }
 
+/// A mobile host's share sheet gets the written files when a UI export finishes, and the
+/// Export dialog starts in the host's export folder.
+#[test]
+fn finished_export_is_offered_to_the_share_sheet() {
+    let mut h = demo([1200.0, 900.0]);
+    let t = Duration::from_secs(10);
+    h.app.services.write_shared = Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(())));
+    h.app.services.export_dir = Some("/sandbox/Exports".into());
+    let shared = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<String>>::new()));
+    let s = shared.clone();
+    h.app.services.share = Some(Box::new(move |paths: &[String]| s.borrow_mut().push(paths.to_vec())));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), t);
+    h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+    h.settle(SETTLE);
+    let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog else { panic!("no export dialog") };
+    assert_eq!(dir, "/sandbox/Exports");
+    *full_size = false;
+    *resize = lightcraft_engine::export::Resize::long_edge(64);
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
+    let t0 = Instant::now();
+    while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
+        h.step();
+    }
+    let shared = shared.borrow();
+    assert_eq!(shared.len(), 1, "shared once: {shared:?}");
+    assert_eq!(shared[0].len(), 2);
+    assert!(shared[0].iter().all(|p| p.starts_with("/sandbox/Exports/")), "{shared:?}");
+}
+
 /// Dragging grid photos onto an album row adds them to the album.
 #[test]
 fn drag_photos_onto_an_album() {
@@ -3581,7 +3611,8 @@ fn import_review_offers_recently_deleted_files() {
         let services = crate::Services { png: None, ..Default::default() };
         let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
-        let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+        // tall enough for the whole Import dialog (a shorter window scrolls it)
+        let mut h = Headless::new(app, [1300.0, 1400.0], 1.0);
         let t = Duration::from_secs(10);
         let r = h.request("engine.execute", json!({"command": "library.import", "params": {"paths": [dir.join("img0.png").to_string_lossy()]}}), t);
         let id = r["result"]["imported"][0].as_u64().unwrap();
@@ -3718,7 +3749,7 @@ fn import_review_dialog_resizes() {
     }
     let r0 = rect(&mut h);
     assert!(r0[3] > 600.0, "{r0:?}");
-    // the Copy options add rows below the grid: the grid makes room, the window doesn't grow
+    // the Copy options add rows to the options column: it scrolls, the window doesn't grow
     for copy in [true, false] {
         if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
             opts.copy = copy;
@@ -3729,13 +3760,16 @@ fn import_review_dialog_resizes() {
         let r = rect(&mut h);
         assert!((r[3] - r0[3]).abs() < 0.5, "copy {copy}: {r0:?} → {r:?}");
     }
+    let grid = |h: &Headless| h.app.widgets.iter().rev().find(|(w, _)| w == "grid:importPhotos").map(|(_, r)| r.height()).unwrap();
+    let g0 = grid(&h);
     let (x, y) = (r0[0] + r0[2] - 3.0, r0[1] + r0[3] - 3.0);
-    h.request("ui.drag", json!({"x": x, "y": y, "toX": x + 160.0, "toY": y + 120.0, "steps": 12}), t);
+    h.request("ui.drag", json!({"x": x, "y": y, "toX": x - 160.0, "toY": y - 120.0, "steps": 12}), t);
     for _ in 0..10 {
         h.step();
     }
     let r1 = rect(&mut h);
-    assert!(r1[2] > r0[2] + 100.0 && r1[3] > r0[3] + 80.0, "dragging the corner resized it: {r0:?} → {r1:?}");
+    assert!(r1[2] < r0[2] - 100.0 && r1[3] < r0[3] - 80.0, "dragging the corner resized it: {r0:?} → {r1:?}");
+    assert!(grid(&h) < g0 - 80.0, "the photo grid took the new height: {g0} → {}", grid(&h));
     for _ in 0..60 {
         h.step();
     }
@@ -4052,7 +4086,8 @@ fn import_rename_tags_insert_at_the_cursor() {
     session.open_library(&lib, false).unwrap();
     let mut app = LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
     app.ui.view = crate::state::ViewMode::PhotoGrid;
-    let mut h = Headless::new(app, [1300.0, 1000.0], 1.0);
+    // tall enough for the whole Import dialog (a shorter window scrolls it)
+    let mut h = Headless::new(app, [1300.0, 1400.0], 1.0);
     let t = Duration::from_secs(10);
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.join("IMG_0007.png").to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");

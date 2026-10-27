@@ -30,7 +30,7 @@ fn setup(name: &str) -> (LightcraftApp, PathBuf, PhotoId) {
     (LightcraftApp::new(s, Services::default()), dir, id)
 }
 
-fn denoise_file(dir: &Path) -> PathBuf {
+pub(crate) fn denoise_file(dir: &Path) -> PathBuf {
     let source = dir.join("source");
     std::fs::create_dir_all(&source).unwrap();
     let bytes = lightcraft_denoise::synthetic::smoothing_onnx();

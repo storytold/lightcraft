@@ -186,9 +186,8 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
 }
 
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
-    let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
-    let film_h = if app.ui.filmstrip { t.film_h } else { 0.0 };
+    let film_h = if app.ui.filmstrip { super::detail::film_height(ui.ctx(), full) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
     if app.ui.filmstrip {
@@ -327,7 +326,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     // caption right under the image (at the bottom when zoomed in)
     let cap_top = (display.bottom() + 2.0).min(img_area.bottom());
     let cap = Rect::from_min_max(pos2(img.left().max(area.left()), cap_top), pos2(area.right(), cap_top + caption_h));
-    let pt = ui.painter();
+    let pt = &ui.painter().clone();
     let mut x = cap.left() + 4.0;
     if !label.is_empty() {
         let g = pt.layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(12.0), if active { t.text } else { t.text_label });
@@ -341,14 +340,19 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         pt.galley(pos2(x, cap.center().y - g.size().y / 2.0), g, t.text_dim);
         x += name_w + 10.0;
     }
-    for i in 0..5u8 {
-        let filled = i < photo.rating;
-        let r = Rect::from_min_size(pos2(x + i as f32 * 13.0, cap.center().y - 6.0), vec2(12.0, 12.0));
-        if r.right() < cap.right() {
-            crate::rating::paint_star(pt, r, filled, if filled { t.star } else { t.icon.gamma_multiply(0.6) });
+    // the stars rate this photo: the shared rating row (a click on the current rating clears it)
+    let cell = crate::rating::RatingSize::Large.step() + 2.0;
+    let row = Rect::from_min_size(pos2(x, cap.center().y - cell / 2.0), vec2(5.0 * cell, cell));
+    if row.right() < cap.right() {
+        let mut stars = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        stars.spacing_mut().item_spacing.x = 0.0;
+        if let Some(r) =
+            crate::rating::Rating::new(format!("cull{}", id.0), photo.rating).automation_ids(format!("cullStar:{}:", id.0)).show(&mut stars)
+        {
+            let _ = app.run("photo.rate", json!({"rating": r, "ids": [id.0]}));
         }
     }
-    x += 5.0 * 13.0 + 4.0;
+    x += row.width() + 4.0;
     let fr = Rect::from_min_size(pos2(x, cap.center().y - 7.0), vec2(14.0, 14.0));
     match photo.flag {
         Flag::Pick if fr.right() < cap.right() => paint(pt, fr, Icon::FlagPickFilled, t.pick),
@@ -571,8 +575,8 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("library.select", json!({"ids": [id.0]}));
             app.ui.view = ViewMode::Detail;
         }
-        // remove from the survey (deselect) on hover
-        if resp.hovered() && photos.len() > 1 {
+        // remove from the survey (deselect) on hover; always there on a touch screen
+        if (resp.hovered() || crate::widgets::touch_screen(ui.ctx())) && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
             let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));

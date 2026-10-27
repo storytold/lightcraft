@@ -160,6 +160,39 @@ fn paste_in_the_menu_replaces_the_selection() {
     assert_eq!(rig.text, "Porto");
 }
 
+thread_local! {
+    static SHOWN: std::cell::RefCell<Vec<NativeMenuItems>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record_native_menu(_field: Rect, _at: Pos2, items: NativeMenuItems) {
+    SHOWN.with_borrow_mut(|s| s.push(items));
+}
+
+/// With a system edit menu (iOS), a right-click or long press shows it instead of the app's
+/// menu, and the field takes the focus: what the system's Paste sends lands in it.
+#[test]
+fn a_hosts_native_menu_replaces_the_apps_menu() {
+    SHOWN.with_borrow_mut(Vec::clear);
+    let mut rig = Rig::new("Lisbon");
+    set_native_menu(&rig.view.ctx, record_native_menu);
+    rig.click(FIELD, PointerButton::Secondary);
+    assert_eq!(SHOWN.with_borrow(Vec::clone), [NativeMenuItems { cut: false, copy: false, select_all: true }]);
+    assert!(rig.rect(&format!("{FIELD}:paste")).is_none(), "no menu of the app's own");
+    assert!(rig.editing, "the field has the focus");
+    // the system's Paste
+    rig.frame(vec![Event::Paste(" Porto".into())]);
+    rig.settle();
+    assert_eq!(rig.text, "Lisbon Porto");
+    assert!(rig.endings.is_empty(), "the edit goes on");
+    // with text selected Cut and Copy are offered, and Copy copies it
+    rig.select_all_by_keys();
+    rig.click(FIELD, PointerButton::Secondary);
+    assert_eq!(SHOWN.with_borrow(|s| s.last().copied()), Some(NativeMenuItems { cut: true, copy: true, select_all: true }));
+    rig.frame(vec![Event::Copy]);
+    rig.settle();
+    assert_eq!(rig.view.clipboard, "Lisbon Porto");
+}
+
 /// Select All in the menu selects the whole text: what is typed next replaces it.
 #[test]
 fn select_all_in_the_menu_selects_the_whole_text() {

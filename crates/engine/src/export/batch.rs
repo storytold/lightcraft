@@ -51,12 +51,13 @@ pub(super) fn run_batch_with(
             if !progress(i, &item.file_name) {
                 break;
             }
-            let (photo, name, guard, source_dir) = (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone());
-            placer.place(photo, name, source_dir.as_deref(), &guard, run_gated(item))?;
+            let (photo, name, guard, source_dir, reduced_from) =
+                (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone(), item.reduced_from);
+            placer.place(photo, name, source_dir.as_deref(), &guard, reduced_from, run_gated(item))?;
         }
         return Ok(std::mem::take(&mut placer.out));
     }
-    let heads: Vec<_> = items.iter().map(|i| (i.photo, i.file_name.clone(), i.guard.clone(), i.source_dir.clone())).collect();
+    let heads: Vec<_> = items.iter().map(|i| (i.photo, i.file_name.clone(), i.guard.clone(), i.source_dir.clone(), i.reduced_from)).collect();
     let queue = Queue {
         lane: std::sync::Mutex::new(Lane { items: items.into_iter().map(Some).collect(), next: 0, placed: 0, stop: false, done: Default::default() }),
         cv: std::sync::Condvar::new(),
@@ -74,12 +75,12 @@ pub(super) fn run_batch_with(
             }
         }
         let placed = || {
-            for (i, (photo, name, guard, source_dir)) in heads.into_iter().enumerate() {
+            for (i, (photo, name, guard, source_dir, reduced_from)) in heads.into_iter().enumerate() {
                 if !progress(i, &name) {
                     break;
                 }
                 let e = queue.result(i);
-                placer.place(photo, name, source_dir.as_deref(), &guard, e)?;
+                placer.place(photo, name, source_dir.as_deref(), &guard, reduced_from, e)?;
             }
             Ok::<_, String>(())
         };

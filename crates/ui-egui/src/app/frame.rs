@@ -378,6 +378,7 @@ impl LightcraftApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
+            self.fullscreen_touch_controls(&ctx);
             panels::second::show(self, &ctx);
             if notice_blocks {
                 panels::notices::restore_prompt_pointer(self, &ctx);
@@ -402,12 +403,33 @@ impl LightcraftApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
-        panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
-        let chrome = theme::Tokens::get(&ctx).chrome;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        if panels::compact::is_compact(&ctx) {
+            panels::compact::show(self, ui);
+            let t = theme::Tokens::get(&ctx);
+            let bg = if matches!(
+                self.ui.view,
+                state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference
+            ) {
+                t.canvas
+            } else {
+                t.grid_bg
+            };
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| match self.ui.view {
+                state::ViewMode::PhotoGrid | state::ViewMode::SquareGrid => panels::grid::show(self, ui),
+                state::ViewMode::Detail => panels::detail::show(self, ui),
+                state::ViewMode::Compare => panels::compare::show_compare(self, ui),
+                state::ViewMode::Survey => panels::compare::show_survey(self, ui),
+                state::ViewMode::Reference => panels::compare::show_reference(self, ui),
+                state::ViewMode::People => panels::people::show(self, ui),
+            });
+        } else {
+            panels::topbar::show(self, ui);
+            panels::library_problem::banner(self, ui);
+            panels::strip::show(self, ui);
+            // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
+            let chrome = theme::Tokens::get(&ctx).chrome;
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        }
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
         if notice_blocks {

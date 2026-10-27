@@ -186,13 +186,18 @@ pub fn eye_pixel(c: [f32; 3], x: f32, y: f32, eyes: &[EyeK]) -> [f32; 3] {
 
 /// Apply the eyes to `img` (output resolution), in place.
 pub fn apply(img: &mut Rgb32f, eyes: &[EyeK]) {
+    apply_at(img, eyes, 0, 0);
+}
+
+/// [`apply`] to the part of the output whose top-left pixel is (`x0`, `y0`).
+pub fn apply_at(img: &mut Rgb32f, eyes: &[EyeK], x0: usize, y0: usize) {
     if eyes.is_empty() {
         return;
     }
     let w = img.width;
     for_rows(&mut img.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
-            *px = eye_pixel(*px, x as f32 + 0.5, y as f32 + 0.5, eyes);
+            *px = eye_pixel(*px, (x0 + x) as f32 + 0.5, (y0 + y) as f32 + 0.5, eyes);
         }
     });
 }

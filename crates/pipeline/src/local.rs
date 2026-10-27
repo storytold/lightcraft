@@ -168,7 +168,7 @@ pub fn guided(p: &Plane, sigma: f32, eps: f32) -> Plane {
 
 /// Blurred guided-filter coefficients (mean a, mean b) of `p`; every pass row-parallel, and the
 /// two independent blurs of each step run side by side.
-fn guided_coeffs(p: &Plane, sigma: f32, eps: f32) -> (Plane, Plane) {
+pub(crate) fn guided_coeffs(p: &Plane, sigma: f32, eps: f32) -> (Plane, Plane) {
     let (mean, corr) = par_join(|| gaussian(p, sigma), || gaussian(&p.map(|v| v * v), sigma));
     let a = corr.zip_map(&mean, |c, m| {
         let var = (c - m * m).max(0.0);

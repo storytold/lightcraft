@@ -130,6 +130,24 @@ impl Decoded {
         to_working(self)
     }
 
+    /// [`Decoded::to_working`], converting the image in place (no second full-size copy):
+    /// transparency composited on white as there.
+    pub fn into_working(self) -> Rgb32f {
+        let mut img = self.image;
+        if !self.space.is_working() {
+            let m = self.space.to_working().to_f32();
+            img.map_in_place(|p| mat_apply(&m, p));
+        }
+        // white is (1, 1, 1) in the working space too: the conversion is white-preserving
+        if let Some(a) = self.alpha.as_ref().filter(|a| a.width == img.width && a.height == img.height) {
+            for (p, &av) in img.data.iter_mut().zip(&a.data) {
+                let av = av.clamp(0.0, 1.0);
+                *p = p.map(|c| c * av + (1.0 - av));
+            }
+        }
+        img
+    }
+
     /// Display-encoded 8-bit sRGB (gamut clipped), with alpha.
     pub fn to_srgb8(&self) -> Rgba8 {
         let m = self.space.to_space(&lightcraft_color::SRGB);

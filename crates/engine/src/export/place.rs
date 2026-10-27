@@ -92,14 +92,16 @@ impl<'a> Placer<'a> {
         Ok(if self.o.subfolder.is_empty() { base } else { join_path(&base, &self.o.subfolder) })
     }
 
-    /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it
-    /// and record the outcome. `Err` only when it failed and `stop_on_error` is set.
+    /// Place photo `photo`'s export result (file `name`, its original in `source_dir`;
+    /// `reduced_from`: see [`PreparedExport::reduced_from`]): write it and record the outcome.
+    /// `Err` only when it failed and `stop_on_error` is set.
     pub(super) fn place(
         &mut self,
         photo: lightcraft_catalog::PhotoId,
         name: String,
         source_dir: Option<&str>,
         guard: &crate::originals::OriginalGuard,
+        reduced_from: Option<(usize, usize)>,
         e: Result<Exported, String>,
     ) -> Result<(), String> {
         use serde_json::json;
@@ -163,6 +165,10 @@ impl<'a> Placer<'a> {
                 let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
                 if let Some(why) = &e.gpu_fallback {
                     entry["gpuFallback"] = json!(why);
+                }
+                if let Some((w, h)) = reduced_from {
+                    // smaller than asked, to fit the host's working-resolution cap
+                    entry["reducedFrom"] = json!([w, h]);
                 }
                 self.out.push(entry);
             }

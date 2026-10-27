@@ -44,6 +44,10 @@ pub(super) fn region_overlay(
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
     let pointer = ui.input(|i| i.pointer.hover_pos());
+    // a finger can't hover: every box shows its handles, its × and its "Add name" invitation, and
+    // the handles and × are bigger
+    let touch = crate::widgets::touch_screen(ui.ctx());
+    let (handle, x_size) = if touch { (28.0, 24.0) } else { (14.0, 16.0) };
     // the box being dragged: (region index, its box so far)
     let drag_key = egui::Id::unique("region-drag");
     let live: Option<(usize, lightcraft_geom::Rect)> = ui.data(|d| d.get_temp(drag_key));
@@ -55,10 +59,10 @@ pub(super) fn region_overlay(
         // white with a black keyline just outside it, so the box shows on any background
         p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
-        if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
+        if dragging.is_some() || (live.is_none() && (touch || pointer.is_some_and(|h| rect.expand(8.0).contains(h)))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
-                let resp = ui.interact(Rect::from_center_size(c, vec2(14.0, 14.0)), egui::Id::unique(("region-handle", index, h)), Sense::drag());
+                let resp = ui.interact(Rect::from_center_size(c, vec2(handle, handle)), egui::Id::unique(("region-handle", index, h)), Sense::drag());
                 crate::widgets::announce(&resp, crate::i18n::tr("Resize region"));
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(*cursor);
@@ -101,8 +105,8 @@ pub(super) fn region_overlay(
                 }
             }
         }
-        if dragging.is_none() && live.is_none() && pointer.is_some_and(|h| rect.expand(3.0).contains(h)) {
-            let xr = Rect::from_center_size(pos2(rect.right() - 13.0, rect.top() + 13.0), vec2(16.0, 16.0));
+        if dragging.is_none() && live.is_none() && (touch || pointer.is_some_and(|h| rect.expand(3.0).contains(h))) {
+            let xr = Rect::from_center_size(pos2(rect.right() - 5.0 - x_size / 2.0, rect.top() + 5.0 + x_size / 2.0), vec2(x_size, x_size));
             let resp = ui.interact(xr, egui::Id::unique(("region-x", index)), Sense::click());
             crate::widgets::announce(&resp, crate::i18n::tr("Remove region"));
             register(ui, format!("regionRemove:{index}"), xr);
@@ -120,7 +124,7 @@ pub(super) fn region_overlay(
         // what the label says: the name, a guess to confirm ("Jane Doe?"), or on hover an invitation to name the face
         let is_face = r.kind == lightcraft_meta::RegionKind::Face;
         let hint = hints.and_then(|h| h.by_index.get(&index));
-        let hovered = pointer.is_some_and(|h| rect.expand(3.0).contains(h));
+        let hovered = touch || pointer.is_some_and(|h| rect.expand(3.0).contains(h));
         let editing_this = editing.as_ref().is_some_and(|e| e.photo == photo.id.0 && e.index == index);
         let (text, text_color, fill_alpha, invitation) = match (&r.name, hint.and_then(|h| h.suggestion.as_ref())) {
             (Some(n), _) => (n.clone(), Color32::from_gray(225), 235, false),
@@ -187,6 +191,21 @@ pub(crate) fn component_pin(shape: &MaskShape) -> Option<Point> {
 }
 
 /// `shape` moved by `dn` (normalized); `handle` 1/2 = a linear gradient's start/end set to `at`.
+/// `shape` (a linear or radial gradient) drawn by a drag from `a` to `b` (normalized): a linear
+/// gradient runs from `a` to `b`, a radial one is centred on `a` and reaches `b`.
+fn drawn_shape(shape: &MaskShape, a: Point, b: Point, map: &CanvasMap) -> MaskShape {
+    match shape.clone() {
+        MaskShape::Radial { feather, invert, .. } => {
+            let l = frame_long_norm(map);
+            let rx = ((b.x - a.x) / l.0).abs().max(0.01);
+            let ry = ((b.y - a.y) / l.1).abs().max(0.01);
+            MaskShape::Radial { center: a, rx, ry, angle: 0.0, feather, invert }
+        }
+        MaskShape::Linear { .. } if a.dist(b) > 1e-3 => MaskShape::Linear { start: a, end: b },
+        other => other,
+    }
+}
+
 fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &CanvasMap, alt: bool) -> MaskShape {
     let mv = |p: Point| Point::new(p.x + dn.x, p.y + dn.y);
     match shape.clone() {
@@ -269,7 +288,8 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
         && let Some(q) = resp.interact_pointer_pos()
     {
         let n = map.norm(q);
-        let add = ui.input(|i| i.modifiers.shift);
+        // ⇧-click adds; so does a tap after the panel's Add (touch screens have no ⇧)
+        let add = ui.input(|i| i.modifiers.shift) || app.ui.pick_adds;
         if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
             app.toast(ui.ctx(), e);
         }
@@ -404,7 +424,7 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             && let Some(q) = resp.interact_pointer_pos()
         {
             let n = map.norm(q);
-            let exclude = ui.input(|i| i.modifiers.alt);
+            let exclude = ui.input(|i| i.modifiers.alt) || app.ui.object_excludes;
             match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
                 Ok(_) => {
                     if let Some(mid) = app.session.active_mask {
@@ -436,10 +456,12 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
                     record_pressure(pressure, points.len(), force);
                     points.push(n);
                 }
+                // from where it was pressed, not where the drag threshold was passed
                 _ => {
+                    let points = stroke_start(ui, resp, map, n);
                     let mut pressure = Vec::new();
-                    record_pressure(&mut pressure, 0, force);
-                    app.gesture = Some(Gesture::Brush { points: vec![n], pressure });
+                    record_pressure(&mut pressure, points.len().saturating_sub(1), force);
+                    app.gesture = Some(Gesture::Brush { points, pressure });
                 }
             }
         }
@@ -481,10 +503,11 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         return;
     }
     // the grip under the pointer: the selected mask's first, then the nearest
+    let reach = crate::widgets::grab_radius(ui.ctx(), 10.0);
     let hit = |q: Pos2| {
         grips
             .iter()
-            .filter(|g| g.3.distance(q) < 10.0)
+            .filter(|g| g.3.distance(q) < reach)
             .min_by(|a, b| {
                 (Some(a.0) != active, a.3.distance(q)).partial_cmp(&(Some(b.0) != active, b.3.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
             })
@@ -497,7 +520,20 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
     {
         let _ = app.run("mask.select", json!({"id": mid}));
     }
+    // a gradient just created from its tile: a drag away from the pins draws it
+    let drawing = app.ui.draw_mask.filter(|m| Some(*m) == active && matches!(app.ui.tool.as_str(), "linear" | "radial"));
+    if drawing.is_none() {
+        app.ui.draw_mask = None;
+    }
     if resp.drag_started()
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
+        && hit(q).is_none()
+        && let Some(mask) = drawing
+        && let Some(original_shape) = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.first()).map(|c| c.shape.clone())
+    {
+        let _ = app.run("develop.beginInteraction", json!({"label": "Draw Mask"}));
+        app.gesture = Some(Gesture::DrawMask { mask, a: map.norm(q), original_shape });
+    } else if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
         let grip = hit(q).map(|(m, c, h, _)| (m, c, h)).or_else(|| {
@@ -519,6 +555,8 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             }
             let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
             app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape });
+            // edited by its pins: drags don't redraw it any more
+            app.ui.draw_mask = None;
         }
     }
     if resp.dragged()
@@ -532,7 +570,16 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         let new_shape = moved_shape(&original_shape, handle, dn, n, map, alt);
         let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
     }
-    if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
+    if resp.dragged()
+        && let (Some(Gesture::DrawMask { mask, a, original_shape }), Some(q)) = (app.gesture.clone(), resp.interact_pointer_pos())
+    {
+        let shape = drawn_shape(&original_shape, a, map.norm(q), map);
+        let _ = app.run("mask.update", json!({"id": mask, "component": 0, "shape": shape}));
+    }
+    if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. } | Gesture::DrawMask { .. })) {
+        if matches!(app.gesture, Some(Gesture::DrawMask { .. })) {
+            app.ui.draw_mask = None;
+        }
         app.gesture = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
@@ -605,10 +652,11 @@ pub(super) fn pin(p: &egui::Painter, c: Pos2, sel: bool) {
 }
 
 /// The pen pressure (0..1) reported this frame: the force of the latest touch or pen event that carries one (winit
-/// reports a pen's pressure as a touch force, on the platforms that give it), `None` for a mouse.
+/// reports a pen's pressure as a touch force, on the platforms that give it), `None` for a mouse. A force of 0 is no
+/// reading yet (an Apple Pencil's first contact reports it before its first real pressure).
 pub(crate) fn pen_force(i: &egui::InputState) -> Option<f32> {
     i.events.iter().rev().find_map(|e| match e {
-        egui::Event::Touch { force: Some(f), .. } if f.is_finite() => Some(f.clamp(0.0, 1.0)),
+        egui::Event::Touch { force: Some(f), .. } if f.is_finite() && *f > 0.0 => Some(f.min(1.0)),
         _ => None,
     })
 }
@@ -653,5 +701,8 @@ mod pen_tests {
         assert_eq!(pen_force(&i), Some(0.3), "the latest usable force");
         i.events = vec![touch(Some(4.0))];
         assert_eq!(pen_force(&i), Some(1.0));
+        // an Apple Pencil's first contact reports 0 before its first real pressure
+        i.events = vec![touch(Some(0.0))];
+        assert_eq!(pen_force(&i), None);
     }
 }

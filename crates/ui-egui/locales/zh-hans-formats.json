@@ -1,5 +1,7 @@
 {
   " · {skipped} skipped (file exists)": " · 已跳过 {skipped} 个（文件已存在）",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} 个已缩小以适应本设备内存",
+  "Photos · {n}": "照片 · {n}",
   " · {} duplicate{} skipped": " · 已跳过 {0} 个重复项{1:.0}",
   " · {} failed: {}": " · {0} 个失败：{1}",
   " · {} moved": " · 已移动 {0} 个",

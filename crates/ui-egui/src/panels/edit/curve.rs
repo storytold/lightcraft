@@ -280,15 +280,18 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
     let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
-    let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
-    if dragging.is_some() {
+    let reach = crate::widgets::grab_radius(ui.ctx(), 10.0);
+    let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < reach).map(|(i, _)| i);
+    // the point being dragged as drawn: none once the finger / button is up (no repaint follows)
+    let live = dragging.filter(|_| !resp.drag_stopped());
+    if live.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if hovered.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     for (i, q) in pts.iter().enumerate() {
         let c = to_screen(q.x, q.y);
-        if dragging == Some(i) || (dragging.is_none() && hovered == Some(i)) {
+        if live == Some(i) || (live.is_none() && hovered == Some(i)) {
             p.circle_filled(c, 5.5, color);
             p.circle_stroke(c, 5.5, Stroke::new(1.0, t.canvas));
         } else {
@@ -296,7 +299,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         }
     }
     // input / output readout of the point being dragged (0–255 like the histogram)
-    if let Some(q) = dragging.and_then(|i| pts.get(i)) {
+    if let Some(q) = live.and_then(|i| pts.get(i)) {
         p.text(
             r.left_top() + vec2(6.0, 4.0),
             egui::Align2::LEFT_TOP,
@@ -309,7 +312,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     if resp.double_clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((i, dist)) = nearest(q)
-        && dist < 10.0
+        && dist < reach
         && i != 0
         && i != pts.len() - 1
     {
@@ -322,7 +325,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         // pick the point under the press, not where the pointer is once the drag threshold passed
         let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
         match nearest(q) {
-            Some((i, dist)) if dist < 10.0 => dragging = Some(i),
+            Some((i, dist)) if dist < reach => dragging = Some(i),
             _ => {
                 let (x, y) = from_screen(q);
                 let mut v = pts.clone();
@@ -365,7 +368,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
-        && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
+        && nearest(q).is_none_or(|(_, dist)| dist >= reach)
     {
         let (x, y) = from_screen(q);
         let mut v = pts.clone();
@@ -432,11 +435,18 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
                 }
-                if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
+                if ui
+                    .add_enabled(
+                        app.services.pick_curve_preset_files.is_some() || app.services.picker.is_some(),
+                        egui::Button::new(crate::i18n::tr("Import Presets…")),
+                    )
+                    .clicked()
+                {
                     let _ = app.run("file.importCurvePresets", json!({}));
                     ui.close();
                 }
-                let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
+                let can_export =
+                    (app.services.save_curve_preset_file.is_some() || app.services.picker.is_some()) && !app.session.curve_presets.is_empty();
                 if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
                     let _ = app.run("file.exportCurvePresets", json!({}));
                     ui.close();

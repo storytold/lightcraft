@@ -1,12 +1,12 @@
 //! Give memory the system allocator keeps after frees back to the operating system.
 //!
-//! macOS's allocator keeps freed large blocks mapped as "reusable": they no longer count in the
+//! Apple's allocator (macOS, iOS) keeps freed large blocks mapped as "reusable": they no longer count in the
 //! process's memory footprint but stay in its resident size until the system runs short. After a
 //! raw decode (hundreds of MB of temporaries) that made the resident size climb towards the sum of
 //! everything ever decoded. `malloc_zone_pressure_relief` (libSystem) returns those pages now.
 //! Elsewhere (glibc, Windows) blocks this large are unmapped when freed: nothing to do.
 //!
-//! This is LightCraft's only crate allowed `unsafe` (one FFI call, in `macos`). Its API is safe,
+//! This is LightCraft's only crate allowed `unsafe` (one FFI call, in `macos`, used on every Apple platform). Its API is safe,
 //! and on failure or on other platforms it simply releases nothing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -14,17 +14,17 @@
 /// platforms where freed large blocks are already unmapped). Safe to call at any time, from any
 /// thread.
 pub fn release_free_memory() -> usize {
-    #[cfg(target_os = "macos")]
+    #[cfg(target_vendor = "apple")]
     {
         macos::release()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(target_vendor = "apple"))]
     {
         0
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 #[allow(unsafe_code)]
 mod macos {
     unsafe extern "C" {
@@ -62,7 +62,7 @@ mod tests {
         assert_eq!(sum, (0..8u64).sum());
         drop(blocks);
         let released = release_free_memory();
-        if cfg!(not(target_os = "macos")) {
+        if cfg!(not(target_vendor = "apple")) {
             assert_eq!(released, 0);
         }
         // The allocator must still work normally afterwards.

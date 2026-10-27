@@ -60,9 +60,21 @@ impl SidebarSection {
         Self::ALL.into_iter().find(|s| s.id() == id)
     }
 
-    /// Whether this build has the section at all (Local browses folders on disk: not on the web).
+    /// Whether this build has the section at all. Local browses folders on disk: not on the web,
+    /// nor on iOS / Android, where the app sees only its own sandbox and what the user picks.
+    /// Folders lists where on disk photos were imported from: on a phone or tablet those are the
+    /// app's own storage and the pickers' temporary copies, nothing the user would browse by.
     pub const fn available(self) -> bool {
-        !(cfg!(target_arch = "wasm32") && matches!(self, SidebarSection::Local))
+        self.available_on(cfg!(target_arch = "wasm32"), cfg!(any(target_os = "ios", target_os = "android")))
+    }
+
+    /// [`Self::available`] for a given platform (split out so tests on the desktop cover every one).
+    const fn available_on(self, web: bool, mobile: bool) -> bool {
+        match self {
+            SidebarSection::Local => !web && !mobile,
+            SidebarSection::Folders => !mobile,
+            SidebarSection::Albums | SidebarSection::ByDate | SidebarSection::Keywords => true,
+        }
     }
 
     /// The ids of every section, for error messages (`albums|local|…`).
@@ -451,5 +463,16 @@ mod tests {
         }
         assert_eq!(SidebarSection::from_id("Albums"), None);
         assert_eq!(SidebarSection::ids(), "albums|local|byDate|folders|keywords");
+    }
+
+    /// The phone and tablet apps have no Local or Folders (no folders of their own to browse);
+    /// the web has Folders but no Local; the desktop has everything.
+    #[test]
+    fn local_and_folders_are_desktop_sections() {
+        let on = |web, mobile| SidebarSection::ALL.into_iter().filter(|s| s.available_on(web, mobile)).collect::<Vec<_>>();
+        assert_eq!(on(false, false), SidebarSection::ALL.to_vec());
+        assert_eq!(on(true, false), [Albums, ByDate, Folders, Keywords]);
+        assert_eq!(on(false, true), [Albums, ByDate, Keywords]);
+        assert!(SidebarSection::ALL.into_iter().all(SidebarSection::available), "this desktop build has every section");
     }
 }

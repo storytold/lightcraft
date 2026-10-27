@@ -1,7 +1,6 @@
 use super::quick::QuickSource;
 use super::source::{DecodedSource, SourceLevel, SourceRef};
 use super::*;
-
 /// Everything needed to render one photo, detached from the session.
 #[derive(Clone)]
 pub struct RenderJob {
@@ -28,6 +27,11 @@ pub struct RenderJob {
     pub stages: Option<Arc<StageCache>>,
     /// Keep a full-quality result here as the photo's view preview ([`crate::Session::loupe_job`]).
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// Render tile by tile on the CPU ([`lightcraft_pipeline::tiled`]): a full-size export over
+    /// the working cap. Its full-resolution source isn't kept in memory afterwards.
+    pub tiled: bool,
+    /// A tiled render may run its tiles on the GPU (there's memory for it).
+    pub tiled_gpu: bool,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
@@ -268,7 +272,22 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let tiled = self.tiled.then(|| {
+                    let (s, req, opts) = (&self.settings, &self.request, Default::default());
+                    // on the GPU when it can (tile-sized device buffers), else on the CPU
+                    let r = (gpu && self.tiled_gpu && gpu_eligible(s, req))
+                        .then(|| lightcraft_gpu::render_tiled(src, &info, s, req, &opts))
+                        .flatten()
+                        .or_else(|| lightcraft_pipeline::tiled::render_tiled(src, &info, s, req, &opts));
+                    if r.is_none() {
+                        log::warn!("render: {}×{} can't be tiled; rendering it whole", req.max_w, req.max_h);
+                    }
+                    r
+                });
+                let (mut rendered, gpu_fallback) = match tiled.flatten() {
+                    Some(r) => (r, None),
+                    None => develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu),
+                };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -294,6 +313,12 @@ impl RenderJob {
                 {
                     cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
                 }
+                // a tiled export's source is larger than the working cap: not for keeping, and its
+                // pages go back before the result is encoded
+                let loaded = (!was_loaded && !self.tiled).then_some(source);
+                if self.tiled {
+                    crate::memory::release();
+                }
                 // the display fit, after the caches have the full render
                 if let Some((fw, fh)) = self.display_fit
                     && self.request.quality == Quality::Full
@@ -311,7 +336,7 @@ impl RenderJob {
                     key: self.key,
                     rendered: Ok(rendered),
                     gpu_fallback,
-                    loaded: (!was_loaded).then_some(source),
+                    loaded,
                     quick: None,
                     display,
                 }
@@ -356,11 +381,7 @@ fn develop_image(
     gpu: bool,
 ) -> (Rendered, Option<String>) {
     // LUT profiles have no GPU stage: they render on the CPU
-    let fallback = if gpu
-        && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
-        && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
-        && req.proof.is_none()
-    {
+    let fallback = if gpu && gpu_eligible(s, req) {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
             Ok(r) => return (r, None),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
@@ -374,4 +395,10 @@ fn develop_image(
         None => lightcraft_pipeline::render(src, info, s, req),
     };
     (rendered, fallback)
+}
+
+/// Whether the GPU renderer handles `s` for `req` (LUT profiles, Refine Edges and soft proofs
+/// render on the CPU).
+fn gpu_eligible(s: &lightcraft_develop::DevelopSettings, req: &lightcraft_pipeline::RenderRequest) -> bool {
+    !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id) && !s.masks.iter().any(|m| m.visible && m.refine > 0.0) && req.proof.is_none()
 }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ai.storyteller.lightcraft.mobile" android:versionCode="1" android:versionName="0.0.1">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
+  <!-- face / AI model downloads, Help links' checks -->
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <application android:label="LightCraft" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:hasCode="true" android:extractNativeLibs="true">
+    <activity android:name="ai.storyteller.lightcraft.mobile.LightCraftActivity" android:exported="true"
+              android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|uiMode"
+              android:windowSoftInputMode="adjustResize"
+              android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+      <meta-data android:name="android.app.lib_name" android:value="lightcraft_mobile"/>
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity>
+    <provider android:name="ai.storyteller.lightcraft.mobile.FilesProvider"
+              android:authorities="ai.storyteller.lightcraft.mobile.files"
+              android:exported="false" android:grantUriPermissions="true"/>
+  </application>
+</manifest>

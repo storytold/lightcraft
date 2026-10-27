@@ -172,6 +172,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "library.selectAll",
             "library.selectNone",
+            "view.selectMode",
             "@Select by",
             "---",
             "view.focusSearch",
@@ -241,6 +242,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "compare.swap",
             "compare.makeSelect",
+            "compare.previous",
+            "compare.next",
             "---",
             "view.viewOptions",
         ],
@@ -417,6 +420,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.beforeAfter" => Some(u.before_after == crate::state::BeforeAfter::SideBySide),
         "view.beforeAfterSplit" => Some(u.before_after == crate::state::BeforeAfter::Split),
         "view.autoAdvance" => Some(u.auto_advance),
+        "view.selectMode" => Some(u.select_mode),
         "view.filterBar" => Some(u.filter_bar),
         "library.toggleFilters" => Some(!app.session.filters_off()),
         "view.soloSections" => Some(u.single_panel),
@@ -1042,7 +1046,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let total: f32 = widths.iter().sum();
     let mut clicked: Option<(String, Value)> = None;
     let start = ui.cursor().left();
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    // ⌘ on Apple keyboards: a Mac's and an iPad's (see `hid`)
+    let mac = matches!(ui.ctx().os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
     // Menus hang below the whole top bar and never grow past the window (#189): a tall menu
     // scrolls instead of egui sliding it up over the titles.
     let bar_bottom = Some(ui.max_rect().bottom());

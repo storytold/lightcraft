@@ -1,5 +1,5 @@
 //! A text field that behaves the same everywhere in the app: right-click for Cut, Copy, Paste and
-//! Select All; Esc gives back the text from before the edit; Return or leaving the field ends the
+//! Select All (the system's edit menu where the host has one: [`set_native_menu`]); Esc gives back the text from before the edit; Return or leaving the field ends the
 //! edit; optionally everything is selected when it takes focus, for fields that are retyped whole.
 //!
 //! It knows nothing of the app's documents or commands, only the UI's plumbing (the automation
@@ -287,12 +287,26 @@ impl<'a> TextField<'a> {
             }
         }
         let menu_was_open = memo.menu_open;
-        // a click on a greyed-out item does nothing, as in a native menu: only a choice or a click
-        // outside closes it (not the right-click that moves the menu within the field, #1877)
-        memo.menu_open = egui::Popup::context_menu(&response)
-            .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
-            .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
-            .is_some();
+        memo.menu_open = match native_menu(ui.ctx()) {
+            // the system's edit menu: the field keeps the focus, and the host sends what is chosen
+            // as clipboard events
+            Some(NativeMenu(show)) => {
+                if response.secondary_clicked() {
+                    ui.memory_mut(|m| m.request_focus(id));
+                    let selected = has_selection(ui.ctx(), id);
+                    let at = response.interact_pointer_pos().unwrap_or(response.rect.center());
+                    let items = NativeMenuItems { cut: selected, copy: selected, select_all: !self.text.is_empty() };
+                    show(response.rect, at, items);
+                }
+                false
+            }
+            // a click on a greyed-out item does nothing, as in a native menu: only a choice or a
+            // click outside closes it (not the right-click that moves the menu within the field, #1877)
+            None => egui::Popup::context_menu(&response)
+                .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
+                .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
+                .is_some(),
+        };
 
         let mut ending = None;
         let close_menu = |ui: &Ui| egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&response));
@@ -364,6 +378,37 @@ enum Action {
     SelectAll,
     /// Only take the focus back (Esc closed the menu).
     Refocus,
+}
+
+/// What the system's edit menu offers for a field, besides Paste (offered when the system
+/// clipboard holds text, which only the host can tell).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeMenuItems {
+    pub cut: bool,
+    pub copy: bool,
+    pub select_all: bool,
+}
+
+/// Shows the system's edit menu for the field at `field`, from the point `at` (egui points).
+/// The host sends the choice to the focused field as `Event::Cut`, `Copy`, `Paste(text)` or ⌘A.
+pub type ShowNativeMenu = fn(field: egui::Rect, at: egui::Pos2, items: NativeMenuItems);
+
+#[derive(Clone, Copy)]
+struct NativeMenu(ShowNativeMenu);
+
+fn native_menu_id() -> egui::Id {
+    egui::Id::unique("lc-native-text-menu")
+}
+
+/// A right-click or long press on a field shows the system's edit menu with `show` instead of
+/// the app's own. For iOS, where only the system's Paste may read what another app or a Mac
+/// (Universal Clipboard) copied: an app's own Paste is refused there.
+pub fn set_native_menu(ctx: &egui::Context, show: ShowNativeMenu) {
+    ctx.data_mut(|d| d.insert_temp(native_menu_id(), NativeMenu(show)));
+}
+
+fn native_menu(ctx: &egui::Context) -> Option<NativeMenu> {
+    ctx.data(|d| d.get_temp(native_menu_id()))
 }
 
 fn select_all(ctx: &egui::Context, id: egui::Id, text: &str) {

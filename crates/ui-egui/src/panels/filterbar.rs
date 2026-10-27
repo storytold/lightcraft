@@ -14,6 +14,10 @@ use crate::widgets::register;
 pub const HEIGHT: f32 = 40.0;
 /// Bar width (points) below which the controls take two rows.
 const WIDE: f32 = 1240.0;
+/// Bar width below which the controls wrap onto as many rows as they need.
+const NARROW: f32 = 760.0;
+/// The most height a wrapped bar takes.
+const WRAPPED_MAX_H: f32 = 400.0;
 
 /// Colour-label swatches (UI colours, our own choice).
 pub use crate::theme::label_color;
@@ -95,9 +99,20 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    // one row when there is room, else the metadata pickers and actions go to a second row
+    // one row when there is room, else the metadata pickers and actions go to a second row; a
+    // narrower bar (a phone) wraps its groups onto as many rows as they need
     let two_rows = ui.available_width() < WIDE;
-    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), if two_rows { 2.0 * HEIGHT - 8.0 } else { HEIGHT }), Sense::hover());
+    let wraps = ui.available_width() < NARROW;
+    let wrapped_id = egui::Id::unique("filterbar-wrapped-height");
+    let wrapped_h = ui.ctx().data(|d| d.get_temp::<f32>(wrapped_id)).unwrap_or(2.0 * HEIGHT - 8.0);
+    let height = if wraps {
+        wrapped_h
+    } else if two_rows {
+        2.0 * HEIGHT - 8.0
+    } else {
+        HEIGHT
+    };
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.chrome);
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.divider));
     register(ui, "filterbar", bar);
@@ -108,10 +123,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         c.spacing_mut().item_spacing.x = 4.0;
         c
     };
-    let mut row1 = row(ui, 0.0);
+    let mut row1 = if wraps {
+        // one row tall: the rows wrap below it (egui centres a row in its area's height)
+        let r = Rect::from_min_size(bar.min + vec2(20.0, 4.0), vec2(bar.width() - 40.0, ui.spacing().interact_size.y.max(26.0)));
+        let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)));
+        c.spacing_mut().item_spacing = vec2(4.0, 2.0);
+        c
+    } else {
+        row(ui, 0.0)
+    };
     let mut row2 = row(ui, 1.0);
     let ui = &mut row1;
 
+    let g = group_start(ui, "rating");
     // rating: operator + stars
     caption(ui, "Rating");
     let op_label = match f.rating_op {
@@ -133,8 +157,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
         filter(app, json!({"rating": r}));
     }
+    group_end(ui, g);
     ui.add_space(14.0);
 
+    let g = group_start(ui, "flag");
     // flags (one at a time; click again to clear)
     caption(ui, "Flag");
     for (id, icon, flag, tip) in [
@@ -154,8 +180,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
         }
     }
+    group_end(ui, g);
     ui.add_space(14.0);
 
+    let g = group_start(ui, "label");
     // colour labels
     caption(ui, "Label");
     // several labels can be on at once (any of them matches); lit are those `label` and `labels` both let through
@@ -179,6 +207,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             filter(app, json!({"label": Value::Null, "labels": names}));
         }
     }
+    group_end(ui, g);
     ui.add_space(14.0);
 
     // kind + edited
@@ -234,7 +263,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     );
 
     // metadata pickers
-    let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
+    let ui: &mut egui::Ui = if two_rows && !wraps { &mut row2 } else { &mut row1 };
     let values = app.caches.filter_values(&app.session.catalog);
     let (cameras, lenses, keywords) = (values.cameras.clone(), values.lenses.clone(), values.keywords.clone());
     for (id, key, all_label, current, values) in [
@@ -287,4 +316,41 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             crate::panels::dialogs::prompt(app, "Save Filter Preset", "Preset name", "", "filter.savePreset", json!({}), "name");
         }
     });
+    if wraps {
+        // the rows the groups took, for next frame's bar (one frame late when that changes)
+        let h = (row1.min_rect().height() + 8.0).clamp(HEIGHT, WRAPPED_MAX_H);
+        if (h - wrapped_h).abs() > 0.5 {
+            row1.ctx().data_mut(|d| d.insert_temp(wrapped_id, h));
+            row1.ctx().request_repaint();
+        }
+    }
+}
+
+/// The start of controls that stay together on one row when a narrow bar wraps
+/// ([`group_end`] after them): a group whose width as last drawn doesn't fit the rest of the row
+/// starts the next one.
+fn group_start(ui: &mut egui::Ui, key: &str) -> (egui::Id, egui::Pos2) {
+    let id = egui::Id::unique(("filterbar-group", key));
+    let last = ui.ctx().data(|d| d.get_temp::<f32>(id));
+    let row_start = ui.cursor().left() <= ui.max_rect().left() + 0.5;
+    if ui.layout().main_wrap() && !row_start && last.is_some_and(|w| w > ui.available_size_before_wrap().x) {
+        ui.end_row();
+        // the new row as tall as the first, so its caption is centred on its controls (egui
+        // centres each item in the row's height so far)
+        ui.allocate_space(vec2(0.0, ui.spacing().interact_size.y.max(26.0)));
+        ui.add_space(-ui.spacing().item_spacing.x);
+    }
+    (id, ui.cursor().min)
+}
+
+/// The end of a group begun by [`group_start`]: remember its width (one that wrapped inside
+/// asks for a row of its own).
+fn group_end(ui: &mut egui::Ui, (id, start): (egui::Id, egui::Pos2)) {
+    let now = ui.cursor().min;
+    let w = if (now.y - start.y).abs() < 0.5 { now.x - start.x } else { f32::INFINITY };
+    let last = ui.ctx().data(|d| d.get_temp::<f32>(id));
+    if last.is_none_or(|l| (l - w).abs() > 0.5) {
+        ui.ctx().data_mut(|d| d.insert_temp(id, w));
+        ui.ctx().request_repaint();
+    }
 }

@@ -110,7 +110,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let n = map.norm(q);
         match &mut app.gesture {
             Some(Gesture::Spot { points }) => points.push(n),
-            _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
+            _ => app.gesture = Some(Gesture::Spot { points: stroke_start(ui, resp, map, n) }),
         }
     }
     if let Some(Gesture::Spot { points }) = &app.gesture {

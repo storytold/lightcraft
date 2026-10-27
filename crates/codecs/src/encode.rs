@@ -180,9 +180,9 @@ pub fn encode_jpeg(img: &EncodeImage, quality: u8, subsampling: ChromaSubsamplin
 pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
     img.validate()?;
     let n = img.width as usize * img.height as usize * img.channels as usize;
-    let (bytes, depth): (Vec<u8>, png::BitDepth) = match img.samples {
-        Samples::U8(s) => (s[..n].to_vec(), png::BitDepth::Eight),
-        Samples::U16(s) => (s[..n].iter().flat_map(|v| v.to_be_bytes()).collect(), png::BitDepth::Sixteen),
+    let (bytes, depth): (std::borrow::Cow<[u8]>, png::BitDepth) = match img.samples {
+        Samples::U8(s) => (s[..n].into(), png::BitDepth::Eight),
+        Samples::U16(s) => (s[..n].iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<u8>>().into(), png::BitDepth::Sixteen),
         Samples::F32(_) => return Err(Error::Encode("PNG needs 8- or 16-bit samples".into())),
     };
     let mut info = png::Info::with_size(img.width, img.height);

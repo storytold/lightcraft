@@ -59,6 +59,18 @@ pub struct MediaCache {
     on_screen: Option<PhotoId>,
     /// How many previews to keep (LRU).
     pub preview_capacity: usize,
+    /// The most pixels a full-resolution render works at (0: no limit). A full-resolution
+    /// decode and render of a 48 MP photo peaks near 3 GB; a host with less memory than that
+    /// (a phone) sets a cap, and larger originals are decoded and exported at the largest size
+    /// within it ([`crate::export::output_size_within`]).
+    pub max_working_pixels: usize,
+    /// The most pixels (source and output alike) a full-size export over `max_working_pixels`
+    /// may have when it is rendered tile by tile ([`lightcraft_pipeline::tiled`]), which needs
+    /// a fraction of a whole render's memory (0: such exports are made smaller instead).
+    pub max_tiled_pixels: usize,
+    /// The same for tiles rendered on the GPU, which need more memory than the CPU's (see
+    /// [`lightcraft_gpu::tiled_working_bytes`]); larger tiled exports render their tiles on the CPU.
+    pub max_gpu_tiled_pixels: usize,
     /// Bytes all decoded sources and rendered previews in memory may take together (the cache
     /// share of [`crate::memory::budget`]); the least recently used entry of any of them goes first.
     budget: usize,
@@ -83,6 +95,26 @@ pub struct MediaCache {
 
 #[cfg(test)]
 mod thumbnail_hash_tests;
+
+/// `w` × `h` reduced by the smallest power of two (½, ¼, …) that brings it within `max_pixels`,
+/// or `None` when it fits already (or `max_pixels` is 0: no limit). Powers of two let decoders
+/// reduce while decoding (JPEG DCT scaling, raw binning) instead of decoding everything first.
+pub fn capped_size(w: usize, h: usize, max_pixels: usize) -> Option<(usize, usize)> {
+    if max_pixels == 0 || w == 0 || h == 0 || w.saturating_mul(h) <= max_pixels {
+        return None;
+    }
+    let mut d = 2;
+    while (w / d).max(1) * (h / d).max(1) > max_pixels && d < 1 << 16 {
+        d *= 2;
+    }
+    Some(((w / d).max(1), (h / d).max(1)))
+}
+
+/// The long edge a `w` × `h` image may be decoded at within `max_pixels` ([`capped_size`];
+/// `usize::MAX` when it fits or its size isn't known).
+pub fn capped_edge(w: usize, h: usize, max_pixels: usize) -> usize {
+    capped_size(w, h, max_pixels).map_or(usize::MAX, |(w, h)| w.max(h))
+}
 
 #[cfg(test)]
 mod tests;

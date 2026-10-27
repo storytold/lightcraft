@@ -76,6 +76,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.memory_mut(|m| m.request_focus(id));
             }
             let focused = ui.memory(|m| m.has_focus(id));
+            // a search cleared or set elsewhere (filter chips, the loupe's filter notice, Clear
+            // Filters) shows here too: the field holds the search that is applied
+            if !focused && app.ui.search != app.session.filter.text {
+                app.ui.search = app.session.filter.text.clone();
+            }
             ui.painter().rect(
                 sr,
                 4.0,

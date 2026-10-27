@@ -31,8 +31,22 @@ pub struct Frame {
     pub flip_v: bool,
     /// Lens corrections / perspective (None = identity).
     pub warp: Option<Warp>,
+    /// Rendering one tile of a larger output ([`crate::tiled`]): the output-pixel mappings
+    /// ([`Frame::out_to_oriented`] and everything built on it, [`Frame::px_per_long`],
+    /// [`Frame::sample`]) then answer for the whole output, with tile pixel (x, y) being output
+    /// pixel (x0 + x, y0 + y), whatever buffer size they're given.
+    pub tile: Option<Tile>,
     /// Set when this frame draws only a window of a larger output (see [`Frame::window`]).
     pub view: Option<ViewWindow>,
+}
+
+/// A tile of a `gw × gh` output whose top-left pixel is (`x0`, `y0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tile {
+    pub x0: usize,
+    pub y0: usize,
+    pub gw: usize,
+    pub gh: usize,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -75,6 +89,7 @@ impl Frame {
             flip_h: s.crop.flip_h,
             flip_v: s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
+            tile: None,
             view: None,
         };
         if apply_crop && s.geometry.constrain_crop {
@@ -115,6 +130,9 @@ impl Frame {
     /// window of a larger one): what size-relative effects (noise reduction, edge refinement)
     /// must scale with, so a window matches the same pixels of the whole render.
     pub fn output_long(&self, w: usize, h: usize) -> usize {
+        if let Some(t) = self.tile {
+            return t.gw.max(t.gh);
+        }
         self.view.map_or(w.max(h), |v| v.full_w.max(v.full_h) as usize)
     }
 
@@ -195,12 +213,18 @@ impl Frame {
 
     /// Output pixels per unit of the oriented image's long edge.
     pub fn px_per_long(&self, out_w: usize) -> f64 {
+        let out_w = self.tile.map_or(out_w, |t| t.gw);
         let r = self.crop.rect_px(self.ow, self.oh);
         out_w as f64 / r.width() * self.ow.max(self.oh)
     }
 
     /// Affine from output pixel coordinates to oriented-image pixel coordinates.
     pub fn out_to_oriented(&self, out_w: usize, out_h: usize) -> Affine {
+        // a tile: its pixels are output pixels shifted by its origin, in the whole output's frame
+        let (out_w, out_h, shift) = match self.tile {
+            Some(t) => (t.gw, t.gh, Affine::translate(lightcraft_geom::Vec2::new(t.x0 as f64, t.y0 as f64))),
+            None => (out_w, out_h, Affine::IDENTITY),
+        };
         let (w, h) = (out_w as f64, out_h as f64);
         let mut flip = Affine::IDENTITY;
         if self.flip_h {
@@ -209,7 +233,12 @@ impl Frame {
         if self.flip_v {
             flip = Affine([1.0, 0.0, 0.0, -1.0, 0.0, h]) * flip;
         }
-        self.crop.output_to_source(self.ow, self.oh, w, h) * flip
+        self.crop.output_to_source(self.ow, self.oh, w, h) * flip * shift
+    }
+
+    /// This frame for the tile of its `gw × gh` output at (`x0`, `y0`).
+    pub fn for_tile(&self, x0: usize, y0: usize, gw: usize, gh: usize) -> Frame {
+        Frame { tile: Some(Tile { x0, y0, gw, gh }), ..self.clone() }
     }
 
     /// Map an output pixel to normalized oriented-image coordinates (0..1).
@@ -232,13 +261,13 @@ impl Frame {
     pub fn sample_plan(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> SamplePlan {
         let (ow, oh) = if self.orient.swaps_axes() { (src_h, src_w) } else { (src_w, src_h) };
         let crop_px = self.crop.rect_px(self.ow, self.oh);
-        let k = crop_px.width() / w as f64;
+        let k = crop_px.width() / self.tile.map_or(w, |t| t.gw) as f64;
         let prefilter = (k > 1.25).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
         let (bw, bh) = prefilter.unwrap_or((ow, oh));
         let (sx, sy) = (bw as f64 / ow as f64, bh as f64 / oh as f64);
         let mode = if self.warp.is_some() {
             SampleMode::Warp(self.out_to_oriented(w, h))
-        } else if self.crop.is_identity() && !self.flip_h && !self.flip_v && bw == w && bh == h {
+        } else if self.crop.is_identity() && !self.flip_h && !self.flip_v && bw == w && bh == h && self.tile.is_none() {
             SampleMode::Copy
         } else {
             SampleMode::Affine(Affine::scale(sx, sy) * self.out_to_oriented(w, h))
@@ -249,6 +278,9 @@ impl Frame {
     /// Sample the source into a `w × h` output buffer: orientation, crop, rotation, flips — one
     /// bilinear resample from a pre-filtered (area-downscaled) copy, so minification never aliases.
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
+        if self.tile.is_some() {
+            return self.sample_tile(src, w, h);
+        }
         let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
         let o = oriented.as_ref().unwrap_or(src);
         let plan = self.sample_plan(src.width, src.height, w, h);
@@ -268,10 +300,31 @@ impl Frame {
         };
         match (plan.mode, self.warp.as_ref()) {
             (SampleMode::Copy, _) => base.into_owned(),
-            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h),
+            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(|x, y| base.sample_bilinear(x, y), plan.sx, plan.sy, warp, o2t, w, h),
             // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
             (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * o2t),
             (SampleMode::Affine(xf), _) => affine(xf),
+        }
+    }
+
+    /// [`Frame::sample`] for a tile (`w × h`, at the tile's place in the whole output): the same
+    /// bilinear reads, taken from `src` through the orientation instead of from an oriented copy
+    /// (no full-size copy per tile). Tiles are only rendered without a prefilter (see
+    /// [`crate::tiled`]).
+    fn sample_tile(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
+        let plan = self.sample_plan(src.width, src.height, w, h);
+        debug_assert!(plan.prefilter.is_none(), "tiles are rendered without a prefilter");
+        let o = orient_to_src(self.orient, src.width, src.height);
+        let fetch = |x: f32, y: f32| {
+            let p = o.apply(Point::new(x as f64, y as f64));
+            src.sample_bilinear(p.x as f32, p.y as f32)
+        };
+        match (plan.mode, self.warp.as_ref()) {
+            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(fetch, plan.sx, plan.sy, warp, o2t, w, h),
+            (SampleMode::Warp(o2t), None) => sample_affine(fetch, Affine::scale(plan.sx, plan.sy) * o2t, w, h),
+            (SampleMode::Affine(xf), _) => sample_affine(fetch, xf, w, h),
+            // `sample_plan` never plans a copy for a tile
+            (SampleMode::Copy, _) => sample_affine(fetch, Affine::IDENTITY, w, h),
         }
     }
 
@@ -319,9 +372,48 @@ pub fn perspective(s: &DevelopSettings, ow: f64, oh: f64) -> Homography {
     crate::transform::manual(&s.geometry).mul(&crate::upright::homography(&s.geometry, ow, oh))
 }
 
+/// Continuous coordinates in the image `o` makes of a `sw × sh` source → that source's own
+/// (pixel centres to pixel centres, matching [`Rgb32f::oriented`]'s index mapping).
+fn orient_to_src(o: Orientation, sw: usize, sh: usize) -> Affine {
+    let (flip, turns) = o.to_parts();
+    // the steps `Rgb32f::oriented` takes (each maps its result's coordinates to its input's),
+    // with the size of the image each starts from
+    let (w, h) = (sw as f64, sh as f64);
+    let flip_h = Affine([-1.0, 0.0, 0.0, 1.0, w, 0.0]); // x ← w − x
+    let half = Affine([-1.0, 0.0, 0.0, -1.0, w, h]); // (x, y) ← (w − x, h − y)
+    let cw = |h: f64| Affine([0.0, -1.0, 1.0, 0.0, 0.0, h]); // (x, y) ← (y, h − x)
+    let mut steps: Vec<Affine> = Vec::new();
+    if flip {
+        steps.push(flip_h);
+    }
+    match turns {
+        1 => steps.push(cw(h)),
+        2 => steps.push(half),
+        3 => {
+            steps.push(half);
+            steps.push(cw(h));
+        }
+        _ => {}
+    }
+    // oriented → source: undo the last step first
+    steps.iter().rev().fold(Affine::IDENTITY, |m, s| *s * m)
+}
+
+/// Bilinear reads through `xf` (output px → read px) into a `w × h` buffer.
+fn sample_affine(fetch: impl Fn(f32, f32) -> [f32; 3] + Sync, xf: Affine, w: usize, h: usize) -> Rgb32f {
+    let mut out = Rgb32f::new(w, h);
+    par_rows(&mut out.data, w, |y, row| {
+        for (x, px) in row.iter_mut().enumerate() {
+            let p = xf.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            *px = fetch(p.x as f32, p.y as f32);
+        }
+    });
+    out
+}
+
 /// One resample through the warp: `o2t` maps output px → transformed px, the warp maps those to source px
-/// (scaled by `sx, sy` into `base`).
-fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usize, h: usize) -> Rgb32f {
+/// (scaled by `sx, sy` into the image `fetch` reads bilinearly).
+fn sample_warped(fetch: impl Fn(f32, f32) -> [f32; 3] + Sync, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usize, h: usize) -> Rgb32f {
     let per_channel = wp.per_channel();
     let gain = wp.has_gain();
     let mut out = Rgb32f::new(w, h);
@@ -331,11 +423,11 @@ fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usi
                 *px = BLANK;
                 continue;
             };
-            let mut v = base.sample_bilinear((g.x * sx) as f32, (g.y * sy) as f32);
+            let mut v = fetch((g.x * sx) as f32, (g.y * sy) as f32);
             if per_channel {
                 for ch in [0usize, 2] {
                     let q = wp.corrected_to_source(c, ch);
-                    v[ch] = base.sample_bilinear((q.x * sx) as f32, (q.y * sy) as f32)[ch];
+                    v[ch] = fetch((q.x * sx) as f32, (q.y * sy) as f32)[ch];
                 }
             }
             if gain {

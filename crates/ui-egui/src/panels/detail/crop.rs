@@ -70,6 +70,17 @@ pub(super) fn crop_overlay(
         let s = to_straight(n, d.crop.geometry.angle, frame);
         d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
     };
+    // the handle a press at `q` grabs: the nearest within reach (a finger's on a touch screen)
+    let reach = crate::widgets::grab_radius(ui.ctx(), 12.0);
+    let grab = |q: Pos2| {
+        handles
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (i, h.distance(q)))
+            .filter(|(_, dist)| *dist < reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
     // a crop drag cut short (the tool closed before the release) leaves its gesture behind: with no
     // button held it is over
     if matches!(app.gesture, Some(Gesture::CropRotate { .. } | Gesture::CropHandle { .. }))
@@ -89,7 +100,7 @@ pub(super) fn crop_overlay(
             Some(Gesture::CropHandle { handle, .. }) => Some(usize::from(handle)),
             _ => None,
         };
-        let near = held.or_else(|| handles.iter().position(|h| h.distance(hq) < 12.0)).filter(|_| !rotating);
+        let near = held.or_else(|| grab(hq)).filter(|_| !rotating);
         let cursor = match near {
             Some(0 | 2) => egui::CursorIcon::ResizeNwSe,
             Some(1 | 3) => egui::CursorIcon::ResizeNeSw,
@@ -113,7 +124,7 @@ pub(super) fn crop_overlay(
     if resp.double_clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && inside(q)
-        && !handles.iter().any(|h| h.distance(q) < 12.0)
+        && grab(q).is_none()
     {
         let _ = app.run("tool.done", json!({}));
         return;
@@ -121,7 +132,7 @@ pub(super) fn crop_overlay(
     // egui reports a drag only once the pointer has moved a few px: the zone is where the button
     // went down, where the cursor showed it, not where the pointer is by then
     if resp.drag_started()
-        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos())
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
     {
         if let Err(e) = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null))
         {
@@ -130,7 +141,7 @@ pub(super) fn crop_overlay(
             return;
         }
         let d = app.session.develop_of(id).unwrap_or_default();
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
+        app.gesture = Some(match grab(q) {
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None => {

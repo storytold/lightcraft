@@ -175,12 +175,13 @@ fn cell_ui(
     // cut short (with …) to the cell, so it never runs into its neighbour; the full name on hover
     let g = one_line(painter, crate::i18n::profile_label(p_id, p_name), t.font(12.0), name_color, cell.width() - 2.0);
     painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
-    // favourite star (always shown when set, on hover otherwise)
+    // favourite star (always shown when set or on a touch screen, where a tap there toggles it; on
+    // hover otherwise)
     let fav = app.session.profile_favorites.iter().any(|f| f == p_id);
     let star = Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0));
     register(ui, format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
-    if fav || resp.hovered() {
+    if fav || resp.hovered() || crate::widgets::touch_screen(ui.ctx()) {
         painter.circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
         crate::rating::paint_star(painter, star.shrink(4.0), fav, if fav || over_star { t.star } else { Color32::WHITE });
     }

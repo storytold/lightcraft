@@ -42,6 +42,8 @@ pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
+/// Hand finished files to the platform's share sheet (paths).
+pub type ShareFn = Box<dyn FnMut(&[String])>;
 
 /// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
@@ -127,6 +129,16 @@ pub struct Services {
     pub backup_library: Option<HostAction>,
     /// File ▸ Restore Library from Backup… (web only; keeps the current library).
     pub restore_library: Option<HostAction>,
+    /// The default export folder (mobile: inside the app's sandbox); else
+    /// `~/Pictures/LightCraft Exports`.
+    pub export_dir: Option<String>,
+    /// Offer the files of a finished export from the Export dialog (or Export with Preset /
+    /// Previous) in the platform's share sheet (mobile hosts).
+    pub share: Option<ShareFn>,
+    /// Import from Folder… starts on Copy (mobile hosts: a folder picked outside the app's own
+    /// storage can be read only while the system allows, so files added in place would go
+    /// missing).
+    pub import_copies: bool,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }

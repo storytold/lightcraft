@@ -4,6 +4,8 @@
   " · {:.0}% clipped": " · {:.0}% recortado",
   " · {failed} couldn't be rendered": " · no se pudieron renderizar: {failed}",
   " · {skipped} skipped (file exists)": " · omitidas: {skipped} (el archivo existe)",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} reducida(s) para caber en la memoria de este dispositivo",
+  "Photos · {n}": "Fotos · {n}",
   " · {} duplicate{} skipped": " · {0} duplicado{1} omitido{1}",
   " · {} failed: {}": " · {} con errores: {}",
   " · {} moved": " · movidas: {}",

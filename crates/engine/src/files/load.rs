@@ -208,9 +208,10 @@ fn load_bytes_now(
     }
     let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
-    let img = d.to_working();
+    let orientation = Orientation::from_exif(d.orientation);
+    let img = d.into_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+    Ok((img.into_oriented(orientation), None, SourceInfo::default(), false))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from

@@ -61,7 +61,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
     let ids = app.session.visible_cloned();
     let active = app.session.selection.active;
-    let cell_w = 120.0;
+    // 120 pt cells in the full-height strip, narrower in a lower one
+    let cell_w = (120.0 * r.height() / t.film_h).round().clamp(70.0, 120.0);
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
         let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
@@ -109,13 +110,14 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 t.canvas
             };
             p.rect_filled(cr, 0.0, crate::theme::label_background(base, label, selected));
-            let names = app.ui.settings.film_names;
+            // (no room for the name and format over a narrow cell)
+            let names = app.ui.settings.film_names && cell_w >= 100.0;
             if let Some(ph) = app.session.catalog.photo(*id).filter(|_| names) {
                 let name = ph.file_name.rsplit_once('.').map(|(n, _)| n).unwrap_or(&ph.file_name);
                 p.text(pos2(cr.left() + 8.0, cr.top() + 10.0), Align2::LEFT_CENTER, film_label(name), t.font(10.0), t.text_dim);
                 p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.semibold(8.5), t.text_dim);
             }
-            let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
+            let img_area = Rect::from_min_max(cr.min + vec2(10.0, if cell_w >= 100.0 { 22.0 } else { 8.0 }), cr.max - vec2(10.0, 8.0));
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             let thumb = app.renderer.thumb(*id);
             if thumb.is_none() {
@@ -173,7 +175,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     // ⌘/Ctrl- and Shift-clicks change the selection; the pair on screen stays (#187)
                     crate::panels::compare::select_with_modifier(app, *id, !m.command)
                 } else {
-                    let mode = if m.command {
+                    // (Select Several on a touch screen: taps add and remove photos, as ⌘-clicks do)
+                    let mode = if m.command || app.ui.select_mode {
                         "toggle"
                     } else if m.shift {
                         "range"
