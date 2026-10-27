@@ -150,6 +150,34 @@ impl CropGeometry {
         CropGeometry { rect: Rect::from_center(f.center(), f.width() * s, f.height() * s).scale(1.0 / w, 1.0 / h), angle: angle_deg }
     }
 
+    /// This crop, made on a `from` (w, h) image, for an image of size `to` (pasting or syncing a crop,
+    /// as Lightroom does): the same crop when the two have the same shape. Otherwise the crop keeps
+    /// its pixel aspect ratio, its angle, its size relative to the largest crop of that aspect, and
+    /// its centre (in normalized coordinates), and is kept inside the turned image. A crop that was
+    /// the largest of its own photo's aspect (the uncropped photo, straightened or not) becomes the
+    /// largest of the new photo's. Sizes that are not finite and positive keep the crop as it is.
+    pub fn refit(&self, (fw, fh): (f64, f64), (tw, th): (f64, f64)) -> CropGeometry {
+        if ![fw, fh, tw, th].iter().all(|v| v.is_finite() && *v > 0.0) || ((fw / fh) - (tw / th)).abs() <= 1e-6 * (tw / th) {
+            return *self;
+        }
+        let own = crop_fit_angle(fw, fh, self.angle, None).rect;
+        let same = |a: Rect, b: Rect| [(a.x0, b.x0), (a.y0, b.y0), (a.x1, b.x1), (a.y1, b.y1)].iter().all(|(a, b)| (a - b).abs() < 1e-9);
+        if same(self.rect, own) {
+            return crop_fit_angle(tw, th, self.angle, None);
+        }
+        let r = self.rect_px(fw, fh);
+        // a degenerate rect has no aspect to keep: left as it is (the render copes with it)
+        let Some(aspect) = Some(r.width() / r.height()).filter(|a| a.is_finite() && *a > 0.0) else {
+            return *self;
+        };
+        let largest = crop_fit_angle(fw, fh, self.angle, Some(aspect)).rect_px(fw, fh);
+        let k = Some(r.width() / largest.width()).filter(|k| k.is_finite() && *k > 0.0).map_or(1.0, |k| k.min(1.0));
+        let t = crop_fit_angle(tw, th, self.angle, Some(aspect)).rect_px(tw, th);
+        let c = self.rect.center();
+        let rect = Rect::from_center(Point::new(c.x * tw, c.y * th), t.width() * k, t.height() * k).scale(1.0 / tw, 1.0 / th);
+        CropGeometry { rect, angle: self.angle }.constrained(tw, th)
+    }
+
     /// The largest scale, at most 1, at which this crop shrunk about its own centre lies inside the
     /// rotated image; `None` when its centre is outside it.
     fn fit_scale_about_centre(&self, w: f64, h: f64) -> Option<f64> {
@@ -367,6 +395,51 @@ mod tests {
                 assert!([r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()), "{rect:?} {angle}: {r:?}");
                 assert!(c.is_within_image(400.0, 300.0), "{rect:?} {angle}: {r:?}");
             }
+        }
+    }
+
+    #[test]
+    fn refit_keeps_the_same_crop_on_a_photo_of_the_same_shape() {
+        let c = CropGeometry { rect: Rect::new(0.1, 0.2, 0.6, 0.9), angle: 4.0 };
+        assert_eq!(c.refit((600.0, 400.0), (3000.0, 2000.0)), c);
+    }
+
+    #[test]
+    fn refit_keeps_the_crop_aspect_on_a_photo_of_another_shape() {
+        let px = |c: CropGeometry, w: f64, h: f64| c.rect_px(w, h);
+        // a square crop left of centre in a 3:2 landscape, pasted onto a 2:3 portrait
+        let sq = CropGeometry { rect: Rect::new(0.3 - 100.0 / 600.0, 0.1, 0.3 + 100.0 / 600.0, 0.6), angle: 0.0 };
+        assert!((px(sq, 600.0, 400.0).aspect() - 1.0).abs() < 1e-9);
+        let t = sq.refit((600.0, 400.0), (400.0, 600.0));
+        let r = px(t, 400.0, 600.0);
+        assert!((r.aspect() - 1.0).abs() < 1e-9, "{r:?}");
+        // half the largest square on either photo (400 px tall there, 400 px wide here)
+        assert!((r.width() - 200.0).abs() < 1e-6, "{r:?}");
+        let (c0, c1) = (sq.rect.center(), t.rect.center());
+        assert!((c0.x - c1.x).abs() < 1e-9 && (c0.y - c1.y).abs() < 1e-9, "centred where it was: {:?}", t.rect);
+        assert!(t.is_within_image(400.0, 600.0));
+        // a 16:9 crop straightened by 8° onto a square photo stays 16:9 and inside the turned photo
+        let wide = crop_fit_angle(600.0, 400.0, 8.0, Some(16.0 / 9.0));
+        let t = wide.refit((600.0, 400.0), (500.0, 500.0));
+        assert!((px(t, 500.0, 500.0).aspect() - 16.0 / 9.0).abs() < 1e-9);
+        assert_eq!(t.angle, 8.0);
+        assert!(t.is_within_image(500.0, 500.0));
+    }
+
+    #[test]
+    fn refit_of_an_uncropped_photo_is_the_whole_new_photo() {
+        assert_eq!(CropGeometry::default().refit((600.0, 400.0), (400.0, 600.0)), CropGeometry::default());
+        let straight = crop_fit_angle(600.0, 400.0, 5.0, None);
+        assert_eq!(straight.refit((600.0, 400.0), (400.0, 600.0)), crop_fit_angle(400.0, 600.0, 5.0, None));
+    }
+
+    #[test]
+    fn refit_survives_degenerate_crops_and_sizes() {
+        let flat = CropGeometry { rect: Rect::new(0.0, 0.5, 1.0, 0.5), angle: 0.0 };
+        assert_eq!(flat.refit((600.0, 400.0), (400.0, 600.0)), flat);
+        let c = CropGeometry { rect: Rect::new(0.1, 0.1, 0.5, 0.5), angle: 0.0 };
+        for (from, to) in [((0.0, 400.0), (400.0, 600.0)), ((600.0, 400.0), (f64::NAN, 600.0)), ((600.0, 400.0), (400.0, f64::INFINITY))] {
+            assert_eq!(c.refit(from, to), c);
         }
     }
 }

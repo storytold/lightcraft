@@ -141,7 +141,7 @@
   "Created folder “{name}” in “{parent}”": "Đã tạo thư mục «{name}» trong «{parent}»",
   "On {have} of {of} selected photos": "Trên {have} / {of} ảnh đã chọn",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Gán «{k}»: nhấp ảnh để thêm hoặc gỡ · Esc dừng",
-  "Paste into {n} photo{} — only settings that were copied are pasted": "Dán vào {n} ảnh{:.0} — chỉ dán các thiết lập đã sao chép",
+  "Paste into {n} photo{}": "Dán vào {n} ảnh{:.0}",
   "Preset: {name}": "Thiết lập sẵn: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Chỉ xem trước — chỉnh sửa JPEG nhúng của máy ảnh ({})",
   "Preview only — {}": "Chỉ xem trước — {}",

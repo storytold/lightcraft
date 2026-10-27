@@ -214,7 +214,7 @@ pub enum Dialog {
     CopySettings {
         groups: Vec<String>,
     },
-    /// Paste Selected Settings: which of the copied groups to paste.
+    /// Paste Selected Settings: which groups of the copied photo to paste.
     PasteSettings {
         groups: Vec<String>,
     },
