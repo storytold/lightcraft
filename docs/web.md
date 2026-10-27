@@ -45,7 +45,8 @@ To keep a copy of a video, choose **Original files**. This copies the clip witho
 along with a separate XMP file containing its catalogue information.
 
 With **Remove location info** on, LightCraft checks the clip before copying it. If it finds
-location information, or cannot complete the check, it does not export the clip. It cannot yet
+coordinates or recognized place names (such as city, country or location), or cannot complete
+the check, it does not export the clip. It cannot yet
 remove location information from videos. Turn the option off only if you intend to share the
 unchanged clip, including any location it contains.
 
@@ -61,6 +62,9 @@ scheduling, not whether originals are accepted.
 The native and browser metadata scanners share a one-million-top-level-box traversal budget for
 fragmented MP4s, while retaining the existing 64 MiB per-box and total metadata caps. QuickTime
 and ISO FullBox metadata use the same child-box selection for extraction and location checks.
+The same verifier guards buffered APIs, filesystem copies and browser Blobs, including after
+storage reload. Empty place-name fields alone do not block export; original bytes remain unchanged
+when Remove Location is off.
 Failed browser original loads are not requeued every frame: changing selection or explicitly
 retrying with `photo.reload` permits another attempt.
 

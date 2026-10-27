@@ -46,6 +46,10 @@ No panics on malformed input: proptests feed random bytes to every container wal
 XMP parser; truncation tests cut a sample JPEG at every byte and exercise truncated PSD/PSB headers and
 image-resource records with hostile declared lengths.
 PSD/PSB XMP resources require valid UTF-8; trailing NUL padding is trimmed after validation.
+Before an unchanged video Original is exported with Remove Location, `verify_video_location_absent`
+checks native location metadata and every embedded XMP packet. It rejects GPS properties and
+non-empty recognized place names (sublocation, city, state, country and `lc:location`), including
+namespace aliases and structured properties. Empty place-name fields alone do not block export.
 
 ISO capture-time parsing requires a complete clock and consumes every clock and fractional-second character. Invalid
 XMP capture-time values remain available in the raw property map but are not projected into `Metadata`; a later valid

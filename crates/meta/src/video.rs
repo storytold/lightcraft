@@ -463,6 +463,10 @@ fn verify_xmp_structure(packet: &str) -> Result<(), String> {
     Err("can't verify video location: XMP event limit exceeded".into())
 }
 
+fn is_xmp_place_name(key: &str) -> bool {
+    key.split('/').any(|part| matches!(part, "Iptc4xmpCore:Location" | "photoshop:City" | "photoshop:State" | "photoshop:Country" | "lc:location"))
+}
+
 fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Result<(), String> {
     if depth > MAX_DEPTH {
         return Err("can't verify video location: metadata nesting limit exceeded".into());
@@ -528,6 +532,12 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
                 {
                     return Err(
                         "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                    );
+                }
+                if xmp.properties.iter().any(|(key, values)| is_xmp_place_name(key) && values.iter().any(|value| !value.trim().is_empty())) {
+                    return Err(
+                        "can't remove embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
+                            .into(),
                     );
                 }
             }
@@ -708,6 +718,61 @@ mod tests {
         }
         write_box(&mut bytes, b"XMP_", b"<broken>");
         assert!(verify_video_location_absent(&bytes).unwrap_err().contains("XMP"));
+    }
+
+    #[test]
+    fn location_verification_rejects_place_names_without_gps_in_every_xmp_container() {
+        let clean = synthetic_mp4(1000, 1000, 640, 360, 0);
+        for (namespace, local, canonical) in [
+            ("http://ns.adobe.com/photoshop/1.0/", "City", "photoshop:City"),
+            ("http://ns.adobe.com/photoshop/1.0/", "State", "photoshop:State"),
+            ("http://ns.adobe.com/photoshop/1.0/", "Country", "photoshop:Country"),
+            ("http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/", "Location", "Iptc4xmpCore:Location"),
+            (crate::xmp::LC_NS, "location", "lc:location"),
+        ] {
+            for property in [
+                format!(r#"<rdf:Description xmlns:p="{namespace}" p:{local}="Private place"/>"#),
+                format!(r#"<rdf:Description xmlns:p="{namespace}"><p:{local}>Private place</p:{local}></rdf:Description>"#),
+                format!(
+                    r#"<rdf:Description xmlns:p="{namespace}"><p:{local}><rdf:Seq><rdf:li>Private place</rdf:li><rdf:li/></rdf:Seq></p:{local}></rdf:Description>"#
+                ),
+                format!(
+                    r#"<rdf:Description xmlns:p="{namespace}"><p:details rdf:parseType="Resource"><p:{local}>Private place</p:{local}></p:details></rdf:Description>"#
+                ),
+            ] {
+                let packet = format!(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{property}</rdf:RDF>"#);
+                let parsed = crate::parse_xmp(&packet).unwrap();
+                assert!(parsed.metadata.gps.is_none());
+                assert!(parsed.properties.keys().any(|key| key.split('/').any(|part| part == canonical)));
+                for uuid in [false, true] {
+                    let mut bytes = clean.clone();
+                    write_box(&mut bytes, b"XMP_", br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>"#);
+                    let mut body = if uuid { XMP_UUID.to_vec() } else { Vec::new() };
+                    body.extend_from_slice(packet.as_bytes());
+                    write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
+                    let error = verify_video_location_absent(&bytes).unwrap_err();
+                    assert!(error.contains("embedded location metadata"), "{canonical}, uuid={uuid}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn location_verification_allows_empty_place_names_and_unrelated_properties() {
+        let packet = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description xmlns:p="http://ns.adobe.com/photoshop/1.0/"
+            xmlns:i="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/" xmlns:l="http://ns.lightcraft.app/lc/1.0/"
+            xmlns:photoshop="urn:unrelated" xmlns:dc="http://purl.org/dc/elements/1.1/"
+            p:City=" " p:State="" p:Country="" i:Location="" l:location=" " photoshop:City="Unrelated value"
+            dc:title="City lights"/>
+        </rdf:RDF>"#;
+        for uuid in [false, true] {
+            let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+            let mut body = if uuid { XMP_UUID.to_vec() } else { Vec::new() };
+            body.extend_from_slice(packet);
+            write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
+            verify_video_location_absent(&bytes).unwrap();
+        }
     }
 
     #[test]

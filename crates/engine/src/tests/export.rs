@@ -133,6 +133,58 @@ fn original_video_location_removal_refuses_native_gps_but_allows_location_free_c
 }
 
 #[test]
+fn original_video_location_removal_checks_embedded_place_names_in_buffers_and_copies() {
+    let dir = temp_dir("video-original-place-names");
+    let source = dir.join("source.mov");
+    let destination = dir.join("destination.mov");
+    for field in ["sublocation", "city", "state", "country", "lc:location"] {
+        for value in ["Private place", "", " "] {
+            let metadata = lightcraft_meta::Metadata {
+                sublocation: (field == "sublocation").then(|| value.to_string()),
+                city: (field == "city").then(|| value.to_string()),
+                state: (field == "state").then(|| value.to_string()),
+                country: (field == "country").then(|| value.to_string()),
+                ..Default::default()
+            };
+            let lc = if field == "lc:location" { vec![("location", value)] } else { Vec::new() };
+            let packet = lightcraft_meta::write_xmp_lc(&metadata, &lc);
+            for uuid in [false, true] {
+                let mut bytes = super::import::synthetic_mp4(1000, 1000, 640, 360, 0);
+                let mut body = if uuid {
+                    vec![0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac]
+                } else {
+                    Vec::new()
+                };
+                body.extend_from_slice(packet.as_bytes());
+                super::import::write_test_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
+                assert!(lightcraft_meta::probe_video(&bytes).unwrap().metadata.gps.is_none());
+                std::fs::write(&source, &bytes).unwrap();
+                std::fs::write(&destination, b"existing destination").unwrap();
+                let mut s = Session::new().with_fs();
+                s.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+                let id = s.catalog.photos().next().unwrap().id;
+                let private = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+                let buffered = export_photo(&mut s, id, &private, 1);
+                let copied = crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), true);
+                if value.trim().is_empty() {
+                    assert_eq!(buffered.unwrap().bytes, bytes);
+                    assert_eq!(copied.unwrap(), bytes.len() as u64);
+                } else {
+                    assert!(buffered.err().unwrap().contains("embedded location metadata"), "{field}, uuid={uuid}");
+                    assert!(copied.unwrap_err().contains("embedded location metadata"), "{field}, uuid={uuid}");
+                    assert_eq!(std::fs::read(&destination).unwrap(), b"existing destination");
+                }
+                let unchanged = ExportOptions::from_json(&json!({"format": "original", "removeLocation": false}));
+                assert_eq!(export_photo(&mut s, id, &unchanged, 1).unwrap().bytes, bytes);
+                crate::export::copy_original(source.to_str().unwrap(), destination.to_str().unwrap(), false).unwrap();
+                assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn original_video_buffers_use_current_size_and_streaming_preserves_the_clip() {
     use crate::files::check_buffered_original_size;
     let streamed_len = 64 * 1024 + 1;
