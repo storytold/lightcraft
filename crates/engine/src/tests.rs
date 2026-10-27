@@ -766,6 +766,73 @@ fn auto_sync_refits_a_crop_like_sync() {
     assert_eq!(auto.0, synced.0);
 }
 
+/// Review of #3056: Auto Sync carries only the crop fields the edit changed. A new crop rect on the
+/// active photo is refitted to each other photo at that photo's own angle, which it keeps.
+#[test]
+fn auto_sync_of_a_crop_rect_keeps_each_photos_angle() {
+    let mut s = demo();
+    let (a, b, tall) = photos_by_shape(&mut s);
+    for (id, angle) in [(b, 5.0), (tall, -3.0)] {
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        s.execute("crop.straighten", &json!({"angle": angle})).unwrap();
+    }
+    s.execute("library.select", &json!({"ids": [a.0, b.0, tall.0], "active": a.0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.3, 0.2, 0.7, 0.8]})).unwrap();
+    let src = s.develop_of(a).unwrap().crop.geometry;
+    assert_eq!(src.angle, 0.0);
+    let d = s.develop_of(b).unwrap();
+    assert_eq!((d.crop.geometry.rect, d.crop.geometry.angle), (src.rect, 5.0), "same shape: the rect, at b's own angle");
+    let d = s.develop_of(tall).unwrap();
+    assert_eq!(d.crop.geometry.angle, -3.0, "the portrait keeps its angle");
+    let p = s.catalog.photo(tall).unwrap();
+    assert!(d.crop.geometry.is_within_image(p.width as f64, p.height as f64), "{:?}", d.crop.geometry);
+    let r = crop_px(&s, tall);
+    assert!((r.aspect() - 1.0).abs() < 1e-6, "the square, refitted at the portrait's angle: {r:?}");
+}
+
+/// Review of #3056: dragging one edge changes one leaf of the rect. A photo of another shape takes
+/// the active photo's whole crop refitted, not its own rect with that edge spliced in.
+#[test]
+fn auto_sync_of_one_crop_edge_refits_the_whole_crop_onto_another_shape() {
+    let mut s = demo();
+    let (a, _, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [tall.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.1, 0.1, 0.9, 0.9], "angle": -3.0})).unwrap();
+    s.execute("library.select", &json!({"ids": [a.0, tall.0], "active": a.0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.0, 0.0, 0.6, 1.0]})).unwrap();
+    let (src, r) = (crop_px(&s, a), crop_px(&s, tall));
+    assert!((r.aspect() - src.aspect()).abs() < 1e-6, "the active crop's shape: {src:?} vs {r:?}");
+    assert_eq!(s.develop_of(tall).unwrap().crop.geometry.angle, -3.0, "the portrait keeps its angle");
+}
+
+/// Review of #3056: a new angle on the active photo (its crop still fits, so only the angle
+/// changes) turns the other photos and leaves their own crop rect and aspect lock alone.
+#[test]
+fn auto_sync_of_a_crop_angle_keeps_each_photos_rect_and_lock() {
+    let mut s = demo();
+    let (a, b, tall) = photos_by_shape(&mut s);
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.35, 0.35, 0.65, 0.65]})).unwrap();
+    s.execute("library.select", &json!({"ids": [b.0]})).unwrap();
+    s.execute("crop.set", &json!({"rect": [0.15, 0.15, 0.5, 0.6]})).unwrap();
+    s.execute("library.select", &json!({"ids": [tall.0]})).unwrap();
+    s.execute("crop.aspect", &json!({"aspect": "4x5"})).unwrap();
+    let before: Vec<_> = [b, tall].iter().map(|id| s.develop_of(*id).unwrap().crop).collect();
+    assert_eq!(before[1].aspect, Some((400, 500)));
+    s.execute("library.select", &json!({"ids": [a.0, b.0, tall.0], "active": a.0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let rect = s.develop_of(a).unwrap().crop.geometry.rect;
+    s.execute("crop.straighten", &json!({"angle": 3.0})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().crop.geometry.rect, rect, "the small crop still fits: only the angle changed");
+    for (id, was) in [b, tall].iter().zip(&before) {
+        let d = s.develop_of(*id).unwrap();
+        assert_eq!(d.crop.geometry.angle, 3.0, "the angle is synced");
+        assert_eq!((d.crop.geometry.rect, d.crop.aspect), (was.geometry.rect, was.aspect), "its own rect and lock");
+    }
+}
+
 /// A crop of no size (or a hair wide), as a sidecar can set it, made the render's
 /// samplers read at infinite coordinates and its blurs ask for sigmas of millions of pixels: with a
 /// healing spot and masks on, render workers panicked (an i32 square in the blur, a bilinear

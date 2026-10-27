@@ -990,9 +990,11 @@ impl Session {
     /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`, as asked,
     /// before its crop is fitted) over to the other selected photos: only the settings that changed;
     /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
-    /// (Sync doesn't carry it either), nor history / snapshot restores. A changed crop is refitted to
-    /// each photo's shape as Sync does ([`lightcraft_develop::Crop::refit`]). Constrain Crop then fits
-    /// each photo's own crop: the active photo's fitted crop is never copied over another's.
+    /// (Sync doesn't carry it either), nor history / snapshot restores. A changed crop rect or aspect
+    /// lock is refitted to each photo's shape as Sync does ([`lightcraft_develop::Crop::refit`]),
+    /// leaving the crop fields the edit didn't change (a rect edit keeps each photo's angle).
+    /// Constrain Crop then fits each photo's own crop: the active photo's fitted crop is never
+    /// copied over another's.
     fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
         if !self.auto_sync
             || self.active() != Some(id)
@@ -1028,14 +1030,30 @@ impl Session {
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
                 let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
-                // a changed crop takes this photo's shape, as Sync and Paste give it (issue #3056)
-                if let Some(c) = delta.get("crop")
-                    && (c.get("geometry").is_some() || c.get("aspect").is_some())
+                // a changed crop takes this photo's shape, as Sync and Paste give it (issue #3056).
+                // Only what changed: the refit starts from this photo's crop with the changed leaves
+                // applied (a new rect keeps this photo's angle) under the lock the edit was made with,
+                // and sets only the rect and lock the edit changed (the refit keeps angle and flips).
+                let crop = delta.get("crop");
+                let rect_changed = crop.and_then(|c| c.get("geometry")).is_some_and(|g| g.get("rect").is_some());
+                let aspect_changed = crop.is_some_and(|c| c.get("aspect").is_some());
+                if (rect_changed || aspect_changed)
                     && let (Some(from), Some(to)) = (self.oriented_dims(id, new.orientation), self.oriented_dims(x, synced.orientation))
                 {
-                    let fit = new.crop.refit(from, to);
-                    synced.crop.geometry = fit.geometry;
-                    synced.crop.aspect = fit.aspect;
+                    let mut start = lightcraft_develop::Crop { aspect: new.crop.aspect, ..synced.crop };
+                    // a dragged edge or two mean nothing in a photo of another shape: it refits the
+                    // active photo's whole rect (at its own angle); one of the same shape takes the edges
+                    let same_shape = (from.0 * to.1 - to.0 * from.1).abs() <= 1e-6 * (to.0 * from.1);
+                    if rect_changed && !same_shape {
+                        start.geometry.rect = new.crop.geometry.rect;
+                    }
+                    let fit = start.refit(from, to);
+                    if rect_changed {
+                        synced.crop.geometry.rect = fit.geometry.rect;
+                    }
+                    if aspect_changed {
+                        synced.crop.aspect = fit.aspect;
+                    }
                 }
                 let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
