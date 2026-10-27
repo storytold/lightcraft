@@ -827,12 +827,14 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
 
 pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
     let mut spoken = photo.file_name.clone();
-    if is_clip(photo)
-        && let Some(d) = photo.duration
-    {
-        let text = crate::widgets::format_duration(d);
-        if !text.is_empty() {
-            spoken.push_str(&format!(", {} {text}", crate::i18n::tr("Video")));
+    if is_clip(photo) {
+        spoken.push_str(&format!(", {}", crate::i18n::tr("Video")));
+        if let Some(d) = photo.duration {
+            let text = crate::widgets::format_duration(d);
+            if !text.is_empty() {
+                spoken.push(' ');
+                spoken.push_str(&text);
+            }
         }
     }
     if photo.rating > 0 {

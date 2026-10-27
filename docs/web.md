@@ -33,6 +33,37 @@ and brotli (`-11`) precompressed copies next to each file (`*.gz`, `*.br`, pure 
 as a size table). `--serve` sends them with `Content-Encoding` when the browser accepts them;
 configure a production server the same way (e.g. nginx `gzip_static`/`brotli_static`).
 
+## Video originals (unreleased)
+
+This section describes the development branch, not the released user guide. These instructions
+must be checked against a release before moving them into the guide and updating its `verified` tag.
+
+LightCraft cannot yet turn a video into an exported photo. If your selection includes videos,
+a photo export skips them and tells you which clips were skipped.
+
+To keep a copy of a video, choose **Original files**. This copies the clip without changing it,
+along with a separate XMP file containing its catalogue information.
+
+With **Remove location info** on, LightCraft checks the clip before copying it. If it finds
+location information, or cannot complete the check, it does not export the clip. It cannot yet
+remove location information from videos. Turn the option off only if you intend to share the
+unchanged clip, including any location it contains.
+
+### Implementation reference
+
+Desktop, CLI and MCP Original-video exports stream to the destination; browser downloads reuse
+stored Blobs. These paths do not buffer the whole clip in Rust memory or impose a clip-size limit.
+The CLI's `render` command refuses rendered video output with a nonzero status and no output file;
+`--opt format=original` copies the clip instead. Whole-buffer APIs check platform buffer capacity,
+physical RAM when known, and allocation failures. `app.memoryBudget` controls cache retention and
+scheduling, not whether originals are accepted.
+
+The native and browser metadata scanners share a one-million-top-level-box traversal budget for
+fragmented MP4s, while retaining the existing 64 MiB per-box and total metadata caps. QuickTime
+and ISO FullBox metadata use the same child-box selection for extraction and location checks.
+Failed browser original loads are not requeued every frame: changing selection or explicitly
+retrying with `photo.reload` permits another attempt.
+
 ## Bundle size
 
 Measured on the full bundle (every codec and raw decoder is in the module), without `wasm-opt`:

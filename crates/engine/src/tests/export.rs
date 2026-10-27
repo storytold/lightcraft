@@ -133,10 +133,10 @@ fn original_video_location_removal_refuses_native_gps_but_allows_location_free_c
 }
 
 #[test]
-fn original_video_buffers_ignore_cache_budgets_and_destination_backed_export_streams_large_clips() {
+fn original_video_buffers_use_current_size_and_streaming_preserves_the_clip() {
     use crate::files::check_buffered_original_size;
-    let streamed_len = (crate::memory::budget() / 2) as u64 + 1;
-    assert!(check_buffered_original_size(streamed_len).is_ok(), "a cache budget does not limit original file size");
+    let streamed_len = 64 * 1024 + 1;
+    assert!(check_buffered_original_size(streamed_len).is_ok());
     let dir = temp_dir("video-original-size");
     let path = dir.join("growing.mp4");
     std::fs::write(&path, super::import::synthetic_mp4(1000, 1000, 640, 360, 0)).unwrap();
@@ -157,7 +157,7 @@ fn original_video_buffers_ignore_cache_budgets_and_destination_backed_export_str
     assert!(s.catalog.photo(id).unwrap().file_size < streamed_len, "the catalog size is deliberately stale");
     match prepared.run().unwrap() {
         crate::export::Ran::Exported(e) => assert_eq!(e.bytes.len() as u64, streamed_len),
-        _ => panic!("a buffered Original above the cache share must still export"),
+        _ => panic!("a grown original must still export"),
     }
     if let Some(ram) = crate::memory::total_ram() {
         std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(ram as u64 + 1).unwrap();

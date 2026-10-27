@@ -126,7 +126,7 @@ pub enum Gesture {
 /// (name and running time), and what this build does with it. It keeps a video from reading as a
 /// broken photo in the loupe ("This photo can't be opened" and a warning pill) until playback,
 /// trim and cover frames land.
-fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, canvas: Rect) {
+pub(super) fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, canvas: Rect, widget: &str) {
     let w = (canvas.width() * 0.6).clamp(160.0, 460.0).min((canvas.width() - 24.0).max(80.0));
     let wrap = (w - 32.0).max(20.0);
     let name = crate::widgets::one_line(p, &photo.file_name, t.semibold(14.0), t.text, wrap);
@@ -157,7 +157,7 @@ fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_c
     }
     y += 14.0;
     p.galley(pos2(card.center().x - message.size().x / 2.0, y), message, t.text_dim);
-    register(ui, "canvas:videoCard", card);
+    register(ui, widget, card);
 }
 
 /// Draw the Develop loupe: the optional filmstrip, the fitted or zoomed photo (before/after and
@@ -327,7 +327,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         && app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
         && app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != id);
     if video_only {
-        video_card(ui, &p, &t, &photo, canvas);
+        video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard");
         shown = "video";
     } else if split {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the

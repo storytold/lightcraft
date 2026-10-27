@@ -129,7 +129,7 @@ pub(crate) fn read_video_metadata_from(f: &mut (impl std::io::Read + std::io::Se
     use std::io::SeekFrom;
     let mut out = Vec::new();
     let mut at = 0u64;
-    let mut budget = 1024usize;
+    let mut budget = MAX_VIDEO_TOP_LEVEL_BOXES;
     const MAX_BOX_SIZE: u64 = 64 * 1024 * 1024;
 
     while at.saturating_add(8) <= file_len && budget > 0 {

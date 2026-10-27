@@ -3025,6 +3025,45 @@ fn the_bounded_video_reader_skips_an_mdat_before_moov() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+#[test]
+fn video_metadata_after_thousands_of_fragments_is_read_without_the_payloads() {
+    let file = synthetic_mp4(1000, 84_500, 640, 360, 0);
+    let ftyp_len = u32::from_be_bytes(file[..4].try_into().unwrap()) as usize;
+    let mut fragmented = file[..ftyp_len].to_vec();
+    for _ in 0..2048 {
+        for kind in [b"moof", b"mdat"] {
+            fragmented.extend_from_slice(&8u32.to_be_bytes());
+            fragmented.extend_from_slice(kind);
+        }
+    }
+    fragmented.extend_from_slice(&file[ftyp_len..]);
+    let mut reader = std::io::Cursor::new(&fragmented);
+    let metadata = crate::files::read_video_metadata_from(&mut reader, fragmented.len() as u64, "fragmented.mp4").unwrap();
+    assert_eq!(metadata, file, "fragment boxes are skipped; only the original metadata is retained");
+    assert_eq!(lightcraft_meta::probe_video(&metadata).unwrap().duration, Some(84.5));
+}
+
+#[test]
+fn candidate_thumbnails_skip_legacy_videos_and_failed_probes() {
+    let src = temp_dir("legacy-video-candidate");
+    write_png(&src.join("photo.png"), 42);
+    let mut s = Session::new().with_fs();
+    let mut candidates = crate::import::scan(&mut s, &[src.to_string_lossy().into_owned()]);
+    let mut candidate = candidates.pop().unwrap();
+    assert!(s.candidate_thumb_job(&candidate, 256, 0).is_some());
+    candidate.error = Some("unreadable original".into());
+    assert!(s.candidate_thumb_job(&candidate, 256, 0).is_none());
+    candidate.error = None;
+    candidate.name = "legacy.mov".into();
+    candidate.path = "/legacy.mov".into();
+    candidate.format = "VIDEO".into();
+    assert_eq!(candidate.kind, lightcraft_catalog::MediaKind::Image);
+    assert!(s.candidate_thumb_job(&candidate, 256, 0).is_none());
+    candidate.kind = lightcraft_catalog::MediaKind::Video;
+    assert!(s.candidate_thumb_job(&candidate, 256, 0).is_none());
+    std::fs::remove_dir_all(src).unwrap();
+}
+
 /// A moov over the 64 MiB metadata cap is refused instead of read.
 #[test]
 fn a_moov_over_the_metadata_cap_is_refused_without_reading_it() {

@@ -72,6 +72,8 @@ struct Inner {
     wanted: Vec<String>,
     /// Hashes being loaded.
     loading: std::collections::HashSet<String>,
+    failed: std::collections::HashSet<String>,
+    selection: (Vec<lightcraft_engine::catalog::PhotoId>, Option<lightcraft_engine::catalog::PhotoId>),
     /// Bounded metadata for newly imported videos; their originals remain browser Blobs.
     probes: HashMap<String, lightcraft_engine::media::ProbeInfo>,
 }
@@ -105,6 +107,7 @@ impl Originals {
         g.clock += 1;
         let clock = g.clock;
         g.loading.remove(hash);
+        g.failed.remove(hash);
         if let Some(old) = g.bytes.insert(hash.to_string(), (bytes.clone(), clock)) {
             g.total -= old.0.len();
         }
@@ -130,6 +133,7 @@ impl Originals {
     pub fn added_video(&self, name: &str, hash: &str, probe: lightcraft_engine::media::ProbeInfo) -> String {
         let path = original_path(hash, name);
         let mut g = self.lock();
+        g.failed.remove(hash);
         g.probes.insert(hash.to_string(), probe);
         g.pending.push(path.clone());
         path
@@ -145,7 +149,7 @@ impl Originals {
             v.1 = clock;
             return Some(v.0.clone());
         }
-        if !g.loading.contains(hash) && !g.wanted.iter().any(|w| w == hash) {
+        if !g.failed.contains(hash) && !g.loading.contains(hash) && !g.wanted.iter().any(|w| w == hash) {
             g.wanted.push(hash.to_string());
         }
         None
@@ -169,8 +173,30 @@ impl Originals {
         w
     }
 
-    pub fn load_failed(&self, hash: &str) {
+    /// Finish a Blob load whose bytes stay outside the WASM cache.
+    pub fn load_finished(&self, hash: &str) {
         self.lock().loading.remove(hash);
+    }
+
+    /// Suppress automatic retries until the selection changes or a retry is requested.
+    pub fn load_failed(&self, hash: &str) {
+        let mut g = self.lock();
+        g.loading.remove(hash);
+        g.failed.insert(hash.to_string());
+    }
+
+    /// Whether this original's most recent storage load failed.
+    pub fn has_failed(&self, path: &str) -> bool {
+        hash_of_path(path).is_some_and(|hash| self.lock().failed.contains(hash))
+    }
+
+    /// A new selection gives previously failed originals another attempt.
+    pub fn sync_selection(&self, ids: &[lightcraft_engine::catalog::PhotoId], active: Option<lightcraft_engine::catalog::PhotoId>) {
+        let mut g = self.lock();
+        if g.selection.0 != ids || g.selection.1 != active {
+            g.failed.clear();
+            g.selection = (ids.to_vec(), active);
+        }
     }
 
     /// Paths added since the last call.
@@ -198,10 +224,13 @@ impl Originals {
         });
         let s = self.clone();
         let probe: FileProbe = Arc::new(move |path: &str| {
-            if let Some(hash) = hash_of_path(path)
-                && let Some(probe) = s.lock().probes.get(hash).cloned()
-            {
-                return Ok(probe);
+            if let Some(hash) = hash_of_path(path) {
+                let mut g = s.lock();
+                // Explicit imports/reloads may retry; ordinary render reads must not.
+                g.failed.remove(hash);
+                if let Some(probe) = g.probes.get(hash).cloned() {
+                    return Ok(probe);
+                }
             }
             let bytes = s.get(path).ok_or_else(|| format!("{path}: not loaded"))?;
             probe_bytes(path, &bytes)
@@ -269,6 +298,44 @@ mod tests {
         assert!(s.take_wanted().is_empty());
         s.insert("h1", Arc::from(vec![1u8, 2])).unwrap();
         assert_eq!(&*s.get("web/h1/b.jpg").unwrap(), &[1, 2]);
+    }
+
+    #[test]
+    fn failed_originals_wait_for_selection_change_or_explicit_retry() {
+        use lightcraft_engine::catalog::PhotoId;
+        let s = Originals::default();
+        s.sync_selection(&[PhotoId(1)], Some(PhotoId(1)));
+        s.prefetch("web/h1/a.png");
+        assert_eq!(s.take_wanted(), ["h1"]);
+        s.load_failed("h1");
+        for _ in 0..30 {
+            s.sync_selection(&[PhotoId(1)], Some(PhotoId(1)));
+            s.prefetch("web/h1/a.png");
+            assert!(s.get("web/h1/a.png").is_none());
+            assert!(s.take_wanted().is_empty());
+        }
+        assert!(s.has_failed("web/h1/a.png"));
+        s.sync_selection(&[PhotoId(1)], Some(PhotoId(2)));
+        s.prefetch("web/h1/a.png");
+        assert_eq!(s.take_wanted(), ["h1"], "changing the active photo permits a retry");
+        s.load_failed("h1");
+        let (_, probe) = s.hooks();
+        assert!(probe("web/h1/a.png").is_err(), "an explicit reload queues the missing original");
+        s.prefetch("web/h1/a.png");
+        assert_eq!(s.take_wanted(), ["h1"]);
+        s.load_failed("h1");
+        s.insert("h1", Arc::new(vec![1])).unwrap();
+        assert!(!s.has_failed("web/h1/a.png"), "successful replacement clears the failure");
+    }
+
+    #[test]
+    fn a_successful_blob_load_does_not_record_a_failure() {
+        let s = Originals::default();
+        s.prefetch("web/video/clip.mp4");
+        assert_eq!(s.take_wanted(), ["video"]);
+        s.load_finished("video");
+        assert!(!s.has_failed("web/video/clip.mp4"));
+        assert!(s.lock().loading.is_empty());
     }
 
     #[test]

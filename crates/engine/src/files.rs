@@ -13,6 +13,9 @@ use lightcraft_raster::resample::{Filter, fit};
 
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
+/// Top-level movie boxes may include many fragments; retained metadata still has its own size cap.
+pub const MAX_VIDEO_TOP_LEVEL_BOXES: usize = 1_000_000;
+
 /// Check a whole buffer against the platform's capacity and known physical RAM, never the cache
 /// budget. Destination-backed video exports do not buffer the original.
 pub fn check_buffered_original_size(size: u64) -> Result<(), String> {

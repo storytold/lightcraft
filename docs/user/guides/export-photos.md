@@ -25,25 +25,6 @@ Select the photos, then choose **File** > **Export…**. Pick a format, a size a
 
 If you did not choose a folder, the window stays open and shows an error, so your choices are not lost.
 
-## Video originals
-
-Video clips have no frame decoder yet: rendered exports skip them with a per-file warning.
-**Original files** copies a clip unchanged, with its XMP sidecar. Desktop, CLI and MCP exports
-stream to the destination; the browser downloads the stored Blob. Neither loads the whole clip
-into Rust memory or imposes a clip-size limit.
-
-The CLI's `render` command also refuses rendered output for a video, with a nonzero exit status
-and no output written. Use `--opt format=original` to copy the clip instead.
-APIs that return the entire original as bytes check platform buffer capacity and physical RAM
-when known, and report allocation failures. The cache budget (`app.memoryBudget`) controls
-retention and scheduling, not whether an original is accepted.
-
-With **Remove location info**, LightCraft checks native QuickTime location metadata and embedded XMP.
-Clips verified to contain no supported location metadata can be copied. If location metadata is found,
-or the metadata cannot be verified, the export fails without replacing the destination. LightCraft
-does not yet strip GPS from video originals. Only turn the option off if you intend to share the
-unchanged clip, including any location it contains.
-
 ## Reuse your settings
 
 - To keep a set of choices, type a name next to **Save preset** and click **Save**. Pick it again later with **Preset** at the top of the window.

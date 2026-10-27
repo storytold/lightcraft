@@ -474,13 +474,16 @@ impl Session {
     /// A thumbnail for an import candidate (not in the catalog): a raw's embedded preview, else a
     /// small render of the file. `slot` makes the job's photo id unique (`u64::MAX - slot`).
     pub fn candidate_thumb_job(&mut self, c: &ImportCandidate, edge: usize, slot: u64) -> Option<crate::media::QuickJob> {
-        if c.error.is_some() || c.kind == MediaKind::Video {
+        if c.error.is_some() {
             return None;
         }
         let id = PhotoId(u64::MAX - slot);
         let mut p = Photo::new(id, Source::File { path: c.path.clone() }, &c.name, &c.format, c.width.max(1), c.height.max(1), "");
         p.kind = c.kind;
         p.duration = c.duration;
+        if p.is_video() {
+            return None;
+        }
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
             p.embedded_lens = info.embedded_lens;

@@ -178,7 +178,7 @@ async fn video_blob_metadata(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
     }
     let size = size as u64;
     let (mut at, mut out) = (0u64, Vec::new());
-    for _ in 0..1024 {
+    for _ in 0..lightcraft_engine::files::MAX_VIDEO_TOP_LEVEL_BOXES {
         if at == size {
             return Ok(out);
         }
@@ -771,9 +771,11 @@ impl WebApp {
 
     /// Load originals the main thread asked for (and the active photo's, ahead of time).
     fn load_originals(&mut self, ctx: &egui::Context) {
+        self.originals.sync_selection(&self.app.session.selection.ids, self.app.session.selection.active);
         for id in self.app.session.selection.ids.iter().chain(self.app.session.selection.active.iter()) {
             if let Some(Source::File { path }) = self.app.session.catalog.photo(*id).map(|p| &p.source)
                 && !self.originals.contains(path)
+                && !self.originals.has_failed(path)
                 && !VIDEO_BLOBS.with(|b| crate::store::hash_of_path(path).is_some_and(|h| b.borrow().contains_key(h)))
             {
                 self.originals.prefetch(path);
@@ -815,9 +817,12 @@ impl WebApp {
                         Ok::<(), String>(())
                     }
                     .await;
-                    originals.load_failed(&hash);
-                    if let Err(e) = result {
-                        notice(format!("Original video was not loaded: {e}"));
+                    match result {
+                        Ok(()) => originals.load_finished(&hash),
+                        Err(e) => {
+                            originals.load_failed(&hash);
+                            notice(format!("Original video was not loaded: {e}"));
+                        }
                     }
                     ctx.request_repaint();
                     continue;

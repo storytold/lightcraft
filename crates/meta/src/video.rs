@@ -302,7 +302,6 @@ fn parse_udta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget
                 }
             }
             b"meta" => {
-                // QuickTime `meta` atom inside `udta` has 4 bytes version/flags before child boxes
                 parse_meta(b.body, meta, xmp, budget, depth + 1);
             }
             _ => {}
@@ -337,6 +336,11 @@ fn apply_mdta(key: &str, value: &str, meta: &mut Metadata) {
     }
 }
 
+/// QuickTime starts with an `hdlr` child; ISO FullBox metadata has version/flags before children.
+fn meta_children(body: &[u8]) -> Option<&[u8]> {
+    if body.get(4..8) == Some(b"hdlr") { Some(body) } else { body.get(4..) }
+}
+
 /// Parse a QuickTime/ISO `meta` box: its `keys` name the fields and its `ilst` items, numbered by
 /// the key they belong to, hold the values. Apple's MOVs record the capture time, make, model,
 /// software and location here (mdta) rather than in `udta`; the time carries its offset.
@@ -344,8 +348,7 @@ fn parse_meta(body: &[u8], meta: &mut Metadata, _xmp: &mut Option<String>, budge
     if depth > MAX_DEPTH {
         return;
     }
-    // a FullBox: version and flags before the child boxes
-    let body = body.get(4..).unwrap_or(body);
+    let Some(body) = meta_children(body) else { return };
     let mut keys: Vec<Option<String>> = Vec::new();
     for b in read_boxes(body, budget) {
         match &b.kind {
@@ -491,7 +494,7 @@ fn verify_location_boxes(bytes: &[u8], budget: &mut usize, depth: usize) -> Resu
             }
             b"moov" | b"udta" | b"trak" | b"mdia" => verify_location_boxes(b.body, budget, depth + 1)?,
             b"meta" => {
-                let body = b.body.get(4..).ok_or("can't verify video location: truncated metadata")?;
+                let body = meta_children(b.body).ok_or("can't verify video location: truncated metadata")?;
                 verify_location_boxes(body, budget, depth + 1)?;
             }
             b"keys" => {
@@ -991,6 +994,54 @@ mod tests {
         assert_eq!(meta.captured.as_deref(), Some("2026-05-04T21:00:00-04:00"), "the local time and its offset");
         assert_eq!(meta.metadata.make.as_deref(), Some("Apple"));
         assert_eq!(meta.metadata.model.as_deref(), Some("iPhone 17 Pro"));
+    }
+
+    #[test]
+    fn quicktime_and_fullbox_metadata_share_extraction_and_location_checks() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        for quicktime in [false, true] {
+            for located in [false, true] {
+                let mut fields = vec![
+                    ("com.apple.quicktime.creationdate", "2026-05-04T21:00:00-0400"),
+                    ("com.apple.quicktime.make", "Apple"),
+                    ("com.apple.quicktime.model", "iPhone 17 Pro"),
+                ];
+                if located {
+                    fields.push(("com.apple.quicktime.location.ISO6709", "+37.7749-122.4194/"));
+                }
+                let meta = mdta_meta_box(&fields);
+                let children = &meta[12..];
+                let mut body = Vec::new();
+                if quicktime {
+                    let mut handler = vec![0; 8];
+                    handler.extend_from_slice(b"mdta");
+                    handler.extend_from_slice(&[0; 12]);
+                    write_box(&mut body, b"hdlr", &handler);
+                } else {
+                    body.extend_from_slice(&0x100u32.to_be_bytes());
+                }
+                body.extend_from_slice(children);
+                let mut atom = Vec::new();
+                write_box(&mut atom, b"meta", &body);
+                let bytes = with_moov_children(&file, &atom);
+                let parsed = probe_video(&bytes).unwrap();
+                assert_eq!(parsed.captured.as_deref(), Some("2026-05-04T21:00:00-04:00"), "QuickTime layout: {quicktime}");
+                let metadata = parsed.metadata;
+                assert_eq!(metadata.make.as_deref(), Some("Apple"), "QuickTime layout: {quicktime}");
+                assert_eq!(metadata.model.as_deref(), Some("iPhone 17 Pro"), "QuickTime layout: {quicktime}");
+                assert_eq!(metadata.gps.is_some(), located);
+                let checked = verify_video_location_absent(&bytes);
+                if located {
+                    assert!(checked.unwrap_err().contains("GPS"), "QuickTime layout: {quicktime}");
+                } else {
+                    checked.unwrap();
+                }
+                atom.pop();
+                let truncated = with_moov_children(&file, &atom);
+                assert!(verify_video_location_absent(&truncated).is_err());
+            }
+        }
+        assert_eq!(meta_children(&[0; 3]), None);
     }
 
     /// A 90-degree display matrix is read as Rotate90.

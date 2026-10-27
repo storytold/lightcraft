@@ -64,6 +64,7 @@ fn video_app(view: ViewMode) -> Headless {
         Services {
             png: Some(Box::new(png)),
             write: Some(Box::new(|path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| e.to_string()))),
+            write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
             ..Default::default()
         },
     );
@@ -104,6 +105,42 @@ fn grid_cells_mark_videos_with_their_format_and_running_time() {
         assert!(!has(&h, "badge:videoDuration:4"), "{view:?}: a clip without a duration shows no time");
         assert!(!has(&h, "badge:videoDuration:2") && !has(&h, "badge:videoFormat:2"), "{view:?}: a still has neither badge");
         shot(&mut h, &format!("video-{view:?}.png"));
+    }
+}
+
+#[test]
+fn grids_announce_video_even_without_a_duration() {
+    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+        let mut h = video_app(view);
+        let ctx = h.view.ctx.clone();
+        ctx.enable_accesskit();
+        let mut labels = Vec::new();
+        for frame in 0..3 {
+            let raw = crate::headless::HeadlessView::raw_input(egui::vec2(1200.0, 800.0), 1.0, h.time() + frame as f64, Vec::new());
+            let out = ctx.run_ui(raw, |ui| h.app.ui(ui));
+            if let Some(update) = out.platform_output.accesskit_update {
+                labels.extend(update.nodes.into_iter().filter_map(|(_, node)| node.label().map(str::to_string)));
+            }
+        }
+        let video = crate::i18n::tr("Video");
+        assert!(labels.iter().any(|label| label == &format!("unknown.mp4, {video}")), "{view:?}: {labels:?}");
+        assert!(labels.iter().any(|label| label == &format!("clip.mp4, {video} 01:24")), "{view:?}: {labels:?}");
+        assert!(labels.iter().any(|label| label == "photo.jpg"));
+    }
+}
+
+#[test]
+fn culling_views_show_video_cards_without_scheduling_frames() {
+    for command in ["view.compare", "view.reference", "view.survey"] {
+        let mut h = video_app(ViewMode::PhotoGrid);
+        h.app.run("library.select", json!({"ids": [1, 3], "active": 3})).unwrap();
+        h.app.run(command, json!({})).unwrap();
+        h.settle(SETTLE);
+        assert!(has(&h, "cull:1:videoCard"), "{command}: the first clip is not a permanent skeleton");
+        assert!(has(&h, "cull:3:videoCard"), "{command}: the second clip is not a permanent skeleton");
+        assert_eq!(h.app.renderer.in_flight(), 0, "{command}: no frame decoder jobs");
+        assert!(!h.app.widgets.iter().any(|(id, _)| id.starts_with("compare:rendering:")));
+        shot(&mut h, &format!("video-{}.png", command.replace('.', "-")));
     }
 }
 
