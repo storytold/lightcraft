@@ -76,17 +76,20 @@ impl Drop for FaultGuard {
 /// it takes the exclusive-create + rename fallback. Product code never calls it.
 #[doc(hidden)]
 pub fn without_hard_links() -> NoHardLinksGuard {
-    NO_HARD_LINKS.with(|c| c.set(true));
-    NoHardLinksGuard(())
+    NoHardLinksGuard { previous: NO_HARD_LINKS.with(|c| c.replace(true)), _same_thread: std::marker::PhantomData }
 }
 
-/// Ends a [`without_hard_links`] when dropped.
+/// Ends a [`without_hard_links`] when dropped, putting back what was set before (so nested guards
+/// work). It stays on the thread whose flag it set (not `Send`).
 #[doc(hidden)]
-pub struct NoHardLinksGuard(());
+pub struct NoHardLinksGuard {
+    previous: bool,
+    _same_thread: std::marker::PhantomData<*const ()>,
+}
 
 impl Drop for NoHardLinksGuard {
     fn drop(&mut self) {
-        NO_HARD_LINKS.with(|c| c.set(false));
+        NO_HARD_LINKS.with(|c| c.set(self.previous));
     }
 }
 
@@ -260,6 +263,10 @@ pub fn publish_new(tmp: &Path, path: &Path) -> io::Result<()> {
 /// Fallback of [`publish_new`]: reserve the name with an exclusive create (atomic, so a file that
 /// appears at the same time is never replaced), then rename the complete temp file over our own
 /// empty placeholder. `before_claim` runs just before the name is claimed (a test hook).
+///
+/// That guarantee holds against other writers that also create names exclusively (as everything in
+/// a library folder does). A process that deletes or replaces our placeholder between the claim and
+/// the rename would have its file replaced, and a failed rename removes whatever then has the name.
 fn publish_new_by_rename(tmp: &Path, path: &Path, before_claim: &dyn Fn()) -> io::Result<()> {
     before_claim();
     OpenOptions::new().write(true).create_new(true).open(path)?;
