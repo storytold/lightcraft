@@ -286,20 +286,10 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
             missing = missing
         )
     } else {
-        let report = value.get("report").unwrap_or(&value);
-        let imported = report["imported"].as_u64().unwrap_or(0);
-        let failed = report["failed"].as_array().map_or(0, Vec::len);
-        let warning = value.get("indexWarning").and_then(Value::as_str);
-        if let Some(warning) = warning {
-            crate::i18n::tr_format!(
-                "Lightroom import complete: {imported} photos added; index warning: {warning}",
-                imported = imported,
-                warning = warning
-            )
-        } else if failed == 0 {
-            crate::i18n::tr_format!("Lightroom import complete: {imported} photos added", imported = imported)
-        } else {
-            crate::i18n::tr_format!("Lightroom import complete: {imported} photos added, {failed} failed", imported = imported, failed = failed)
+        let message = import_summary(value.get("report").unwrap_or(&value));
+        match value.get("indexWarning").and_then(Value::as_str) {
+            Some(warning) => crate::i18n::tr_format!("{message}; index warning: {warning}", message = message, warning = warning),
+            None => message,
         }
     };
     if matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) {
@@ -311,41 +301,105 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
     app.toast_for(ctx, message, 6.0);
 }
 
+/// The toast for a finished import: how many photos the catalog has and what became of them, the
+/// photos added and then each other outcome there is (the report's breakdown, see
+/// `lightroom_catalog::apply_prepared`).
+fn import_summary(report: &Value) -> String {
+    let count = |key: &str| report[key].as_u64().unwrap_or(0);
+    let mut parts = vec![crate::i18n::tr_format!("{added} added", added = count("added"))];
+    let already = count("alreadyInLibrary");
+    if already > 0 {
+        parts.push(crate::i18n::tr_format!("{already} already in the library", already = already));
+    }
+    let in_trash = count("inRecentlyDeleted");
+    if in_trash > 0 {
+        parts.push(crate::i18n::tr_format!("{in_trash} in Recently Deleted", in_trash = in_trash));
+    }
+    let not_supported = count("notSupported");
+    if not_supported > 0 {
+        parts.push(crate::i18n::tr_format!("{not_supported} not supported", not_supported = not_supported));
+    }
+    let path_refused = count("pathRefused");
+    if path_refused > 0 {
+        parts.push(crate::i18n::tr_format!("{path_refused} on refused paths", path_refused = path_refused));
+    }
+    let incomplete = count("incomplete");
+    if incomplete > 0 {
+        parts.push(crate::i18n::tr_format!("{incomplete} incomplete", incomplete = incomplete));
+    }
+    let failed = report["failed"].as_array().map_or(0, Vec::len);
+    if failed > 0 {
+        parts.push(crate::i18n::tr_format!("{failed} failed", failed = failed));
+    }
+    crate::i18n::tr_format!(
+        "Lightroom import complete. {in_catalog} photos in the catalog: {parts}",
+        in_catalog = count("inCatalog"),
+        parts = parts.join(", ")
+    )
+}
+
 fn show_result(app: &mut LightcraftApp) {
     if app.ui.dialog.is_none() {
         app.ui.dialog = app.lightroom_result.take();
     }
 }
 
-/// The lasting result window for an inspect or import: counts, failures, missing originals, the
-/// skipped images (one line, in the UI language) and at most eight warnings. Show in Library goes
-/// to the lowest mapped photo that is not in Recently Deleted, where All Photos can show it.
+/// The lasting result window for an import: how many photos the catalog has and where each went
+/// (one line per outcome there is, adding up to the catalog's photos), failures, missing
+/// originals and at most eight warnings. Show in Library goes to the lowest mapped photo that is
+/// not in Recently Deleted, where All Photos can show it.
 fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Catalog) -> crate::state::Dialog {
     let report = value.get("report").unwrap_or(value);
+    let count = |key: &str| report[key].as_u64().unwrap_or(0);
     let mut details = Vec::new();
-    if let Some(photos) = report["photos"].as_u64() {
+    if let Some(in_catalog) = report["inCatalog"].as_u64() {
         details.push(crate::i18n::tr_format!(
-            "{photos} catalog records processed; {collections} collections.",
-            photos = photos,
-            collections = report["collections"].as_u64().unwrap_or(0)
+            "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.",
+            in_catalog = in_catalog,
+            collections = count("collections")
         ));
     }
-    if let Some(failures) = report["failed"].as_array() {
-        details
-            .extend(failures.iter().take(4).map(|failure| format!("{}: {}", failure[0].as_str().unwrap_or(""), failure[1].as_str().unwrap_or(""))));
+    let added = count("added");
+    if added > 0 {
+        details.push(crate::i18n::tr_format!("{added} added to the library.", added = added));
     }
-    let missing = report["missing"].as_array().map_or(0, Vec::len);
-    if missing > 0 {
+    let already = count("alreadyInLibrary");
+    if already > 0 {
         details.push(crate::i18n::tr_format!(
-            "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
-            missing = missing
+            "{already} catalog photos were already in this library and were updated from the catalog.",
+            already = already
         ));
     }
-    let in_trash = report["inRecentlyDeleted"].as_u64().unwrap_or(0);
+    let in_trash = count("inRecentlyDeleted");
     if in_trash > 0 {
         details.push(crate::i18n::tr_format!(
             "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.",
             in_trash = in_trash
+        ));
+    }
+    let not_supported = count("notSupported");
+    if not_supported > 0 {
+        // the file types, as the files name them (MP4, MOV); one without an extension isn't named
+        let types: Vec<String> =
+            report["notSupportedTypes"].as_object().into_iter().flatten().map(|(ext, _)| ext.to_uppercase()).filter(|ext| !ext.is_empty()).collect();
+        details.push(if types.is_empty() {
+            crate::i18n::tr_format!(
+                "{not_supported} catalog photos were not imported: LightCraft doesn't read their file types.",
+                not_supported = not_supported
+            )
+        } else {
+            crate::i18n::tr_format!(
+                "{not_supported} catalog photos were not imported: LightCraft doesn't read their file types ({types}).",
+                not_supported = not_supported,
+                types = types.join(", ")
+            )
+        });
+    }
+    let path_refused = count("pathRefused");
+    if path_refused > 0 {
+        details.push(crate::i18n::tr_format!(
+            "{path_refused} catalog photos were not imported: their originals are on another computer or a device, or their paths in the catalog aren't valid. The warnings list them.",
+            path_refused = path_refused
         ));
     }
     // images whose catalog records are incomplete come as data (`skipped`), said here in the UI
@@ -356,6 +410,17 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
             "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
             skipped = skipped
         ));
+    }
+    let missing = report["missing"].as_array().map_or(0, Vec::len);
+    if missing > 0 {
+        details.push(crate::i18n::tr_format!(
+            "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
+            missing = missing
+        ));
+    }
+    if let Some(failures) = report["failed"].as_array() {
+        details
+            .extend(failures.iter().take(4).map(|failure| format!("{}: {}", failure[0].as_str().unwrap_or(""), failure[1].as_str().unwrap_or(""))));
     }
     if let Some(warning) = value.get("indexWarning").and_then(Value::as_str) {
         details.push(warning.to_string());
@@ -662,9 +727,9 @@ mod tests {
             rules: vec![lightcraft_catalog::rules::Rule::Field { field: "rating".into(), op: "is".into(), value: json!(5) }],
         });
         let (task, _tx, _, _) = fake_import(&h);
-        let value = json!({"photos": 1, "imported": 1, "collections": 0, "missing": ["D:/Photos/a.NEF"], "mapping": {"1": id}, "library": "C:/Pictures/LightCraft Library"});
+        let value = json!({"photos": 1, "imported": 1, "inCatalog": 1, "added": 1, "collections": 0, "missing": ["D:/Photos/a.NEF"], "mapping": {"1": id}, "library": "C:/Pictures/LightCraft Library"});
         terminal(&mut h.app, &h.view.ctx, &task, value);
-        assert!(h.app.ui.toast.as_ref().unwrap().0.contains("1 photos added"));
+        assert!(h.app.ui.toast.as_ref().unwrap().0.contains("1 photos in the catalog: 1 added"));
         h.step();
         h.step();
         let text = h.painted_text().join(" ");
@@ -749,25 +814,65 @@ mod tests {
         let crate::state::Dialog::LightroomResult { details: en, .. } = result_dialog(&value, "done", &Default::default()) else {
             panic!("not a Lightroom result")
         };
-        assert_eq!(en.len(), 4, "{en:?}");
-        assert_eq!(en[1], "3 catalog images were not imported because their records in the catalog are incomplete.");
-        assert_eq!(&en[2..], ["w1", "w2"]);
+        assert_eq!(en.len(), 3, "{en:?}");
+        assert_eq!(en[0], "3 catalog images were not imported because their records in the catalog are incomplete.");
+        assert_eq!(&en[1..], ["w1", "w2"]);
     }
 
+    /// A report with one catalog photo per outcome (see `lightroom_catalog::apply_prepared`).
+    fn every_outcome() -> Value {
+        json!({"report": {"photos": 3, "collections": 2, "inCatalog": 8, "added": 2, "alreadyInLibrary": 1, "inRecentlyDeleted": 1,
+            "notSupported": 2, "notSupportedTypes": {"mov": 1, "mp4": 1}, "pathRefused": 1, "incomplete": 1,
+            "skipped": [{"image": 8, "reason": "missingFile"}], "missing": ["/a.ARW"], "failed": [], "warnings": []}})
+    }
+
+    /// The result window says where each of the catalog's photos went, one line per outcome there
+    /// is, so an import that adds fewer photos than the catalog has explains the rest (#2589, #1584).
     #[test]
-    fn photos_left_in_recently_deleted_are_one_line() {
-        let value = json!({"report": {"photos": 3, "collections": 0, "inRecentlyDeleted": 2}});
+    fn the_result_lists_each_outcome_there_is() {
         crate::i18n::set_language(crate::i18n::Locale::En);
+        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&every_outcome(), "done", &Default::default()) else {
+            panic!("not a Lightroom result")
+        };
+        assert_eq!(
+            details,
+            [
+                "8 photos in the catalog, virtual copies included; 2 collections.",
+                "2 added to the library.",
+                "1 catalog photos were already in this library and were updated from the catalog.",
+                "1 catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.",
+                "2 catalog photos were not imported: LightCraft doesn't read their file types (MOV, MP4).",
+                "1 catalog photos were not imported: their originals are on another computer or a device, or their paths in the catalog aren't valid. The warnings list them.",
+                "1 catalog images were not imported because their records in the catalog are incomplete.",
+                "1 originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
+            ]
+        );
+        // an outcome no photo had gets no line
+        let value =
+            json!({"report": {"inCatalog": 3, "collections": 0, "added": 0, "alreadyInLibrary": 3, "inRecentlyDeleted": 0, "notSupported": 0}});
         let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
             panic!("not a Lightroom result")
         };
         assert_eq!(details.len(), 2, "{details:?}");
-        assert!(details[1].starts_with("2 catalog photos are in this library's Recently Deleted"), "{details:?}");
-        let value = json!({"report": {"photos": 3, "collections": 0, "inRecentlyDeleted": 0}});
-        let crate::state::Dialog::LightroomResult { details, .. } = result_dialog(&value, "done", &Default::default()) else {
-            panic!("not a Lightroom result")
-        };
-        assert_eq!(details.len(), 1, "no line when none are: {details:?}");
+        assert!(details[1].starts_with("3 catalog photos were already in this library"), "{details:?}");
+    }
+
+    /// The toast counts the catalog's photos and names each outcome besides the photos added only
+    /// when some photo had it: "nothing happened" was "0 added" (#1584).
+    #[test]
+    fn the_toast_reconciles_the_catalog() {
+        crate::i18n::set_language(crate::i18n::Locale::En);
+        let report = json!({"inCatalog": 45091, "added": 16521, "alreadyInLibrary": 812, "inRecentlyDeleted": 0, "failed": []});
+        assert_eq!(import_summary(&report), "Lightroom import complete. 45091 photos in the catalog: 16521 added, 812 already in the library");
+        let report = json!({"inCatalog": 5, "added": 0, "alreadyInLibrary": 5});
+        assert_eq!(import_summary(&report), "Lightroom import complete. 5 photos in the catalog: 0 added, 5 already in the library");
+        let mut report = every_outcome()["report"].clone();
+        report["failed"] = json!([["/b.ARW", "unreadable"]]);
+        assert_eq!(
+            import_summary(&report),
+            "Lightroom import complete. 8 photos in the catalog: 2 added, 1 already in the library, 1 in Recently Deleted, 2 not supported, \
+             1 on refused paths, 1 incomplete, 1 failed"
+        );
     }
 
     #[test]
@@ -794,6 +899,8 @@ mod tests {
             collection_content: Vec::new(),
             warnings: vec!["warning".into()],
             skipped: Vec::new(),
+            images: 0,
+            not_supported: Default::default(),
         });
         assert_eq!(report["photos"], 0);
         assert_eq!(report["collections"], 0);
