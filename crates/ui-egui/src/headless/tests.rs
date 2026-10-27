@@ -297,11 +297,23 @@ fn stuck(release: &mut Option<std::sync::mpsc::Sender<()>>) -> Headless {
 fn settled_fails_with_what_is_still_busy() {
     let mut release = None;
     let mut h = stuck(&mut release);
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.settled(Duration::from_millis(200), "the stuck task")));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.settled_within(Duration::from_millis(200), "the stuck task")));
     let message = failed.expect_err("a task that never ends can't settle");
     let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
     assert!(message.starts_with("did not settle within 200ms (the stuck task); still busy: "), "{message}");
     assert!(message.contains("background tasks: [\"stuck\"]"), "{message}");
+}
+
+/// `settled` waits at least 120 s whatever timeout a test passes: tests passed short timeouts
+/// back when a timeout was ignored, and a slow runner must not turn them into failures (#3063).
+#[test]
+fn settled_waits_past_a_short_timeout() {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default()), [640.0, 480.0], 1.0);
+    let started = crate::tasks::spawn(&mut h.app, "slow", None, || std::thread::sleep(Duration::from_secs(1)), |_, _, _| {});
+    assert_eq!(started, Ok(()));
+    assert!(h.busy());
+    h.settled(Duration::from_millis(100), "a task that ends after a second");
+    assert!(!h.busy(), "{}", h.busy_description());
 }
 
 /// The description lists what `busy` reads, and an idle session says so and settles.

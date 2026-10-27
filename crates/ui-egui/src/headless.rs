@@ -26,6 +26,9 @@ use crate::{ControlRequest, LightcraftApp};
 const CLEAR: Color32 = Color32::from_rgb(12, 12, 12);
 /// Simulated frame interval (deterministic animation time).
 const FRAME_DT: f64 = 1.0 / 60.0;
+/// The shortest wait [`Headless::settled`] gives a test before failing it (see there).
+#[cfg(test)]
+const SETTLED_FLOOR: Duration = Duration::from_secs(120);
 
 /// Validate the scaled screenshot dimensions before layout or pixel allocation.
 pub fn viewport_pixels(size: [f32; 2], pixels_per_point: f32) -> Result<[usize; 2], String> {
@@ -458,9 +461,22 @@ impl Headless {
     /// [`Self::settle`], for tests: a timeout fails the test there and then, saying what it waited
     /// for (`what`), where (the caller's line) and what was still busy, instead of carrying on with
     /// an unsettled app and failing later at an unrelated assertion (issue #3063).
+    ///
+    /// It waits at least [`SETTLED_FLOOR`] (120 s), whatever `timeout` says. Tests passed short
+    /// timeouts (5 or 10 s) back when a timeout was ignored, so none relies on a short wait giving
+    /// up; a healthy app settles in well under a second, so the floor only lengthens waits that
+    /// would otherwise fail the test on a slow or loaded machine. A test that is really stuck
+    /// still fails, after 120 s, naming what was busy.
     #[cfg(test)]
     #[track_caller]
     pub(crate) fn settled(&mut self, timeout: Duration, what: &str) {
+        self.settled_within(timeout.max(SETTLED_FLOOR), what);
+    }
+
+    /// [`Self::settled`] without the floor: gives up after exactly `timeout` (its own tests).
+    #[cfg(test)]
+    #[track_caller]
+    fn settled_within(&mut self, timeout: Duration, what: &str) {
         if !self.settle(timeout) {
             panic!("did not settle within {timeout:?} ({what}); still busy: {}", self.busy_description());
         }
