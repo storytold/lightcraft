@@ -55,7 +55,7 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
         let _ = tx.send(scan_with(input, &p));
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-sync-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
@@ -270,7 +270,7 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-sync".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));

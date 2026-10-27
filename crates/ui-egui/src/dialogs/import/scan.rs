@@ -69,7 +69,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
         let _ = tx.send(scan_with(input, &paths, &p));
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-import-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
@@ -131,7 +131,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         let _ = tx.send(scan_with(input, &files, &p));
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-browse-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
