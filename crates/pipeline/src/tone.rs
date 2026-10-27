@@ -221,6 +221,20 @@ impl ToneMap {
         ToneMap { lut, chroma: NO_CHROMA }
     }
 
+    /// This map followed by process V3's Whites and Blacks ([`whites_blacks_v3`], −100..100) on
+    /// its display output; above SDR white (an HDR render) values keep their distance from it.
+    pub fn with_whites_blacks_v3(mut self, whites: f64, blacks: f64) -> ToneMap {
+        let (w, b) = ((whites / 100.0).clamp(-1.0, 1.0) as f32, (blacks / 100.0).clamp(-1.0, 1.0) as f32);
+        if w == 0.0 && b == 0.0 {
+            return self;
+        }
+        let top = whites_blacks_v3(1.0, w, b);
+        for o in &mut self.lut {
+            *o = if *o <= 1.0 { whites_blacks_v3(*o, w, b) } else { top + (*o - 1.0) };
+        }
+        self
+    }
+
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
     pub fn lut(&self) -> &[f32] {
         &self.lut
@@ -257,6 +271,46 @@ impl ToneMap {
         let v = self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t;
         if ev < LUT_MIN_EV { v * (y / (GREY * 2f32.powf(LUT_MIN_EV))) } else { v }
     }
+}
+
+/// Process V3's Whites (`w`) and Blacks (`b`), each −1..1, on display-linear luminance `o`
+/// (0..=1), as curves on the sRGB-encoded value `p` that compose (Whites, then Blacks). The shapes
+/// follow black-box measurements of how Lightroom's sliders move exported pixels (issue #523; no
+/// Adobe code, tables or files): Whites reaches down into the midtones, Blacks up to them.
+/// - Whites < 0: `p − 0.13·|w|·p²`, a fixed curve.
+/// - Whites > 0: a gain up to 1 / 0.77 at +100 (strength `w^1.6`), easing in from black so deep
+///   shadows barely move, with a short shoulder that clips the brightest tones.
+/// - Blacks < 0: the black point moves to `0.13·|b| + 0.08·|b|³` (0.21 at −100) with a soft toe.
+/// - Blacks > 0: deep shadows lift by up to 0.17 (at +100; quickly saturating in the amount), the
+///   black end anchored, fading out towards white.
+///
+/// Monotone and finite for every `o` in 0..=1 and `w`, `b` in −1..=1.
+pub fn whites_blacks_v3(o: f32, w: f32, b: f32) -> f32 {
+    use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+    if !o.is_finite() {
+        return 0.0;
+    }
+    let mut p = linear_to_srgb(o.clamp(0.0, 1.0));
+    if w < 0.0 {
+        p -= 0.13 * -w * p * p;
+    } else if w > 0.0 {
+        let g = 1.0 / (1.0 - 0.23 * w.powf(1.6));
+        let q = p * (1.0 + (g - 1.0) * smooth(0.0, 0.3, p));
+        // shoulder: slope 1 at 0.9, flat (and clipped) at 1 from q = 1.1
+        let q = q.min(1.1);
+        p = if q <= 0.9 { q } else { q - (q - 0.9).powi(2) / 0.4 };
+    }
+    if b < 0.0 {
+        let a = -b;
+        let bp = 0.13 * a + 0.08 * a * a * a;
+        let e = 0.02;
+        let soft = |v: f32| ((v - bp) + ((v - bp) * (v - bp) + e * e).sqrt()) * 0.5;
+        p = (soft(p) - soft(0.0)) / (soft(1.0) - soft(0.0));
+    } else if b > 0.0 {
+        let lift = 0.17 * (1.0 - (-3.0 * b).exp()) / (1.0 - (-3.0f32).exp());
+        p += lift * smooth(0.0, 0.08, p) * (1.0 - p).max(0.0).powf(1.25);
+    }
+    srgb_to_linear(p.clamp(0.0, 1.0))
 }
 
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {

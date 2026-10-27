@@ -34,3 +34,4 @@ denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
 lightcraft-testkit = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-raw = { workspace = true }
+naga = { workspace = true }

@@ -279,6 +279,23 @@ fn constants() -> String {
     s
 }
 
+/// Every kernel, with the constants and bindings it is built with, parses and validates: one that
+/// doesn't compile (e.g. reading a parameter field missing from `params::FIELDS`) would otherwise
+/// only show on a machine with a GPU.
+#[cfg(test)]
+#[test]
+fn kernels_compile() {
+    let consts = constants();
+    for m in MODULES {
+        let src = module_source(m, &consts);
+        let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        let mut validator = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
+        if let Err(e) = validator.validate(&module) {
+            panic!("{}", e.emit_to_string(&src));
+        }
+    }
+}
+
 fn module_source(m: &Module, consts: &str) -> String {
     let mut s = String::from(consts);
     s += "@group(0) @binding(0) var<storage, read> P: array<u32>;\n";

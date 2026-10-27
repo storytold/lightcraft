@@ -160,6 +160,8 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// [`tone_shape`] of the settings' process.
+    pub tone_shape: ToneShape,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -229,6 +231,7 @@ impl FinishParams {
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
             sh: (s.light.shadows / 100.0) as f32,
+            tone_shape: tone_shape(s),
             clar,
             tex,
             dehaze,
@@ -268,13 +271,40 @@ impl FinishParams {
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
+    let curve = |whites, blacks| match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Some(curve) => ToneMap::camera_hdr(curve, l.contrast, whites, blacks, peak),
+        None if info.raw => ToneMap::hdr(l.contrast, whites, blacks, peak),
+        None => ToneMap::display_hdr(l.contrast, whites, blacks, peak),
+    };
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
-            Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
-            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
-            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
-        },
+        Process::V1 | Process::V2 => curve(l.whites, l.blacks),
+        // V3: the curves take Contrast only; Whites and Blacks are display-referred curves on
+        // every source (`tone::whites_blacks_v3`)
+        Process::V3 => curve(0.0, 0.0).with_whites_blacks_v3(l.whites, l.blacks),
+    }
+}
+
+/// How Highlights and Shadows (global and local) weigh tones, by the base layer's log2 luminance
+/// over grey `t`: shadows by `(1 − smooth(sh_lo, sh_hi, t))^1.5 · sh_amp`, highlights by
+/// `smooth(hl_lo, hl_hi, t) · hl_amp`, in EV at ±100.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToneShape {
+    pub sh_lo: f32,
+    pub sh_hi: f32,
+    pub sh_amp: f32,
+    pub hl_lo: f32,
+    pub hl_hi: f32,
+    pub hl_amp: f32,
+}
+
+/// The [`ToneShape`] of `s`'s rendering process.
+pub fn tone_shape(s: &DevelopSettings) -> ToneShape {
+    match s.process.process() {
+        Process::V1 | Process::V2 => ToneShape { sh_lo: -4.8, sh_hi: 0.3, sh_amp: 1.7, hl_lo: -1.0, hl_hi: 2.8, hl_amp: 1.7 },
+        // Highlights reaches down to the upper midtones (about L* 40) and Shadows up to them,
+        // with less pull on the deepest tones (issue #523)
+        Process::V3 => ToneShape { sh_lo: -6.0, sh_hi: 1.5, sh_amp: 1.2, hl_lo: -2.3, hl_hi: 3.0, hl_amp: 1.8 },
     }
 }
 
@@ -363,6 +393,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         out_luma,
         hl,
         sh,
+        tone_shape: shape,
         clar,
         tex,
         dehaze,
@@ -375,6 +406,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         grain,
         ..
     } = fp;
+    let shape = *shape;
     let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
         (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
@@ -473,9 +505,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let mut delta = 0.0f32;
             let (hh, ss) = (hl + l_hl, sh + l_sh);
             if hh != 0.0 || ss != 0.0 {
-                let ws = 1.0 - smooth(-4.8, 0.3, base);
-                let wh = smooth(-1.0, 2.8, base);
-                delta += ss * 1.7 * ws * ws.sqrt() + hh * 1.7 * wh;
+                let ws = 1.0 - smooth(shape.sh_lo, shape.sh_hi, base);
+                let wh = smooth(shape.hl_lo, shape.hl_hi, base);
+                delta += ss * shape.sh_amp * ws * ws.sqrt() + hh * shape.hl_amp * wh;
             }
             if l_wh != 0.0 {
                 delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);

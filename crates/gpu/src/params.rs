@@ -23,6 +23,12 @@ const FIELDS: &[(&str, usize)] = &[
     ("AIR_PRE", 1),
     ("HL", 1),
     ("SH", 1),
+    ("SH_LO", 1),
+    ("SH_HI", 1),
+    ("SH_AMP", 1),
+    ("HL_LO", 1),
+    ("HL_HI", 1),
+    ("HL_AMP", 1),
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
@@ -179,6 +185,13 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
     p.f("SH", fp.sh);
+    let shape = &fp.tone_shape;
+    p.f("SH_LO", shape.sh_lo);
+    p.f("SH_HI", shape.sh_hi);
+    p.f("SH_AMP", shape.sh_amp);
+    p.f("HL_LO", shape.hl_lo);
+    p.f("HL_HI", shape.hl_hi);
+    p.f("HL_AMP", shape.hl_amp);
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);
