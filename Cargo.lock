@@ -3570,6 +3570,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-meta",
  "lightcraft-raw",
+ "lightcraft-sysmem",
  "log",
  "proptest",
  "serde",

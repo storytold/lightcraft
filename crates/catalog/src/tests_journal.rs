@@ -286,6 +286,39 @@ fn fs_store_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A library on an SMB share (issue #1407): macOS can't make the full flush there (`F_FULLFSYNC`
+/// fails with ENOTSUP), so the files are flushed with a plain `fsync` and the new library's
+/// snapshot, its log and `prefs.json` are still written.
+#[test]
+fn a_volume_without_a_full_flush_still_gets_its_files() {
+    let dir = std::env::temp_dir().join(format!("lc-journal-nofullsync-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fsyncs = crate::store::plain_fsyncs();
+    let c = {
+        let _smb = crate::store::full_sync_unsupported();
+        let (mut j, mut c, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+        assert!(r.created);
+        assert!(dir.join(SNAPSHOT).exists(), "the new library's snapshot is written");
+        let id = c.alloc_photo_id();
+        let add = Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: "/a.jpg".into() }, "a.jpg", "JPEG", 1, 1, "t")) };
+        c.apply(add.clone()).unwrap();
+        j.append(&[add]).unwrap();
+        j.snapshot(&c).unwrap();
+        let mut s = FsStore::open(&dir).unwrap();
+        s.write_atomic("prefs.json", b"{}").unwrap();
+        s.truncate(LOG, 0).unwrap();
+        // the new library's snapshot, the append, the snapshot and the emptied log, prefs.json, the truncate
+        assert_eq!(crate::store::plain_fsyncs() - fsyncs, 6, "each sync falls back to fsync");
+        c
+    };
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    names.sort();
+    assert_eq!(names, vec![LOG, SNAPSHOT, "prefs.json"], "no temp file left behind");
+    let (_, c2, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    assert_eq!((r.snapshot_seq, c2.to_snapshot()), (1, c.to_snapshot()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The streamed snapshot is byte-for-byte the format written before streaming (issue #37), so
 /// existing libraries load and older builds can read new snapshots; FsStore and MemStore agree.
 #[test]
