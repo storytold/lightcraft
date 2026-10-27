@@ -36,6 +36,22 @@ const NAME_SUFFIX: &str = ".lca";
 const MAX_SCAN: usize = 1024;
 const IO_BUFFER: usize = 16 * 1024;
 
+/// A saved archive. Once it is published it is complete, so cleanup that fails afterwards (a
+/// temporary left behind, an old archive that could not be retired) is reported beside it, not
+/// as a failure to save it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Stored {
+    pub path: PathBuf,
+    /// What could not be cleaned up after the archive was published, if anything.
+    pub cleanup_failed: Option<String>,
+}
+
+impl Stored {
+    fn new(path: PathBuf, problems: Vec<String>) -> Self {
+        Self { path, cleanup_failed: (!problems.is_empty()).then(|| problems.join("; ")) }
+    }
+}
+
 /// Store compact source data below `directory` and return its managed archive.
 ///
 /// The operation is safe to call before catalog mutation.  It rejects a
@@ -44,7 +60,7 @@ const IO_BUFFER: usize = 16 * 1024;
 /// most [`MAX_MANAGED_ARCHIVES`] and [`MAX_TOTAL_ARCHIVE_BYTES`].  Legacy
 /// `lightroom-import-*.json` files are deliberately ignored and preserved for
 /// an explicit caller warning.
-pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> {
+pub fn store(directory: &Path, data: &CatalogImport) -> Result<Stored, String> {
     prepare_directory(directory)?;
     let mut managed = managed_files(directory)?;
     managed.sort_by_key(|entry| entry.index);
@@ -64,11 +80,17 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
             }
         };
         if same {
-            remove_managed_file(&temporary).map_err(|e| e.to_string())?;
+            // the matching archive already exists: what is left is cleanup
+            let mut problems = Vec::new();
+            if let Err(error) = remove_managed_file(&temporary) {
+                problems.push(format!("could not remove the temporary {}: {error}", temporary.display()));
+            }
             let matched = entry.path.clone();
             let mut all = managed.clone();
-            prune_existing(directory, &mut all, Some(&matched))?;
-            return Ok(matched);
+            if let Err(error) = prune_existing(directory, &mut all, Some(&matched)) {
+                problems.push(error);
+            }
+            return Ok(Stored::new(matched, problems));
         }
     }
 
@@ -115,26 +137,33 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
         let _ = remove_managed_file(&temporary);
         return Err(error.to_string());
     }
+    Ok(Stored::new(destination, clean_up_after_publish(&temporary, &quarantined)))
+}
+
+/// Remove the temporary and the quarantined old archives once the new archive is published, and
+/// say what could not be removed. Every removal is tried; none of them can unpublish the archive.
+fn clean_up_after_publish(temporary: &Path, quarantined: &[(PathBuf, PathBuf)]) -> Vec<String> {
+    let mut problems = Vec::new();
     // after a hard link the temporary is a second name of the archive; after the rename fallback it is gone
-    match remove_managed_file(&temporary) {
+    match remove_managed_file(temporary) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => {
-            return Err(format!("archive published but temporary cleanup failed: {error}"));
+            problems.push(format!("could not remove the temporary {}: {error}", temporary.display()));
         }
         _ => {}
     }
     for (old, held) in quarantined {
-        if let Err(error) = remove_managed_file(&held) {
-            return Err(format!("archive published but could not retire {}: {error}", old.display()));
+        if let Err(error) = remove_managed_file(held) {
+            problems.push(format!("could not retire {} (left as {}): {error}", old.display(), held.display()));
         }
     }
-    Ok(destination)
+    problems
 }
 
 /// Store source data when possible. An archive that reaches its bounded size is
 /// omitted with a warning so catalog import can still complete.
-pub fn store_best_effort(directory: &Path, data: &CatalogImport) -> Result<Option<PathBuf>, String> {
+pub fn store_best_effort(directory: &Path, data: &CatalogImport) -> Result<Option<Stored>, String> {
     match store(directory, data) {
-        Ok(path) => Ok(Some(path)),
+        Ok(stored) => Ok(Some(stored)),
         Err(error) if error.contains("Lightroom archive exceeds 32 MiB") => Ok(None),
         Err(error) => Err(error),
     }
@@ -562,8 +591,8 @@ mod tests {
     fn deduplicates_identical_deterministic_archives() {
         let path = tempdir();
         let input = data("catalog.lrcat".into());
-        let first = store(&path, &input).unwrap();
-        let second = store(&path, &input).unwrap();
+        let first = store(&path, &input).unwrap().path;
+        let second = store(&path, &input).unwrap().path;
         assert_eq!(first, second);
         assert_eq!(managed_count(&path), 1);
         fs::remove_dir_all(path).unwrap();
@@ -573,12 +602,12 @@ mod tests {
     fn dedup_returns_archive_that_retention_keeps() {
         let path = tempdir();
         let input = data("catalog.lrcat".into());
-        let first = store(&path, &input).unwrap();
+        let first = store(&path, &input).unwrap().path;
         for index in 1..MAX_MANAGED_ARCHIVES {
             let filler = path.join(format!("lightroom-import-{index}.lca"));
             File::create(filler).unwrap().set_len(19 * 1024 * 1024).unwrap();
         }
-        let reused = store(&path, &input).unwrap();
+        let reused = store(&path, &input).unwrap().path;
         assert_eq!(reused, first);
         assert!(reused.is_file());
         assert!(managed_count(&path) <= MAX_MANAGED_ARCHIVES);
@@ -637,7 +666,7 @@ mod tests {
     #[test]
     fn archive_roundtrips_zlib_payload_and_preserves_numeric_arrays() {
         let path = tempdir();
-        let archive = store(&path, &rich_data()).unwrap();
+        let archive = store(&path, &rich_data()).unwrap().path;
         let bytes = fs::read(archive).unwrap();
         assert!(bytes.starts_with(HEADER));
         let json = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&bytes[HEADER.len()..], MAX_ARCHIVE_BYTES as usize).unwrap();
@@ -689,17 +718,38 @@ mod tests {
         fs::remove_dir_all(path).unwrap();
     }
 
+    /// Cleanup after publishing tries every removal and reports each failure; it never fails the
+    /// archive, which is already published.
+    #[test]
+    fn cleanup_after_publish_reports_what_it_could_not_remove_and_removes_the_rest() {
+        let path = tempdir();
+        let temporary = path.join(".lightroom-import-new.tmp");
+        fs::write(&temporary, b"second name").unwrap();
+        // a held name that is no longer a regular file can't be removed; the next one still is
+        let (stuck, held_stuck) = (path.join("lightroom-import-0.lca"), path.join(".lightroom-retire-test-0.tmp"));
+        let (gone, held_gone) = (path.join("lightroom-import-1.lca"), path.join(".lightroom-retire-test-1.tmp"));
+        fs::create_dir(&held_stuck).unwrap();
+        fs::write(&held_gone, b"old").unwrap();
+        let problems = clean_up_after_publish(&temporary, &[(stuck.clone(), held_stuck.clone()), (gone, held_gone.clone())]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with(&format!("could not retire {} (left as {})", stuck.display(), held_stuck.display())), "{problems:?}");
+        assert!(!temporary.exists() && !held_gone.exists());
+        let stored = Stored::new(path.join("lightroom-import-2.lca"), problems);
+        assert!(stored.cleanup_failed.is_some_and(|note| note.contains("could not retire")));
+        fs::remove_dir_all(path).unwrap();
+    }
+
     /// Issue #3114: a library on exFAT (no hard links) aborted every Lightroom import here.
     #[test]
     fn publishes_on_a_volume_without_hard_links() {
         let path = tempdir();
         let _no_links = lightcraft_catalog::safe_file::without_hard_links();
-        let first = store(&path, &rich_data()).unwrap();
+        let first = store(&path, &rich_data()).unwrap().path;
         assert!(fs::read(&first).unwrap().starts_with(HEADER));
         // retention and dedup still work: a new archive gets the next name, the same data reuses it
-        let second = store(&path, &data("other.lrcat".into())).unwrap();
+        let second = store(&path, &data("other.lrcat".into())).unwrap().path;
         assert_ne!(first, second);
-        assert_eq!(store(&path, &rich_data()).unwrap(), first);
+        assert_eq!(store(&path, &rich_data()).unwrap().path, first);
         let mut names: Vec<_> = fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().file_name()).collect();
         names.sort();
         assert_eq!(names, ["lightroom-import-0.lca", "lightroom-import-1.lca"], "no temporary left behind");

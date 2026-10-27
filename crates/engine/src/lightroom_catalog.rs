@@ -903,7 +903,8 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
     let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let mut index = load_index(index_path.as_deref())?;
-    let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
+    let archive_path =
+        archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map(|stored| stored.path).map_err(error)).transpose()?;
     let undo0 = s.undo.len();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();

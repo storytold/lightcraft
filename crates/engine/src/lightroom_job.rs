@@ -43,7 +43,16 @@ fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate:
     // duplicate virtual copies.
     require_index_folder(dir).map_err(|e| crate::EngineError::Other(format!("cannot import into this library: {e}")))?;
     match crate::lightroom_archive::store_best_effort(dir, data) {
-        Ok(Some(path)) => Ok(Some(path)),
+        Ok(Some(stored)) => {
+            // the archive is saved: the report names it, and the leftover is a warning of its own
+            if let Some(problem) = stored.cleanup_failed {
+                data.warnings.insert(
+                    0,
+                    format!("Lightroom source archive saved as {}, but cleaning up {} failed: {problem}", stored.path.display(), dir.display()),
+                );
+            }
+            Ok(Some(stored.path))
+        }
         Ok(None) => {
             data.warnings.insert(0, "Lightroom source archive exceeded 32 MiB; archive skipped".into());
             Ok(None)
@@ -634,6 +643,34 @@ mod tests {
         assert_eq!(data.warnings.len(), 11);
         assert!(data.warnings[0].starts_with("Lightroom source archive not saved in "), "{}", data.warnings[0]);
         assert!(data.warnings[0].contains(&*interop.to_string_lossy()), "{}", data.warnings[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An archive that is saved but whose cleanup fails afterwards (here an old archive can't be
+    /// retired) is still the import's archive: the report names it, and the cleanup is a warning.
+    #[test]
+    fn a_saved_archive_whose_cleanup_fails_is_reported_with_a_warning() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lr-archive-cleanup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let interop = dir.join("Interop");
+        std::fs::create_dir_all(&interop).unwrap();
+        let mut data = empty_data();
+        // an older archive, then this catalog's, then enough others to retire the older one
+        std::fs::write(interop.join("lightroom-import-0.lca"), b"older").unwrap();
+        let saved = crate::lightroom_archive::store(&interop, &data).unwrap().path;
+        assert_eq!(saved, interop.join("lightroom-import-1.lca"));
+        for i in 2..=crate::lightroom_archive::MAX_MANAGED_ARCHIVES {
+            std::fs::write(interop.join(format!("lightroom-import-{i}.lca")), format!("other {i}")).unwrap();
+        }
+        // retiring the older archive needs this name, which is taken
+        std::fs::write(interop.join(format!(".lightroom-retire-{}-0.tmp", std::process::id())), b"taken").unwrap();
+        assert_eq!(stage_archive(Some(&interop), &mut data).unwrap(), Some(saved.clone()));
+        assert!(saved.is_file());
+        assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
+        let warning = &data.warnings[0];
+        assert!(warning.starts_with(&format!("Lightroom source archive saved as {}, but cleaning up", saved.display())), "{warning}");
+        assert!(warning.contains("retention temporary path already exists"), "{warning}");
+        assert_eq!(std::fs::read(interop.join("lightroom-import-0.lca")).unwrap(), b"older", "the older archive is kept");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
