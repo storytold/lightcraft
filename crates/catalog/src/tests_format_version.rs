@@ -97,6 +97,34 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v9 library with a folder label (a record without `made`) opens as it was and is rewritten in
+/// the current format; a folder made afterwards is saved with it, and an older build (which reads
+/// up to v9) refuses the library instead of reading it without `made`.
+#[test]
+fn v9_library_with_folder_records_is_upgraded_and_the_new_format_is_refused_by_older_builds() {
+    let (mut base, _, _) = legacy_parts();
+    let op = base.folder_label_op("/p", Some(ColorLabel::Red));
+    base.apply(op).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":3,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, Vec::new());
+    let (mut j, mut c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert_eq!(c.folder_color_label("/p"), Some(ColorLabel::Red));
+    assert!(!c.holds_made_folder("/p"), "no folder was made in a v9 library");
+    let made = c.folder_made_op("/p/new");
+    c.apply(made.clone()).unwrap();
+    j.append(&[made]).unwrap();
+    j.snapshot(&c).unwrap();
+    drop(j);
+    let (_, reopened, _) = Journal::open(Box::new(m.clone())).unwrap();
+    assert!(reopened.holds_made_folder("/p/new"));
+    // what a v9 build sees: a snapshot above its VERSION (9), so it stops before reading any of it
+    let v: serde_json::Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(v["version"].as_u64().unwrap() > 9);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();

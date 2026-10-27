@@ -142,7 +142,8 @@
   of the creation removes the folder and its row, Redo brings both back. Renaming or moving the folder in
   LightCraft takes the row along. A folder you rename or delete outside LightCraft keeps its row, empty, like a folder
   whose photos are missing.
-
+  The catalog format is now version 10 (`FolderRecord.made`). Once this version has opened a library, older versions
+  refuse it, as with every format change.
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
