@@ -610,6 +610,8 @@ pub(crate) fn keyword_clip_items(app: &mut LightcraftApp, ui: &mut egui::Ui, key
     }
     if item(ui, "clip:copy", crate::i18n::tr("Copy").to_string(), true).clicked() {
         ui.ctx().copy_text(keywords.join(", "));
+        // the last thing taken is what Paste offers: this is only text, so an earlier Cut is dropped
+        app.ui.side.clip = None;
         app.toast(ui.ctx(), crate::i18n::tr("Copied as text: paste it in a keyword box to give the keywords to photos").to_string());
         ui.close();
     }

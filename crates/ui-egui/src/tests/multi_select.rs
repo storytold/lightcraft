@@ -644,6 +644,23 @@ fn cut_and_paste_nests_keywords_and_copy_puts_them_on_the_clipboard() {
     assert_eq!(picked(&h), vec!["Sel Parent|Sel K1", "Sel Parent|Sel K3"], "still picked, where they are now");
 }
 
+#[test]
+fn copying_keywords_after_a_cut_leaves_nothing_to_paste() {
+    use crate::panels::side_select::SideClip;
+    let (mut h, _ids) = keyword_list();
+    click(&mut h, "keywordRow:Sel K1");
+    right_click(&mut h, "keywordRow:Sel K1");
+    click(&mut h, "sideMenu:clip:cut");
+    assert_eq!(h.app.ui.side.clip, Some(SideClip::Keywords { keywords: vec!["Sel K1".to_string()] }));
+    // the last thing taken is what Paste offers: a Copy is text, so the earlier Cut is dropped
+    right_click(&mut h, "keywordRow:Sel K3");
+    click(&mut h, "sideMenu:clip:copy");
+    assert_eq!(h.app.copied.as_deref(), Some("Sel K3"));
+    assert_eq!(h.app.ui.side.clip, None);
+    right_click(&mut h, "keywordRow:Sel Parent");
+    assert!(!has(&h, "sideMenu:clip:paste"));
+}
+
 // ---- What two independent reviews found
 
 /// A range starts from a row that is chosen: not from an album clicked before All Photos was shown.

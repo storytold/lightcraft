@@ -1337,7 +1337,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Duplicate Album",
             [],
             None,
-            "{id | ids: [albumId], parent?: folderId|null} → {ids: the copies} — a copy of each album (the same photos; a smart album: the same rules; a folder: copies of everything inside it), beside the original as “name copy”, or in `parent` (null: the top level) under its own name; one undo step. Of a folder and an album inside it the folder is copied; one that can't be copied there refuses the whole call",
+            "{id | ids: [albumId], parent?: folderId|null} → {ids: the copies} — a copy of each album (the same photos; a smart album: the same rules; a folder: copies of everything inside it), named “name copy” when it lands in its original's own folder (the default: beside the original), else under its own name in `parent` (null: the top level); one undo step. Of a folder and an album inside it the folder is copied; one that can't be copied there refuses the whole call",
             always,
             duplicate_albums
         ),
