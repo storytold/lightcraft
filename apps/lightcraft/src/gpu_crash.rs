@@ -52,7 +52,7 @@ pub(crate) fn gpu_crash_check_at(marker: Option<std::path::PathBuf>, in_memory: 
 
 pub(crate) fn gpu_crash_notice(what: &str) -> String {
     format!(
-        "LightCraft closed unexpectedly, or the graphics driver stopped responding, while starting the GPU last time ({what}), so GPU rendering is now off and photos render on the CPU. \
+        "LightCraft closed unexpectedly while starting the GPU last time ({what}), so GPU rendering is now off and photos render on the CPU. \
          To try the GPU again, turn on Settings ▸ Performance ▸ Use the GPU for rendering; to try another graphics backend, start LightCraft with \
          LIGHTCRAFT_GPU_BACKEND=dx12, vulkan or off (see docs/gpu-pipeline.md → Troubleshooting)."
     )
