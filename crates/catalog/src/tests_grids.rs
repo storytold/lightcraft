@@ -330,3 +330,35 @@ fn stray_grid_from_a_document_is_not_written_as_a_reference() {
     assert_eq!((seg.data.as_str(), seg.grid), ("", None), "the stray reference is not resolved to photo one's grid");
     assert_eq!(loaded.to_snapshot(), live.to_snapshot());
 }
+
+/// A snapshot whose shared grid table is empty (`grids: []`) but whose masks still refer into
+/// it: the table being empty must not skip the repair. A reference past an empty table is
+/// dangling, so it is cleared (the mask renders nothing, like any other damaged grid), the
+/// repair is reported, and a mask that carries its own grid inline is left untouched.
+#[test]
+fn empty_shared_grid_table_clears_dangling_references() {
+    let (live, _, id, blob) = masked_catalog(1);
+    let inline = live.to_snapshot();
+
+    // a damaged snapshot: an empty table, but the develop mask still refers to entry 0
+    let body = inline.replacen(&format!("\"data\":\"{blob}\""), "\"grid\":0", 1);
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!(
+            "{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[],{} }} }}\n",
+            &body[1..body.len() - 1]
+        )
+        .into_bytes(),
+    );
+    let (_, damaged, report) = open(&m);
+    assert_eq!(report.repaired.len(), 1, "{:?}", report.repaired);
+    assert!(report.repaired[0].contains("pointed past the shared table"), "{:?}", report.repaired);
+    let p = damaged.photo(id).unwrap();
+    let MaskShape::Object { seg: Some(seg), .. } = &p.develop.masks[0].components[0].shape else { panic!("an Object mask") };
+    assert_eq!((seg.data.as_str(), seg.grid), ("", None), "the dangling reference is cleared even with an empty table");
+
+    // the history step carries its grid inline: nothing there to resolve, left as it was
+    let MaskShape::Object { seg: Some(seg), .. } = &p.history[0].settings.masks[0].components[0].shape else { panic!("an Object mask") };
+    assert_eq!(seg.data, blob, "the history step's inline grid is untouched");
+}

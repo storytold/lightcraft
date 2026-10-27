@@ -1217,19 +1217,18 @@ impl Catalog {
         // reference takes its grid's data, and the table is not kept — a live catalog always
         // stores the data inline, so masks render and serialize without the snapshot's table.
         // Resolving is the normal way a snapshot in this format reads (not reported); a
-        // reference past the table is damage and is reported.
-        if !self.grids.is_empty() {
-            let grids = std::mem::take(&mut self.grids);
-            let mut dangling = 0usize;
-            for p in self.photos.values_mut() {
-                let photo = Arc::make_mut(p);
-                for settings in photo.settings_holders_mut() {
-                    dangling = resolve_grids(settings, &grids, dangling);
-                }
+        // reference past the table is damage and is reported — that includes a reference into
+        // an empty table, which is always dangling, so the table being empty does not skip it.
+        let grids = std::mem::take(&mut self.grids);
+        let mut dangling = 0usize;
+        for p in self.photos.values_mut() {
+            let photo = Arc::make_mut(p);
+            for settings in photo.settings_holders_mut() {
+                dangling = resolve_grids(settings, &grids, dangling);
             }
-            if dangling > 0 {
-                changed.push(format!("{dangling} segmentation grid reference(s) pointed past the shared table: cleared"));
-            }
+        }
+        if dangling > 0 {
+            changed.push(format!("{dangling} segmentation grid reference(s) pointed past the shared table: cleared"));
         }
         for (id, p) in self.photos.iter_mut() {
             if p.id != *id {
