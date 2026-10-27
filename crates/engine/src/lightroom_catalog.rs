@@ -1039,6 +1039,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         albums.insert(number(collection, "id_local"), id);
     }
     let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let sets: HashSet<_> = data
+        .collections
+        .iter()
+        .filter(|r| text(r, "creationId").contains("group") && albums.contains_key(&number(r, "id_local")))
+        .map(|r| number(r, "id_local"))
+        .collect();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
     for member in &data.members {
         grouped_members.entry(number(member, "collection")).or_default().push(member);
@@ -1059,8 +1065,19 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     for collection in ordered {
         let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
         let mut album = Album::new(id, text(collection, "name"));
-        album.parent = albums.get(&number(collection, "parent")).copied();
         album.folder = text(collection, "creationId").contains("group");
+        // Lightroom Classic can save a print, book or slideshow inside a plain collection, but an album only nests
+        // in a folder: such a child joins the nearest collection set above it.
+        let mut at = number(collection, "parent");
+        let mut depth = 0;
+        while at != 0 && depth < 64 && !sets.contains(&at) {
+            depth += 1;
+            at = parents.get(&at).copied().unwrap_or(0);
+        }
+        album.parent = albums.get(&at).copied();
+        if album.parent != albums.get(&number(collection, "parent")).copied() {
+            warnings.push(format!("{}: was inside a collection, imported into the collection set above it", album.name));
+        }
         if text(collection, "creationId").contains("smart") {
             warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
         }

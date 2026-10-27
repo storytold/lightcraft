@@ -158,6 +158,21 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
 }
 #[test]
+fn creation_saved_inside_a_collection_joins_the_nearest_set() {
+    // Lightroom Classic can save a print or book inside a plain collection; LightCraft albums only nest in folders.
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Print","creationId":"com.adobe.ag.print"})));
+    data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 3);
+    let travel = s.catalog.albums().find(|a| a.name == "Travel").unwrap().id;
+    let print = s.catalog.albums().find(|a| a.name == "Print").unwrap();
+    assert_eq!(print.parent, Some(travel));
+    assert_eq!(print.photos.len(), 1);
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.contains("Print"))));
+}
+#[test]
 fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     let mut s = crate::Session::new();
     let data = sample();
