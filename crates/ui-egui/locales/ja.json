@@ -2428,6 +2428,10 @@
   "Reduce Motion": "動きを減らす",
   "Reduce motion": "動きを減らす",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。",
+  "Increase Contrast": "コントラストを上げる",
+  "Increase contrast": "コントラストを上げる",
+  "Makes borders, separators and text stand out more in every theme.": "すべてのテーマで、境界線、区切り線、テキストをより際立たせます。",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "すべてのテーマで、境界線、区切り線、テキストをより際立たせます。ここで変更するまで、システムの「コントラストを上げる」設定に従います。",
   "Use the system setting": "システム設定に従う",
   "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。"
 }

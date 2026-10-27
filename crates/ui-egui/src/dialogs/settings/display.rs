@@ -98,6 +98,26 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
             app.ui.settings.reduce_motion = None;
         }
     });
+    let mut increase = app.increase_contrast();
+    let has_system = app.system_increase_contrast_available();
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(&mut increase, crate::i18n::tr("Increase contrast"));
+        register(ui, "check:settings.increaseContrast".to_string(), r.rect);
+        if r.changed() {
+            app.ui.settings.increase_contrast = Some(increase);
+        }
+        r.on_hover_text(crate::i18n::tr(if has_system {
+            "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here."
+        } else {
+            "Makes borders, separators and text stand out more in every theme."
+        }));
+        if has_system
+            && app.ui.settings.increase_contrast.is_some()
+            && crate::widgets::text_button(ui, "settings.increaseContrastFollow", "Use the system setting", false).clicked()
+        {
+            app.ui.settings.increase_contrast = None;
+        }
+    });
     heading(ui, t, crate::i18n::tr("Filmstrip"));
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");

@@ -211,6 +211,10 @@ pub struct AppSettings {
     /// (`view.reduceMotion`; see [`crate::motion`]). `None`: follow the system's Reduce Motion until
     /// the user chooses.
     pub reduce_motion: Option<bool>,
+    /// Settings ▸ Interface ▸ Increase contrast: stronger borders, separators and text in every theme
+    /// (`view.increaseContrast`; see [`crate::increase_contrast`]). `None`: follow the system's
+    /// Increase Contrast until the user chooses.
+    pub increase_contrast: Option<bool>,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -265,6 +269,7 @@ impl Default for AppSettings {
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
             reduce_motion: None,
+            increase_contrast: None,
         }
     }
 }

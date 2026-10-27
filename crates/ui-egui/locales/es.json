@@ -2430,6 +2430,10 @@
   "Reduce Motion": "Reducir movimiento",
   "Reduce motion": "Reducir movimiento",
   "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen. Sigue el ajuste Reducir movimiento del sistema hasta que lo cambies aquí.",
+  "Increase Contrast": "Aumentar contraste",
+  "Increase contrast": "Aumentar contraste",
+  "Makes borders, separators and text stand out more in every theme.": "Hace que los bordes, los separadores y el texto destaquen más en todos los temas.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Hace que los bordes, los separadores y el texto destaquen más en todos los temas. Sigue el ajuste Aumentar contraste del sistema hasta que lo cambies aquí.",
   "Use the system setting": "Usar el ajuste del sistema",
   "Turns off zoom and spinner animations. Fades stay.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen."
 }

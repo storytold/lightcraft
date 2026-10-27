@@ -250,6 +250,7 @@ fn services(
         pick_display_profile: None,
         screen_profile: None,
         system_reduce_motion: None,
+        system_increase_contrast: None,
         backup_library: Some(Box::new(move |session: &mut Session| {
             let Some(b) = backup_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             if let Some(why) = crate::backup::unsaved_refusal(session.unsaved()) {

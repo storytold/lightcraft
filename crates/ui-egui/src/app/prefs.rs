@@ -27,13 +27,37 @@ impl LightcraftApp {
         self.system_reduce_motion = read();
     }
 
+    /// Whether contrast is increased: the user's choice, else the system's Increase Contrast (off when unknown).
+    pub fn increase_contrast(&self) -> bool {
+        self.ui.settings.increase_contrast.unwrap_or(self.system_increase_contrast.unwrap_or(false))
+    }
+
+    /// Whether there is a system Increase Contrast to follow: a reader that has answered.
+    pub(crate) fn system_increase_contrast_available(&self) -> bool {
+        self.services.system_increase_contrast.is_some() && self.system_increase_contrast.is_some()
+    }
+
+    /// Read the system's Increase Contrast (`services.system_increase_contrast`) at most once a second.
+    fn follow_system_increase_contrast(&mut self) {
+        let now = self.tick_now();
+        if self.system_increase_contrast_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+            return;
+        }
+        let Some(read) = self.services.system_increase_contrast.as_mut() else { return };
+        self.system_increase_contrast_read = Some(now);
+        self.system_increase_contrast = read();
+    }
+
     /// Restyle `ctx` when the theme the settings select (Appearance Mode, the dark and light
     /// themes, the system's appearance in Auto) is not the one it shows. A no-op otherwise.
     pub fn sync_theme(&mut self, ctx: &egui::Context) {
         self.follow_system_reduce_motion();
         crate::motion::sync(ctx, self.reduce_motion());
+        self.follow_system_increase_contrast();
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
-        if theme::current(ctx) != Some(wanted) {
+        let increased = self.increase_contrast();
+        if theme::current(ctx) != Some(wanted) || crate::increase_contrast::increased(ctx) != increased {
+            crate::increase_contrast::set(ctx, increased);
             theme::apply_kind(ctx, wanted);
         }
     }
