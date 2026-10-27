@@ -848,6 +848,57 @@ fn persistent_reimport_keeps_copy_and_collection_ids_and_capture_time() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Issue #3114: a library on exFAT (no hard links) aborted every import when saving the archive.
+#[test]
+fn imports_into_a_library_on_a_volume_without_hard_links() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-no-hard-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+    let report = import(&mut s, &source, false).unwrap();
+    assert_eq!(report["imported"], 1);
+    assert_eq!(report["warnings"], json!([]));
+    let archive = Path::new(report["archive"].as_str().unwrap());
+    assert_eq!(archive, library.join("Interop").join("lightroom-import-0.lca"));
+    assert!(std::fs::read(archive).unwrap().starts_with(b"LC-LRARCH"));
+    assert!(library.join("Interop").join("lightroom-index.json").is_file());
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The recovery archive is best-effort: when it can't be saved (here `Interop` is a symlink, which
+/// the archive refuses) the import still goes on, with a warning naming the folder.
+#[cfg(unix)]
+#[test]
+fn an_archive_that_cannot_be_saved_warns_and_the_import_proceeds() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-archive-refused-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog(&photo_tables((dir.join("offline").to_str().unwrap(), "")))).unwrap();
+    let library = dir.join("library");
+    let mut s = crate::Session::new();
+    s.open_library(&library, false).unwrap();
+    let interop = library.join("Interop");
+    std::os::unix::fs::symlink(dir.join("elsewhere"), &interop).unwrap();
+    let report = import(&mut s, &source, false).unwrap();
+    assert_eq!(report["imported"], 1);
+    assert_eq!(report["archive"], Value::Null);
+    let warnings = report["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap().starts_with(&format!("Lightroom source archive not saved in {}", interop.display()))),
+        "{warnings:?}"
+    );
+    assert!(dir.join("elsewhere").join("lightroom-index.json").is_file(), "re-import mapping is still saved");
+    s.close_library().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // Construct a small SQLite fixture from public file-format records, never private media.
 fn varint(mut n: u64) -> Vec<u8> {
     let mut out = vec![(n & 127) as u8];

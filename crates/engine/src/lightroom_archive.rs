@@ -115,8 +115,12 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
         let _ = remove_managed_file(&temporary);
         return Err(error.to_string());
     }
-    if let Err(error) = remove_managed_file(&temporary) {
-        return Err(format!("archive published but temporary cleanup failed: {error}"));
+    // after a hard link the temporary is a second name of the archive; after the rename fallback it is gone
+    match remove_managed_file(&temporary) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+            return Err(format!("archive published but temporary cleanup failed: {error}"));
+        }
+        _ => {}
     }
     for (old, held) in quarantined {
         if let Err(error) = remove_managed_file(&held) {
@@ -420,11 +424,10 @@ fn rollback_quarantine(moved: &[(PathBuf, PathBuf)]) {
     }
 }
 
+/// Never replaces an existing archive (`AlreadyExists`), also on a volume without hard links.
 fn publish_new(temporary: &Path, destination: &Path) -> io::Result<()> {
-    match fs::hard_link(temporary, destination) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(io::Error::new(error.kind(), format!("cannot atomically publish archive: {error}"))),
-    }
+    lightcraft_catalog::safe_file::publish_new(temporary, destination)
+        .map_err(|error| io::Error::new(error.kind(), format!("cannot publish archive {}: {error}", destination.display())))
 }
 
 fn remove_managed_file(path: &Path) -> io::Result<()> {
@@ -684,6 +687,44 @@ mod tests {
         let entry = Managed { index: 0, path: old.clone(), size: 11 };
         assert!(quarantine(&[entry]).is_err());
         assert_eq!(fs::read(&old).unwrap(), b"old archive");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Issue #3114: a library on exFAT (no hard links) aborted every Lightroom import here.
+    #[test]
+    fn publishes_on_a_volume_without_hard_links() {
+        let path = tempdir();
+        let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+        let first = store(&path, &rich_data()).unwrap();
+        assert!(fs::read(&first).unwrap().starts_with(HEADER));
+        // retention and dedup still work: a new archive gets the next name, the same data reuses it
+        let second = store(&path, &data("other.lrcat".into())).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(store(&path, &rich_data()).unwrap(), first);
+        let mut names: Vec<_> = fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        names.sort();
+        assert_eq!(names, ["lightroom-import-0.lca", "lightroom-import-1.lca"], "no temporary left behind");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn publishing_without_hard_links_never_replaces_an_existing_archive() {
+        let path = tempdir();
+        let existing = path.join("lightroom-import-0.lca");
+        let temporary = path.join(".lightroom-import-new.tmp");
+        fs::write(&existing, b"old archive").unwrap();
+        fs::write(&temporary, b"new archive").unwrap();
+        let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+        let error = publish_new(&temporary, &existing).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(error.to_string().contains("lightroom-import-0.lca"), "{error}");
+        assert_eq!(fs::read(&existing).unwrap(), b"old archive");
+        assert_eq!(fs::read(&temporary).unwrap(), b"new archive", "the temporary is kept for the caller to remove");
+        // a free name takes the fallback: the temporary is renamed (a hard link would leave it in place)
+        let fresh = path.join("lightroom-import-1.lca");
+        publish_new(&temporary, &fresh).unwrap();
+        assert_eq!(fs::read(&fresh).unwrap(), b"new archive");
+        assert!(!temporary.exists(), "published by rename, not by a hard link");
         fs::remove_dir_all(path).unwrap();
     }
 }

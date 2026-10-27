@@ -30,12 +30,21 @@ fn cancelled() -> crate::EngineError {
     crate::EngineError::Cancelled(error("Lightroom import cancelled").to_string())
 }
 
+/// Save the recovery archive. It is best-effort: nothing reads it back during import, so a folder
+/// it can't be written to costs the archive (with a warning naming the folder), not the import.
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
-    let archive_path = archive_dir.map(|dir| crate::lightroom_archive::store_best_effort(dir, data).map_err(error)).transpose()?.flatten();
-    if archive_dir.is_some() && archive_path.is_none() {
-        data.warnings.push("Lightroom source archive exceeded 32 MiB; archive skipped".into());
+    let Some(dir) = archive_dir else { return Ok(None) };
+    match crate::lightroom_archive::store_best_effort(dir, data) {
+        Ok(Some(path)) => Ok(Some(path)),
+        Ok(None) => {
+            data.warnings.push("Lightroom source archive exceeded 32 MiB; archive skipped".into());
+            Ok(None)
+        }
+        Err(e) => {
+            data.warnings.push(format!("Lightroom source archive not saved in {}: {e}; archive skipped", dir.display()));
+            Ok(None)
+        }
     }
-    Ok(archive_path)
 }
 
 /// Memory identity of the library which owns a prepared completion.
@@ -117,7 +126,8 @@ impl LightroomArchiveFinalization {
         if bytes.len() > MAX_INDEX_BYTES {
             return Err(error("Lightroom import index exceeds 16 MiB"));
         }
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))
+        lightcraft_catalog::safe_file::write_atomic(&path, &bytes)
+            .map_err(|e| crate::EngineError::Other(format!("could not write the Lightroom import index {}: {e}", path.display())))
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -562,6 +572,31 @@ mod tests {
         );
         assert_eq!(session.catalog.len(), 5_000);
         std::fs::remove_dir_all(archive_dir).unwrap();
+    }
+
+    /// The archive is best-effort: a folder it can't be written to costs the archive, not the import.
+    #[test]
+    fn an_archive_that_cannot_be_written_is_a_warning_naming_its_folder() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lr-archive-unwritable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let interop = dir.join("Interop");
+        std::fs::write(&interop, b"a file where the folder belongs").unwrap();
+        let mut data = empty_data();
+        assert_eq!(stage_archive(Some(&interop), &mut data).unwrap(), None);
+        assert_eq!(data.warnings.len(), 1);
+        assert!(data.warnings[0].starts_with("Lightroom source archive not saved in "), "{}", data.warnings[0]);
+        assert!(data.warnings[0].contains(&*interop.to_string_lossy()), "{}", data.warnings[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A failed index write is an I/O error naming the file, not "invalid parameters".
+    #[test]
+    fn an_index_write_failure_names_the_index_file() {
+        let path = std::env::temp_dir().join(format!("lightcraft-lr-index-missing-{}", std::process::id())).join("lightroom-index.json");
+        let e = LightroomArchiveFinalization { path: Some(path.clone()), bytes: Some(b"{}".to_vec()) }.finish().unwrap_err();
+        assert!(matches!(e, crate::EngineError::Other(_)), "{e:?}");
+        assert!(e.to_string().starts_with(&format!("could not write the Lightroom import index {}", path.display())), "{e}");
     }
 
     #[test]
