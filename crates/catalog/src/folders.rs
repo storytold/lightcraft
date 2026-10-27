@@ -3,8 +3,8 @@
 //! A *folder* here is a folder holding at least one photo of the library (imported, not deleted,
 //! not merely browsed in Local; demo scenes have no folder). The tree lists those folders and the
 //! ones above them, with how many photos each holds — its subfolders included, like a year in By
-//! Date counts its months — and also the folders made through LightCraft, empty or not (see
-//! below), but no other folder that holds nothing of the library.
+//! Date counts its months. The folders made through LightCraft are listed too, empty or not, with
+//! the folders above them (see below); no other folder that holds nothing of the library is.
 //!
 //! Every folder is a row of its own, the ones above the imported photos included
 //! (`/Users` → `me` → `Pictures`), so a row is exactly the folder it names. A folder spelled two
