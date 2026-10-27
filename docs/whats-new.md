@@ -38,6 +38,11 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### One Enter Full Screen row in the macOS View menu
+- On macOS the View menu showed two "Enter Full Screen" rows: LightCraft's and the one macOS adds itself (not with
+  LightCraft in German). Now there is one, LightCraft's. It reads "Exit Full Screen" while the window is full screen
+  and uses the system's key, ⌃⌘F, instead of ⇧⌘F. Windows and Linux are unchanged (⇧Ctrl+F).
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

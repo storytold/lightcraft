@@ -301,8 +301,10 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
         };
         // `Ctrl` is the physical Control key (on macOS distinct from Cmd; elsewhere Cmd = Ctrl);
         // "Delete" (⌫ = Backspace) also matches forward-delete
-        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || modifiers.command };
-        let cmd_ok = m.ctrl || modifiers.command == m.command;
+        // and a Ctrl+Cmd binding (⌃⌘F) wants both keys; on macOS ⌃⌘F is not ⌘F with Control held (there
+        // `mac_cmd` is ⌘, and Control held is no ⌘)
+        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || (modifiers.command && !modifiers.mac_cmd) };
+        let cmd_ok = if m.ctrl { !m.command || modifiers.command } else { modifiers.command == m.command };
         // winit can report shifted digits as punctuation (Shift+1 = `!`). Recognize the
         // physical number key for culling, without changing layout-aware letter shortcuts.
         let shifted_digit = m.shift

@@ -35,6 +35,24 @@ fn select_only_active_chord(h: &mut crate::headless::Headless) {
     assert_eq!(r["ok"], true, "{r}");
 }
 
+/// On macOS ⌃⌘F (window full screen) is not ⌘F (Find) with Control held, and a bare ⌃F is not
+/// window full screen: Control counts as Command only where Ctrl *is* Command (Windows, Linux).
+/// The menu bar takes both keys itself; this is what the handler does when it gets them (no native
+/// menu, `LIGHTCRAFT_NO_NATIVE_MENU`).
+#[cfg(target_os = "macos")]
+#[test]
+fn control_command_f_is_window_full_screen_and_not_find_and_control_f_is_nothing() {
+    let mut h = library();
+    let t = std::time::Duration::from_secs(20);
+    h.request("ui.key", json!({"key": "f", "ctrl": true}), t);
+    h.step();
+    assert!(!h.app.window_is_fullscreen, "⌃F alone is not window full screen");
+    h.request("ui.key", json!({"key": "f", "cmd": true, "ctrl": true}), t);
+    h.step();
+    assert!(h.app.window_is_fullscreen, "⌃⌘F is");
+    assert!(!h.app.ui.focus_search && !h.app.text_focus, "and it doesn't also run Find (⌘F)");
+}
+
 #[test]
 fn select_only_active_keeps_the_active_photo_and_the_edit_undo_step() {
     use crate::state::ViewMode;
