@@ -20,14 +20,11 @@ use crate::lightroom_catalog::{self, CatalogImport, ImportIndex};
 const COMMAND: &str = "library.importLightroom";
 const MAX_INDEX_BYTES: usize = 16 * 1024 * 1024;
 
-fn error(message: impl Into<String>) -> crate::EngineError {
-    crate::EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
-}
-
 /// The import was cancelled ([`crate::ErrorKind::Cancelled`]: not a failure). The message is the
 /// one it always had, so control-channel and MCP clients see the same `error` text.
 fn cancelled() -> crate::EngineError {
-    crate::EngineError::Cancelled(error("Lightroom import cancelled").to_string())
+    let message = crate::EngineError::BadParams { cmd: COMMAND.into(), msg: "Lightroom import cancelled".into() };
+    crate::EngineError::Cancelled(message.to_string())
 }
 
 /// Save the recovery archive. It is best-effort: nothing reads it back during import, so an archive
@@ -168,7 +165,7 @@ impl LightroomArchiveFinalization {
     pub fn finish(self) -> crate::Result<()> {
         let (Some(path), Some(bytes)) = (self.path, self.bytes) else { return Ok(()) };
         if bytes.len() > MAX_INDEX_BYTES {
-            return Err(error("Lightroom import index exceeds 16 MiB"));
+            return Err(crate::EngineError::Other(format!("could not write the Lightroom import index {}: it exceeds 16 MiB", path.display())));
         }
         let failed =
             |e: &dyn std::fmt::Display| crate::EngineError::Other(format!("could not write the Lightroom import index {}: {e}", path.display()));
@@ -300,10 +297,10 @@ impl LightroomJob {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
+        // (reading stops when `cancel` is set: the flag says it was cancelled; a catalog that can't be
+        // read is an error naming it, and a bad record is skipped, not an error)
         let mut data = lightroom_catalog::read_with_progress(&self.path, cancel, &self.progress.catalog_total, &self.progress.catalog_done)
-            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
-        lightroom_catalog::validate_for_job(&data).map_err(error)?;
+            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { e })?;
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
@@ -344,7 +341,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     }
     if !prepared.token.matches(s) {
         prepared.normal.rollback();
-        return Err(error("Lightroom import belongs to a different open library"));
+        return Err(crate::EngineError::Other("Lightroom import belongs to a different open library".into()));
     }
     // A command-scoped Lightroom import must never rewrite source XMP sidecars.  Direct depth-0
     // callers do not set this transient flag, so they cannot affect a later command.
@@ -370,7 +367,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
         },
     )?;
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
-    let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
+    let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| crate::EngineError::Other(e.to_string()))?) } else { None };
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
 }
 
@@ -538,6 +535,9 @@ mod tests {
         assert_eq!(e.to_string(), "invalid parameters for `library.importLightroom`: Lightroom import cancelled");
         let Err(e) = job.prepare(&AtomicBool::new(false)) else { panic!("no such catalog") };
         assert_ne!(e.kind(), crate::ErrorKind::Cancelled, "{e}");
+        // a catalog that can't be read is not "invalid parameters": the error names it
+        assert_eq!(e.kind(), crate::ErrorKind::Other, "{e}");
+        assert!(e.to_string().starts_with("the Lightroom catalog /nonexistent/cancelled.lrcat can't be read: "), "{e}");
     }
 
     #[test]
