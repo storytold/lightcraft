@@ -461,6 +461,120 @@ fn contradictory_images_are_skipped_and_the_rest_imports() {
     assert_eq!(s.undo.len(), 1);
 }
 
+/// A second image with an id already used must not take the first one, or its virtual copy, with
+/// it: refusing its original, or finding its file record gone, used to drop every image with that id.
+#[test]
+fn a_duplicate_image_id_costs_only_the_duplicate() {
+    let mut data = sample();
+    let mut planted = data.photos[1].clone();
+    planted.uuid = "planted".into();
+    planted.path = "/Users/sky/Downloads/payload.exe".into();
+    data.photos.push(planted);
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "the first image with id 1 and its copy: {r}");
+    assert_eq!(r["skipped"], json!([{"image": 1, "reason": "duplicateId"}]));
+    assert!(!r["warnings"].to_string().contains("payload.exe"), "the duplicate is skipped before its original is looked at: {r}");
+    assert!(s.catalog.photos().all(|p| source_path(p) == Some("/missing/test.ARW")));
+    assert_eq!(s.catalog.photos().filter(|p| p.copy_of.is_some()).count(), 1);
+
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    for (duplicate_file, case) in [(2, "a refused file type"), (9, "no file record")] {
+        let mut tables = one_row(photo_tables(("/catalog/", "")));
+        tables[2].2.push(vec![N, I(1), T("payload.exe".into())]);
+        tables[3] = (
+            "Adobe_images",
+            "id_local INTEGER PRIMARY KEY, id_global, rootFile, masterImage, fileFormat, fileWidth, fileHeight, rating, pick",
+            vec![
+                vec![N, T("master".into()), I(1), N, T("ARW".into()), I(20), I(10), I(5), I(1)],
+                vec![N, T("copy".into()), I(1), I(1), T("ARW".into()), I(20), I(10), I(3), I(0)],
+                vec![I(1), T("duplicate".into()), I(duplicate_file), N, T("ARW".into()), I(20), I(10), I(0), I(0)],
+            ],
+        );
+        let catalog = read_tables(&tables, &format!("duplicate-{duplicate_file}"));
+        let read: Vec<_> = catalog.photos.iter().map(|p| (p.source_id, p.uuid.as_str())).collect();
+        assert_eq!(read, [(1, "master"), (2, "copy")], "{case}");
+        assert_eq!(catalog.skipped, [SkippedImage { image: 1, reason: SkipReason::DuplicateId }], "{case}");
+        assert!(catalog.warnings.is_empty(), "{case}: {:?}", catalog.warnings);
+        let mut s = crate::Session::new();
+        let r = apply(&mut s, catalog, false).unwrap();
+        assert_eq!(r["photos"], 2, "{case}: {r}");
+        assert_eq!(s.catalog.photos().filter(|p| p.copy_of.is_some()).count(), 1, "{case}");
+    }
+}
+
+/// A capture time that isn't a date used to fail the whole metadata batch at `SetCaptured` on the
+/// first import that met the photo as a record (a reimport); it is left out with a warning.
+#[test]
+fn a_capture_time_that_is_not_a_date_is_left_out() {
+    let mut data = sample();
+    let mut other = data.photos[1].clone();
+    other.source_id = 3;
+    other.uuid = "other".into();
+    other.path = "/missing/other.ARW".into();
+    other.image = row(json!({"id_local": 3, "fileFormat": "ARW", "captureTime": "broken"}));
+    data.photos.push(other);
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    let missing_sources = HashSet::new();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        let context = ApplyPrepared {
+            update_existing: true,
+            files: Default::default(),
+            index: &mut index,
+            archive_path: None,
+            missing_sources: &missing_sources,
+            undo0,
+        };
+        apply_prepared(s, data.clone(), context).unwrap().report
+    };
+    let first = import(&mut s);
+    assert_eq!(first["photos"], 3, "{first}");
+    let warning = "image 3: capture time “broken” is not a date; imported without it";
+    assert!(first["warnings"].as_array().unwrap().iter().any(|w| w == warning), "{first}");
+    let captured = |s: &crate::Session, image: &str| s.catalog.photo(PhotoId(first["mapping"][image].as_u64().unwrap())).unwrap().captured.clone();
+    assert_eq!(captured(&s, "3"), None);
+    assert_eq!(captured(&s, "1").as_deref(), Some("2024-01-16T12:34:56"), "the rest of the batch stands");
+    assert_eq!(s.catalog.albums().count(), 2);
+    let second = import(&mut s);
+    assert_eq!(second["mapping"], first["mapping"], "the reimport updates the same records: {second}");
+    assert_eq!(second["imported"], 0);
+
+    // a record an earlier version stored with that time keeps it, and the import goes on
+    let mut s = crate::Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut old = Photo::new(id, Source::File { path: "/missing/other.ARW".into() }, "other.ARW", "ARW", 20, 10, "before");
+    old.captured = Some("broken".into());
+    s.commit("Earlier import", Op::AddPhoto { photo: Box::new(old) }).unwrap();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["mapping"]["3"], id.0, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+    assert_eq!(s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
+}
+
+/// Two collections with one id used to stage two albums with one id, failing the import: the first
+/// is kept, and the photos listed under the id go to it.
+#[test]
+fn a_duplicate_collection_id_costs_only_the_duplicate() {
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local": 10, "parent": 0, "name": "Rejects", "creationId": "collection"})));
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2);
+    assert_eq!(r["collections"], 2, "{r}");
+    let names: Vec<_> = s.catalog.albums().map(|a| a.name.clone()).collect();
+    assert!(names.contains(&"Keepers".to_string()) && !names.contains(&"Rejects".to_string()), "{names:?}");
+    let keepers = s.catalog.albums().find(|a| a.name == "Keepers").unwrap();
+    assert_eq!(keepers.photos.len(), 2);
+    assert!(keepers.parent.is_some(), "the first row's place is kept");
+    assert_eq!(
+        r["warnings"],
+        json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
+    );
+    assert_eq!(s.undo.len(), 1);
+}
+
 /// A looping (or too deep) collection hierarchy used to fail the whole import: it is cut at the
 /// loop's oldest collection, which goes to the top level with a warning.
 #[test]

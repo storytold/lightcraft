@@ -67,13 +67,16 @@ One bad record costs that record, not the import (issue #1588). An image whose f
 record is gone from the catalog, or whose original path is empty (Lightroom leaves these behind and ignores them),
 is skipped together with its virtual copies. So are the contradictory records of a damaged catalog: a second
 image with an id an earlier image has (the first is imported), and a virtual copy whose master is not in the
-catalog or is itself a virtual copy. The result lists them as data (`skipped`: each image id with its reason,
+catalog or is itself a virtual copy. A duplicate is left out before anything else looks at it, so it can't take
+the first image's records or virtual copies with it. The result lists them as data (`skipped`: each image id with its reason,
 `missingFile`, `missingFolder`, `missingRoot`, `incompletePath`, `masterSkipped`, `missingMaster`,
 `masterIsCopy` or `duplicateId`), also in `library.inspectLightroom`, and the desktop result window says how many
 in the UI language (one line for incomplete records, one for contradictory ones). A keyword or collection
 hierarchy that loops, or is nested more than 64 levels deep, is cut with a warning instead of failing the import:
 a keyword keeps its path up to where the loop comes back, and a collection loop is cut at its oldest collection
-(the lowest id), which is imported at the top level.
+(the lowest id), which is imported at the top level. A second collection with the id of an earlier one is left out
+with a warning naming both; the photos the catalog lists under that id go to the first. A capture time that isn't a
+date is left out with a warning naming the image, which imports without it.
 
 Only a catalog that can't be read at all still fails the import, before anything changes, with an error that
 names the file and says what is wrong, not "invalid parameters": "the Lightroom catalog … can't be read: …" (it
