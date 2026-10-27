@@ -1,7 +1,7 @@
-use crate::menu_item::MenuItem;
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
 use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
+use crate::menu_item::MenuItem;
 
 // ---------------------------------------------------------------------------------- Interface
 

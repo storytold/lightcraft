@@ -1,9 +1,9 @@
 use super::hdr_flow::{LayoutFlow, hdr_histogram_key, sdr_histogram_key};
-use crate::menu_item::MenuItem;
 use super::{
     Align2, Color32, Histogram, Icon, LightcraftApp, PhotoId, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, divider, json, paint, pos2,
     register, vec2,
 };
+use crate::menu_item::MenuItem;
 
 // ------------------------------------------------------------------------------ histogram
 

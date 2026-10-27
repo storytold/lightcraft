@@ -1,8 +1,8 @@
-use crate::menu_item::MenuItem;
 use super::albums::pointer_over_row;
 use super::local::{is_builtin_place, same_folder, subfolders};
 use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
-use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
+use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, vec2};
+use crate::menu_item::MenuItem;
 
 /// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
 /// subfolders. In the tree that holds the folder being browsed (`reveal`), the folders on the

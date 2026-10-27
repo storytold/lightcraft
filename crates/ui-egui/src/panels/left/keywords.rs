@@ -1,7 +1,7 @@
-use crate::menu_item::MenuItem;
 use super::dates::browse_all_photos;
 use super::rows::{INDENT_STEP, Row, out_of_sight, tree_open, tree_toggle};
 use super::{Icon, KeywordNode, LightcraftApp, json};
+use crate::menu_item::MenuItem;
 
 /// "Keywords": the library's keyword tree with photo counts (`a|b|c` keywords nest). A click
 /// filters the grid by the keyword (children included), the triangle opens a level, and the

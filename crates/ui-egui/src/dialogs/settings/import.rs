@@ -1,7 +1,7 @@
-use crate::menu_item::MenuItem;
 use super::general::{cameras, preset_combo};
 use super::widgets::{button_width, check, choices, field, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, Tokens, json, register};
+use crate::menu_item::MenuItem;
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();

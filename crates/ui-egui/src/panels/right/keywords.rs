@@ -1,5 +1,5 @@
-use crate::menu_item::MenuItem;
 use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
+use crate::menu_item::MenuItem;
 
 pub(super) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // (the box is the selection's: the active photo only says that there is one)

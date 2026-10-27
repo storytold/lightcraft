@@ -1,7 +1,6 @@
 use super::widgets::{check, choices, field, heading, hint, path_label, row};
-use crate::menu_item::MenuItem;
-use super::widgets::{check, choices, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use crate::menu_item::MenuItem;
 
 // ------------------------------------------------------------------------------------- General
 

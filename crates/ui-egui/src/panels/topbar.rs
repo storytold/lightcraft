@@ -255,10 +255,7 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
             }
             for kind in group {
                 let current = app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind;
-                let r = MenuItem::new(crate::i18n::tr(kind.label()))
-                    .selected(current)
-                    .widget(format!("menu:themeFavorite-{}", kind.id()))
-                    .show(ui);
+                let r = MenuItem::new(crate::i18n::tr(kind.label())).selected(current).widget(format!("menu:themeFavorite-{}", kind.id())).show(ui);
                 if r.clicked() {
                     let _ = app.run("view.theme", json!({"theme": kind.id()}));
                     ui.close();

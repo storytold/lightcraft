@@ -1,6 +1,6 @@
-use crate::menu_item::MenuItem;
 use super::frame::{field, num};
 use super::{ControlSpec, LightcraftApp, Section, SettingsGroup, Tokens, Track};
+use crate::menu_item::MenuItem;
 
 /// The Export dialog's watermark preview: the first exported photo, as wide as the dialog whatever
 /// its shape, with the watermark drawn on it as the file will have it at size `resize` (`None` =
