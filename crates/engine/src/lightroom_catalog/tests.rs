@@ -405,6 +405,74 @@ fn a_reimport_counts_each_trashed_match_once() {
     assert_eq!(r["imported"], 0, "{r}");
     assert!(ids.iter().all(|id| s.catalog.photo(*id).unwrap().deleted));
 }
+/// The import report's warnings about `album`.
+fn warnings_naming(r: &Value, album: &str) -> Vec<String> {
+    r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.starts_with(&format!("{album}:"))).map(String::from).collect()
+}
+fn album_named<'a>(s: &'a crate::Session, name: &str) -> &'a lightcraft_catalog::Album {
+    s.catalog.albums().find(|a| a.name == name).unwrap_or_else(|| panic!("no album {name}"))
+}
+/// A LightCraft album nests only in a folder. A collection Lightroom keeps inside a plain collection used to fail the
+/// whole batch with "parent must be an existing folder", taking every album with it (#2165, #2532).
+#[test]
+fn a_collection_inside_a_plain_collection_joins_the_set_above_it() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Picks","creationId":"com.adobe.ag.library.collection"})));
+    data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 3);
+    assert_eq!(s.catalog.photos().count(), 2);
+    let travel = album_named(&s, "Travel").id;
+    assert_eq!(album_named(&s, "Keepers").parent, Some(travel));
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert_eq!(album_named(&s, "Picks").parent, Some(travel));
+    assert_eq!(album_named(&s, "Picks").photos.len(), 1);
+    let w = warnings_naming(&r, "Picks");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("Keepers") && w[0].contains("into “Travel”"), "{w:?}");
+    assert!(warnings_naming(&r, "Keepers").is_empty());
+}
+/// Lightroom Classic saves a print, book, slideshow or web gallery inside a collection; with no set above it, the
+/// creation lands at the top level.
+#[test]
+fn a_creation_saved_inside_a_top_level_collection_lands_at_the_top_level() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":12,"name":"Loose","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":13,"parent":12,"name":"Poster","creationId":"com.adobe.ag.print"})));
+    data.collections.push(row(json!({"id_local":14,"parent":10,"name":"Album Book","creationId":"com.adobe.ag.layout.book"})));
+    data.members.push(row(json!({"collection":13,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 5);
+    let poster = album_named(&s, "Poster");
+    assert_eq!((poster.parent, poster.folder, poster.photos.len()), (None, false, 1));
+    assert_eq!(album_named(&s, "Album Book").parent, Some(album_named(&s, "Travel").id));
+    let w = warnings_naming(&r, "Poster");
+    assert!(w.len() == 1 && w[0].contains("Loose") && w[0].contains("at the top level"), "{w:?}");
+    assert_eq!(warnings_naming(&r, "Album Book").len(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+}
+/// A parent that's gone from the catalog or system-only (Quick Collection, an unsaved print…) isn't imported; the
+/// album lands at the top level, and the report says why it isn't where Lightroom had it.
+#[test]
+fn a_collection_whose_parent_is_missing_or_system_only_lands_at_the_top_level_with_a_warning() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":99,"name":"Orphan","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":5,"name":"quick collection","creationId":"com.adobe.ag.library.collection","systemOnly":1})));
+    data.collections.push(row(json!({"id_local":12,"parent":5,"name":"Stray","creationId":"com.adobe.ag.print"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 4);
+    assert_eq!(album_named(&s, "Orphan").parent, None);
+    assert_eq!(album_named(&s, "Stray").parent, None);
+    assert!(s.catalog.albums().all(|a| a.name != "quick collection"));
+    let w = warnings_naming(&r, "Orphan");
+    assert!(w.len() == 1 && w[0].contains("isn't in the catalog"), "{w:?}");
+    let w = warnings_naming(&r, "Stray");
+    assert!(w.len() == 1 && w[0].contains("quick collection") && w[0].contains("at the top level"), "{w:?}");
+    assert_eq!(album_named(&s, "Keepers").parent, Some(album_named(&s, "Travel").id));
+}
 #[test]
 fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     let mut s = crate::Session::new();

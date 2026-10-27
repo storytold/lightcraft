@@ -2,6 +2,13 @@
 
 ## 2026-10-30
 
+### Lightroom catalogs with a print inside a collection import their collections
+- Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
+  LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
+  existing folder" and brought over no collections, and photos whose originals were offline were lost with them
+  (issues #2165, #2532). Such a collection now joins the nearest collection set above it, or the top level, and the
+  import result names it under warnings; so does one whose parent is system-only or gone from the catalog.
+
 ### Lens distortion correction for the Sony A7 III
 - Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
   the A7R IVA's: straight lines stay straight at wide angles (the FE 16–35 F4 ZA at 16 mm shifts detail near the
