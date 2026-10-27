@@ -205,8 +205,11 @@ pub struct SkippedImage {
     pub reason: SkipReason,
 }
 
-/// Why a catalog image was not imported. Lightroom leaves incomplete records behind and ignores
-/// them; contradictory ones come from a damaged catalog. Either costs that image, not the import.
+/// Why a catalog image was not imported. Incomplete records, which Lightroom leaves behind and
+/// ignores, refer to a record that is gone or empty: every reason up to [`SkipReason::MissingMaster`]
+/// (a virtual copy whose master is gone). Contradictory ones, [`SkipReason::MasterIsCopy`] and
+/// [`SkipReason::DuplicateId`], conflict with another record of a damaged catalog; the desktop
+/// result window counts them on their own line. Either costs that image, not the import.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkipReason {

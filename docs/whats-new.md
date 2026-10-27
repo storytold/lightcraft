@@ -3,7 +3,7 @@
 ## 2026-10-30
 
 ### A damaged Lightroom catalog imports everything it can
-- A Lightroom catalog with a few contradictory records (two images with the same id, a virtual copy whose master
+- A Lightroom catalog with a few damaged records (two images with the same id, a virtual copy whose master
   is gone or is itself a copy, keywords or collections whose parents loop) no longer fails the whole import: those
   images are skipped and counted in the result window, and a looping keyword or collection is imported with a
   warning. So is a second collection with the id of another (its photos go to the first), and a capture time that

@@ -762,7 +762,8 @@ mod tests {
         assert_eq!(&en[2..], ["w1", "w2"]);
     }
 
-    /// Images skipped for contradictory records (a damaged catalog, #1588) are their own line.
+    /// Images skipped for contradictory records (a damaged catalog, #1588) are their own line; a
+    /// virtual copy whose master is gone is incomplete, like a missing file record.
     #[test]
     fn contradictory_records_are_their_own_line() {
         let value = json!({"report": {"photos": 3, "collections": 0, "skipped": [
