@@ -105,6 +105,24 @@ impl Default for Resize {
 /// Lightroom's ceiling. A full-size or smaller export is never held to it.
 pub const MAX_ENLARGED_PIXELS: f64 = 512e6;
 
+/// Below this many bits per pixel a JPEG file-size limit can force a quality low enough to break
+/// smooth areas such as skies into flat blocks: baseline JPEG degrades sharply between about 0.5
+/// and 0.25 bits per pixel, where each 8×8 block keeps little more than its average. 1 MB is about
+/// 0.2 over a 40 MP photo, where a detailed X-T5 frame fit at quality 12 (issue #3033), and about 3
+/// over 2048 px on the long edge; a smooth demo scene still fits at quality 87 with 0.6.
+///
+/// The Export dialog uses this to *estimate*, before anything is encoded, whether a limit is tight
+/// ([`size_limit_is_tight`]); the export toast *reports* the quality the limit actually settled on
+/// and has its own threshold for when that is low (`LOW_LIMIT_QUALITY` in the UI's `export_task`).
+/// Tune them together: a limit the dialog calls tight should usually toast a low quality.
+pub const TIGHT_LIMIT_BITS_PER_PIXEL: f64 = 0.5;
+
+/// Whether `limit_kb` leaves an output of `pixels` fewer than [`TIGHT_LIMIT_BITS_PER_PIXEL`].
+pub fn size_limit_is_tight(limit_kb: u32, pixels: usize) -> bool {
+    let px = pixels as f64;
+    px > 0.0 && f64::from(limit_kb) * 8192.0 / px < TIGHT_LIMIT_BITS_PER_PIXEL
+}
+
 impl Resize {
     pub fn long_edge(px: u32) -> Self {
         Self { value: px as f32, ..Default::default() }
