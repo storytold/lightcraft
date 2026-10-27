@@ -79,6 +79,7 @@ mod rating;
 mod recheck;
 mod rename_person;
 mod rules_editor;
+mod sam_remove;
 mod sam_setup;
 mod scan_probes;
 mod scroll;

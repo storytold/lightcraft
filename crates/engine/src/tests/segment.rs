@@ -42,6 +42,91 @@ fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
     }
 }
 
+/// `segment.model.remove` deletes the model's files and partial downloads, nothing else, and says how much it freed.
+#[test]
+fn removing_the_model_deletes_its_files_and_nothing_else() {
+    let mut s = Session::with_demo();
+    // no folder, no id, another id: nothing to remove, said plainly
+    let e = s.execute("segment.model.remove", &json!({"id": "sam3"})).unwrap_err().to_string();
+    assert!(e.contains("no folder"), "{e}");
+    let dir = damaged_model("remove");
+    std::fs::write(dir.join("model.safetensors.part"), b"half").unwrap();
+    std::fs::write(dir.join("notes.txt"), b"mine").unwrap();
+    s.segmenter.dir = Some(dir.clone());
+    let size = |names: &[&str]| names.iter().map(|n| std::fs::metadata(dir.join(n)).unwrap().len()).sum::<u64>();
+    let mine = size(&["model.safetensors", "vocab.json", "merges.txt", "model.safetensors.part"]);
+    assert_eq!(s.execute("segment.model.status", &json!({})).unwrap()["diskBytes"], mine);
+    for p in [json!({}), json!({"id": "x"}), json!({"id": ["sam3"]})] {
+        let e = s.execute("segment.model.remove", &p).unwrap_err().to_string();
+        assert!(e.contains("sam3") && e.contains("nothing was removed"), "{p}: {e}");
+    }
+    assert!(dir.join("model.safetensors").is_file(), "a refused call removes nothing");
+    let r = s.execute("segment.model.remove", &json!({"id": "sam3"})).unwrap();
+    assert_eq!(r["removed"].as_array().unwrap().len(), 4, "{r}");
+    assert_eq!(r["bytes"], mine);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "only notes.txt is left");
+    assert_eq!(std::fs::read(dir.join("notes.txt")).unwrap(), b"mine");
+    assert_eq!(s.execute("segment.model.status", &json!({})).unwrap()["diskBytes"], 0);
+    // again: nothing there, nothing to say but so
+    assert_eq!(s.execute("segment.model.remove", &json!({"id": "sam3"})).unwrap()["bytes"], 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A model file that is a symbolic link counts by the link's own size (never followed) and is removed as a link, so the size
+/// shown and what Remove deletes agree; what the link points to survives.
+#[test]
+fn a_linked_model_file_is_counted_and_removed_as_a_link() {
+    let dir = tmp("remove-link");
+    let outside = tmp("remove-link-target");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let target = outside.join("weights.bin");
+    std::fs::write(&target, vec![7u8; 4096]).unwrap();
+    let link = dir.join("model.safetensors");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(&target, &link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(&target, &link);
+    #[cfg(not(any(unix, windows)))]
+    let made: std::io::Result<()> = Err(std::io::Error::other("no symbolic links on this platform"));
+    if let Err(e) = made {
+        lightcraft_testkit::skip!(System, "cannot create a symbolic link here: {e}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        return;
+    }
+    std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+    let link_len = std::fs::symlink_metadata(&link).unwrap().len();
+    let mut s = Session::with_demo();
+    s.segmenter.dir = Some(dir.clone());
+    assert_eq!(s.segmenter.disk_bytes(), link_len + 2, "the link counts by its own size");
+    #[cfg(unix)]
+    assert!(s.segmenter.disk_bytes() > 2, "a link is never zero bytes on unix");
+    let r = s.execute("segment.model.remove", &json!({"id": "sam3"})).unwrap();
+    assert_eq!(r["removed"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(r["bytes"], link_len + 2);
+    assert!(std::fs::symlink_metadata(&link).is_err(), "the link is gone");
+    assert_eq!(std::fs::read(&target).unwrap().len(), 4096, "what it pointed to is untouched");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// A model folder that cannot be inspected (any error but "not found") is an error naming it, not a silent success.
+#[test]
+fn an_unreadable_model_folder_is_an_error_that_names_it() {
+    // a NUL in the path is rejected by the OS with an error that is not NotFound, on every platform
+    let dir = std::env::temp_dir().join(format!("lc-sam3-bad\0dir-{}", std::process::id()));
+    let kind = std::fs::symlink_metadata(dir.join("model.safetensors")).unwrap_err().kind();
+    assert_ne!(kind, std::io::ErrorKind::NotFound, "the trigger must not be a missing file");
+    let mut s = Session::with_demo();
+    s.segmenter.dir = Some(dir.clone());
+    let e = s.execute("segment.model.remove", &json!({"id": "sam3"})).unwrap_err().to_string();
+    assert!(e.contains("could not remove") && e.contains("model.safetensors"), "{e}");
+    // a folder that simply is not there is still nothing to remove, not an error
+    s.segmenter.dir = Some(tmp("never-created"));
+    assert_eq!(s.execute("segment.model.remove", &json!({"id": "sam3"})).unwrap()["bytes"], 0);
+}
+
 #[test]
 fn status_and_model_commands_without_the_model() {
     let mut s = Session::with_demo();
