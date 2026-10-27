@@ -128,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove Folder from Library",
             [],
             None,
-            "{path, disk?: bool} — move the library photos imported from this folder (and the folders inside it) to Recently Deleted; one undo step, no file is touched. A whole disk or share (`/Volumes/nas`, `C:\\`, `\\\\srv\\share`) goes only with `disk: true`, the startup disk never → {removed}",
+            "{path, disk?: bool} — move the library photos imported from this folder (and the folders inside it) to Recently Deleted, and take a folder made with folder.create (empty or not) off the list (`removed` may be 0); one undo step, no file is touched. A whole disk or share (`/Volumes/nas`, `C:\\`, `\\\\srv\\share`) goes only with `disk: true`, the startup disk never → {removed}",
             always,
             |s, p| {
                 const C: &str = "library.removeFolder";
@@ -182,7 +182,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Folder Color Label",
             [],
             None,
-            "{path, label: red|yellow|green|blue|purple|none} — give a folder of the library (one its photos were imported from, see library.folders) a colour label, or take it off (also once its photos are gone); one undo step. The label follows the folder when it is renamed or moved with folder.rename / folder.move → {path, label}",
+            "{path, label: red|yellow|green|blue|purple|none} — give a folder of the library (one its photos were imported from, or one made with folder.create; see library.folders) a colour label, or take it off (also once its photos are gone); one undo step. The label follows the folder when it is renamed or moved with folder.rename / folder.move → {path, label}",
             always,
             |s, p| {
                 const C: &str = "folder.label";

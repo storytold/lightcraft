@@ -48,7 +48,7 @@ pub(super) fn folder_tree(
             app.toast(ui.ctx(), e);
         }
         crate::widgets::context_menu(&resp, |ui| {
-            // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
+            // the library actions of the Folders tree, when this folder is one of its rows (or one inside it holds library photos)
             let library = app.caches.folder_tree(&app.session.catalog);
             let held = library_node_for(&library, path);
             if (transient || indent > 0.0)
@@ -269,7 +269,8 @@ pub(super) fn is_within(app: &LightcraftApp, id: lightcraft_catalog::AlbumId, an
 // "Folders" (drawn in `show`): where on disk the library's photos were imported from, with photo counts (see
 // `lightcraft_catalog::folders`). A click makes that folder the source, like an album or a Local
 // folder: its photos and those of the folders inside it fill the grid. The triangle opens a
-// level. Only folders holding imported photos are listed; every folder on disk is under Local.
+// level. Only folders holding imported photos, and the ones made with New Folder on Disk…, are listed;
+// every folder on disk is under Local.
 
 /// Whenever the shown folder changes (a click, an agent, a rename or its undo), open the rows
 /// above it so it is on screen; folding one by hand afterwards sticks until the choice changes.
