@@ -128,8 +128,14 @@ impl LightroomArchiveFinalization {
         if bytes.len() > MAX_INDEX_BYTES {
             return Err(error("Lightroom import index exceeds 16 MiB"));
         }
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes)
-            .map_err(|e| crate::EngineError::Other(format!("could not write the Lightroom import index {}: {e}", path.display())))
+        let failed =
+            |e: &dyn std::fmt::Display| crate::EngineError::Other(format!("could not write the Lightroom import index {}: {e}", path.display()));
+        // the archive refuses a linked `Interop` folder; now that its failure no longer stops the
+        // import, the index must refuse it too, or it would be written outside the library
+        if let Some(dir) = path.parent() {
+            crate::lightroom_archive::require_real_directory(dir).map_err(|e| failed(&e))?;
+        }
+        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| failed(&e))
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -601,6 +607,29 @@ mod tests {
         let e = LightroomArchiveFinalization { path: Some(path.clone()), bytes: Some(b"{}".to_vec()) }.finish().unwrap_err();
         assert!(matches!(e, crate::EngineError::Other(_)), "{e:?}");
         assert!(e.to_string().starts_with(&format!("could not write the Lightroom import index {}", path.display())), "{e}");
+    }
+
+    /// A linked `Interop` folder (which the archive already refuses) must not receive the index:
+    /// it would land outside the library and could replace a file there.
+    #[cfg(unix)]
+    #[test]
+    fn an_index_write_refuses_a_linked_interop_folder() {
+        let root = std::env::temp_dir().join(format!("lightcraft-lr-index-linked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (library, outside) = (root.join("library"), root.join("outside"));
+        std::fs::create_dir_all(&library).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("lightroom-index.json"), b"not ours").unwrap();
+        std::os::unix::fs::symlink(&outside, library.join("Interop")).unwrap();
+        let path = library.join("Interop/lightroom-index.json");
+        let e = LightroomArchiveFinalization { path: Some(path), bytes: Some(b"{}".to_vec()) }.finish().unwrap_err();
+        assert!(e.to_string().contains("is a link or a file, not a folder"), "{e}");
+        assert_eq!(std::fs::read(outside.join("lightroom-index.json")).unwrap(), b"not ours");
+        // the archive gives way with a warning, so the import goes on to this write: both refuse the link
+        let mut data = empty_data();
+        assert_eq!(stage_archive(Some(&library.join("Interop")), &mut data).unwrap(), None);
+        assert!(data.warnings[0].contains("is a link or a file, not a folder"), "{}", data.warnings[0]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

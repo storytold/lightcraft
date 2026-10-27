@@ -149,19 +149,18 @@ struct Managed {
 
 fn prepare_directory(directory: &Path) -> Result<(), String> {
     match fs::symlink_metadata(directory) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || !meta.is_dir() {
-                return Err(format!("archive directory is not a real directory: {}", directory.display()));
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir_all(directory).map_err(|e| e.to_string())?;
-            let meta = fs::symlink_metadata(directory).map_err(|e| e.to_string())?;
-            if meta.file_type().is_symlink() || !meta.is_dir() {
-                return Err(format!("archive directory is not a real directory: {}", directory.display()));
-            }
-        }
-        Err(error) => return Err(error.to_string()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir_all(directory).map_err(|e| e.to_string())?,
+        _ => {}
+    }
+    require_real_directory(directory)
+}
+
+/// Refuse `directory` when it is a symlink or not a folder, so nothing written below it lands
+/// outside the library. The archive and the import index (`lightroom_job`) both check it.
+pub(crate) fn require_real_directory(directory: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(directory).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(format!("{} is a link or a file, not a folder", directory.display()));
     }
     Ok(())
 }
