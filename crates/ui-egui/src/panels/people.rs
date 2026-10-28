@@ -63,7 +63,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let thumb = app.ui.thumb_size;
-    let people = app.caches.people(&app.session.catalog, &app.session.filter);
+    let people = app.caches.people(&app.session);
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
     let title =
         ui.painter().text(pos2(head.left() + PAD, head.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Named People"), t.semibold(15.0), t.text);
