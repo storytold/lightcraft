@@ -3695,5 +3695,9 @@
   "Export time (HHMM)": "Heure d'export (HHMM)",
   "Insert variable": "Insérer une variable",
   "Insert…": "Insérer…",
-  "none  ({album}, {date}, {hour})": "aucun  ({album}, {date}, {hour})"
+  "none  ({album}, {date}, {hour})": "aucun  ({album}, {date}, {hour})",
+  "Use as Person's Picture": "Utiliser comme image de la personne",
+  "Use Their Largest Face": "Revenir au visage le plus grand",
+  "This face is now their picture in People": "Ce visage est maintenant son image dans Personnes",
+  "Their largest face is their picture again": "Son visage le plus grand redevient son image"
 }
