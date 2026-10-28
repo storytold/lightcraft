@@ -233,7 +233,8 @@ pub struct Photo {
     pub height: u32,
     #[serde(default)]
     pub file_size: u64,
-    /// ISO 8601 local capture time.
+    /// ISO 8601 capture time: the camera's local wall-clock time, with its UTC offset when the file
+    /// records one; a video with only its container's UTC `mvhd` time ends in `Z`.
     #[serde(default)]
     pub captured: Option<String>,
     pub imported: String,
@@ -497,6 +498,39 @@ impl Photo {
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
     }
+    /// Whether this record is a video clip.
+    ///
+    /// Three signals, because a library can hold clips from before video import existed: this
+    /// build's [`MediaKind::Video`], a Lightroom catalog's `VIDEO` format, and a video container
+    /// extension on the file name or path. Guards that would decode or render the pixels (the
+    /// engine's render jobs, exports, smart previews) and the UI's video presentation all use this
+    /// one check, so an old entry cannot reach a decoder by having the wrong `kind`.
+    pub fn is_video(&self) -> bool {
+        if self.kind == MediaKind::Video || self.format.eq_ignore_ascii_case("video") {
+            return true;
+        }
+        if self.kind == MediaKind::Image
+            && !self.format.is_empty()
+            && !matches!(self.format.to_ascii_uppercase().as_str(), "MP4" | "MOV" | "M4V" | "VIDEO")
+        {
+            return false;
+        }
+        let video_extension = |name: &str| {
+            std::path::Path::new(name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("mov") || e.eq_ignore_ascii_case("m4v"))
+        };
+        let path = match &self.source {
+            Source::File { path } => Some(path.as_str()),
+            Source::Demo { .. } => None,
+        };
+        video_extension(&self.file_name) || path.is_some_and(video_extension)
+    }
+    /// Media kind including legacy video records, without rewriting the stored catalog.
+    pub fn effective_kind(&self) -> MediaKind {
+        if self.is_video() { MediaKind::Video } else { self.kind }
+    }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();
@@ -546,6 +580,32 @@ impl Album {
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+
+    /// A clip is recognised by its kind, by a Lightroom catalog's `VIDEO` format, and by a video
+    /// container extension on an old record that predates `MediaKind::Video`.
+    #[test]
+    fn clips_are_recognised_however_the_record_named_them() {
+        let still = Photo::new(PhotoId(1), Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 10, 10, "2026-10-01T00:00:00");
+        assert!(!still.is_video());
+
+        let mut by_kind = still.clone();
+        by_kind.kind = MediaKind::Video;
+        assert!(by_kind.is_video());
+
+        let by_format = Photo::new(PhotoId(2), Source::File { path: "/p/old.mov".into() }, "old.mov", "VIDEO", 10, 10, "2026-10-01T00:00:00");
+        assert!(by_format.is_video());
+
+        let by_extension = Photo::new(PhotoId(3), Source::File { path: "/p/OLD.MOV".into() }, "OLD.MOV", "MOV", 10, 10, "2026-10-01T00:00:00");
+        assert!(by_extension.is_video(), "a catalog from before video import may say Image");
+
+        let m4v = Photo::new(PhotoId(4), Source::File { path: "/p/a.m4v".into() }, "a.m4v", "", 10, 10, "2026-10-01T00:00:00");
+        assert!(m4v.is_video());
     }
 }
 

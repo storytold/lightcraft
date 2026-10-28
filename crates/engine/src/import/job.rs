@@ -358,6 +358,8 @@ impl ImportJob {
                     // the templates see the photo as it will be catalogued (undated: the import time)
                     let own = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
+                    q.kind = info.kind;
+                    q.duration = info.duration;
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
                     let name = opts.rename.as_deref().filter(|t| !t.trim().is_empty()).map(|t| {
@@ -441,6 +443,10 @@ impl Session {
         let id = PhotoId(u64::MAX - slot);
         let mut p = Photo::new(id, Source::File { path: c.path.clone() }, &c.name, &c.format, c.width.max(1), c.height.max(1), "");
         p.kind = c.kind;
+        p.duration = c.duration;
+        if p.is_video() {
+            return None;
+        }
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
             p.embedded_lens = info.embedded_lens;

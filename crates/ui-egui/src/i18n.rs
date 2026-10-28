@@ -441,7 +441,8 @@ pub fn display_time(iso: &str) -> String {
         return lightcraft_catalog::dates::display_time(iso);
     }
     let date = date_group_label(iso.get(..10).unwrap_or(iso), false);
-    match iso.get(11..).filter(|time| !time.is_empty()) {
+    // (the seconds alone: a zone suffix such as the `Z` of a movie's UTC header is not shown)
+    match iso.get(11..).map(|time| time.get(..8).unwrap_or(time)).filter(|time| !time.is_empty()) {
         Some(time) => format!("{date} {time}"),
         None => date,
     }

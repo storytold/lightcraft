@@ -1,3 +1,20 @@
+#[test]
+fn original_buffers_use_platform_capacity_and_physical_ram_not_cache_budgets() {
+    use super::check_original_buffer_capacity;
+    let large = 257 << 20;
+    assert!(check_original_buffer_capacity(large, Some(512 << 20)).is_ok());
+    assert!(check_original_buffer_capacity(512 << 20, Some(512 << 20)).is_ok());
+    let error = check_original_buffer_capacity((512 << 20) + 1, Some(512 << 20)).unwrap_err();
+    assert!(error.contains("physical RAM") && !error.contains("app.memoryBudget"), "{error}");
+    assert!(check_original_buffer_capacity(large, None).is_ok());
+    assert!(check_original_buffer_capacity(0, Some(0)).is_ok());
+    assert!(check_original_buffer_capacity(isize::MAX as u64, None).is_ok());
+    assert!(check_original_buffer_capacity(isize::MAX as u64 + 1, None).is_err());
+    assert!(check_original_buffer_capacity(u64::MAX, None).is_err());
+    let above_cache_budget = crate::memory::budget() as u64 + 1;
+    assert!(super::check_buffered_original_size(above_cache_budget).is_ok());
+}
+
 /// Keywords from a file keep their hierarchy: the paths of `lr:hierarchicalSubject`, not the
 /// flat names of `dc:subject` that LightCraft's exports (and Lightroom Classic) write besides
 /// them; an exported `travel|Italy|Rome` comes back as itself.

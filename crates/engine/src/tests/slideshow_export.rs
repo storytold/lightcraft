@@ -332,3 +332,20 @@ fn unwritable_targets_and_long_videos_are_errors() {
     let e = s.execute("slideshow.export", &json!({"format": "video", "path": dir.path("long.mp4"), "ids": many})).unwrap_err();
     assert!(e.to_string().contains("limited to 120 min"), "{e}");
 }
+
+/// A video in a slideshow is skipped with a warning; the photo slide still exports.
+#[test]
+fn a_video_in_a_slideshow_is_skipped_with_a_warning() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    let dir = Scratch::new("mp4-video-skip");
+    let (mut s, ids) = session(1);
+    let video = s.catalog.alloc_photo_id();
+    let mut p =
+        Photo::new(video, Source::File { path: "/lightcraft-slideshow-video/clip.mp4".into() }, "clip.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = export(&mut s, json!({"format": "video", "path": dir.path("mixed.mp4"), "size": 64, "fps": 24, "quality": 40, "ids": [ids[0], video.0]}));
+    let warnings: Vec<&str> = r["warnings"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    assert!(warnings.iter().any(|w| w.contains("clip.mp4") && w.contains("video")), "{r}");
+    assert_eq!(r["seconds"].as_f64(), Some(1.0), "the photo slide is still exported");
+}

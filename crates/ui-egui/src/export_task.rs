@@ -1,7 +1,7 @@
 //! Background export: the Export dialog, File → Export with Preset and Export with Previous hand
 //! their batch to a worker thread so the window stays responsive. Photos are prepared on the UI
 //! thread ([`lightcraft_engine::export::prepare_export`]: cheap, needs the session) and rendered,
-//! encoded and written on the worker (several side by side: [`run_batch`]); its row in the
+//! encoded and written on the worker (several side by side: [`run_batch_with_copy`]); its row in the
 //! activity stack shows the count, the file in progress and ✕ (issue #345).
 //!
 //! Needs [`crate::Services::write_shared`] (a thread-safe writer); without it (web) the batch runs
@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch_with_copy};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -44,6 +44,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
         return Err("an export is already running".into());
     }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
+    let copy = app.services.original_copy_shared.clone();
     let total = items.len();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -56,12 +57,23 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
-        let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
-            if let Ok(mut g) = p.lock() {
-                *g = (done, name.to_string());
-            }
-            !c.load(Ordering::Relaxed)
-        });
+        let mut copier = |from: &str, to: &str, remove: bool| copy.as_ref().ok_or("no Original copier")?(from, to, remove);
+        let can_copy = copy.is_some();
+        let r = run_batch_with_copy(
+            items,
+            &opts,
+            &to,
+            &mut w,
+            &|path| std::path::Path::new(path).exists(),
+            false,
+            &mut |done, name| {
+                if let Ok(mut g) = p.lock() {
+                    *g = (done, name.to_string());
+                }
+                !c.load(Ordering::Relaxed)
+            },
+            if can_copy { Some(&mut copier) } else { None },
+        );
         let r = r.map(|files| {
             if !after.is_none() {
                 // Photos can't be stopped once asked: no ✕ from here, before the last look at
@@ -95,6 +107,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     let guard = app.session.original_guard();
     let prepared = lightcraft_engine::contact_sheet::prepare(&mut app.session, params)?;
     let total = prepared.len();
+    let skipped: Vec<Value> = prepared.skipped().iter().map(|(file, warning)| json!({"file": file, "warning": warning})).collect();
     let write = app.services.write_shared.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -117,7 +130,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
                     Some(write) => write(&path, &doc.bytes)?,
                     None => lightcraft_engine::export::write_file(&path, &doc.bytes)?,
                 }
-                Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true})])
+                Ok(vec![json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len(), "contactSheet": true, "skipped": skipped})])
             });
         // a PDF isn't something Photos imports: contact sheets never add to Apple Photos
         let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
@@ -146,13 +159,14 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     let ids = app.session.targets(params).map_err(|e| e.to_string())?;
     let prepared = compose::prepare(&mut app.session, &settings, &ids)?;
     let total = prepared.len();
+    let skipped: Vec<Value> = prepared.skipped().iter().map(|(file, warning)| json!({"file": file, "warning": warning})).collect();
     let title = std::path::Path::new(&path).file_stem().and_then(|n| n.to_str()).unwrap_or("Print").to_string();
     let write = app.services.write_shared.clone();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (p, c) = (progress.clone(), cancel.clone());
     let (tx, rx) = channel();
-    let photos = ids.len();
+    let photos = prepared.photos();
     let work = move || {
         let result = prepared
             .run(&mut |done, name| {
@@ -171,7 +185,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
                     Some(write) => write(&path, &bytes)?,
                     None => lightcraft_engine::export::write_file(&path, &bytes)?,
                 }
-                Ok(vec![json!({"path": path, "pages": pages.len(), "photos": photos, "bytes": bytes.len(), "print": true})])
+                Ok(vec![json!({"path": path, "pages": pages.len(), "photos": photos, "bytes": bytes.len(), "print": true, "skipped": skipped})])
             });
         let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
     };
@@ -247,7 +261,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let sheet = files.first().filter(|f| f["contactSheet"] == true);
                     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
                     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
-                    let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
+                    // (a conflict leaves `skipped` as the taken path; a print or contact sheet
+                    // reports its skipped photos as an array of {file, warning})
+                    let skipped = files.iter().filter(|f| f.get("skipped").is_some_and(|v| !v.is_array())).count();
+                    let warned = files.iter().filter(|f| f.get("warning").is_some()).count()
+                        + files.iter().filter_map(|f| f.get("skipped").and_then(Value::as_array)).map(Vec::len).sum::<usize>();
                     let mut m =
                         crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
                     if let Some(sheet) = sheet {
@@ -258,6 +276,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     if skipped > 0 {
                         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
+                    }
+                    if warned > 0 {
+                        m += &format!(" · {warned} {}", crate::i18n::tr("not exported"));
                     }
                     if let Some(first) = failed.first() {
                         m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));

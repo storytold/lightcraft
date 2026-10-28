@@ -24,7 +24,7 @@ mod watermark;
 
 #[cfg(test)]
 use batch::run_batch_with;
-pub use batch::{export_parallelism, run_batch};
+pub use batch::{export_parallelism, run_batch, run_batch_with_copy};
 pub use encoding::{
     encode_deep, encode_gain_map_jpeg, encode_image, encode_rendered, encode_with_metadata, export_metadata, named_space, output_sharpen,
     output_sharpen_deep, removes_location, srgb8_in,
@@ -39,9 +39,9 @@ pub use params::{
 };
 #[cfg(test)]
 use place::Placer;
-pub use place::{write_file, write_file_durable, write_file_new};
+pub use place::{OriginalCopier, SharedOriginalCopier, copy_original, write_file, write_file_durable, write_file_new};
 pub use prepare::{
-    AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
+    AfterExport, Destination, DngCompression, Exported, PreparedExport, Ran, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };
 #[cfg(test)]
 use prepare::{render_weight, too_big_for_memory};

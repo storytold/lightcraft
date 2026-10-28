@@ -863,6 +863,7 @@ fn date_headings_in_every_language() {
             assert!(date_group_label("2026-09", false).contains("2026"), "{language:?}");
             assert!(date_group_label("2026", false).contains("2026"), "{language:?}");
             assert_eq!(display_time("2026-09-20T16:04:05"), format!("{day} 16:04:05"), "{language:?}");
+            assert_eq!(display_time("2026-09-20T16:04:05Z"), format!("{day} 16:04:05"), "{language:?}: a movie's UTC time shows without its zone");
         }
         for key in ["", "abcd", "2026-xx", "2026-13", "2026-09-xx", "２０２６-09"] {
             assert!(!date_group_label(key, false).contains('{'), "{language:?}: {key:?}");

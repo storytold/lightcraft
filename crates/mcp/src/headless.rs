@@ -60,7 +60,7 @@ impl Headless {
     /// (see `lightcraft_engine::export::ExportOptions::from_json`, plus `ids`, `dir`, `path`).
     /// With `path` and no `format`, the format follows the path's extension.
     fn export(&mut self, p: &Value) -> Result<Value, String> {
-        use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
+        use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch_with_copy};
         let p = &self.session.export_params_or(p, ExportFormat::Png)?;
         // PNG for a `path` that names no format; `bitDepth` is checked against the format written
         let mut opts = ExportOptions::from_params_or(p, ExportFormat::Png).map_err(|e| e.to_string())?;
@@ -85,7 +85,7 @@ impl Headless {
         let total = items.len();
         let mut hook = self.progress.take();
         let mut cancelled = false;
-        let files = run_batch(
+        let files = run_batch_with_copy(
             items,
             &opts,
             &Destination { dir: dir.to_string(), exact: exact.map(str::to_string) },
@@ -96,6 +96,7 @@ impl Headless {
                 cancelled = hook.as_mut().is_some_and(|h| !h(done, total, name));
                 !cancelled
             },
+            Some(&mut lightcraft_engine::export::copy_original),
         )?;
         if !cancelled && let Some(hook) = hook.as_mut() {
             cancelled = !hook(total, total, "");

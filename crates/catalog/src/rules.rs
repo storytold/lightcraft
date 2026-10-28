@@ -966,7 +966,7 @@ impl Rule {
                 let named = p.label.is_some_and(|l| cat.custom_label_name(l).map_or(label_colour(l) == want, |n| n.to_lowercase() == want));
                 (l == want || named) == (op == "is")
             }
-            "kind" => (kind_name(p.kind) == want) == (op == "is"),
+            "kind" => (kind_name(p.effective_kind()) == want) == (op == "is"),
             "edited" => yes(p.is_edited()),
             "hasGps" => yes(m.gps.is_some()),
             "virtualCopy" => yes(p.copy_of.is_some()),

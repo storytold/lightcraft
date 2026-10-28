@@ -122,6 +122,44 @@ pub enum Gesture {
     },
 }
 
+/// The card a catalogued video shows where a frame it can't decode yet would go: what the clip is
+/// (name and running time), and what this build does with it. It keeps a video from reading as a
+/// broken photo in the loupe ("This photo can't be opened" and a warning pill) until playback,
+/// trim and cover frames land.
+pub(super) fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, canvas: Rect, widget: &str) {
+    let w = (canvas.width() * 0.6).clamp(160.0, 460.0).min((canvas.width() - 24.0).max(80.0));
+    let wrap = (w - 32.0).max(20.0);
+    let name = crate::widgets::one_line(p, &photo.file_name, t.semibold(14.0), t.text, wrap);
+    let duration = photo.duration.and_then(|d| {
+        let text = crate::widgets::format_duration(d);
+        (!text.is_empty()).then(|| p.layout_no_wrap(format!("{} · {text}", crate::i18n::tr("Duration")), t.font(12.0), t.text_label))
+    });
+    let message =
+        p.layout(crate::i18n::tr("Video catalogued — playback and trim are coming in a later update").to_string(), t.font(12.0), t.text_dim, wrap);
+    let icon = 36.0;
+    let name_h = name.size().y;
+    let duration_h = duration.as_ref().map_or(0.0, |g| 6.0 + g.size().y);
+    let content = icon + 14.0 + name_h + duration_h + 14.0 + message.size().y;
+    let h = (content + 40.0).max(120.0).min((canvas.height() - 8.0).max(1.0));
+    let card = Rect::from_center_size(canvas.center(), vec2(w, h));
+    p.rect_filled(card, 10.0, t.cell);
+    p.rect_stroke(card, 10.0, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);
+    let mut y = card.center().y - content / 2.0;
+    crate::icons::paint(p, Rect::from_center_size(pos2(card.center().x, y + icon / 2.0), vec2(icon, icon)), crate::icons::Icon::Video, t.text_label);
+    y += icon + 14.0;
+    p.galley(pos2(card.center().x - name.size().x / 2.0, y), name, t.text);
+    y += name_h;
+    if let Some(g) = duration {
+        let (gw, gh) = (g.size().x, g.size().y);
+        y += 6.0;
+        p.galley(pos2(card.center().x - gw / 2.0, y), g, t.text_label);
+        y += gh;
+    }
+    y += 14.0;
+    p.galley(pos2(card.center().x - message.size().x / 2.0, y), message, t.text_dim);
+    register(ui, widget, card);
+}
+
 /// Draw the Develop loupe: the optional filmstrip, the fitted or zoomed photo (before/after and
 /// full-screen aware), crop overlays and the render requests for the current view, or, when no
 /// photo is active, the empty-library message if the library is empty and "No photo selected"
@@ -435,7 +473,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // below what else lives in the canvas' top-left corner: the filter pill, the info overlay
     let pill_inset = if !fullscreen && filter_pill_shown(app) { FILTER_PILL_INSET + FILTER_PILL_HEIGHT } else { 0.0 };
     let badge_top_inset = pill_inset.max(info_overlay_extent(app, &p, &photo));
-    if split {
+    // A catalogued video has no frame to decode or show yet (playback, trim and cover frames come
+    // in a later update): its card stands in for the picture in every view mode, instead of the
+    // error a broken photo shows or a blank pane.
+    let video_only = photo.is_video()
+        && app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
+        && app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != id);
+    if video_only {
+        video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard");
+        shown = "video";
+    } else if split {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the
         // other view's margins with its whole-frame render, magnified and blurred)
         let br = before_img;
@@ -624,7 +671,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         && (!app.renderer.is_pending(Slot::Main) || app.renderer.retrying(Slot::Main)))
     .then(|| app.renderer.failure_of(Slot::Main, id))
     .flatten();
-    if rendering || failed.is_some() {
+    // (a catalogued video has no frame to render: its card is all there is, not a failure)
+    if (rendering || failed.is_some()) && !photo.is_video() {
         // over the photo (the After in two views); in the crop tool's wide margin, under it
         let over = if crop_tool { canvas } else { img_rect.intersect(if split { main_area } else { canvas }) };
         let over = if over.is_positive() { over } else { canvas };

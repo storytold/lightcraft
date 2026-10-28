@@ -763,6 +763,7 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
+/// Render a single photo or video thumbnail cell in the library grid.
 fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
@@ -770,8 +771,21 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     register(ui, format!("thumb:{}", id.0), r);
     let state = app.session.selection.state_of(id);
     let selected = state != lightcraft_engine::SelectionState::NotSelected;
+    // A video has no decoded thumbnail yet (playback comes in a later update), so what the cell
+    // draws for it is a placeholder plus these badges rather than a failed image.
+    let video = photo.is_video() || photo.duration.is_some();
     // screen readers: the file, then rating / flag / label
     let mut spoken = photo.file_name.clone();
+    if video {
+        spoken.push_str(&format!(", {}", crate::i18n::tr("Video")));
+        if let Some(d) = photo.duration {
+            let text = crate::widgets::format_duration(d);
+            if !text.is_empty() {
+                spoken.push(' ');
+                spoken.push_str(&text);
+            }
+        }
+    }
     if photo.rating > 0 {
         spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
     }
@@ -808,7 +822,13 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         }
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
-        p.rect_filled(ph, 0.0, t.skeleton);
+        p.rect_filled(ph, 0.0, if video { Color32::from_gray(30) } else { t.skeleton });
+        if video {
+            // A catalogued clip: a clean dark tile with its video icon (the thumbnail render is
+            // not an image a decoder can read, so it must not read as a broken photo).
+            let side = ph.width().min(ph.height()).clamp(10.0, 34.0);
+            paint(p, Rect::from_center_size(ph.center(), vec2(side, side)), Icon::Video, t.text_dim);
+        }
         // not drawn yet (or unreadable): the selection is still visible
         if active {
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
@@ -817,7 +837,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             let ring = if t.skeleton.r() > 0x80 { t.text_dim } else { Color32::from_gray(170) };
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, ring), StrokeKind::Outside);
         }
-        if app.renderer.failure(Slot::Thumb(id)).is_some() {
+        if !video && app.renderer.failure(Slot::Thumb(id)).is_some() {
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
@@ -849,6 +869,18 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         let br = Rect::from_min_size(pos2(r.right() - g.size().x - 14.0, r.top() + 5.0), g.size() + vec2(8.0, 3.0));
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
+        if video {
+            // the same automation id the justified grid's video badge carries
+            register(ui, format!("badge:videoFormat:{}", id.0), br);
+        }
+    }
+    // A video's format (where the square grid's filename line doesn't carry it already) and its
+    // running time, which is what tells one clip from another at a glance.
+    if video && !(square && app.ui.show_filenames) && !photo.format.is_empty() {
+        video_format_badge(ui, p, &t, id, &photo.format, img_rect);
+    }
+    if video && let Some(d) = photo.duration {
+        video_duration_badge(ui, p, &t, id, d, img_rect);
     }
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
@@ -951,6 +983,34 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
     }
     crate::widgets::context_menu(&resp, |ui| context_menu(app, ui, id));
+}
+
+/// A clip's container (`MP4`, `MOV`) in a dark pill at the thumbnail's top right.
+fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, format: &str, img_rect: Rect) {
+    let g = p.layout_no_wrap(format.to_uppercase(), t.semibold(9.0), Color32::WHITE);
+    let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 14.0, img_rect.top() + 6.0), g.size() + vec2(8.0, 3.0));
+    p.rect_filled(br, 3.0, Color32::from_black_alpha(170));
+    p.galley(br.min + vec2(4.0, 1.5), g, Color32::WHITE);
+    register(ui, format!("badge:videoFormat:{}", id.0), br);
+}
+
+/// A clip's running time (video icon + `MM:SS`) in a dark pill at the thumbnail's lower edge,
+/// above the rating bar so neither hides the other.
+fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, seconds: f64, img_rect: Rect) {
+    let text = crate::widgets::format_duration(seconds);
+    if text.is_empty() {
+        return;
+    }
+    let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
+    let w = g.size().x + 26.0;
+    // (a cell smaller than the pill still keeps it inside its own picture)
+    let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
+    let y = (img_rect.bottom() - 24.0 - 20.0).max(img_rect.top() + 4.0);
+    let br = Rect::from_min_size(pos2(x, y), vec2(w, 17.0));
+    p.rect_filled(br, 8.5, Color32::from_black_alpha(175));
+    paint(p, Rect::from_center_size(pos2(br.left() + 11.0, br.center().y), vec2(12.0, 12.0)), Icon::Video, Color32::WHITE);
+    p.galley(pos2(br.left() + 19.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    register(ui, format!("badge:videoDuration:{}", id.0), br);
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),

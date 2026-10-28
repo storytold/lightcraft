@@ -2,7 +2,8 @@
 //! `<canvas id="lightcraft_canvas">`, wires the file picker and drag-and-drop, and turns exports
 //! into downloads.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
 use crate::safety::{self, notice};
-use crate::store::{Originals, content_hash, download_name, storage_key};
+use crate::store::{Originals, check_original_size, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
 use crate::workers::{THUMB_INDEX, Workers};
 
@@ -100,25 +101,171 @@ impl Options {
 }
 
 /// Store a picked/dropped file (bytes into browser storage, then queue its import).
-async fn store_file(originals: Originals, backend: Option<Backend>, name: String, bytes: Vec<u8>, ctx: egui::Context) {
+async fn store_file(originals: Originals, backend: Option<Backend>, file: &web_sys::File, bytes: Vec<u8>, ctx: egui::Context) {
+    let name = file.name();
+    if let Err(e) = check_original_size(bytes.len() as f64) {
+        notice(format!("{name} was not added: {e}"));
+        return;
+    }
     let hash = content_hash(&bytes);
     if let Some(b) = &backend
-        && let Err(e) = b.write(&storage_key(&hash), &bytes).await
+        && let Err(e) = b.write_original_blob(&storage_key(&hash), file).await
     {
         // a photo whose bytes aren't stored would be gone after a reload: don't add it
         notice(format!("{name} was not added: browser storage refused it ({e}). Free up space or back up and clear old photos."));
         return;
     }
-    originals.added(&name, &hash, Arc::from(bytes));
+    if let Err(e) = originals.added(&name, &hash, Arc::new(bytes)) {
+        notice(format!("{name} was not added: {e}"));
+    }
     ctx.request_repaint();
 }
 
 /// Read a browser `File` into storage.
 async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
-    match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-        Ok(buf) => store_file(originals, backend, file.name(), js_sys::Uint8Array::new(&buf).to_vec(), ctx).await,
-        Err(e) => log::warn!("reading {}: {e:?}", file.name()),
+    let head = match blob_range(&file, 0, file.size().min(16.0) as u64).await {
+        Ok(head) => head,
+        Err(e) => {
+            notice(format!("{} was not added: {e}", file.name()));
+            return;
+        }
+    };
+    let format = lightcraft_codecs::sniff(&head);
+    if format.as_ref().is_some_and(|f| f.is_video()) || (format.is_none() && lightcraft_engine::files::looks_like_video_container(&head)) {
+        if let Err(e) = store_video(&originals, backend.as_ref(), &file).await {
+            notice(format!("{} was not added: {e}", file.name()));
+        }
+        ctx.request_repaint();
+        return;
     }
+    if let Err(e) = check_original_size(file.size()) {
+        notice(format!("{} was not added: {e}", file.name()));
+        return;
+    }
+    match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+        Ok(buf) => match crate::store::copy_browser_bytes(&js_sys::Uint8Array::new(&buf)) {
+            Ok(bytes) => store_file(originals, backend, &file, bytes, ctx).await,
+            Err(e) => notice(format!("{} was not added: {e}", file.name())),
+        },
+        Err(e) => notice(format!("{} was not added: can't read the file ({e:?})", file.name())),
+    }
+}
+
+struct BlobOriginal {
+    blob: web_sys::Blob,
+    location_check: Result<(), String>,
+}
+
+/// Each read is bounded; offsets stay in u64/f64 so clips larger than WASM's address space work.
+async fn blob_range(blob: &web_sys::Blob, start: u64, length: u64) -> Result<Vec<u8>, String> {
+    if length > 64 << 20 {
+        return Err("video metadata exceeds the 64 MiB scan budget".into());
+    }
+    let end = start.checked_add(length).ok_or("video offset overflow")?;
+    let slice = blob.slice_with_f64_and_f64(start as f64, end as f64).map_err(|e| format!("reading original: {e:?}"))?;
+    let buf = wasm_bindgen_futures::JsFuture::from(slice.array_buffer()).await.map_err(|e| format!("reading original: {e:?}"))?;
+    let bytes = crate::store::copy_browser_bytes(&js_sys::Uint8Array::new(&buf))?;
+    if bytes.len() as u64 != length {
+        return Err("original changed or was truncated while reading".into());
+    }
+    Ok(bytes)
+}
+
+async fn video_blob_metadata(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
+    let size = blob.size();
+    if !size.is_finite() || size < 0.0 || size.fract() != 0.0 || size > 9_007_199_254_740_991.0 {
+        return Err("invalid video file size".into());
+    }
+    let size = size as u64;
+    let (mut at, mut out) = (0u64, Vec::new());
+    for _ in 0..lightcraft_engine::files::MAX_VIDEO_TOP_LEVEL_BOXES {
+        if at == size {
+            return Ok(out);
+        }
+        let head = blob_range(blob, at, size.saturating_sub(at).min(16)).await?;
+        let (kind, len) = lightcraft_engine::files::video_box_info(&head, at, size)?;
+        if lightcraft_engine::files::is_video_metadata_box(&kind) {
+            let new_len = (out.len() as u64).checked_add(len).ok_or("video metadata length overflow")?;
+            if new_len > 64 << 20 {
+                return Err("video metadata exceeds the 64 MiB scan budget".into());
+            }
+            out.try_reserve_exact(len as usize).map_err(|e| format!("video metadata allocation: {e}"))?;
+            let end = at.checked_add(len).ok_or("video offset overflow")?;
+            let slice = blob.slice_with_f64_and_f64(at as f64, end as f64).map_err(|e| format!("reading metadata: {e:?}"))?;
+            let buffer = wasm_bindgen_futures::JsFuture::from(slice.array_buffer()).await.map_err(|e| format!("reading metadata: {e:?}"))?;
+            let bytes = js_sys::Uint8Array::new(&buffer);
+            if u64::from(bytes.length()) != len {
+                return Err("original changed or was truncated while reading metadata".into());
+            }
+            let start = out.len();
+            out.resize(new_len as usize, 0);
+            let target = out.get_mut(start..).ok_or("video metadata offset overflow")?;
+            bytes.copy_to(target);
+        }
+        at = at.checked_add(len).ok_or("video offset overflow")?;
+    }
+    if at == size { Ok(out) } else { Err("video metadata scan exceeded its box budget".into()) }
+}
+
+async fn store_video(originals: &Originals, backend: Option<&Backend>, file: &web_sys::File) -> Result<(), String> {
+    let metadata = video_blob_metadata(file).await?;
+    let mut probe = lightcraft_engine::files::probe_bytes(&file.name(), &metadata)?;
+    if probe.kind != lightcraft_engine::catalog::MediaKind::Video {
+        return Err("no readable video track in this container".into());
+    }
+    let size = file.size() as u64;
+    let mut hash = lightcraft_preview::Hasher128::new();
+    let mut at = 0;
+    while at < size {
+        let length = (size - at).min(1 << 20);
+        hash.update(&blob_range(file, at, length).await?);
+        at += length;
+    }
+    let hash = hash.finish().to_string();
+    if let Some(b) = backend {
+        b.write_original_blob(&storage_key(&hash), file).await?;
+    }
+    probe.content_hash = Some(hash.clone());
+    probe.file_size = size;
+    let location_check = lightcraft_meta::verify_video_location_absent(&metadata);
+    VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob: file.clone().into(), location_check }));
+    originals.added_video(&file.name(), &hash, probe);
+    Ok(())
+}
+
+struct PendingImport {
+    originals: Originals,
+    backend: Option<Backend>,
+    file: web_sys::File,
+    ctx: egui::Context,
+    guard: lightcraft_engine::activity::TaskGuard,
+}
+
+thread_local! {
+    static VIDEO_BLOBS: RefCell<HashMap<String, BlobOriginal>> = RefCell::new(HashMap::new());
+    static IMPORT_QUEUE: RefCell<VecDeque<PendingImport>> = const { RefCell::new(VecDeque::new()) };
+    static READING_FILES: Cell<bool> = const { Cell::new(false) };
+    static LOADING_ORIGINALS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Read one original at a time, so a multi-file drop cannot allocate every clip concurrently.
+fn queue_file(originals: Originals, backend: Option<Backend>, file: web_sys::File, ctx: egui::Context) {
+    let guard = originals.import_activity(&file.name());
+    IMPORT_QUEUE.with(|q| q.borrow_mut().push_back(PendingImport { originals, backend, file, ctx, guard }));
+    if READING_FILES.with(|reading| reading.replace(true)) {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async {
+        loop {
+            let next = IMPORT_QUEUE.with(|q| q.borrow_mut().pop_front());
+            let Some(PendingImport { originals, backend, file, ctx, guard }) = next else {
+                READING_FILES.with(|reading| reading.set(false));
+                break;
+            };
+            read_file(originals, backend, file, ctx).await;
+            drop(guard);
+        }
+    });
 }
 
 /// Show the browser's open dialog; picked files are imported asynchronously.
@@ -133,7 +280,7 @@ fn open_picker(originals: Originals, backend: Option<Backend>, ctx: egui::Contex
         if let Some(files) = inp.files() {
             for i in 0..files.length() {
                 if let Some(f) = files.get(i) {
-                    wasm_bindgen_futures::spawn_local(read_file(originals.clone(), backend.clone(), f, ctx.clone()));
+                    queue_file(originals.clone(), backend.clone(), f, ctx.clone());
                 }
             }
         }
@@ -151,6 +298,12 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     let name = download_name(path);
     opts.set_type(crate::store::mime_for(name));
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&arr, &opts).map_err(e)?;
+    download_blob(path, &blob)
+}
+
+fn download_blob(path: &str, blob: &web_sys::Blob) -> Result<(), String> {
+    let e = |e: JsValue| format!("download failed: {e:?}");
+    let name = download_name(path);
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(e)?;
     let doc = window().and_then(|w| w.document()).ok_or("no document")?;
     let a: web_sys::HtmlAnchorElement = doc.create_element("a").map_err(e)?.unchecked_into();
@@ -164,7 +317,7 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     if let Some(w) = window() {
         let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 5000);
     }
-    log::info!("exported {name} ({} bytes)", bytes.len());
+    log::info!("exported {name} ({} bytes)", blob.size());
     Ok(())
 }
 
@@ -194,8 +347,9 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
                 })
                 .collect();
             let files = backup_files.clone();
-            notice("Backing up the library… (the download starts when it's ready)");
+            let guard = session.activity.start("backup", "Backing up library", lightcraft_engine::activity::Cancel::No);
             wasm_bindgen_futures::spawn_local(async move {
+                let _guard = guard;
                 match safety::backup(files, b, names).await {
                     Ok((n, bytes)) => notice(format!(
                         "Library backed up: {n} original{} ({:.1} MB). Keep the file somewhere safe.",
@@ -207,11 +361,11 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
             });
             Ok(json!({"started": true}))
         })),
-        restore_library: Some(Box::new(move |_session: &mut Session| {
+        restore_library: Some(Box::new(move |session: &mut Session| {
             let Some(b) = restore_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             let frozen = frozen.clone();
             // once the backup is in place, stop saving the old library (the page reloads)
-            safety::pick_and_restore(b, move || frozen.set(true));
+            safety::pick_and_restore(b, session.activity.clone(), move || frozen.set(true));
             Ok(json!({"started": true}))
         })),
         pick_files: Some(Box::new(move || {
@@ -235,11 +389,24 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         pick_print_templates: None,
         save_print_template: None,
         write: Some(Box::new(download)),
+        original_copy: Some(Box::new(|source, destination, remove_location| {
+            let hash = crate::store::hash_of_path(source).ok_or("invalid browser original path")?;
+            VIDEO_BLOBS.with(|b| {
+                let b = b.borrow();
+                let original = b.get(hash).ok_or("the original video is still loading from browser storage; retry shortly")?;
+                if remove_location {
+                    original.location_check.clone()?;
+                }
+                download_blob(destination, &original.blob)?;
+                Ok(original.blob.size() as u64)
+            })
+        })),
         // the browser download path has no meaningful create-new file write; the control channel
         // (and therefore screenshot paths) is not available on the web
         write_new: None,
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
+        original_copy_shared: None,
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
@@ -456,9 +623,9 @@ impl WebApp {
     /// load the stored UI state, start render workers and the optional benchmark.
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
         let Boot { opts, backend, files, index, lib_dir, load_error } = boot;
-        let originals = Originals::default();
         let t = perf_now();
         let mut session = Session::new();
+        let mut originals = Originals::new(session.activity.clone());
         originals.install(&mut session);
         let stores = LibraryStores {
             dir: format!("browser:{}/{lib_dir}", backend.as_ref().map_or("memory", |b| b.kind())).into(),
@@ -486,6 +653,7 @@ impl WebApp {
                 // never a silent demo session (issue #100): an empty one, and the window says why
                 log::error!("opening the library failed: {e}");
                 session = Session::new();
+                originals = Originals::new(session.activity.clone());
                 originals.install(&mut session);
                 problem = Some(lightcraft_ui_egui::panels::library_problem::LibraryProblem {
                     can_retry: false,
@@ -574,14 +742,12 @@ impl WebApp {
             return;
         }
         for f in drained.dropped {
-            let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
-            wasm_bindgen_futures::spawn_local(async move {
+            if let Some(file) = egui::DroppedFile::web_file(f.as_ref()) {
+                queue_file(self.originals.clone(), self.backend.clone(), file.clone(), ctx.clone());
+            } else {
                 let name = egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string();
-                match egui::DroppedFile::bytes_async(f.as_ref()).await {
-                    Ok(bytes) => store_file(originals, backend, name, bytes, ctx).await,
-                    Err(e) => notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, &e.to_string())),
-                }
-            });
+                notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, "can't inspect the file size; use Import Photos instead"));
+            }
         }
         let Some(paths) = drained.pending else { return };
         if !paths.is_empty() {
@@ -599,24 +765,74 @@ impl WebApp {
                     self.app.toast(ctx, lightcraft_ui_egui::i18n::dropped_import_failed(&e));
                 }
             }
+            self.originals.finish_import();
         }
     }
 
     /// Load originals the main thread asked for (and the active photo's, ahead of time).
     fn load_originals(&mut self, ctx: &egui::Context) {
-        if let Some(id) = self.app.session.selection.active
-            && let Some(Source::File { path }) = self.app.session.catalog.photo(id).map(|p| &p.source)
-            && !self.originals.contains(path)
-        {
-            self.originals.prefetch(path);
+        self.originals.sync_selection(&self.app.session.selection.ids, self.app.session.selection.active);
+        for id in self.app.session.selection.ids.iter().chain(self.app.session.selection.active.iter()) {
+            if let Some(Source::File { path }) = self.app.session.catalog.photo(*id).map(|p| &p.source)
+                && !self.originals.contains(path)
+                && !self.originals.has_failed(path)
+                && !VIDEO_BLOBS.with(|b| crate::store::hash_of_path(path).is_some_and(|h| b.borrow().contains_key(h)))
+            {
+                self.originals.prefetch(path);
+            }
         }
         let Some(b) = &self.backend else { return };
-        for hash in self.originals.take_wanted() {
-            let (b, originals, ctx) = (b.clone(), self.originals.clone(), ctx.clone());
-            wasm_bindgen_futures::spawn_local(async move {
+        if LOADING_ORIGINALS.with(Cell::get) {
+            return;
+        }
+        let wanted = self.originals.take_wanted();
+        if wanted.is_empty() {
+            return;
+        }
+        let video_hashes: std::collections::HashSet<String> = self
+            .app
+            .session
+            .catalog
+            .photos()
+            .filter(|p| p.is_video())
+            .filter_map(|p| {
+                let Source::File { path } = &p.source else { return None };
+                crate::store::hash_of_path(path).map(str::to_string)
+            })
+            .collect();
+        let (b, originals, ctx) = (b.clone(), self.originals.clone(), ctx.clone());
+        let guard = self.app.session.activity.start("load", "Loading originals", lightcraft_engine::activity::Cancel::No);
+        LOADING_ORIGINALS.with(|loading| loading.set(true));
+        wasm_bindgen_futures::spawn_local(async move {
+            let _guard = guard;
+            for hash in wanted {
+                if video_hashes.contains(&hash) {
+                    let result = async {
+                        let blob = b.read_original_blob(&storage_key(&hash)).await?.ok_or("original is missing from browser storage")?;
+                        let location_check = match video_blob_metadata(&blob).await {
+                            Ok(metadata) => lightcraft_meta::verify_video_location_absent(&metadata),
+                            Err(e) => Err(format!("cannot verify video location: {e}")),
+                        };
+                        VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob, location_check }));
+                        Ok::<(), String>(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => originals.load_finished(&hash),
+                        Err(e) => {
+                            originals.load_failed(&hash);
+                            notice(format!("Original video was not loaded: {e}"));
+                        }
+                    }
+                    ctx.request_repaint();
+                    continue;
+                }
                 match b.read(&storage_key(&hash)).await {
                     Ok(Some(bytes)) => {
-                        originals.insert(&hash, Arc::from(bytes));
+                        if let Err(e) = originals.insert(&hash, Arc::new(bytes)) {
+                            originals.load_failed(&hash);
+                            notice(format!("Original was not loaded: {e}"));
+                        }
                         ctx.request_repaint();
                     }
                     Ok(None) => {
@@ -626,10 +842,12 @@ impl WebApp {
                     Err(e) => {
                         log::warn!("loading original {hash}: {e}");
                         originals.load_failed(&hash);
+                        notice(format!("Original was not loaded: {e}"));
                     }
                 }
-            });
-        }
+            }
+            LOADING_ORIGINALS.with(|loading| loading.set(false));
+        });
     }
 
     /// Save view state, UI prefs and the thumbnail index now and then; flush dirty files.

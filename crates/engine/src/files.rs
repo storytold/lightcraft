@@ -13,6 +13,29 @@ use lightcraft_raster::resample::{Filter, fit};
 
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
+/// Top-level movie boxes may include many fragments; retained metadata still has its own size cap.
+pub const MAX_VIDEO_TOP_LEVEL_BOXES: usize = 1_000_000;
+
+/// Check a whole buffer against the platform's capacity and known physical RAM, never the cache
+/// budget. Destination-backed video exports do not buffer the original.
+pub fn check_buffered_original_size(size: u64) -> Result<(), String> {
+    check_original_buffer_capacity(size, crate::memory::total_ram())
+}
+
+fn check_original_buffer_capacity(size: u64, ram: Option<usize>) -> Result<(), String> {
+    let bytes = usize::try_from(size).ok().filter(|n| *n <= isize::MAX as usize).ok_or("original exceeds this platform's buffer capacity")?;
+    if let Some(ram) = ram
+        && bytes > ram
+    {
+        return Err(format!(
+            "this original buffer needs {} MiB, exceeding this computer's {} MiB of physical RAM; use destination-backed Original export",
+            bytes.div_ceil(1 << 20),
+            ram / (1 << 20)
+        ));
+    }
+    Ok(())
+}
+
 mod colour;
 mod fs;
 mod load;
@@ -23,7 +46,8 @@ pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
 #[cfg(test)]
 use fs::quick_image_srgb;
-pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};
+pub(crate) use fs::read_video_metadata_from;
+pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader, is_video_metadata_box, looks_like_video_container, video_box_info};
 pub(crate) use load::{DngWhite, WbScaleOf, dng_tone_curve};
 pub use load::{load_bytes, load_vec, load_vec_pair, load_vec_reduced};
 #[cfg(test)]

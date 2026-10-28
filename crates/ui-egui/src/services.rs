@@ -97,6 +97,10 @@ pub struct Services {
     pub write_new: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,
+    /// Copy an unchanged Original video without buffering it (including location verification).
+    pub original_copy: Option<Box<lightcraft_engine::export::OriginalCopier<'static>>>,
+    /// Thread-safe Original copier for background exports.
+    pub original_copy_shared: Option<lightcraft_engine::export::SharedOriginalCopier>,
     /// PNG encoder (the host links an image encoder; the UI crate stays codec-free).
     pub png: Option<PngEncode>,
     /// Show a file in the system file manager (desktop only).

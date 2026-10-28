@@ -123,6 +123,46 @@ fn filter_search_sort() {
     assert_eq!(c.keywords(), vec![("ocean".to_string(), 1), ("summer".to_string(), 1)]);
 }
 
+#[test]
+fn legacy_videos_match_kind_filters_search_and_smart_rules() {
+    let mut c = Catalog::new();
+    let mut videos = Vec::new();
+    for (name, format, kind) in
+        [("new.mp4", "MP4", MediaKind::Video), ("legacy.mov", "VIDEO", MediaKind::Image), ("extension.m4v", "", MediaKind::Image)]
+    {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: name.into() }, name, format, 640, 360, "2026-10-26T12:00:00");
+        p.kind = kind;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        videos.push(id);
+    }
+    let still = c.alloc_photo_id();
+    c.apply(Op::AddPhoto {
+        photo: Box::new(Photo::new(still, Source::File { path: "image.mp4".into() }, "image.mp4", "PNG", 40, 30, "2026-10-26T12:00:00")),
+    })
+    .unwrap();
+    let query = |f| c.query(&f, &Sort::default());
+    for f in [
+        Filter { kind: Some(MediaKind::Video), ..Default::default() },
+        Filter { text: "kind:video".into(), ..Default::default() },
+        Filter { text: "type:video".into(), ..Default::default() },
+        Filter {
+            rule_set: Some(serde_json::from_value(serde_json::json!({"rules": [{"field": "kind", "op": "is", "value": "video"}]})).unwrap()),
+            ..Default::default()
+        },
+    ] {
+        let got = query(f);
+        assert_eq!(got.len(), videos.len());
+        assert!(videos.iter().all(|id| got.contains(id)));
+    }
+    assert_eq!(query(Filter { kind: Some(MediaKind::Image), ..Default::default() }), vec![still]);
+    assert_eq!(query(Filter { text: "kind:image".into(), ..Default::default() }), vec![still]);
+    let not_video: crate::rules::Rule = serde_json::from_value(serde_json::json!({"field": "kind", "op": "isNot", "value": "video"})).unwrap();
+    assert!(not_video.matches(c.photo(still).unwrap(), &c));
+    assert!(videos.iter().all(|id| !not_video.matches(c.photo(*id).unwrap(), &c)));
+    assert_eq!(c.photo(videos[1]).unwrap().kind, MediaKind::Image, "legacy storage is unchanged");
+}
+
 /// A search word with a colon whose left part is not a known field ("10:30", "Re:") is plain
 /// text, not a fielded token that matches nothing.
 #[test]
