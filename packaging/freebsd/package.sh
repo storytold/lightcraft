@@ -34,7 +34,8 @@ done
 if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
   case "$CARGO_BUILD_TARGET" in
     aarch64-unknown-freebsd) ARCH=aarch64 ;;
-    *) ARCH=x86_64 ;;
+    x86_64-unknown-freebsd) ARCH=x86_64 ;;
+    *) echo "unsupported FreeBSD target $CARGO_BUILD_TARGET" >&2; exit 2 ;;
   esac
 else
   MACHINE="$(uname -m)"
