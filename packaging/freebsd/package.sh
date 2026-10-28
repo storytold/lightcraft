@@ -102,7 +102,12 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-"$STAGE/bin/lightcraft-cli" --version
+# A cross-built binary (e.g. aarch64 on the x86_64 VM) cannot run on the build host.
+if [[ -z "${CARGO_BUILD_TARGET:-}" ]]; then
+  "$STAGE/bin/lightcraft-cli" --version
+else
+  echo "skipping --version: $CARGO_BUILD_TARGET binaries do not run on this host"
+fi
 if [[ "$DRY_RUN" = 1 ]]; then
   echo "==> dry run: tarball contents"
   tar -tzvf "$OUT_DIR/$BASENAME.tar.gz"
