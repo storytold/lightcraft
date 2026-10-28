@@ -153,7 +153,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad(C, format!("{path} holds whole disks: pass `disk: true` to remove everything on them")));
                 }
                 mark_deleted_with(s, &ids, unmade, "Remove Folder from Library")?;
-                if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
+                let filter_changed = s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
+                if filter_changed {
                     s.filter.library_folder = None;
                 }
                 // a filter put aside by Enable Filters must not bring the removed folder back
@@ -165,15 +166,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.shelved_filter.as_ref() == Some(&Filter::default()) {
                     s.shelved_filter = None;
                 }
-                // the folder being shown is gone: back to everything, as for a deleted album
+                // the folder being shown is gone: back to everything, as for a deleted album (a folder left again
+                // stays remembered in `library_folder` and is forgotten, but it was not the view)
+                let source_before = s.source;
                 if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.library_folder = None;
                     if s.source == LibrarySource::LibraryFolder {
                         s.source = LibrarySource::All;
                     }
                 }
+                // (also drops a shown folder that is no longer listed: it held only the folder just removed)
                 let vis = s.visible_cloned();
-                s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+                // photos went to Recently Deleted or the grid shows something else now: select afresh; an empty made
+                // folder that no view showed leaves the selection alone
+                if !ids.is_empty() || filter_changed || s.source != source_before {
+                    s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+                }
                 Ok(json!({"removed": ids.len()}))
             }
         ),
