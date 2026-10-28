@@ -2348,5 +2348,7 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Recently Added always shows the newest imports first.": "Ostatnio dodane zawsze pokazuje najnowsze importy jako pierwsze.",
+  "Recently Deleted shows no date groups.": "Ostatnio usunięte nie pokazuje grup według dat."
 }
