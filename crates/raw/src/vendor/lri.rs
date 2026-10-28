@@ -306,7 +306,7 @@ fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usi
     };
     let Some(n) = cols.checked_mul(rows).filter(|&n| (4..=MAX_GRID_POINTS).contains(&n) && cols >= 2 && rows >= 2) else { return Ok(None) };
     let Some(raw) = grid.bytes(3) else { return Ok(None) };
-    if raw.len() != n.checked_mul(4).unwrap_or(usize::MAX) {
+    if raw.len() != n.saturating_mul(4) {
         return Ok(None);
     }
     let gains: Vec<f32> = raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
