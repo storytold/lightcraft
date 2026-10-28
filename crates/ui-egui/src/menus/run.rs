@@ -16,6 +16,7 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
     if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
     }
+    app.end_midi_interaction();
     let _ = app.session.end_interaction();
 }
 
@@ -164,6 +165,23 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if id == "library.findSimilar" {
         // the photos are read in the background (the first search reads the whole library)
         return Some(crate::find_similar::command(app, p));
+    }
+    if id == "midi.reload" {
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        let result = match app.midi_reload.as_mut() {
+            Some(reload) => reload(),
+            None => Err("MIDI input is not available in this build".to_string()),
+        };
+        return Some(match result {
+            Ok(said) => {
+                app.toast(&ctx, said.clone());
+                Ok(json!(said))
+            }
+            Err(e) => {
+                app.toast_error(&ctx, e.clone());
+                Err(e)
+            }
+        });
     }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
@@ -475,6 +493,7 @@ fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 app.ui.fullscreen = true;
                 app.ui.zoom = Zoom::Fit;
                 app.ui.tool.clear();
+                app.end_midi_interaction();
                 let _ = app.session.end_interaction();
             }
             Ok(json!({"fullscreen": app.ui.fullscreen}))
@@ -616,6 +635,7 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 if app.ui.tool != "wbPicker" {
                     app.ui.tool.clear();
                 }
+                app.end_midi_interaction();
                 let _ = app.session.end_interaction();
             } else if app.ui.right == RightPanel::None {
                 let p = match std::mem::take(&mut app.ui.right_hidden) {
@@ -1022,6 +1042,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             // Return commits a tool panel (crop, remove, red eye, masking): back to Edit
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
+                app.end_midi_interaction();
                 if app.ui.right == Crop {
                     app.apply_crop_preview();
                 }
