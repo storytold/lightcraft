@@ -34,6 +34,8 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// The ICC profile of the screen showing the window, as the system colour-manages it (`None`:
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
+/// Re-reads the MIDI map and says what happened (`midi.reload`; see `docs/midi.md`).
+pub type MidiReload = Box<dyn FnMut() -> Result<String, String>>;
 
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
