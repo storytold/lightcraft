@@ -2269,4 +2269,45 @@ pub(crate) const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/data/Mamiya/ZD/RAW_MAMIYA_ZD.MEF",
         "bcd63507c3c4cc3ea1bad2945e3f88cb4677a1a3c762e1acc38df4445714eb7c",
     ),
+    // GoPro GPR (VC-5): one CC0 file per body (crates/raw/tests/it/gpr_corpus.rs)
+    (
+        "gpr-hero5-936.gpr",
+        "https://raw.pixls.us/getfile.php/936/nice/GoPro%20-%20HERO5%20Black%20-%2016bit%20%284:3%29.GPR",
+        "191901b64412083146256ccebeacd954783f6c40a4556ef355a067915136159b",
+    ),
+    (
+        "gpr-hero6-2556.gpr",
+        "https://raw.pixls.us/getfile.php/2556/nice/GoPro%20-%20HERO6%20Black%20-%2016bit%20%284:3%29.GPR",
+        "ca9b79fcdfab1cc071405209063fb736cc0b7169a7a88fe091fceee803f546fb",
+    ),
+    (
+        "gpr-hero7-2786.gpr",
+        "https://raw.pixls.us/getfile.php/2786/nice/GoPro%20-%20HERO7%20Black%20-%2016bit%20%284:3%29.GPR",
+        "0c2003137feb0ca7c9a8adf6cd832bc8fba7ff1b89cf5d77822b22558b9a20fe",
+    ),
+    (
+        "gpr-hero8-3949.gpr",
+        "https://raw.pixls.us/getfile.php/3949/nice/GoPro%20-%20HERO8%20Black%20-%2016bit%20%284:3%29.GPR",
+        "bfd992594af380748f3d46e37814dae595356cb6fce182d4188230ca978e6a9f",
+    ),
+    (
+        "gpr-hero9-4483.gpr",
+        "https://raw.pixls.us/getfile.php/4483/nice/GoPro%20-%20HERO9%20Black%20-%2016bit%20%284:3%29.GPR",
+        "bf6f67d0c7096f347b864310f6d58be35237c3d0e715b47a1b30e650e9d785b1",
+    ),
+    (
+        "gpr-hero10-4883.gpr",
+        "https://raw.pixls.us/getfile.php/4883/nice/GoPro%20-%20HERO10%20Black%20-%2016bit%20%284:3%29.GPR",
+        "f462ea1e695a0491960a496e3998c8806a2a02a2830c9c696c7067c0039a437c",
+    ),
+    (
+        "gpr-hero11-7319.gpr",
+        "https://raw.pixls.us/getfile.php/7319/nice/GoPro%20-%20HERO11%20Black%20-%2016bit%20%285:4%29.GPR",
+        "d7a6be163c847cb8456e6858a99aef3b85dc3d8836bca1da1b8886effe0d43e1",
+    ),
+    (
+        "gpr-fusion-7370.gpr",
+        "https://raw.pixls.us/getfile.php/7370/nice/GoPro%20-%20FUSION%20-%2016bit%20%281:1%29.GPR",
+        "f90535bbb28f8b24093c6112bd982f89c47cb0181bcfaba97471e191861a1e80",
+    ),
 ];
