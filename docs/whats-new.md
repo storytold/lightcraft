@@ -11,6 +11,15 @@
   `faces.matching {topFaces}`; `faces.suggest` and `faces.evaluate` take `topFaces` too, so `faces.evaluate` can
   compare counts on your own photos. (#3250)
 
+## 2026-10-29
+
+### A person's page opens in seconds in a large library
+- Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
+  runs on every processor core, and each comparison of two faces uses the processor's vector instructions. In a
+  library of 92 000 unnamed faces, a person with 4 100 named ones took about 2 minutes 40 seconds on one core of an
+  Apple M1 Pro, with the window frozen; it now takes about 3 seconds. Name suggestions and the order of the unnamed
+  faces get the faster comparison too.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

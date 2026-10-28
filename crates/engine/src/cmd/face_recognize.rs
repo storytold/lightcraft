@@ -280,6 +280,7 @@ mod imp {
     use lightcraft_faces::runtime::Embedder;
     use lightcraft_geom::Rect;
     use lightcraft_meta::{Region, RegionKind};
+    use rayon::prelude::*;
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -733,12 +734,14 @@ mod imp {
             return ready;
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|e| ("person", &e[..])).collect();
+        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
+        // in a library of 90 000, so on every core (minutes on one)
         let top = top_faces(s);
         let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
-            .into_iter()
+            .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
-                let score = matching::rank_top(&e, &refs, top).first()?.score;
+                let score = matching::person_score(&e, &refs, top)?;
                 (score >= bar).then_some((score, photo, index, rect))
             })
             .collect();
