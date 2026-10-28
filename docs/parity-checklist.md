@@ -535,7 +535,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-VIEW-EDIT | Edit Panel | P0 | ✅ | `cmd:panel.edit` | |
 | MENU-VIEW-FULLSCREENPREVIEW | Full Screen Preview | P1 | ✅ | `cmd:view.fullScreenPreview` | |
 | MENU-VIEW-LIGHTSOUT | Lights Out | P2 | ✅ | `cmd:view.lightsOut` | everything but the photo veiled; panels stay put |
-| MENU-VIEW-ENTERFULLSCREEN | Enter Full Screen | P1 | ✅ | `cmd:view.enterFullScreen`, `apps/lightcraft/src/appkit_defaults.rs` | on macOS the menu bar has one row, LightCraft's, which reads Exit Full Screen while the window is full screen; AppKit's own row is switched off (`NSFullScreenMenuItemEverywhere`) |
+| MENU-VIEW-ENTERFULLSCREEN | Enter Full Screen | P1 | ✅ | `cmd:view.enterFullScreen`, `apps/lightcraft/src/appkit_defaults.rs` | on macOS the menu bar has one row, LightCraft's, which reads Exit Full Screen while the window is full screen; AppKit's own row is switched off (`NSFullScreenMenuItemEverywhere`; not by a `--memory` session, which writes nothing) |
 | MENU-VIEW-PHOTOSPANEL | Show/Hide photos panel | P0 | ✅ | `cmd:view.leftPanel` | |
 | MENU-VIEW-FILMSTRIP | Show/Hide filmstrip | P0 | ✅ | `cmd:view.filmstrip` | |
 | MENU-VIEW-INFO | Show/Hide info | P0 | ✅ | `cmd:panel.info` | |

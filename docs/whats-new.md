@@ -41,7 +41,9 @@
 ### One Enter Full Screen row in the macOS View menu
 - On macOS the View menu showed two "Enter Full Screen" rows: LightCraft's and the one macOS adds itself (not with
   LightCraft in German). Now there is one, LightCraft's. It reads "Exit Full Screen" while the window is full screen
-  and uses the system's key, ⌃⌘F, instead of ⇧⌘F. Windows and Linux are unchanged (⇧Ctrl+F).
+  and uses the system's key, ⌃⌘F, instead of ⇧⌘F. Windows and Linux are unchanged (⇧Ctrl+F). (A `--memory` session
+  doesn't change the setting that switches macOS's row off, so on a Mac where LightCraft only ever ran that way,
+  macOS's row stays.)
 
 ## 2026-11-02
 
