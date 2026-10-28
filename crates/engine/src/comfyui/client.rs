@@ -138,7 +138,12 @@ pub(super) fn workflow(settings: &Settings, image: &str, mask: &str) -> Result<V
             "/1/inputs/unet_name",
             "/4/inputs/prompt",
             "/4/inputs/negative_prompt",
-            format!("Edit <image1>: {}. Preserve the surrounding scene, lighting and perspective. Return an opaque photograph.", settings.prompt),
+            format!(
+                "Replace the entire white region shown in <image2> of <image1> with the following: {}. \
+                Remove the existing objects in that white region and reconstruct it as the requested replacement. \
+                Black regions are context: keep them unchanged. Return an opaque photograph.",
+                settings.prompt
+            ),
         )
     } else {
         ("/1/inputs/ckpt_name", "/4/inputs/text", "/5/inputs/text", settings.prompt.clone())
@@ -187,7 +192,11 @@ mod tests {
         let v = workflow(&s, "photo.png", "mask.png").unwrap();
         assert_eq!(v.pointer("/1/inputs/unet_name"), Some(&json!(s.model)));
         assert_eq!(v.pointer("/4/inputs/images.image_1"), Some(&json!(["2", 0])));
+        assert_eq!(v.pointer("/4/inputs/images.image_2"), Some(&json!(["17", 0])));
+        assert_eq!(v.pointer("/17/class_type"), Some(&json!("MaskToImage")));
+        assert_eq!(v.pointer("/17/inputs/mask"), Some(&json!(["3", 0])));
         assert!(v.pointer("/4/inputs/prompt").unwrap().as_str().unwrap().contains(&s.prompt));
+        assert!(v.pointer("/4/inputs/prompt").unwrap().as_str().unwrap().contains("Replace the entire white region"));
         assert_eq!(v.pointer("/3/inputs/image"), Some(&json!("mask.png")));
         assert_eq!(v.pointer("/9/inputs/mask"), Some(&json!(["3", 0])));
         assert_eq!(v.pointer("/9/inputs/samples"), Some(&json!(["6", 0])));

@@ -35,8 +35,9 @@ a mask, opening settings, starting LightCraft or reading generation status.
   whole-photo resize. Large selections are still limited to the model's resolution.
 - The bundled **Lightcraft-masking** API templates bind the photo, mask, prompt, negative
   prompt, model and seed. SDXL uses its checkpoint, CLIP and inpaint VAE nodes. Qwen uses
-  reference-image conditioning, the encoded original photo and a latent noise mask, so it sees
-  the scene while sampling the selected area. Both decode to RGB for local compositing. The
+  reference-image conditioning with the original photo and the combined mask as separate
+  references, the encoded original and a latent noise mask. The instruction explicitly asks
+  Qwen to replace the entire white area, including all original objects there. Both decode to RGB for local compositing. The
   templates are independent of a workflow edited/saved in the browser. ComfyUI's implementation
   and custom-node code are not bundled into LightCraft.
 - The returned region is scaled back and blended once, in linear light, through the original
@@ -65,7 +66,10 @@ run, so the instruction entered in LightCraft reaches the edit model directly, w
 reference-image/preserve-surroundings instruction. Qwen may take longer than SDXL; actual
 quality depends on the scene, selection and prompt. SAM 3 still creates the mask locally.
 
-The source and mask are uploaded together at matching dimensions. LightCraft keeps compositing
+The source and combined mask (all Add/Subtract/Intersect components evaluated together) are
+uploaded at matching dimensions. Qwen sees both as references: the source gives scene context
+and the white-on-black mask identifies the entire replacement area. A region only constrains
+where editing is allowed; it does not guarantee that the model follows the instruction perfectly. LightCraft keeps compositing
 through the original full-resolution mask, so the model cannot alter zero-mask pixels. The saved
 browser workflow performs its own composite for standalone use; the application API template
 returns the raw RGB region to avoid blending a feathered edge twice.

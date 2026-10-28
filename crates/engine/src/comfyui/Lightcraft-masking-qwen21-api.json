@@ -44,6 +44,10 @@
       "vae": [
         "14",
         0
+      ],
+      "images.image_2": [
+        "17",
+        0
       ]
     },
     "_meta": {
@@ -198,6 +202,18 @@
     },
     "_meta": {
       "title": "RGB output for LightCraft"
+    }
+  },
+  "17": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Combined selection \u2014 white region to replace"
     }
   }
 }
