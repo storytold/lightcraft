@@ -180,13 +180,22 @@ pub(super) const MARK_W: f32 = 12.0;
 /// How long a dragged album must rest on a closed folder before it opens.
 const HOVER_OPEN_SECS: f64 = 0.6;
 
-/// Whether the album `dragged` may be dropped into the folder `target` (`None`: the top level):
-/// a folder other than where it already is, and not itself or something inside it.
+/// Whether the album `dragged`, with the albums chosen beside it when it is one of several, may be
+/// dropped into the folder `target` (`None`: the top level): at least one of them has to move
+/// there (it is not in that folder already), and none may go into itself or something inside it.
 fn can_drop_album(app: &LightcraftApp, dragged: AlbumId, target: Option<AlbumId>) -> bool {
-    let Some(d) = app.session.catalog.album(dragged) else { return false };
+    let cat = &app.session.catalog;
+    if cat.album(dragged).is_none() {
+        return false;
+    }
+    let group: Vec<AlbumId> = crate::panels::side_select::albums_dragged(app, dragged).into_iter().map(AlbumId).collect();
     match target {
-        None => d.parent.is_some(),
-        Some(t) => app.session.catalog.album(t).is_some_and(|f| f.folder) && d.parent != Some(t) && !is_within(app, t, dragged),
+        None => group.iter().any(|id| cat.album(*id).is_some_and(|a| a.parent.is_some())),
+        Some(t) => {
+            cat.album(t).is_some_and(|f| f.folder)
+                && group.iter().any(|id| cat.album(*id).is_some_and(|a| a.parent != Some(t)))
+                && !group.iter().any(|id| is_within(app, t, *id))
+        }
     }
 }
 
@@ -278,11 +287,14 @@ fn album_drop_at(app: &LightcraftApp, dragged: AlbumId, target: &Album, frac: f3
     let sibs = cat.album_children(parent);
     let at = sibs.iter().position(|a| a.id == target.id)?;
     let was = sibs.iter().position(|a| a.id == dragged);
+    // (placed where it already is is nothing, unless an album chosen with it is elsewhere: `place_album` moves those here)
+    let group = crate::panels::side_select::albums_dragged(app, dragged);
+    let others_move = group.iter().any(|id| cat.album(AlbumId(*id)).is_some_and(|a| a.parent != parent));
     if !after {
-        (was.map(|w| w + 1) != Some(at)).then_some(AlbumDrop::Place { parent, before: Some(target.id), above: true })
+        (others_move || was.map(|w| w + 1) != Some(at)).then_some(AlbumDrop::Place { parent, before: Some(target.id), above: true })
     } else {
         let next = sibs.iter().skip(at + 1).find(|a| a.id != dragged).filter(|a| a.folder == target.folder).map(|a| a.id);
-        (was != Some(at + 1)).then_some(AlbumDrop::Place { parent, before: next, above: false })
+        (others_move || was != Some(at + 1)).then_some(AlbumDrop::Place { parent, before: next, above: false })
     }
 }
 
@@ -345,9 +357,9 @@ fn album_drag_over(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Resp
     opened
 }
 
-/// While an album that sits in a folder is dragged: the "Albums" header takes it back to the top
-/// level (outlined, with a hint). The header stays in view however long the tree is, and nothing
-/// moves when it appears.
+/// While an album that sits in a folder, or chosen with one that does, is dragged: the "Albums"
+/// header takes it back to the top level (outlined, with a hint). The header stays in view however
+/// long the tree is, and nothing moves when it appears.
 pub(super) fn top_level_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rect) {
     let Some(dragged) = app.ui.dragging_album.map(AlbumId) else { return };
     if !can_drop_album(app, dragged, None) {

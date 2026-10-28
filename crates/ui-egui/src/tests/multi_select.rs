@@ -236,6 +236,53 @@ fn dragging_one_of_several_albums_onto_a_folder_moves_them_all() {
     assert_eq!((parent(&h, a), parent(&h, c)), (None, None));
 }
 
+/// The group goes wherever one of its albums still has to move: the dragged row may already be there.
+#[test]
+fn a_group_can_be_dropped_where_only_the_dragged_album_already_is() {
+    let mut h = app("info");
+    let ([a, _, c, _], _) = four_albums(&mut h);
+    let folder = run(&mut h, "album.create", json!({"name": "Sel Folder", "folder": true}))["id"].as_u64().unwrap();
+    run(&mut h, "album.move", json!({"id": a, "parent": folder}));
+    let parent = |h: &Headless, id: u64| h.app.session.catalog.album(AlbumId(id)).unwrap().parent.map(|p| p.0);
+    h.app.ui.reveal_album = Some(a);
+    run(&mut h, "library.source", json!({"kind": "album", "ids": [a, c]}));
+    h.step();
+    h.step();
+    let undo = h.app.session.undo.len();
+    // dragged: the one already at the top level; the other one is in the folder
+    drag(&mut h, &row(c), "sidebarSection:albums");
+    assert_eq!((parent(&h, a), parent(&h, c)), (None, None), "both at the top level");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    run(&mut h, "edit.undo", json!({}));
+    h.app.ui.reveal_album = Some(a);
+    h.step();
+    h.step();
+    // dragged: the one already in the folder; the other one is at the top level
+    drag(&mut h, &row(a), &format!("source:folder:{folder}"));
+    assert_eq!((parent(&h, a), parent(&h, c)), (Some(folder), Some(folder)), "both in the folder");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+}
+
+/// A drop beside a row that would put the dragged album where it already is still moves the albums
+/// chosen with it that are elsewhere.
+#[test]
+fn a_group_dropped_beside_the_row_above_its_dragged_album_still_moves_the_others() {
+    let mut h = app("info");
+    let ([a, b, c, _], _) = four_albums(&mut h);
+    let folder = run(&mut h, "album.create", json!({"name": "Sel Folder", "folder": true}))["id"].as_u64().unwrap();
+    run(&mut h, "album.move", json!({"id": a, "parent": folder}));
+    let parent = |h: &Headless, id: u64| h.app.session.catalog.album(AlbumId(id)).unwrap().parent.map(|p| p.0);
+    h.app.ui.reveal_album = Some(a);
+    run(&mut h, "library.source", json!({"kind": "album", "ids": [a, c]}));
+    h.step();
+    h.step();
+    let undo = h.app.session.undo.len();
+    // (C goes below B, where it already is: for C alone that is nothing)
+    drag(&mut h, &row(c), &row(b));
+    assert_eq!((parent(&h, a), parent(&h, c)), (None, None), "A comes out of its folder to the top level");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+}
+
 #[test]
 fn cmd_click_filters_by_any_of_several_keywords() {
     let mut h = app("info");
