@@ -569,3 +569,8 @@ Konica Minolta	DiMAGE A200	verified	corpus: crates/raw/tests/it/corpus.rs (xtask
 Konica Minolta	Maxxum 7D Dynax 7D	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Konica Minolta	DiMAGE 7	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
 Konica Minolta	DiMAGE A2	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
+GoPro	FUSION	verified	corpus: crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO5 Black	verified	corpus: crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO6 Black	verified	corpus: crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO7 Black	verified	corpus: crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)
+GoPro	HERO10 Black	verified	corpus: crates/raw/tests/it/gpr_corpus.rs (pinned sensor hash, green-pair check)

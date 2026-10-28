@@ -30,6 +30,13 @@ poisson.rs), Copyright the PhotoCraft contributors, licensed under the MIT Licen
 License 2.0, at your option. The port was modified by the LightCraft contributors (2026); each
 ported file says so.
 
+crates/raw/src/vc5.rs (lightcraft-raw) ports the VC-5 decoder of GoPro's GPR SDK
+(https://github.com/gopro/gpr, source/lib/vc5_common and source/lib/vc5_decoder, including its codebook 17
+table), Copyright 2018 GoPro Inc., licensed under the Apache License 2.0 or the MIT License, at your
+option. The port was modified by the LightCraft contributors (2026): translated from C to Rust and
+restructured; the file says so. crates/raw/tests/data/gpr-table17.inc is a verbatim, unmodified copy of the SDK's
+source/lib/vc5_common/table17.inc (same copyright and licence), used by a test to check the port's codebook.
+
 crates/segment (lightcraft-segment) ports the SAM 3 model code of Hugging Face Transformers
 (https://github.com/huggingface/transformers, src/transformers/models/sam3 and sam3_tracker),
 Copyright The HuggingFace Team and Meta Platforms, Inc., licensed under the Apache License 2.0.
