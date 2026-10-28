@@ -445,6 +445,29 @@ fn people_from_named_face_regions() {
         "the person filter is ignored"
     );
     assert_eq!(names(Filter { rating: 5, ..Default::default() }), vec![], "nobody in the filtered photos");
+
+    // a face chosen for a person stands for them instead of their largest one (#3246)
+    use crate::PersonCover;
+    let small = Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+    let picture = |covers: &std::collections::BTreeMap<String, PersonCover>, f: Filter, name: &str| {
+        c.people_in_with(&f, covers).into_iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| (p.photo, p.face))
+    };
+    let mut covers = std::collections::BTreeMap::new();
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: small });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((b, small)), "the chosen face, not the larger one");
+    // read back from a file, a box may differ in its last digit
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: Rect { x0: 0.4 + 1e-12, ..small } });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((b, small)));
+    // a chosen photo the filter hides, or a face that no longer bears the name, falls back to the largest face
+    assert_eq!(picture(&covers, Filter { rating: 5, ..Default::default() }, "John Roe"), None);
+    covers.insert("john roe".to_string(), PersonCover { photo: e, face: small });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "Sam's face is not John Roe's");
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: big });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "no such face in that photo");
+    // the counts are the same either way
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: small });
+    let counts = |covers| c.people_in_with(&Filter::default(), covers).into_iter().map(|p| (p.name, p.count)).collect::<Vec<_>>();
+    assert_eq!(counts(&covers), counts(&Default::default()));
 }
 
 /// Most photos have no regions: the field is left out of the catalog JSON then, and a catalog written

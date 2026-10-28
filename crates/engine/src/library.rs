@@ -203,6 +203,15 @@ impl Library {
     }
 }
 
+/// people.json: what the user chose for the people named on faces. Kept beside the catalog rather than in it, so a
+/// library stays readable by builds that don't know about it.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct PeopleFile {
+    /// The face that shows each person in the People view (lower-cased name → face).
+    covers: std::collections::BTreeMap<String, lightcraft_catalog::PersonCover>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
@@ -524,6 +533,9 @@ impl Session {
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        // the people's chosen pictures
+        self.person_covers = settings.read::<PeopleFile>(files.as_mut(), "people.json").unwrap_or_default().covers;
+        self.people_gen = self.people_gen.wrapping_add(1);
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -760,6 +772,18 @@ impl Session {
                 Err(e) => log::error!("library: view: {e}"),
             }
         }
+    }
+
+    /// Save the people's chosen pictures (no-op for in-memory sessions).
+    pub fn save_people(&mut self) -> Result<()> {
+        let v = serde_json::to_vec_pretty(&PeopleFile { covers: self.person_covers.clone() }).unwrap_or_default();
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&"people.json") {
+            return Err(EngineError::Other(
+                "people: people.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save the change".into(),
+            ));
+        }
+        lib.files.write_atomic("people.json", &v).map_err(|e| EngineError::Other(format!("people: {e}")))
     }
 
     /// Save the library preferences (no-op for in-memory sessions).
