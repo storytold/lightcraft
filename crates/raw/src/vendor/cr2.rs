@@ -225,8 +225,21 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let slices = raw.u64s(CR2_SLICE).filter(|s| s.len() == 3 && s[1] > 0 && s[2] > 0);
     let widths: Vec<usize> = match &slices {
         Some(s) => {
-            let n = s[0].min(64) as usize;
-            let mut v = vec![s[1] as usize; n];
+            // Clamping the count changes the width and can silently rearrange sensor pixels.
+            if s[0] > 64 {
+                return Err(RawError::Limit("too many CR2 slices"));
+            }
+            // Validate in the file's integer domain before casting to usize (also on wasm32).
+            s[0].checked_mul(s[1])
+                .and_then(|w| w.checked_add(s[2]))
+                .filter(|&w| w <= total as u64)
+                .ok_or_else(|| RawError::Corrupt("bad CR2 slice widths".into()))?;
+            let n = s[0] as usize;
+            let mut v = Vec::with_capacity(n + 1);
+            if n > 0 {
+                // Every used width is now bounded by `total`.
+                v.resize(n, s[1] as usize);
+            }
             v.push(s[2] as usize);
             v
         }
@@ -375,6 +388,49 @@ pub(crate) mod tests {
             assert_eq!(r.cfa.as_ref().map(Cfa::name).as_deref(), Some("GBRG"), "CR2CFAPattern 3");
             assert_eq!(r.metadata.iso, Some(400));
             assert!(r.develop(crate::Method::Ahd).is_ok());
+        }
+    }
+
+    /// A slice count above the decoder's bound must not silently change the sensor geometry.
+    #[test]
+    fn excessive_slice_count_is_rejected() {
+        // 66 * 65 samples also divide by the old, clamped width of 65: the decoder used
+        // to accept this file as 65 * 66 and shuffle its pixels instead of reporting it.
+        let (bytes, _) = synthetic_cr2(66, 65, Some([65, 1, 1]));
+        for mode in [Mode::Header, Mode::Full] {
+            let result = decode(&bytes, mode);
+            assert!(matches!(result, Err(RawError::Limit(_))), "{mode:?}: {:?}", result.as_ref().map(|r| (r.width, r.height)));
+        }
+    }
+
+    #[test]
+    fn slice_count_at_limit_preserves_pixels() {
+        let (bytes, img) = synthetic_cr2(130, 65, Some([64, 2, 2]));
+        let decoded = crate::decode(&bytes).unwrap();
+        assert_eq!((decoded.width, decoded.height), (130, 65));
+        assert_eq!(decoded.data, RawData::U16(img));
+        assert_eq!(crate::probe_info(&bytes).unwrap(), decoded.info());
+    }
+
+    /// Oversized TIFF values must be rejected before width arithmetic or integer casts.
+    #[test]
+    fn hostile_slice_widths_are_rejected() {
+        for slices in [[1, u64::MAX, 1], [2, 1 << 63, 2], [1, 1 << 32, 8], [0, 1, u64::MAX]] {
+            let enc = crate::ljpeg::encode(&[1024; 8], 4, 1, 2, 14, 1, 0);
+            let mut raw = IfdBuilder::new().with(CR2_SLICE, Value::Long8(slices.to_vec()));
+            raw.set_image(ImageData::Strips { rows_per_strip: 1, strips: vec![enc] });
+            let bytes = TiffWriter::new(ByteOrder::Little, false)
+                .write(&[
+                    IfdBuilder::new().with(t::MAKE, Value::Ascii("Canon".into())),
+                    IfdBuilder::new().with(1, Value::Short(vec![0])),
+                    IfdBuilder::new().with(1, Value::Short(vec![0])),
+                    raw,
+                ])
+                .unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let result = decode(&bytes, mode);
+                assert!(matches!(result, Err(RawError::Corrupt(_))), "{slices:?}, {mode:?}: {:?}", result.as_ref().map(|r| (r.width, r.height)));
+            }
         }
     }
 
