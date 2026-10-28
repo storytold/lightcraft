@@ -51,7 +51,7 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 - **Last-resort guard:** a panic hook plus `catch_unwind` around command dispatch and import/export turns an escaped
   panic into an error dialog and keeps the document. It's a safety net, not a licence; keep `panic = "unwind"` on native.
 - **Prove it:** every crash fix lands with a small synthetic regression test that panicked before the fix.
-- Enforced by clippy: root `clippy.toml` allows unwrap/expect/panic/indexing in tests only, and every production crate
+- Enforced by clippy: root `clippy.toml` allows unwrap/expect/panic in tests only; indexing is not denied. Every production crate
   root (`lib.rs`, each binary's `main.rs`) carries `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
   clippy::unimplemented, clippy::todo, clippy::unreachable)]`. Not `[workspace.lints]`: those would also hit
   integration tests, examples and benches. New crates start with the attribute.

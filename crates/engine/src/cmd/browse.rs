@@ -35,8 +35,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v: Vec<String> = std::fs::read_dir(&dir)
             .map_err(|e| bad(C, format!("{path}: {e}")))?
             .flatten()
+            .filter(|e| !crate::walk::is_hidden_entry(e))
             .map(|e| e.path())
-            .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|f| f.is_file() && is_supported(f))
             .map(|f| f.to_string_lossy().to_string())
             .collect();
         v.sort();

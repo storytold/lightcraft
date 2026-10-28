@@ -1,5 +1,7 @@
 use super::geometry::CanvasMap;
-use super::*;
+use super::{
+    Affine, Color32, DevelopSettings, Frame, Gesture, LightcraftApp, PhotoId, Point, Pos2, Rect, Stroke, Tokens, json, pos2, register, vec2,
+};
 
 // ------------------------------------------------------------------------ crop
 

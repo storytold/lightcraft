@@ -1,5 +1,5 @@
 use super::widgets::{choices, heading};
-use super::*;
+use super::{RichText, Tokens, register};
 
 /// Appearance Mode (`button:settingsAppearance-{0,1,2}`: Auto, Dark, Light) above the light and
 /// dark theme cards (`radio:theme-{id}`), each with a preview of the chosen theme. The card in
@@ -17,9 +17,15 @@ pub(super) fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::Ap
     let mut cards = |ui: &mut egui::Ui, width: f32| {
         ui.spacing_mut().item_spacing.x = 12.0;
         let light: Vec<_> = LightTheme::ALL.iter().map(|l| (*l, l.kind())).collect();
-        theme_card(ui, t, "Light Theme", light_active, &light, &mut s.light_theme, &mut s.favorite_themes, width);
+        theme_card(
+            ui,
+            t,
+            ThemeCard { title: "Light Theme", active: light_active, options: &light, width },
+            &mut s.light_theme,
+            &mut s.favorite_themes,
+        );
         let dark: Vec<_> = DarkTheme::ALL.iter().map(|d| (*d, d.kind())).collect();
-        theme_card(ui, t, "Dark Theme", !light_active, &dark, &mut s.dark_theme, &mut s.favorite_themes, width);
+        theme_card(ui, t, ThemeCard { title: "Dark Theme", active: !light_active, options: &dark, width }, &mut s.dark_theme, &mut s.favorite_themes);
     };
     if available < 440.0 {
         ui.vertical(|ui| cards(ui, available));
@@ -29,18 +35,19 @@ pub(super) fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::Ap
     ui.add_space(2.0);
 }
 
+/// What a theme family's card shows.
+struct ThemeCard<'a, V> {
+    title: &'a str,
+    /// the family in use
+    active: bool,
+    options: &'a [(V, crate::theme::ThemeKind)],
+    width: f32,
+}
+
 /// One family's card: its title (and "Active" when it is the one shown), a preview of the
 /// selected theme and a radio button per theme.
-fn theme_card<V: PartialEq + Copy>(
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    title: &str,
-    active: bool,
-    options: &[(V, crate::theme::ThemeKind)],
-    value: &mut V,
-    favorites: &mut Vec<String>,
-    width: f32,
-) {
+fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCard<V>, value: &mut V, favorites: &mut Vec<String>) {
+    let ThemeCard { title, active, options, width } = card;
     egui::Frame::new()
         .fill(t.inset)
         .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.field_border }))

@@ -1,6 +1,6 @@
 use super::folders::{folder_menu, is_within};
-use super::rows::{INDENT_STEP, indent_x, row_sensed, set_tree_open, tree_open, tree_toggle};
-use super::*;
+use super::rows::{INDENT_STEP, Row, indent_x, set_tree_open, tree_open, tree_toggle};
+use super::{Album, AlbumId, Align2, Icon, LibrarySource, LightcraftApp, Rect, Sense, Tokens, json, pos2, register, vec2};
 
 /// Albums: the tree of albums and the folders they are sorted into. `reveal`: an album just made,
 /// whose folders open down to it.
@@ -34,8 +34,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 open = true;
                 set_tree_open(ui, open_id, true);
             }
-            let resp =
-                row_sensed(app, ui, &format!("folder:{}", a.id.0), Icon::Folder, &a.name, None, None, false, indent, Sense::click_and_drag(), None);
+            let resp = Row::new(&format!("folder:{}", a.id.0), Icon::Folder, &a.name).indent(indent).sense(Sense::click_and_drag()).show(app, ui);
             // a folder is no source, so its row folds it too; the triangle is the same click, aimed
             let has_children = all.get(&Some(a.id)).is_some_and(|v| !v.is_empty());
             if resp.drag_started() {
@@ -74,7 +73,12 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             // a smart album whose rules no longer check (an album they test was deleted) says so
             let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
-            let mut resp = row_sensed(app, ui, &format!("album:{}", a.id.0), icon, &label, None, Some(n), sel, indent, Sense::click_and_drag(), None);
+            let mut resp = Row::new(&format!("album:{}", a.id.0), icon, &label)
+                .count(Some(n))
+                .selected(sel)
+                .indent(indent)
+                .sense(Sense::click_and_drag())
+                .show(app, ui);
             if !problems.is_empty() {
                 crate::widgets::register(ui, format!("albumProblem:{}", a.id.0), resp.rect);
             }
@@ -393,23 +397,35 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_stroke(resp.rect.shrink2(vec2(8.0, 1.0)), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     if released {
-        match app.run("album.addPhotos", json!({"id": a.id.0, "ids": ids})) {
-            Ok(r) => {
-                let n = r.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                let skipped = r.get("skipped").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                let mut msg = crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n);
-                if skipped > 0 {
-                    msg.push_str(" · ");
-                    msg.push_str(&crate::i18n::tr_format!(
-                        "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)",
-                        if skipped == 1 { "" } else { "s" },
-                        n = skipped
-                    ));
-                }
-                app.toast(ui.ctx(), msg);
-            }
-            Err(e) => app.toast(ui.ctx(), e),
-        }
+        drop_photos_on_album(app, ui, a, ids);
         app.ui.dragging_photos = None;
     }
+}
+
+/// Adds the dragged photos to the album and toasts how many went in (and how many Local ones were skipped).
+fn drop_photos_on_album(app: &mut LightcraftApp, ui: &egui::Ui, a: &Album, ids: Vec<u64>) {
+    match app.run("album.addPhotos", json!({"id": a.id.0, "ids": ids})) {
+        Ok(r) => app.toast(ui.ctx(), added_message(a, &r)),
+        Err(e) => app.toast(ui.ctx(), e),
+    }
+}
+
+/// "Added N photos to “album”", plus a note when Local photos were skipped.
+fn added_message(a: &Album, r: &serde_json::Value) -> String {
+    let n = r.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let skipped = r.get("skipped").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let mut msg = crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n);
+    if skipped > 0 {
+        msg.push_str(" · ");
+        msg.push_str(&skipped_note(skipped));
+    }
+    msg
+}
+
+fn skipped_note(skipped: u64) -> String {
+    crate::i18n::tr_format!(
+        "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)",
+        if skipped == 1 { "" } else { "s" },
+        n = skipped
+    )
 }

@@ -319,6 +319,13 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     if status["enabled"] != true {
         return;
     }
+    speed_section(app, ui, t, list, &status);
+    photos_section(app, ui, t, list, &status);
+    cache_section(app, ui, t, list, &status);
+}
+
+/// Where the work runs.
+fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Speed");
     let current = list["runOn"].as_str().unwrap_or("auto").to_string();
     let mut run_on = current.as_str();
@@ -342,6 +349,10 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
             app.caches.denoise.epoch += 1;
         }
     }
+}
+
+/// Whether photos are made as they are looked at, and the progress of what is being made.
+fn photos_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Photos");
     let mut auto = list["auto"].as_bool().unwrap_or(true);
     if check(ui, "settings.denoiseAuto", &mut auto, "Make the denoised picture of the photos I am looking at") {
@@ -350,27 +361,7 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
     }
     hint(ui, t, "Only photos whose AI Denoise amount is above 0 are made. Exports always make theirs if it is missing.");
     let (running, queued) = (app.caches.denoise.running, app.caches.denoise.queued);
-    match running {
-        Some((done, total)) => {
-            let name = status["running"]["photo"]
-                .as_u64()
-                .and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone()))
-                .unwrap_or_default();
-            let text = tr_format!(
-                "Denoising {name}: {done} of {total} tiles{}",
-                if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() },
-                name = name,
-                done = done,
-                total = total
-            );
-            settings_bar(ui, done, total, text);
-        }
-        None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
-        None => {
-            let ready = status["ready"].as_u64().unwrap_or(0);
-            hint(ui, t, &count(ready, "photo has its denoised picture.", "photos have their denoised picture."))
-        }
-    }
+    progress_line(app, ui, t, status, running, queued);
     ui.horizontal(|ui| {
         let r = ui.button(tr("Denoise all photos with an Amount"));
         register(ui, "denoise:queueAll", r.rect);
@@ -385,6 +376,37 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
             }
         }
     });
+}
+
+/// "Denoising {photo}: {done} of {total} tiles", and how many photos wait.
+fn running_text(app: &LightcraftApp, status: &Value, done: u64, total: u64, queued: u64) -> String {
+    let name =
+        status["running"]["photo"].as_u64().and_then(|p| app.session.catalog.photo(PhotoId(p)).map(|p| p.file_name.clone())).unwrap_or_default();
+    tr_format!("Denoising {name}: {done} of {total} tiles{}", waiting_suffix(queued), name = name, done = done, total = total)
+}
+
+/// " · N waiting" after the running photo, when any wait.
+fn waiting_suffix(queued: u64) -> String {
+    if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() }
+}
+
+/// What is being made now, or how many photos wait or are done.
+fn progress_line(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, status: &Value, running: Option<(u64, u64)>, queued: u64) {
+    match running {
+        Some((done, total)) => {
+            let text = running_text(app, status, done, total, queued);
+            settings_bar(ui, done, total, text);
+        }
+        None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
+        None => {
+            let ready = status["ready"].as_u64().unwrap_or(0);
+            hint(ui, t, &count(ready, "photo has its denoised picture.", "photos have their denoised picture."))
+        }
+    }
+}
+
+/// The cache's contents and limit.
+fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Cache");
     let (files, bytes) = (status["cache"]["files"].as_u64().unwrap_or(0), status["cache"]["bytes"].as_u64().unwrap_or(0));
     hint(

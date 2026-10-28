@@ -1,4 +1,4 @@
-use super::*;
+use super::UiCommand;
 
 /// The "Edit → Language" entries, one per language in [`crate::i18n::Locale::ALL`], so a language
 /// has a matching menu command (also listed through the control channel). Tests check coverage.

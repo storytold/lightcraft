@@ -1,4 +1,4 @@
-use super::*;
+use super::{Color32, LightcraftApp, PhotoId, Rect, Slot, pos2, vec2};
 
 /// Whether an overlay can be rendered on a region tile without changing what the tile means. Mask (one or all)
 /// overlays are evaluated from the same mask alpha as the full render; Point Color range and Visualize

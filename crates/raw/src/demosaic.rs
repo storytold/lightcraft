@@ -15,7 +15,7 @@ mod bilinear;
 mod ppg;
 mod xtrans;
 
-use crate::{Cfa, Normalized, Rgb32f};
+use crate::{Cfa, Normalized, Rect, Rgb32f};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -114,6 +114,20 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
     }
 }
 
+/// [`demosaic`] with [`Method::Ahd`] of the window `r` alone, for Bayer mosaics (`None` for any other data, or a
+/// window not inside the mosaic): the same pixels as demosaicing it all and cropping that to `r`, without
+/// demosaicing the rest or copying the window out of it.
+pub(crate) fn ahd_window(n: &Normalized, r: Rect) -> Option<Rgb32f> {
+    let (w, h) = (n.width, n.height);
+    let cfa = n.cfa.as_ref()?;
+    let inside = r.x.checked_add(r.width).is_some_and(|e| e <= w) && r.y.checked_add(r.height).is_some_and(|e| e <= h);
+    if n.cpp != 1 || !cfa.is_bayer() || w < 4 || h < 4 || n.data.len() != w * h || r.width == 0 || r.height == 0 || !inside {
+        return None;
+    }
+    let m = Mosaic { w, h, data: &n.data, cfa };
+    Some(ahd::ahd_window(&m, r.x, r.y, r.width, r.height))
+}
+
 /// Build a mosaic from an RGB image by sampling each pixel's CFA colour (for tests and synthetic data).
 pub fn mosaic_from_rgb(img: &Rgb32f, cfa: &Cfa) -> Normalized {
     let data = (0..img.height).flat_map(|y| (0..img.width).map(move |x| (x, y))).map(|(x, y)| img.get(x, y)[cfa.color_at(x, y) as usize]).collect();
@@ -190,6 +204,26 @@ mod tests {
         }
         let out = run(&Rgb32f::filled(19, 14, [0.3, 0.55, 0.8]), &Cfa::xtrans(), Method::Ahd);
         assert!(out.data.iter().all(|p| (p[0] - 0.3).abs() < 1e-5 && (p[1] - 0.55).abs() < 1e-5 && (p[2] - 0.8).abs() < 1e-5));
+    }
+
+    /// A window demosaiced alone is the same, bit for bit, as that part of the whole picture: at the edges and
+    /// corners (where the mosaic is reflected), in the middle, across tile seams, at every CFA phase.
+    #[test]
+    fn ahd_window_is_the_crop_of_the_whole() {
+        let img = edgy_scene(300, 270);
+        for pat in ["RGGB", "GBRG"] {
+            let n = mosaic_from_rgb(&img, &Cfa::bayer(pat).unwrap());
+            let whole = demosaic(&n, Method::Ahd);
+            for r in
+                [Rect::new(0, 0, 300, 270), Rect::new(0, 0, 7, 5), Rect::new(1, 3, 298, 266), Rect::new(121, 130, 140, 9), Rect::new(293, 263, 7, 7)]
+            {
+                let part = ahd_window(&n, r).unwrap();
+                let want = whole.clone().into_crop(r.x, r.y, r.width, r.height);
+                assert_eq!((part.width, part.height), (r.width, r.height));
+                assert!(part.data.iter().zip(&want.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)), "{pat} {r:?}");
+            }
+            assert!(ahd_window(&n, Rect::new(1, 0, 300, 270)).is_none(), "a window past the mosaic is refused");
+        }
     }
 
     #[test]

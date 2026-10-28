@@ -30,7 +30,7 @@ pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
 #[cfg(test)]
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
-use rows::{LIBFOLDER_REVEALED, SCROLL_TO_ROW, row, set_tree_open};
+use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
 pub(crate) use rows::{content_width, indent_step, step_for};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
@@ -90,18 +90,27 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("recentlyAdded", Icon::Clock, "Recently Added", None, LibrarySource::RecentlyAdded),
                 ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
             ] {
-                if row(app, ui, id, icon, label, count, src == s, 0.0).clicked() {
+                if Row::new(id, icon, label).count(count).selected(src == s).show(app, ui).clicked() {
                     let _ = app.run("library.source", json!({"kind": id}));
                 }
             }
             // photos whose files can't be found (checked every few seconds, not every frame)
             let missing = missing_count(app, ui);
             if (missing > 0 || src == LibrarySource::Missing)
-                && row(app, ui, "missing", Icon::Folder, "Missing Photos", Some(missing), src == LibrarySource::Missing, 0.0).clicked()
+                && Row::new("missing", Icon::Folder, "Missing Photos")
+                    .count(Some(missing))
+                    .selected(src == LibrarySource::Missing)
+                    .show(app, ui)
+                    .clicked()
             {
                 let _ = app.run("library.source", json!({"kind": "missing"}));
             }
-            if row(app, ui, "recentlyDeleted", Icon::Trash, "Recently Deleted", Some(deleted), src == LibrarySource::RecentlyDeleted, 0.0).clicked() {
+            if Row::new("recentlyDeleted", Icon::Trash, "Recently Deleted")
+                .count(Some(deleted))
+                .selected(src == LibrarySource::RecentlyDeleted)
+                .show(app, ui)
+                .clicked()
+            {
                 let _ = app.run("library.source", json!({"kind": "recentlyDeleted"}));
             }
             // the album just made: the folders down to it open, once (also when the section is shut)

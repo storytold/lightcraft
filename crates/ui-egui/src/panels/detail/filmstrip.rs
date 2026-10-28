@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align2, Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, json, pos2, register, vec2};
 
 /// Size of the Navigator mini map (points).
 const NAV_W: f32 = 180.0;

@@ -29,10 +29,10 @@ finish-args:
   # drag-and-drop through the document portal, so picked folders elsewhere work without broad
   # filesystem access.
   - --filesystem=xdg-pictures
-  # Deliberately not granted: home/host filesystem access, and network. The network is only for
-  # the optional SAM 3 model download (AI Object/Describe masks, docs/ai-masks.md); without it
-  # that download fails with an error and everything else works. Users who want it run
-  # `flatpak override --user --share=network ai.storyteller.lightcraft`.
+  # Deliberately not granted: home/host filesystem access. Network is needed for update checks
+  # against GitHub and the optional SAM 3 model download (AI Object/Describe masks,
+  # docs/ai-masks.md).
+  - --share=network
 modules:
   - name: lightcraft
     buildsystem: simple

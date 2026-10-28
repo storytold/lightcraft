@@ -2,7 +2,7 @@ use super::colour::{PROFILE_PROXY, PROXY, file_local_look};
 use super::hue_sat::fit_hue_sat;
 use super::look_fit::{FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, clip_mask, without_clipped};
 use super::pairs::{collect_pairs, fit_matrix};
-use super::*;
+use super::{CameraTransform, Filter, HsvTable, Mat3, RawFormat, RawImage, Rgb32f, fit, luminance_2020, resize};
 
 /// The embedded preview's long edge must be at least this share of the raw's (and 384 px): a DNG whose preview is a
 /// small thumbnail is not fitted. The fit itself runs on a proxy of at most 384 px, so the 1024 px preview

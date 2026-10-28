@@ -858,6 +858,83 @@ pub(crate) struct ApplyPrepared<'a> {
     pub(crate) undo0: usize,
 }
 
+fn stage_collections(
+    s: &mut crate::Session,
+    data: &CatalogImport,
+    index: &mut ImportIndex,
+    ids: &HashMap<i64, PhotoId>,
+    ops: &mut Vec<Op>,
+    warnings: &mut Vec<String>,
+) -> usize {
+    let mut albums = HashMap::new();
+    for collection in &data.collections {
+        if number(collection, "systemOnly") != 0 {
+            continue;
+        }
+        let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
+        let id = index
+            .collections
+            .get(&collection_key)
+            .copied()
+            .map(lightcraft_catalog::AlbumId)
+            .filter(|id| s.catalog.album(*id).is_some())
+            .unwrap_or_else(|| s.catalog.alloc_album_id());
+        index.collections.insert(collection_key, id.0);
+        albums.insert(number(collection, "id_local"), id);
+    }
+    let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
+    for member in &data.members {
+        grouped_members.entry(number(member, "collection")).or_default().push(member);
+    }
+    for members in grouped_members.values_mut() {
+        members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
+    }
+    let mut ordered: Vec<_> = data.collections.iter().collect();
+    ordered.sort_by_key(|r| {
+        let mut depth = 0;
+        let mut at = number(r, "parent");
+        while at != 0 && depth < 64 {
+            depth += 1;
+            at = parents.get(&at).copied().unwrap_or(0);
+        }
+        depth
+    });
+    for collection in ordered {
+        let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
+        let mut album = Album::new(id, text(collection, "name"));
+        album.parent = albums.get(&number(collection, "parent")).copied();
+        album.folder = text(collection, "creationId").contains("group");
+        if text(collection, "creationId").contains("smart") {
+            warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
+        }
+        if !album.folder {
+            album.photos = grouped_members
+                .get(&number(collection, "id_local"))
+                .into_iter()
+                .flatten()
+                .filter_map(|r| ids.get(&number(r, "image")).copied())
+                .collect();
+        }
+        if s.catalog.album(id).is_some() {
+            // Reimport preserves the user's album name/hierarchy, merges only new membership.
+            if let Some(old) = s.catalog.album(id).filter(|a| !a.folder && !a.is_smart()) {
+                let mut photos = old.photos.clone();
+                let mut seen: HashSet<_> = photos.iter().copied().collect();
+                for photo in album.photos {
+                    if seen.insert(photo) {
+                        photos.push(photo);
+                    }
+                }
+                ops.push(Op::SetAlbumPhotos { id, photos });
+            }
+        } else {
+            ops.push(Op::AddAlbum { album });
+        }
+    }
+    albums.len()
+}
+
 /// Turn the read catalog into library records in one undo step and return the import report
 /// (added, missing, failed, warnings and skipped images).
 pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, context: ApplyPrepared<'_>) -> crate::Result<AppliedImport> {
@@ -1022,78 +1099,13 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
-    let mut albums = HashMap::new();
-    for collection in &data.collections {
-        if number(collection, "systemOnly") != 0 {
-            continue;
-        }
-        let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
-        let id = index
-            .collections
-            .get(&collection_key)
-            .copied()
-            .map(lightcraft_catalog::AlbumId)
-            .filter(|id| s.catalog.album(*id).is_some())
-            .unwrap_or_else(|| s.catalog.alloc_album_id());
-        index.collections.insert(collection_key, id.0);
-        albums.insert(number(collection, "id_local"), id);
-    }
-    let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
-    let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
-    for member in &data.members {
-        grouped_members.entry(number(member, "collection")).or_default().push(member);
-    }
-    for members in grouped_members.values_mut() {
-        members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
-    }
-    let mut ordered: Vec<_> = data.collections.iter().collect();
-    ordered.sort_by_key(|r| {
-        let mut depth = 0;
-        let mut at = number(r, "parent");
-        while at != 0 && depth < 64 {
-            depth += 1;
-            at = parents.get(&at).copied().unwrap_or(0);
-        }
-        depth
-    });
-    for collection in ordered {
-        let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
-        let mut album = Album::new(id, text(collection, "name"));
-        album.parent = albums.get(&number(collection, "parent")).copied();
-        album.folder = text(collection, "creationId").contains("group");
-        if text(collection, "creationId").contains("smart") {
-            warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
-        }
-        if !album.folder {
-            album.photos = grouped_members
-                .get(&number(collection, "id_local"))
-                .into_iter()
-                .flatten()
-                .filter_map(|r| ids.get(&number(r, "image")).copied())
-                .collect();
-        }
-        if s.catalog.album(id).is_some() {
-            // Reimport preserves the user's album name/hierarchy, merges only new membership.
-            if let Some(old) = s.catalog.album(id).filter(|a| !a.folder && !a.is_smart()) {
-                let mut photos = old.photos.clone();
-                let mut seen: HashSet<_> = photos.iter().copied().collect();
-                for photo in album.photos {
-                    if seen.insert(photo) {
-                        photos.push(photo);
-                    }
-                }
-                ops.push(Op::SetAlbumPhotos { id, photos });
-            }
-        } else {
-            ops.push(Op::AddAlbum { album });
-        }
-    }
+    let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings);
     if !ops.is_empty() {
         s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":albums.len(),"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
 }

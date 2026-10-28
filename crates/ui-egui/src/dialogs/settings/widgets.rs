@@ -1,4 +1,4 @@
-use super::*;
+use super::{LABEL_W, RichText, Tokens, register};
 
 /// `path` shortened to fit `max` (as `width` measures it) by dropping leading folders, after
 /// either kind of separator, so that its end stays (`…/Pictures/Library`,

@@ -1,4 +1,4 @@
-use super::*;
+use super::{AlbumId, Flag, Op, PhotoId, Result, Selection, Session, Value, bad, bool_or, json, ok};
 
 /// The selection after photos left the view (deleted, or rated, flagged or labelled out of it).
 /// Its callers end an open edit (a slider drag) before their own change, as moving to the next

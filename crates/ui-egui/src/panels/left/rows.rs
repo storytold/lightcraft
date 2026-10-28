@@ -1,5 +1,5 @@
 use super::albums::MARK_W;
-use super::*;
+use super::{Align2, Icon, LightcraftApp, Rect, Sense, Tokens, paint, pos2, register, vec2};
 
 /// How wide the sidebar's content needs to be, from the widest row of the last frame: rows are
 /// drawn at this width (or the panel's, if wider), and the sidebar scrolls sideways when it
@@ -77,50 +77,66 @@ pub(crate) fn step_for(panel_w: f32, deepest: f32) -> f32 {
     [16.0, 14.0, 12.0, 10.0].into_iter().find(|step| levels * step <= room).unwrap_or(MIN_INDENT_STEP)
 }
 
-pub(super) fn row(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    id: &str,
+/// One row of the sidebar, as it is drawn: build it with [`Row::new`] and the setters, then [`Row::show`] it.
+pub(super) struct Row<'a> {
+    id: &'a str,
     icon: Icon,
-    label: &str,
+    label: &'a str,
+    /// the spoken name when the painted `label` is a shortened form of it
+    spoken: Option<&'a str>,
     count: Option<usize>,
     selected: bool,
     indent: f32,
-) -> egui::Response {
-    row_named(app, ui, id, icon, label, None, count, selected, indent)
-}
-
-/// [`row`] whose spoken name is `spoken` when the painted `label` is a shortened form of it.
-fn row_named(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    id: &str,
-    icon: Icon,
-    label: &str,
-    spoken: Option<&str>,
-    count: Option<usize>,
-    selected: bool,
-    indent: f32,
-) -> egui::Response {
-    row_sensed(app, ui, id, icon, label, spoken, count, selected, indent, Sense::click(), None)
-}
-
-/// [`row_named`] with the given `sense` (rows that can be dragged add `drag`) and a colour
-/// label's dot (`mark`) before the count.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn row_sensed(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    id: &str,
-    icon: Icon,
-    label: &str,
-    spoken: Option<&str>,
-    count: Option<usize>,
-    selected: bool,
-    indent: f32,
+    /// rows that can be dragged add `drag`
     sense: Sense,
+    /// a colour label's dot, before the count
     mark: Option<egui::Color32>,
-) -> egui::Response {
+}
+
+impl<'a> Row<'a> {
+    pub(super) fn new(id: &'a str, icon: Icon, label: &'a str) -> Self {
+        Row { id, icon, label, spoken: None, count: None, selected: false, indent: 0.0, sense: Sense::click(), mark: None }
+    }
+
+    pub(super) fn spoken(mut self, spoken: &'a str) -> Self {
+        self.spoken = Some(spoken);
+        self
+    }
+
+    pub(super) fn count(mut self, count: Option<usize>) -> Self {
+        self.count = count;
+        self
+    }
+
+    pub(super) fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub(super) fn indent(mut self, indent: f32) -> Self {
+        self.indent = indent;
+        self
+    }
+
+    pub(super) fn sense(mut self, sense: Sense) -> Self {
+        self.sense = sense;
+        self
+    }
+
+    pub(super) fn mark(mut self, mark: Option<egui::Color32>) -> Self {
+        self.mark = mark;
+        self
+    }
+
+    /// Draw the row; the response is the row's.
+    pub(super) fn show(self, app: &mut LightcraftApp, ui: &mut egui::Ui) -> egui::Response {
+        draw_row(app, ui, self)
+    }
+}
+
+/// Draw a [`Row`].
+fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Response {
+    let Row { id, icon, label, spoken, count, selected, indent, sense, mark } = row;
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);

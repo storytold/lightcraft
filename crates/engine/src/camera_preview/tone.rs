@@ -1,6 +1,6 @@
 use super::look_fit::dro_off;
 use super::pairs::{Pairs, displayed, luma};
-use super::*;
+use super::{CameraTone, Rgb32f, ToneMap, luminance_2020};
 
 /// How the per-photo tone curve is fitted ([`fit_pairs_ordered`] tries them in order).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

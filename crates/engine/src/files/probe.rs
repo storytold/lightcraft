@@ -1,6 +1,6 @@
 use super::load::WbScaleOf;
 use super::preview::embedded_preview_size;
-use super::*;
+use super::{MediaKind, Meta, Orientation, ProbeInfo};
 
 pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();

@@ -235,32 +235,35 @@ fn round_up(v: usize, to: usize) -> usize {
     v.div_ceil(to) * to
 }
 
-/// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
-fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
+fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<(), String> {
     if !net.fits_tile(tile) {
         return unsupported("the tile does not fit the network");
     }
     if tile > MAX_TILE {
         return unsupported("the tile is larger than the kernels' dispatches reach");
     }
+    if !net.in_channels.is_multiple_of(4) {
+        return unsupported("the input channel count is not a multiple of 4");
+    }
+    let count = ops.len();
+    let ends_right = matches!(
+        (count.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
+        (Some(Op::Conv(conv)), Some(Op::DepthToSpace2 { src }))
+            if conv.k == 1 && conv.src2.is_none() && *src == count - 1 && conv.cout == 12 && conv.leaky.is_none()
+    );
+    if ends_right { Ok(()) } else { unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space") }
+}
+
+/// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
+fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
+    let ops = net.ops();
+    validate_plan(net, tile, ops)?;
     let side = |t: usize| -> usize {
         let level = net.shape(t).map_or(0, |s| s.level);
         if level >= 0 { tile >> level } else { tile << (-level) }
     };
     let chan = |t: usize| net.shape(t).map_or(0, |s| s.channels);
-    if !net.in_channels.is_multiple_of(4) {
-        return unsupported("the input channel count is not a multiple of 4");
-    }
-    let ops = net.ops();
-    // the network must end in a 1 × 1 convolution and a depth-to-space (they run as one kernel)
     let n_ops = ops.len();
-    let ends_right = matches!(
-        (n_ops.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
-        (Some(Op::Conv(c)), Some(Op::DepthToSpace2 { src })) if c.k == 1 && c.src2.is_none() && *src == n_ops - 1 && c.cout == 12 && c.leaky.is_none()
-    );
-    if !ends_right {
-        return unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space");
-    }
     // the last layer that reads each tensor
     let mut last_use = vec![0usize; n_ops + 1];
     for (i, op) in ops.iter().enumerate() {

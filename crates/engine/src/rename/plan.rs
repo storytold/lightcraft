@@ -2,7 +2,7 @@ use super::fs::{MoveFs, RealFs, folded_path};
 use super::moves::{BatchMoveError, move_all, set_file_ops_to};
 use super::sidecar::{PacketVersion, retry_sidecars, retry_sidecars_for_paths};
 use super::tokens::{expand, split_ext};
-use super::*;
+use super::{EngineError, HashMap, HashSet, Op, Path, PathBuf, Photo, PhotoId, RenamePlan, Result, Session, Source};
 
 /// The photos among `ids` a rename handles, in order: photos sharing one file (virtual copies)
 /// rename once. No file-system calls.

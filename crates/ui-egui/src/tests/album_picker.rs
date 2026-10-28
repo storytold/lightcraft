@@ -119,6 +119,48 @@ fn albums_that_would_loop_are_greyed() {
     assert_eq!(value(&h), json!(null), "but not picked");
 }
 
+/// The registered rectangle of `id` in the current frame.
+fn rect_of(h: &Headless, id: &str) -> egui::Rect {
+    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
+}
+
+/// The height of the smallest area (the popup, not the dialog) that holds the search field, as egui keeps it between frames.
+fn popup_height(h: &Headless, search: egui::Rect) -> f32 {
+    let ctx = &h.view.ctx;
+    let layers = ctx.memory(|m| m.areas().visible_layer_ids());
+    layers
+        .into_iter()
+        .filter_map(|layer| egui::AreaState::load(ctx, layer.id))
+        .filter(|a| a.rect().contains_rect(search))
+        .filter_map(|a| a.size.map(|s| s.y))
+        .fold(f32::MAX, f32::min)
+}
+
+/// Filtering to nothing shrinks the popup and clearing the filter grows it back (egui#5225),
+/// with the search field in the same place throughout.
+#[test]
+fn the_popup_grows_back_when_the_search_is_cleared() {
+    let Library { mut h, .. } = library();
+    click(&mut h, "albumPicker:rules-0");
+    let search = rect_of(&h, "albumPickerSearch:rules-0");
+    let full = popup_height(&h, search);
+    assert!(full > 80.0, "the open popup shows the tree: {full}");
+    let r = h.request("ui.text", json!({"text": "zzzz"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let none = popup_height(&h, search);
+    assert!(none < full - 20.0, "no match shrinks the popup: {none} vs {full}");
+    assert_eq!(rect_of(&h, "albumPickerSearch:rules-0"), search, "the search field stays put");
+    for _ in 0..4 {
+        let r = h.request("ui.key", json!({"key": "Backspace"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
+    let again = popup_height(&h, search);
+    assert!((again - full).abs() < 1.0, "cleared, the popup is {again} tall, not {full} as when it opened");
+    assert_eq!(rect_of(&h, "albumPickerSearch:rules-0"), search, "the search field stays put");
+}
+
 /// After opening a folder, typing still goes to the search: the box keeps the keyboard.
 #[test]
 fn typing_after_a_folder_click_still_searches() {

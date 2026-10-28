@@ -43,8 +43,37 @@ pub struct Walked {
     pub entries: usize,
 }
 
-fn hidden(p: &Path) -> bool {
-    p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+/// Whether the entry has a dot-prefixed name or a Windows or macOS hidden attribute.
+pub fn is_hidden_entry(entry: &std::fs::DirEntry) -> bool {
+    hidden_with_metadata(&entry.path(), || entry.metadata())
+}
+
+/// Whether the path has a dot-prefixed name or a Windows or macOS hidden attribute.
+pub fn is_hidden_path(path: &Path) -> bool {
+    hidden_with_metadata(path, || std::fs::symlink_metadata(path))
+}
+
+fn hidden_with_metadata(path: &Path, metadata: impl FnOnce() -> std::io::Result<std::fs::Metadata>) -> bool {
+    if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        metadata().is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::darwin::fs::MetadataExt;
+        const UF_HIDDEN: u32 = 0x0000_8000;
+        metadata().is_ok_and(|m| m.st_flags() & UF_HIDDEN != 0)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 /// What a folder's listing says an entry is.
@@ -120,7 +149,7 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             let p = e.path();
             // (a hidden entry's kind is only asked for when the listing is wanted; every other
             // entry's is asked once)
-            let is_hidden = hidden(&p);
+            let is_hidden = is_hidden_entry(&e);
             if is_hidden && listed.is_none() {
                 continue;
             }
@@ -176,6 +205,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn hidden_names_and_platform_attributes_are_excluded_from_walks() {
+        let root = tmp("hidden-attributes");
+        for folder in [".dot", "Hidden"] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            std::fs::write(root.join(folder).join("inside.jpg"), b"x").unwrap();
+        }
+        for file in ["Shown.jpg", ".dot.jpg", "hidden.jpg"] {
+            std::fs::write(root.join(file), b"x").unwrap();
+        }
+        for name in ["Hidden", "hidden.jpg"] {
+            #[cfg(windows)]
+            assert!(std::process::Command::new("attrib").arg("+h").arg(root.join(name)).status().unwrap().success());
+            #[cfg(target_os = "macos")]
+            assert!(std::process::Command::new("chflags").arg("hidden").arg(root.join(name)).status().unwrap().success());
+            assert_eq!(is_hidden_path(&root.join(name)), cfg!(any(windows, target_os = "macos")));
+        }
+        let mut found = files_in(&root, None, Limits::default(), |_| true).files;
+        found.sort();
+        let mut expected = vec![root.join("Shown.jpg")];
+        if !cfg!(any(windows, target_os = "macos")) {
+            expected.extend([root.join("Hidden/inside.jpg"), root.join("hidden.jpg")]);
+        }
+        expected.sort();
+        assert_eq!(found, expected);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Given a folder with files, a folder inside it, a hidden file and a link, when it is walked

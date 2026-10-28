@@ -196,13 +196,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     app.ui.print = pu;
 }
 
-fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
+/// The print templates: save the settings as one, import, and the saved ones to apply, export and delete.
+fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) {
     let ctx = ui.ctx().clone();
-    let l = &st.layout;
-    let unit = st.guides.units;
-    ui.spacing_mut().item_spacing.y = 5.0;
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
-
     heading(ui, t, "Templates");
     ui.horizontal(|ui| {
         crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
@@ -246,17 +242,13 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             });
         });
     }
+}
 
-    heading(ui, t, "Layout Style");
-    let styles =
-        [(Style::SingleImage, "Single"), (Style::ContactSheet, "Contact"), (Style::PicturePackage, "Package"), (Style::CustomPackage, "Custom")];
-    ui.horizontal_wrapped(|ui| {
-        if let Some(s) = choice(ui, "printStyle", &styles, l.style) {
-            patch(app, &ctx, json!({"layout": {"style": s}}));
-            pu.page = 0;
-        }
-    });
-
+/// The image settings: zoom, rotation, border and stroke.
+fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSettings) {
+    let ctx = ui.ctx().clone();
+    let l = &st.layout;
+    let unit = st.guides.units;
     heading(ui, t, "Image Settings");
     let im = &st.image;
     if let Some(v) = check(ui, "printZoomFill", "Zoom to Fill Frame", im.zoom_to_fill) {
@@ -292,6 +284,28 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             patch(app, &ctx, json!({"image": {"strokeColor": c}}));
         }
     });
+}
+
+fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
+    let ctx = ui.ctx().clone();
+    let l = &st.layout;
+    let unit = st.guides.units;
+    ui.spacing_mut().item_spacing.y = 5.0;
+    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
+
+    templates_section(app, ui, t, pu);
+
+    heading(ui, t, "Layout Style");
+    let styles =
+        [(Style::SingleImage, "Single"), (Style::ContactSheet, "Contact"), (Style::PicturePackage, "Package"), (Style::CustomPackage, "Custom")];
+    ui.horizontal_wrapped(|ui| {
+        if let Some(s) = choice(ui, "printStyle", &styles, l.style) {
+            patch(app, &ctx, json!({"layout": {"style": s}}));
+            pu.page = 0;
+        }
+    });
+
+    image_section(app, ui, t, st);
 
     heading(ui, t, "Layout");
     match l.style {
@@ -407,7 +421,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
         let current = current_paper(&l.page.paper);
-        let c = egui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
+        let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
             for name in layout::paper_names().chain(std::iter::once("custom")) {
                 if ui.selectable_label(current == name, paper_label(name)).clicked() {
                     patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
@@ -499,7 +513,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     };
     let mut pick = false;
     row(ui, t, "Profile", |ui| {
-        let c = egui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
+        let c = craft_ui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
                 let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
                 register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);

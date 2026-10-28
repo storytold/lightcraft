@@ -1,6 +1,6 @@
 use super::files::{edit_in, open_log_folder, open_original_in, show_in_finder, show_in_folders};
 use super::ui_commands::{UI_COMMANDS, language_from_command};
-use super::*;
+use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
@@ -168,6 +168,25 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,
     // and a toast set by it was long over by the app's clock: it never showed)
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    const PARTS: [fn(&mut LightcraftApp, &egui::Context, &str, &Value) -> Option<Result<Value, String>>; 12] = [
+        ui_commands_1,
+        ui_commands_2,
+        ui_commands_3,
+        ui_commands_4,
+        ui_commands_5,
+        ui_commands_6,
+        ui_commands_7,
+        ui_commands_8,
+        ui_commands_9,
+        ui_commands_10,
+        ui_commands_11,
+        ui_commands_12,
+    ];
+    PARTS.iter().find_map(|part| part(app, &ctx, id, p))
+}
+
+/// Part 1 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
@@ -203,7 +222,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.view = ViewMode::PhotoGrid;
             }
             if let Some(k) = app.ui.keyword_painter.clone() {
-                app.toast(&ctx, crate::i18n::tr_format!("Painting “{k}”: click photos to add or remove it · Esc stops", k = k));
+                app.toast(ctx, crate::i18n::tr_format!("Painting “{k}”: click photos to add or remove it · Esc stops", k = k));
             }
             Ok(json!({"keyword": app.ui.keyword_painter}))
         }
@@ -279,6 +298,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.view = if app.ui.view == ViewMode::PhotoGrid { ViewMode::SquareGrid } else { ViewMode::PhotoGrid };
             Ok(Value::Null)
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 2 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "view.detail" => {
             app.ui.view = ViewMode::Detail;
             Ok(Value::Null)
@@ -369,47 +396,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "compare.makeSelect" => crate::panels::compare::make_select(app),
         "view.autoAdvance" => {
             app.ui.auto_advance = !app.ui.auto_advance;
-            app.toast(&ctx, crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
+            app.toast(ctx, crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
             Ok(json!({"autoAdvance": app.ui.auto_advance}))
         }
-        "view.back" => {
-            if app.ui.dialog.is_some() {
-                app.ui.dialog = None;
-            } else if app.ui.lights_out != crate::state::LightsOut::On {
-                app.ui.lights_out = crate::state::LightsOut::On;
-            } else if app.ui.keyword_painter.is_some() {
-                app.ui.keyword_painter = None;
-            } else if app.ui.fullscreen {
-                // Through `slideshow::end`: it also releases the held slide textures. Clearing the
-                // two fields directly left every rendered slide in the renderer.
-                crate::panels::slideshow::end(app);
-            } else if !app.ui.tool.is_empty() {
-                app.ui.tool.clear();
-            } else if app.ui.right == RightPanel::Crop && app.ui.view == ViewMode::Detail {
-                // Esc leaves the crop tool (the crop stays), as C does; the next Esc goes back
-                panel(app, &ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
-            } else if app.ui.view == ViewMode::People && app.ui.person_page.is_some() {
-                app.ui.person_page = None;
-            } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey | ViewMode::Reference) {
-                app.ui.view = ViewMode::Detail;
-            } else if app.ui.view == ViewMode::Detail {
-                // a photo opened from a person's page (or the unnamed faces) goes back there, any other to the grid
-                match app.ui.person_from.take() {
-                    Some((name, photo)) if app.session.active().is_some_and(|a| a.0 == photo) => {
-                        app.ui.view = ViewMode::People;
-                        app.ui.person_page = name;
-                    }
-                    _ => app.ui.view = ViewMode::PhotoGrid,
-                }
-            }
-            Ok(Value::Null)
-        }
+        "view.back" => view_back_command(app, ctx),
         "view.slideshow" => {
             // the photos in view, full screen, with the playback settings (see panels::slideshow)
             let now = app.tick_now();
             let r = crate::panels::slideshow::start(app, p, now);
             if r.is_ok() {
-                app.toast(&ctx, crate::i18n::tr("Slideshow · Space pauses · Esc ends"));
+                app.toast(ctx, crate::i18n::tr("Slideshow · Space pauses · Esc ends"));
             }
             r
         }
@@ -417,6 +413,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let now = app.tick_now();
             crate::panels::slideshow::command(app, id, now)
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 3 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "view.slideshowOptions" => {
             app.ui.dialog = Some(Dialog::Settings { tab: "slideshow".into() });
             Ok(Value::Null)
@@ -464,51 +468,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 crate::state::InfoOverlay::Basic => "Info Overlay: File",
                 crate::state::InfoOverlay::Exposure => "Info Overlay: Exposure",
             };
-            app.toast(&ctx, crate::i18n::tr(label));
+            app.toast(ctx, crate::i18n::tr(label));
             Ok(json!({"infoOverlay": app.ui.info_overlay}))
         }
-        "view.viewOptions" => {
-            // `info1` / `info2` set the lines, `briefly` the Info that Show Briefly When Photo Changes
-            // shows and `loupeMessages` Show message when loading or rendering photos, for an agent;
-            // without any of them the window opens
-            let mut info = app.ui.settings.loupe_info;
-            let mut set = false;
-            // `loupeMessages` sets Show message when loading or rendering photos
-            let messages = match p.get("loupeMessages") {
-                None => app.ui.settings.loupe_messages,
-                Some(v) => match v.as_bool() {
-                    Some(on) => {
-                        set = true;
-                        on
-                    }
-                    None => return Some(Err("`loupeMessages`: true|false".into())),
-                },
-            };
-            for (key, lines) in [("info1", &mut info.info1), ("info2", &mut info.info2)] {
-                let Some(v) = p.get(key) else { continue };
-                match serde_json::from_value(v.clone()) {
-                    Ok(v) => *lines = v,
-                    Err(_) => {
-                        return Some(Err(format!("`{key}`: three of none|fileName|captureDate|dimensions|exposure|camera|lens|cameraAndLens")));
-                    }
-                }
-                set = true;
-            }
-            if let Some(v) = p.get("briefly") {
-                match serde_json::from_value(v.clone()) {
-                    Ok(v) => info.briefly = v,
-                    Err(_) => return Some(Err("`briefly`: off|basic|exposure (neither, Info 1 or Info 2)".into())),
-                }
-                set = true;
-            }
-            if set {
-                app.ui.settings.loupe_info = info;
-                app.ui.settings.loupe_messages = messages;
-            } else {
-                app.ui.dialog = Some(Dialog::ViewOptions);
-            }
-            Ok(json!({"loupeInfo": app.ui.settings.loupe_info, "loupeMessages": app.ui.settings.loupe_messages}))
-        }
+        "view.viewOptions" => view_view_options_command(app, p),
         "view.chooseLayoutImage" => {
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(path) => path.trim().to_string(),
@@ -531,7 +494,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             li.path = path;
             li.show = true;
             li.revision = li.revision.wrapping_add(1);
-            app.toast(&ctx, "Layout Image On");
+            app.toast(ctx, "Layout Image On");
             Ok(json!({"layoutImage": app.ui.layout_image}))
         }
         "view.layoutImage" => {
@@ -541,7 +504,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 return run_ui_command(app, "view.chooseLayoutImage", &json!({}));
             }
             app.ui.layout_image.show = show;
-            app.toast(&ctx, if show { "Layout Image On" } else { "Layout Image Off" });
+            app.toast(ctx, if show { "Layout Image On" } else { "Layout Image Off" });
             Ok(json!({"layoutImage": app.ui.layout_image}))
         }
         "view.layoutImageOpacity" | "view.layoutImageMatte" => {
@@ -561,6 +524,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.navigator = !app.ui.navigator;
             Ok(json!({"navigator": app.ui.navigator}))
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 4 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
@@ -665,6 +636,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 5 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "view.clickZoom" => {
             // {ratio?: 1|2|3|4|8} → {ratio}
             if let Some(r) = p.get("ratio").and_then(Value::as_f64) {
@@ -733,67 +712,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.hdr_visualize = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.hdr_visualize);
             Ok(json!({"on": app.ui.hdr_visualize}))
         }
-        "view.softProof" => {
-            // {on?, space?, profile?: ICC path | null, intent?: perceptual|relative, paperInk?,
-            // destWarning?, displayWarning?}; no params toggles
-            let has = |k: &str| p.get(k).is_some();
-            if let Some(s) = p.get("space").and_then(Value::as_str) {
-                match lightcraft_engine::pipeline::OutputSpace::parse(s) {
-                    Some(sp) => {
-                        app.ui.proof.space = sp;
-                        // a standard space replaces a device profile (unless one is given too)
-                        app.ui.proof_profile = None;
-                    }
-                    None => return Some(Err(format!("view.softProof: unknown space {s:?} (srgb|displayP3|adobeRgb|proPhoto|rec2020)"))),
-                }
-            }
-            if let Some(i) = p.get("intent") {
-                match i.as_str().and_then(lightcraft_engine::proof::ProofIntent::parse) {
-                    Some(i) => app.ui.proof_intent = i,
-                    None => return Some(Err("view.softProof: intent must be perceptual or relative".into())),
-                }
-            }
-            if let Some(b) = p.get("paperInk").and_then(Value::as_bool) {
-                app.ui.proof_paper_ink = b;
-            }
-            let path = match p.get("profile") {
-                Some(Value::String(s)) => Some(s.clone()),
-                Some(Value::Null) => {
-                    app.ui.proof_profile = None;
-                    None
-                }
-                Some(_) => return Some(Err("view.softProof: profile must be an ICC file path or null".into())),
-                None => app.ui.proof_profile.as_ref().map(|(f, _)| f.clone()),
-            };
-            match path {
-                Some(path) => match lightcraft_engine::proof::load(&path, app.ui.proof_intent, app.ui.proof_paper_ink) {
-                    Ok(pp) => {
-                        app.ui.proof.profile = pp.id;
-                        app.ui.proof_profile = Some((path, pp.name));
-                    }
-                    Err(e) => return Some(Err(format!("view.softProof: {e}"))),
-                },
-                None => app.ui.proof.profile = 0,
-            }
-            if let Some(b) = p.get("destWarning").and_then(Value::as_bool) {
-                app.ui.proof.dest_warning = b;
-            }
-            if let Some(b) = p.get("displayWarning").and_then(Value::as_bool) {
-                app.ui.proof.display_warning = b;
-            }
-            app.ui.soft_proof = match p.get("on").and_then(Value::as_bool) {
-                Some(b) => b,
-                None if ["space", "destWarning", "displayWarning", "profile", "intent", "paperInk"].iter().any(|k| has(k)) => app.ui.soft_proof,
-                None => !app.ui.soft_proof,
-            };
-            if app.ui.soft_proof && !matches!(app.ui.view, ViewMode::Detail | ViewMode::Reference) {
-                app.ui.view = ViewMode::Detail;
-            }
-            let pr = app.ui.proof;
-            let profile = app.ui.proof_profile.as_ref().map(|(f, n)| json!({"path": f, "name": n}));
-            Ok(json!({"on": app.ui.soft_proof, "space": pr.space, "profile": profile, "intent": app.ui.proof_intent.name(),
-                "paperInk": app.ui.proof_paper_ink, "destWarning": pr.dest_warning, "displayWarning": pr.display_warning}))
-        }
+        "view.softProof" => view_soft_proof_command(app, id, p),
         "view.histogram" => {
             app.ui.histogram = !app.ui.histogram;
             Ok(Value::Null)
@@ -821,9 +740,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             };
             app.ui.mask_overlay_mode = next.name().into();
             app.ui.mask_overlay = true;
-            app.toast(&ctx, next.label());
+            app.toast(ctx, next.label());
             Ok(json!({"mode": next.name()}))
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 6 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "view.maskOverlayColor" => {
             // no params: the next of the panel's swatch colours
             if p.get("color").is_none() && p.get("opacity").is_none() {
@@ -876,7 +803,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 },
             };
             app.ui.tool_overlay = mode;
-            app.toast(&ctx, tool_overlay_toast(mode));
+            app.toast(ctx, tool_overlay_toast(mode));
             Ok(json!({"mode": mode.name()}))
         }
         "view.visualizeSpots" => {
@@ -932,6 +859,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             None => Err("local.hide needs a path".into()),
         },
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 7 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "local.restoreHidden" => {
             // one path, or (no path) every hidden location
             match p.get("path").and_then(Value::as_str) {
@@ -952,7 +887,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"filterBar": app.ui.filter_bar}))
         }
         "panel.edit" => {
-            panel(app, &ctx, RightPanel::Edit, "Edit");
+            panel(app, ctx, RightPanel::Edit, "Edit");
             Ok(Value::Null)
         }
         "panel.profiles" => {
@@ -968,47 +903,47 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"open": app.ui.right == RightPanel::Profiles}))
         }
         "panel.crop" => {
-            panel(app, &ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
+            panel(app, ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
             Ok(Value::Null)
         }
         "panel.remove" => {
-            panel(app, &ctx, RightPanel::Remove, "Remove");
+            panel(app, ctx, RightPanel::Remove, "Remove");
             if app.ui.right == RightPanel::Remove && app.ui.tool.is_empty() {
                 app.ui.tool = "remove".into();
             }
             Ok(Value::Null)
         }
         "panel.masking" => {
-            panel(app, &ctx, RightPanel::Masking, "Masking");
+            panel(app, ctx, RightPanel::Masking, "Masking");
             Ok(Value::Null)
         }
         "panel.redeye" => {
-            panel(app, &ctx, RightPanel::RedEye, "Red Eye");
+            panel(app, ctx, RightPanel::RedEye, "Red Eye");
             Ok(Value::Null)
         }
         "panel.info" => {
-            panel(app, &ctx, RightPanel::Info, "Info");
+            panel(app, ctx, RightPanel::Info, "Info");
             Ok(Value::Null)
         }
         "panel.keywords" => {
-            panel(app, &ctx, RightPanel::Keywords, "Keywords");
+            panel(app, ctx, RightPanel::Keywords, "Keywords");
             Ok(Value::Null)
         }
         "panel.addKeywords" => {
             // opens Keywording when it is folded shut; the panel stays open when pressed again
             if app.ui.right != RightPanel::Keywords {
-                panel(app, &ctx, RightPanel::Keywords, "Keywords");
+                panel(app, ctx, RightPanel::Keywords, "Keywords");
             }
             app.ui.folded_sections.retain(|s| s != "keywording");
             app.ui.focus_keywords = Some(ctx.cumulative_pass_nr());
             Ok(Value::Null)
         }
         "panel.versions" => {
-            panel(app, &ctx, RightPanel::Versions, "Versions");
+            panel(app, ctx, RightPanel::Versions, "Versions");
             Ok(Value::Null)
         }
         "panel.activity" => {
-            panel(app, &ctx, RightPanel::Activity, "History");
+            panel(app, ctx, RightPanel::Activity, "History");
             Ok(Value::Null)
         }
         "panel.presets" => {
@@ -1033,6 +968,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.presets = false;
             Ok(Value::Null)
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 8 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         s if s.starts_with("section.") => bool_param(s, p, "solo").and_then(|solo| {
             // only the Edit sections listed above: an unknown one would close the real ones
             if !UI_COMMANDS.iter().any(|c| c.0 == s) {
@@ -1133,41 +1076,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::AllMetadata { title, rows: r, search: String::new() });
             Ok(Value::Null)
         }
-        "dialog.smartAlbum" => {
-            // {id?}: edit that smart album's rules; without: a new one starting at Rating ≥ 3
-            let album = p
-                .get("id")
-                .and_then(Value::as_u64)
-                .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)).filter(|a| a.is_smart()).cloned());
-            app.ui.dialog = Some(match album {
-                Some(a) => Dialog::SmartRules {
-                    id: Some(a.id.0),
-                    name: a.name.clone(),
-                    // older rules read as they always matched (RuleSet::upgrade)
-                    rules: a
-                        .smart
-                        .as_ref()
-                        .and_then(|f| f.rule_set.clone())
-                        .map(|mut r| {
-                            r.upgrade();
-                            r
-                        })
-                        .unwrap_or_default(),
-                    parent: None,
-                },
-                None => Dialog::SmartRules {
-                    id: None,
-                    name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
-                    rules: lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
-                    parent: parent_param(p),
-                },
-            });
-            Ok(Value::Null)
-        }
+        "dialog.smartAlbum" => dialog_smart_album_command(app, id, p),
         "dialog.newSmartAlbum" => {
             app.ui.dialog = Some(Dialog::NewSmartAlbum { name: p.get("name").and_then(Value::as_str).unwrap_or("").into(), parent: parent_param(p) });
             Ok(Value::Null)
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 9 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "dialog.captureTime" => {
             // a time that doesn't fully read isn't offered as the starting point (`10:0` would read as midnight)
             let time = app
@@ -1268,6 +1189,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             crate::export_task::start_contact_sheet(app, &params)
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 10 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
             let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);
@@ -1303,9 +1232,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "app.checkForUpdates" => crate::updates_ui::check(app),
-        "photo.editInPhotoCraft" => edit_in(app, &ctx, p, true),
-        "photo.editInExternal" => edit_in(app, &ctx, p, false),
-        "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
+        "photo.editInPhotoCraft" => edit_in(app, ctx, p, true),
+        "photo.editInExternal" => edit_in(app, ctx, p, false),
+        "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
             app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, burst_gap, similarity });
@@ -1315,51 +1244,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::WhatsNew);
             Ok(json!({"text": crate::panels::dialogs::WHATS_NEW}))
         }
-        "app.systemInfo" => {
-            let info = app.session.execute("library.info", &json!({})).unwrap_or_default();
-            let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
-            let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
-            let mut rows = vec![
-                ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-                ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
-                ("CPU threads".to_string(), std::thread::available_parallelism().map(|n| n.get().to_string()).unwrap_or_else(|_| "?".into())),
-                (
-                    "GPU".to_string(),
-                    gpu.unwrap_or_else(|| match lightcraft_engine::gpu::unavailable_reason() {
-                        Some(why) => crate::i18n::tr_format!("none (CPU rendering): {why}", why = why),
-                        None => "none (CPU rendering)".into(),
-                    }),
-                ),
-                ("GPU rendering".to_string(), if app.ui.settings.gpu { "on".into() } else { "off".into() }),
-                ("Memory budget".to_string(), mb(lightcraft_engine::memory::default_budget() as u64)),
-                (
-                    "Preview size".to_string(),
-                    match app.ui.settings.preview_limit {
-                        0 => "automatic".to_string(),
-                        n => format!("{n} px"),
-                    },
-                ),
-                ("Photos".to_string(), info["photos"].to_string()),
-                ("Albums".to_string(), info["albums"].to_string()),
-            ];
-            if let Some(dir) = info["dir"].as_str().or(info["path"].as_str()) {
-                rows.push(("Library".into(), dir.to_string()));
-            }
-            rows.push(("Frame time".into(), format!("{:.1} ms ({:.0} fps)", app.perf.frame_ms, app.perf.fps)));
-            rows.push((
-                "Frame update".into(),
-                format!("{:.1} ms (logic {:.1} ms; slowest {:.0} ms)", app.perf.update_ms, app.perf.logic_ms, app.perf.max_update_ms),
-            ));
-            rows.push(("Last loupe render".into(), format!("{:.0} ms", app.renderer.last_main_ms)));
-            if let Some(f) = lightcraft_engine::gpu::last_fallback() {
-                rows.push(("Last GPU fallback".into(), f));
-            }
-            let r = json!(rows.iter().map(|(k, v)| json!({"label": k, "value": v})).collect::<Vec<_>>());
-            if p.get("open").and_then(Value::as_bool).unwrap_or(true) {
-                app.ui.dialog = Some(Dialog::SystemInfo { rows });
-            }
-            Ok(r)
-        }
+        "app.systemInfo" => app_system_info_command(app, p),
         "app.shortcuts" => {
             app.ui.dialog = Some(Dialog::Shortcuts);
             Ok(Value::Null)
@@ -1420,6 +1305,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 None => Ok(Value::Null),
             }
         }
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 11 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
@@ -1429,180 +1322,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             crate::panels::dialogs::prompt(app, "Save Metadata Preset", "Preset name", "", "metadata.savePreset", json!({}), "name");
             Ok(Value::Null)
         }
-        "file.findMissing" => {
-            let within = match p.get("within") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(path)) if !path.is_empty() => Some(path.clone()),
-                Some(Value::String(_)) => return Some(Err("file.findMissing: `within` must not be empty".into())),
-                Some(value) => return Some(Err(format!("file.findMissing: `within` must be a folder path, not {value}"))),
-            };
-            let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false);
-            let timeout = match p.get("timeout") {
-                None | Some(Value::Null) => std::time::Duration::from_secs(600),
-                Some(Value::Number(n)) => {
-                    if let Some(s) = n.as_f64() {
-                        if s.is_finite() && s >= 0.0 {
-                            match std::time::Duration::try_from_secs_f64(s) {
-                                Ok(d) => d,
-                                Err(_) => return Some(Err("file.findMissing: `timeout` is too large".into())),
-                            }
-                        } else {
-                            return Some(Err("file.findMissing: `timeout` must be a non-negative number of seconds".into()));
-                        }
-                    } else {
-                        return Some(Err("file.findMissing: `timeout` must be a number of seconds".into()));
-                    }
-                }
-                Some(other) => return Some(Err(format!("file.findMissing: `timeout` must be a number of seconds, not {other}"))),
-            };
-            let title = if within.is_some() { "Locate Missing Files…" } else { "Find Missing Photos…" };
-            let folder = match p.get("folder").and_then(Value::as_str) {
-                Some(f) => Some(f.to_string()),
-                None => match crate::pick::ask(app, id, p, "folder", PickRequest::folder(crate::i18n::tr(title)), |s| {
-                    s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
-                }) {
-                    Picked::Now(v) => v.into_iter().next(),
-                    Picked::Later | Picked::Unavailable => None,
-                },
-            };
-            let Some(folder) = folder else { return Some(Ok(Value::Null)) };
-            // the search (checking every photo's file, walking the folder) runs on a worker thread;
-            // the relinking happens back here, as one undo step
-            const LABEL: &str = "Find Missing Photos";
-            if app.tasks.is_running(LABEL) {
-                return Some(Err("Find Missing Photos is already searching".into()));
-            }
-            let mut candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
-            if let Some(within) = within {
-                candidates.retain(|candidate| lightcraft_catalog::query::folder_within(&candidate.path, &within));
-            }
-            #[cfg(test)]
-            let test_delay = app.ui.find_missing_test_delay;
-            let work = move || {
-                #[cfg(test)]
-                if let Some(d) = test_delay {
-                    std::thread::sleep(d);
-                }
-                lightcraft_engine::cmd::missing::plan_find_missing(&candidates, &folder)
-            };
-            let done = |app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>| {
-                // relinked under the session as it is now: photos relinked meanwhile and files
-                // now in use are skipped
-                let r = plan.and_then(|plan| app.run("library.findMissing", plan.to_json()));
-                match r {
-                    Ok(v) => {
-                        let n = v["found"].as_array().map_or(0, Vec::len);
-                        let left = v["missing"].as_u64().unwrap_or(0);
-                        let unsure = v["ambiguous"].as_array().map_or(0, Vec::len);
-                        let unsure = if unsure > 0 {
-                            crate::i18n::tr_format!(" ({unsure} with several look-alike files: use Locate)", unsure = unsure)
-                        } else {
-                            String::new()
-                        };
-                        app.toast(
-                            ctx,
-                            crate::i18n::tr_format!(
-                                "Found {n} missing photo{}; {left} still missing{unsure}",
-                                if n == 1 { "" } else { "s" },
-                                left = left,
-                                n = n,
-                                unsure = unsure
-                            ),
-                        );
-                        app.ui.last_find_missing = Some(v.clone());
-                        app.ui.last_find_missing_result = Some(Ok(v));
-                    }
-                    Err(e) => {
-                        app.toast(ctx, e.clone());
-                        app.ui.last_find_missing_result = Some(Err(e));
-                    }
-                }
-            };
-            app.ui.last_find_missing = None;
-            app.ui.last_find_missing_result = None;
-            if let Err(e) = crate::tasks::spawn(app, LABEL, Some("findMissing"), work, done) {
-                return Some(Err(e));
-            }
-            if wait {
-                let ctx = app.tasks.repaint.clone().unwrap_or_default();
-                let completed = crate::tasks::wait_for(app, &ctx, LABEL, timeout);
-                if !completed {
-                    return Some(Err("Find Missing Photos: search timed out (search continues in the background)".into()));
-                }
-                return match app.ui.last_find_missing_result.take() {
-                    Some(Ok(v)) => Some(Ok(v)),
-                    Some(Err(e)) => Some(Err(e)),
-                    None => Some(Err("Find Missing Photos: worker terminated unexpectedly".into())),
-                };
-            }
-            Ok(json!({"background": true}))
-        }
-        "photo.tagFromTracklog" => {
-            // a GPX file → GPS for the selected photos by capture time (one undo step)
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => Some(x.to_string()),
-                None => {
-                    let req = PickRequest::file(crate::i18n::tr("Auto-Tag from Tracklog"), crate::i18n::tr("GPS Track Log"), &["gpx"]);
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_tracklog.as_mut().map(|f| f())) {
-                        Picked::Now(v) => v.into_iter().next(),
-                        Picked::Later | Picked::Unavailable => None,
-                    }
-                }
-            };
-            let Some(path) = path else { return Some(Ok(Value::Null)) };
-            let mut params = p.as_object().cloned().unwrap_or_default();
-            params.insert("path".into(), json!(path));
-            let ask_zone = !params.contains_key("offset");
-            let params = Value::Object(params);
-            if ask_zone {
-                // GPX times are UTC, camera clocks are local: ask for the camera's zone, then come back here
-                crate::panels::dialogs::prompt(
-                    app,
-                    "Auto-Tag from Tracklog",
-                    "Camera time zone, e.g. -07:00 (empty: UTC)",
-                    "",
-                    "photo.tagFromTracklog",
-                    params,
-                    "offset",
-                );
-                return Some(Ok(Value::Null));
-            }
-            let r = app.run("photo.autoTagTracklog", params);
-            if let Ok(v) = &r {
-                let n = v["tagged"].as_u64().unwrap_or(0);
-                let sk = &v["skipped"];
-                let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
-                let outside = sk["outside"].as_u64().unwrap_or(0);
-                if outside > 0 {
-                    msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
-                }
-                let kept = sk["hasGps"].as_u64().unwrap_or(0);
-                if kept > 0 {
-                    msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
-                }
-                let ctx = app.tasks.repaint.clone().unwrap_or_default();
-                app.toast(&ctx, msg);
-            }
-            r
-        }
-        "photo.locate" => {
-            let Some(id) = app.session.active() else { return Some(Err("no photo selected".into())) };
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => Some(x.to_string()),
-                None => {
-                    let req =
-                        PickRequest::file(crate::i18n::tr("Locate Missing File…"), crate::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS);
-                    match crate::pick::ask(app, "photo.locate", p, "path", req, |s| s.pick_files.as_mut().map(|f| f())) {
-                        Picked::Now(v) => v.into_iter().next(),
-                        Picked::Later | Picked::Unavailable => None,
-                    }
-                }
-            };
-            match path {
-                Some(path) => app.run("photo.relink", json!({"id": id.0, "path": path})),
-                None => Ok(Value::Null),
-            }
-        }
+        "file.findMissing" => file_find_missing_command(app, id, p),
+        "photo.tagFromTracklog" => photo_tag_from_tracklog_command(app, ctx, id, p),
+        "photo.locate" => photo_locate_command(app, p),
         "file.addFromDevice" => {
             // a camera / card: review its DCIM folder, copying into the library by default
             let path = match p.get("path").and_then(Value::as_str) {
@@ -1640,208 +1362,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 None => Ok(Value::Null),
             }
         }
-        "file.importPresets" => {
-            let paths = match p.get("paths").and_then(Value::as_array) {
-                Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-                None => {
-                    let req = PickRequest::files(
-                        Some(crate::i18n::tr("Import Presets").into()),
-                        crate::i18n::tr("Presets & Profiles"),
-                        crate::pick::PRESET_EXTENSIONS,
-                    );
-                    match crate::pick::ask(app, id, p, "paths", req, |s| s.pick_preset_files.as_mut().map(|f| f())) {
-                        Picked::Now(paths) => paths,
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            if paths.is_empty() {
-                return Some(Ok(Value::Null));
-            }
-            // .cube LUTs (and those inside zips / folders) become profiles
-            let lut_paths: Vec<&String> = paths
-                .iter()
-                .filter(|p| {
-                    let l = p.to_ascii_lowercase();
-                    l.ends_with(".cube") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
-                })
-                .collect();
-            // one toast for both halves (a second toast would replace the first)
-            let mut parts: Vec<String> = Vec::new();
-            // `name: reason` for each file that couldn't be imported
-            let mut problems: Vec<String> = Vec::new();
-            let mut profiles_result = Value::Null;
-            if !lut_paths.is_empty() {
-                match app.session.execute("profile.import", &json!({"paths": lut_paths})) {
-                    Ok(v) => {
-                        let profiles = v["imported"].as_array().map_or(0, Vec::len);
-                        if profiles > 0 {
-                            parts.push(crate::i18n::tr_format!(
-                                "Imported {profiles} profile{} (Profile browser ▸ their groups)",
-                                if profiles == 1 { "" } else { "s" },
-                                profiles = profiles
-                            ));
-                        }
-                        problems.extend(v["failed"].as_array().into_iter().flatten().map(|f| {
-                            let name = f.get(0).and_then(Value::as_str).unwrap_or_default();
-                            let reason = f.get(1).and_then(Value::as_str).unwrap_or_default();
-                            format!("{name}: {reason}")
-                        }));
-                        profiles_result = v;
-                    }
-                    Err(e) => {
-                        problems.push(e.to_string());
-                        profiles_result = json!({"error": e.to_string()});
-                    }
-                }
-            }
-            let preset_paths: Vec<&String> = paths.iter().filter(|p| !p.to_ascii_lowercase().ends_with(".cube")).collect();
-            let r = if preset_paths.is_empty() {
-                Ok(json!({"imported": [], "failed": [], "skipped": 0}))
-            } else {
-                app.session.execute("preset.import", &json!({"paths": preset_paths})).map_err(|e| e.to_string())
-            };
-            if let (false, Ok(v)) = (preset_paths.is_empty(), &r) {
-                let n = v["imported"].as_array().map_or(0, Vec::len);
-                let failed = v["failed"].as_array().map_or(0, Vec::len);
-                // Lightroom local adjustment presets land in the Masking panel's Effect menu: part of the same toast
-                let effects = v["effects"].as_array().map_or(0, Vec::len);
-                if effects > 0 {
-                    parts.push(crate::panels::mask_effects::import_toast(v));
-                }
-                let profile_news = !parts.is_empty() || !problems.is_empty();
-                let msg = match (n, failed) {
-                    // a zip of LUTs (or only local presets): the other half already says what happened
-                    (0, 0) if profile_news => None,
-                    (0, 0) => Some("No new presets".to_string()),
-                    (n, 0) => Some(crate::i18n::tr_format!("Imported {n} preset{}", if n == 1 { "" } else { "s" }, n = n)),
-                    (n, f) => Some(crate::i18n::tr_format!(
-                        "Imported {n} preset{}, {f} file{} not readable",
-                        if n == 1 { "" } else { "s" },
-                        if f == 1 { "" } else { "s" },
-                        f = f,
-                        n = n
-                    )),
-                };
-                if let Some(mut msg) = msg {
-                    // settings with no counterpart here (the other editor's profiles, masks…)
-                    let mut skipped: Vec<&str> = v["imported"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .flat_map(|i| i["unmapped"].as_array().into_iter().flatten())
-                        .filter_map(Value::as_str)
-                        .collect();
-                    skipped.sort_unstable();
-                    skipped.dedup();
-                    if !skipped.is_empty() {
-                        let names: Vec<&str> = skipped.iter().take(3).copied().collect();
-                        msg += &crate::i18n::tr_format!(" — not carried over: {}{}", names.join(", "), if skipped.len() > 3 { "…" } else { "" });
-                    }
-                    parts.push(msg);
-                }
-                if n > 0 {
-                    app.ui.presets = true;
-                }
-            }
-            let mut msg = parts.join(" · ");
-            if !problems.is_empty() {
-                let detail =
-                    format!("{}{}", problems.iter().take(2).cloned().collect::<Vec<_>>().join("; "), if problems.len() > 2 { "…" } else { "" });
-                if msg.is_empty() {
-                    msg = crate::i18n::tr_format!("Import failed: {e}", e = detail);
-                } else {
-                    msg += &crate::i18n::tr_format!(" · {} failed: {}", problems.len(), detail);
-                }
-                app.toast_error(&ctx, msg);
-            } else if !msg.is_empty() {
-                app.toast(&ctx, msg);
-            }
-            let r = r.map(|mut v| {
-                if !lut_paths.is_empty()
-                    && let Some(o) = v.as_object_mut()
-                {
-                    o.insert("profiles".into(), profiles_result);
-                }
-                v
-            });
-            return Some(r);
-        }
-        "file.importKeywords" => {
-            // a keyword list file: Lightroom Classic's, Capture One's, Photo Supreme's (.utf8)
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => x.to_string(),
-                None => {
-                    let req = PickRequest::file(crate::i18n::tr("Import Keywords"), crate::i18n::tr("Keyword Lists"), &["txt", "utf8"]);
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_keyword_list.as_mut().map(|f| f())) {
-                        Picked::Now(v) => match v.into_iter().next() {
-                            Some(x) => x,
-                            None => return Some(Ok(Value::Null)),
-                        },
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            let r = app.session.execute("keyword.import", &json!({"path": path})).map_err(|e| e.to_string());
-            match &r {
-                Ok(v) => {
-                    let (added, updated) = (v["added"].as_u64().unwrap_or(0), v["updated"].as_u64().unwrap_or(0));
-                    let mut msg = crate::i18n::tr_format!("Added {n} keyword{}", if added == 1 { "" } else { "s" }, n = added);
-                    if updated > 0 {
-                        msg.push_str(&crate::i18n::tr_format!("; {n} gained synonyms", n = updated));
-                    }
-                    app.toast(&ctx, msg);
-                }
-                Err(e) => app.toast(&ctx, e.clone()),
-            }
-            return Some(r);
-        }
-        "file.exportKeywords" => {
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => x.to_string(),
-                None => {
-                    let name = "Keywords.txt";
-                    let req = PickRequest::save(crate::i18n::tr("Export Keywords"), crate::i18n::tr("Keyword Lists"), &["txt"], name);
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.save_keyword_list.as_mut().map(|f| f(name).into_iter().collect())) {
-                        Picked::Now(v) => match v.into_iter().next() {
-                            Some(x) => x,
-                            None => return Some(Ok(Value::Null)),
-                        },
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            let r = app.session.execute("keyword.export", &json!({"path": path})).map_err(|e| e.to_string());
-            if let Err(e) = &r {
-                app.toast(&ctx, e.clone());
-            }
-            if let Ok(v) = &r {
-                let n = v["keywords"].as_u64().unwrap_or(0);
-                let mut msg = crate::i18n::tr_format!("Exported {n} keyword{}", if n == 1 { "" } else { "s" }, n = n);
-                // Capture One's importer refuses ; , < > in a list: say which to rename first
-                let refuses: Vec<&str> = v["captureOneRefuses"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-                if !refuses.is_empty() {
-                    msg.push_str(&crate::i18n::tr_format!(
-                        " — Capture One won't import a list with ; , < or > in a keyword: {names}",
-                        names = refuses.iter().take(5).copied().collect::<Vec<_>>().join(" · ")
-                    ));
-                }
-                // what the format can't hold (a name in brackets, a line break…) isn't in the file
-                let left: Vec<&str> = v["unwritable"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-                if !left.is_empty() {
-                    msg.push_str(&crate::i18n::tr_format!(
-                        " — left out, as a keyword list can't hold them: {names}",
-                        // escaped: a line break in a name would break the toast
-                        names = left.iter().take(5).map(|n| n.escape_debug().to_string()).collect::<Vec<_>>().join(" · ")
-                    ));
-                }
-                app.toast(&ctx, msg);
-            }
-            return Some(r);
-        }
+        "file.importPresets" => file_import_presets_command(app, ctx, id, p),
+        "file.importKeywords" => file_import_keywords_command(app, ctx, id, p),
+        "file.exportKeywords" => file_export_keywords_command(app, ctx, id, p),
         "dialog.saveMaskEffect" => {
             if app.session.active_mask.is_none() {
                 return Some(Err("select a mask first".into()));
@@ -1853,38 +1376,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             crate::panels::mask_effects::open_manage(app);
             Ok(Value::Null)
         }
-        "file.exportMaskEffects" => {
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => Some(x.to_string()),
-                None => {
-                    let name = format!("{}.lceffect", p.get("group").and_then(Value::as_str).unwrap_or("Effect Presets"));
-                    let req = PickRequest::save(
-                        crate::i18n::tr("Export Effect Presets"),
-                        crate::i18n::tr("LightCraft Effect Presets"),
-                        &["lceffect"],
-                        name.clone(),
-                    );
-                    match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
-                        Picked::Now(v) => v.into_iter().next(),
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            let Some(path) = path else { return Some(Ok(Value::Null)) };
-            let mut params = json!({"path": path});
-            for k in ["names", "group"] {
-                if let Some(v) = p.get(k) {
-                    params[k] = v.clone();
-                }
-            }
-            let r = app.session.execute("mask.exportEffects", &params).map_err(|e| e.to_string());
-            match &r {
-                Ok(v) => app.toast(&ctx, crate::i18n::tr_format!("Exported {} effect preset{}", v["count"], if v["count"] == 1 { "" } else { "s" })),
-                Err(e) => app.toast_error(&ctx, e.clone()),
-            }
-            return Some(r);
-        }
+        "file.exportMaskEffects" => file_export_mask_effects_command(app, ctx, id, p),
         "file.exportPresets" => {
             let group = p.get("group").and_then(Value::as_str).map(str::to_string);
             let path = match p.get("path").and_then(Value::as_str) {
@@ -1909,71 +1401,20 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
-                app.toast(&ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
+                app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
             }
-            return Some(r);
+            r
         }
-        "file.importCurvePresets" => {
-            let paths: Vec<String> = match p.get("paths").and_then(Value::as_array) {
-                Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-                None => {
-                    let req = PickRequest::files(
-                        Some(crate::i18n::tr("Import Point Curve Presets").into()),
-                        crate::i18n::tr("Point Curve Presets"),
-                        crate::pick::CURVE_PRESET_EXTENSIONS,
-                    );
-                    match crate::pick::ask(app, id, p, "paths", req, |s| s.pick_curve_preset_files.as_mut().map(|f| f())) {
-                        Picked::Now(paths) => paths,
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            if paths.is_empty() {
-                return Some(Ok(Value::Null));
-            }
-            let r = app.session.execute("curve.importPresets", &json!({"paths": paths})).map_err(|e| e.to_string());
-            if let Ok(v) = &r {
-                let n = v["imported"].as_array().map_or(0, Vec::len);
-                let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let mut msg = crate::i18n::tr_format!("Imported {n} point curve preset{}", if n == 1 { "" } else { "s" }, n = n);
-                if failed > 0 {
-                    msg += &crate::i18n::tr_format!(", {failed} file{} not readable", if failed == 1 { "" } else { "s" }, failed = failed);
-                }
-                app.toast(&ctx, msg);
-            }
-            return Some(r);
-        }
-        "file.exportCurvePresets" => {
-            let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => Some(x.to_string()),
-                None => {
-                    let req = PickRequest::save(
-                        crate::i18n::tr("Export Point Curve Presets"),
-                        crate::i18n::tr("Point Curve Presets"),
-                        &["lccurve"],
-                        "Point Curves.lccurve",
-                    );
-                    match crate::pick::ask(app, id, p, "path", req, |s| {
-                        s.save_curve_preset_file.as_mut().map(|f| f("Point Curves.lccurve").into_iter().collect())
-                    }) {
-                        Picked::Now(v) => v.into_iter().next(),
-                        Picked::Later => return Some(Ok(Value::Null)),
-                        Picked::Unavailable => return Some(Err("no file dialog on this platform".into())),
-                    }
-                }
-            };
-            let Some(path) = path else { return Some(Ok(Value::Null)) };
-            let mut params = json!({"path": path});
-            if let Some(n) = p.get("names") {
-                params["names"] = n.clone();
-            }
-            let r = app.session.execute("curve.exportPresets", &params).map_err(|e| e.to_string());
-            if let Ok(v) = &r {
-                app.toast(&ctx, crate::i18n::tr_format!("Exported {} point curve preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
-            }
-            return Some(r);
-        }
+        "file.importCurvePresets" => file_import_curve_presets_command(app, ctx, id, p),
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// Part 12 of 12 of the UI commands; `None` means the id is not one of this part's.
+fn ui_commands_12(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    let r: Result<Value, String> = match id {
+        "file.exportCurvePresets" => file_export_curve_presets_command(app, ctx, id, p),
         "app.export" => crate::control::export_active(app, p),
         "app.showInFinder" => show_in_finder(app),
         "app.showInFolders" => show_in_folders(app, p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId)),
@@ -1989,4 +1430,743 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         _ => return None,
     };
     Some(r)
+}
+
+/// The `view.back` command.
+fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    if app.ui.dialog.is_some() {
+        app.ui.dialog = None;
+    } else if app.ui.lights_out != crate::state::LightsOut::On {
+        app.ui.lights_out = crate::state::LightsOut::On;
+    } else if app.ui.keyword_painter.is_some() {
+        app.ui.keyword_painter = None;
+    } else if app.ui.fullscreen {
+        // Through `slideshow::end`: it also releases the held slide textures. Clearing the
+        // two fields directly left every rendered slide in the renderer.
+        crate::panels::slideshow::end(app);
+    } else if !app.ui.tool.is_empty() {
+        app.ui.tool.clear();
+    } else if app.ui.right == RightPanel::Crop && app.ui.view == ViewMode::Detail {
+        // Esc leaves the crop tool (the crop stays), as C does; the next Esc goes back
+        panel(app, ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
+    } else if app.ui.view == ViewMode::People && app.ui.person_page.is_some() {
+        app.ui.person_page = None;
+    } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey | ViewMode::Reference) {
+        app.ui.view = ViewMode::Detail;
+    } else if app.ui.view == ViewMode::Detail {
+        // a photo opened from a person's page (or the unnamed faces) goes back there, any other to the grid
+        match app.ui.person_from.take() {
+            Some((name, photo)) if app.session.active().is_some_and(|a| a.0 == photo) => {
+                app.ui.view = ViewMode::People;
+                app.ui.person_page = name;
+            }
+            _ => app.ui.view = ViewMode::PhotoGrid,
+        }
+    }
+    Ok(Value::Null)
+}
+
+/// The `view.viewOptions` command.
+fn view_view_options_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    // `info1` / `info2` set the lines, `briefly` the Info that Show Briefly When Photo Changes
+    // shows and `loupeMessages` Show message when loading or rendering photos, for an agent;
+    // without any of them the window opens
+    let mut info = app.ui.settings.loupe_info;
+    let mut set = false;
+    // `loupeMessages` sets Show message when loading or rendering photos
+    let messages = match p.get("loupeMessages") {
+        None => app.ui.settings.loupe_messages,
+        Some(v) => match v.as_bool() {
+            Some(on) => {
+                set = true;
+                on
+            }
+            None => return Err("`loupeMessages`: true|false".into()),
+        },
+    };
+    for (key, lines) in [("info1", &mut info.info1), ("info2", &mut info.info2)] {
+        let Some(v) = p.get(key) else { continue };
+        match serde_json::from_value(v.clone()) {
+            Ok(v) => *lines = v,
+            Err(_) => {
+                return Err(format!("`{key}`: three of none|fileName|captureDate|dimensions|exposure|camera|lens|cameraAndLens"));
+            }
+        }
+        set = true;
+    }
+    if let Some(v) = p.get("briefly") {
+        match serde_json::from_value(v.clone()) {
+            Ok(v) => info.briefly = v,
+            Err(_) => return Err("`briefly`: off|basic|exposure (neither, Info 1 or Info 2)".into()),
+        }
+        set = true;
+    }
+    if set {
+        app.ui.settings.loupe_info = info;
+        app.ui.settings.loupe_messages = messages;
+    } else {
+        app.ui.dialog = Some(Dialog::ViewOptions);
+    }
+    Ok(json!({"loupeInfo": app.ui.settings.loupe_info, "loupeMessages": app.ui.settings.loupe_messages}))
+}
+
+/// The `view.softProof` command.
+fn view_soft_proof_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> Result<Value, String> {
+    // {on?, space?, profile?: ICC path | null, intent?: perceptual|relative, paperInk?,
+    // destWarning?, displayWarning?}; no params toggles
+    let has = |k: &str| p.get(k).is_some();
+    if let Some(s) = p.get("space").and_then(Value::as_str) {
+        match lightcraft_engine::pipeline::OutputSpace::parse(s) {
+            Some(sp) => {
+                app.ui.proof.space = sp;
+                // a standard space replaces a device profile (unless one is given too)
+                app.ui.proof_profile = None;
+            }
+            None => return Err(format!("view.softProof: unknown space {s:?} (srgb|displayP3|adobeRgb|proPhoto|rec2020)")),
+        }
+    }
+    if let Some(i) = p.get("intent") {
+        match i.as_str().and_then(lightcraft_engine::proof::ProofIntent::parse) {
+            Some(i) => app.ui.proof_intent = i,
+            None => return Err("view.softProof: intent must be perceptual or relative".into()),
+        }
+    }
+    if let Some(b) = p.get("paperInk").and_then(Value::as_bool) {
+        app.ui.proof_paper_ink = b;
+    }
+    let path = match p.get("profile") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Null) => {
+            app.ui.proof_profile = None;
+            None
+        }
+        Some(_) => return Err("view.softProof: profile must be an ICC file path or null".into()),
+        None => app.ui.proof_profile.as_ref().map(|(f, _)| f.clone()),
+    };
+    match path {
+        Some(path) => match lightcraft_engine::proof::load(&path, app.ui.proof_intent, app.ui.proof_paper_ink) {
+            Ok(pp) => {
+                app.ui.proof.profile = pp.id;
+                app.ui.proof_profile = Some((path, pp.name));
+            }
+            Err(e) => return Err(format!("view.softProof: {e}")),
+        },
+        None => app.ui.proof.profile = 0,
+    }
+    if let Some(b) = p.get("destWarning").and_then(Value::as_bool) {
+        app.ui.proof.dest_warning = b;
+    }
+    if let Some(b) = p.get("displayWarning").and_then(Value::as_bool) {
+        app.ui.proof.display_warning = b;
+    }
+    app.ui.soft_proof = match p.get("on").and_then(Value::as_bool) {
+        Some(b) => b,
+        None if ["space", "destWarning", "displayWarning", "profile", "intent", "paperInk"].iter().any(|k| has(k)) => app.ui.soft_proof,
+        None => !app.ui.soft_proof,
+    };
+    if app.ui.soft_proof && !matches!(app.ui.view, ViewMode::Detail | ViewMode::Reference) {
+        app.ui.view = ViewMode::Detail;
+    }
+    let pr = app.ui.proof;
+    let profile = app.ui.proof_profile.as_ref().map(|(f, n)| json!({"path": f, "name": n}));
+    Ok(json!({"on": app.ui.soft_proof, "space": pr.space, "profile": profile, "intent": app.ui.proof_intent.name(),
+        "paperInk": app.ui.proof_paper_ink, "destWarning": pr.dest_warning, "displayWarning": pr.display_warning}))
+}
+
+/// The `dialog.smartAlbum` command.
+fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> Result<Value, String> {
+    // {id?}: edit that smart album's rules; without: a new one starting at Rating ≥ 3
+    let album = p
+        .get("id")
+        .and_then(Value::as_u64)
+        .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)).filter(|a| a.is_smart()).cloned());
+    app.ui.dialog = Some(match album {
+        Some(a) => Dialog::SmartRules {
+            id: Some(a.id.0),
+            name: a.name.clone(),
+            // older rules read as they always matched (RuleSet::upgrade)
+            rules: a
+                .smart
+                .as_ref()
+                .and_then(|f| f.rule_set.clone())
+                .map(|mut r| {
+                    r.upgrade();
+                    r
+                })
+                .unwrap_or_default(),
+            parent: None,
+        },
+        None => Dialog::SmartRules {
+            id: None,
+            name: p.get("name").and_then(Value::as_str).unwrap_or("").into(),
+            rules: lightcraft_catalog::RuleSet { rules: vec![crate::panels::rules_editor::new_rule()], ..Default::default() },
+            parent: parent_param(p),
+        },
+    });
+    Ok(Value::Null)
+}
+
+/// The `app.systemInfo` command.
+fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let info = app.session.execute("library.info", &json!({})).unwrap_or_default();
+    let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
+    let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
+    let mut rows = vec![
+        ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+        ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
+        ("CPU threads".to_string(), std::thread::available_parallelism().map(|n| n.get().to_string()).unwrap_or_else(|_| "?".into())),
+        (
+            "GPU".to_string(),
+            gpu.unwrap_or_else(|| match lightcraft_engine::gpu::unavailable_reason() {
+                Some(why) => crate::i18n::tr_format!("none (CPU rendering): {why}", why = why),
+                None => "none (CPU rendering)".into(),
+            }),
+        ),
+        ("GPU rendering".to_string(), if app.ui.settings.gpu { "on".into() } else { "off".into() }),
+        ("Memory budget".to_string(), mb(lightcraft_engine::memory::default_budget() as u64)),
+        (
+            "Preview size".to_string(),
+            match app.ui.settings.preview_limit {
+                0 => "automatic".to_string(),
+                n => format!("{n} px"),
+            },
+        ),
+        ("Photos".to_string(), info["photos"].to_string()),
+        ("Albums".to_string(), info["albums"].to_string()),
+    ];
+    if let Some(dir) = info["dir"].as_str().or(info["path"].as_str()) {
+        rows.push(("Library".into(), dir.to_string()));
+    }
+    rows.push(("Frame time".into(), format!("{:.1} ms ({:.0} fps)", app.perf.frame_ms, app.perf.fps)));
+    rows.push((
+        "Frame update".into(),
+        format!("{:.1} ms (logic {:.1} ms; slowest {:.0} ms)", app.perf.update_ms, app.perf.logic_ms, app.perf.max_update_ms),
+    ));
+    rows.push(("Last loupe render".into(), format!("{:.0} ms", app.renderer.last_main_ms)));
+    if let Some(f) = lightcraft_engine::gpu::last_fallback() {
+        rows.push(("Last GPU fallback".into(), f));
+    }
+    let r = json!(rows.iter().map(|(k, v)| json!({"label": k, "value": v})).collect::<Vec<_>>());
+    if p.get("open").and_then(Value::as_bool).unwrap_or(true) {
+        app.ui.dialog = Some(Dialog::SystemInfo { rows });
+    }
+    Ok(r)
+}
+
+/// `file.findMissing {within?}`: the folder the search is limited to, if any.
+fn find_missing_within(p: &Value) -> Result<Option<String>, String> {
+    match p.get("within") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(path)) if !path.is_empty() => Ok(Some(path.clone())),
+        Some(Value::String(_)) => Err("file.findMissing: `within` must not be empty".into()),
+        Some(value) => Err(format!("file.findMissing: `within` must be a folder path, not {value}")),
+    }
+}
+
+/// `file.findMissing {timeout?}`: how long `wait` waits for the search (ten minutes when omitted).
+fn find_missing_timeout(p: &Value) -> Result<std::time::Duration, String> {
+    let n = match p.get("timeout") {
+        None | Some(Value::Null) => return Ok(std::time::Duration::from_secs(600)),
+        Some(Value::Number(n)) => n,
+        Some(other) => return Err(format!("file.findMissing: `timeout` must be a number of seconds, not {other}")),
+    };
+    let s = n.as_f64().ok_or("file.findMissing: `timeout` must be a number of seconds")?;
+    if !s.is_finite() || s < 0.0 {
+        return Err("file.findMissing: `timeout` must be a non-negative number of seconds".into());
+    }
+    std::time::Duration::try_from_secs_f64(s).map_err(|_| "file.findMissing: `timeout` is too large".to_string())
+}
+
+/// The toast for a finished search, and the result it leaves for a caller that waits.
+fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>) {
+    // relinked under the session as it is now: photos relinked meanwhile and files
+    // now in use are skipped
+    let r = plan.and_then(|plan| app.run("library.findMissing", plan.to_json()));
+    match r {
+        Ok(v) => {
+            let n = v["found"].as_array().map_or(0, Vec::len);
+            let left = v["missing"].as_u64().unwrap_or(0);
+            let unsure = v["ambiguous"].as_array().map_or(0, Vec::len);
+            let unsure = if unsure > 0 {
+                crate::i18n::tr_format!(" ({unsure} with several look-alike files: use Locate)", unsure = unsure)
+            } else {
+                String::new()
+            };
+            app.toast(
+                ctx,
+                crate::i18n::tr_format!(
+                    "Found {n} missing photo{}; {left} still missing{unsure}",
+                    if n == 1 { "" } else { "s" },
+                    left = left,
+                    n = n,
+                    unsure = unsure
+                ),
+            );
+            app.ui.last_find_missing = Some(v.clone());
+            app.ui.last_find_missing_result = Some(Ok(v));
+        }
+        Err(e) => {
+            app.toast(ctx, e.clone());
+            app.ui.last_find_missing_result = Some(Err(e));
+        }
+    }
+}
+
+/// The `photo.locate` command.
+fn photo_locate_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let Some(id) = app.session.active() else { return Err("no photo selected".into()) };
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => Some(x.to_string()),
+        None => {
+            let req = PickRequest::file(crate::i18n::tr("Locate Missing File…"), crate::i18n::tr("Photos"), lightcraft_engine::import::EXTENSIONS);
+            match crate::pick::ask(app, "photo.locate", p, "path", req, |s| s.pick_files.as_mut().map(|f| f())) {
+                Picked::Now(v) => v.into_iter().next(),
+                Picked::Later | Picked::Unavailable => None,
+            }
+        }
+    };
+    match path {
+        Some(path) => app.run("photo.relink", json!({"id": id.0, "path": path})),
+        None => Ok(Value::Null),
+    }
+}
+
+/// The `file.findMissing` command.
+fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    let within = find_missing_within(p)?;
+    let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false);
+    let timeout = find_missing_timeout(p)?;
+    let title = if within.is_some() { "Locate Missing Files…" } else { "Find Missing Photos…" };
+    let folder = match p.get("folder").and_then(Value::as_str) {
+        Some(f) => Some(f.to_string()),
+        None => match crate::pick::ask(app, id, p, "folder", PickRequest::folder(crate::i18n::tr(title)), |s| {
+            s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
+        }) {
+            Picked::Now(v) => v.into_iter().next(),
+            Picked::Later | Picked::Unavailable => None,
+        },
+    };
+    let Some(folder) = folder else { return Ok(Value::Null) };
+    // the search (checking every photo's file, walking the folder) runs on a worker thread;
+    // the relinking happens back here, as one undo step
+    const LABEL: &str = "Find Missing Photos";
+    if app.tasks.is_running(LABEL) {
+        return Err("Find Missing Photos is already searching".into());
+    }
+    let mut candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
+    if let Some(within) = within {
+        candidates.retain(|candidate| lightcraft_catalog::query::folder_within(&candidate.path, &within));
+    }
+    #[cfg(test)]
+    let test_delay = app.ui.find_missing_test_delay;
+    let work = move || {
+        #[cfg(test)]
+        if let Some(d) = test_delay {
+            std::thread::sleep(d);
+        }
+        lightcraft_engine::cmd::missing::plan_find_missing(&candidates, &folder)
+    };
+    app.ui.last_find_missing = None;
+    app.ui.last_find_missing_result = None;
+    crate::tasks::spawn(app, LABEL, Some("findMissing"), work, find_missing_done)?;
+    if !wait {
+        return Ok(json!({"background": true}));
+    }
+    let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    if !crate::tasks::wait_for(app, &ctx, LABEL, timeout) {
+        return Err("Find Missing Photos: search timed out (search continues in the background)".into());
+    }
+    app.ui.last_find_missing_result.take().unwrap_or_else(|| Err("Find Missing Photos: worker terminated unexpectedly".into()))
+}
+
+/// The `photo.tagFromTracklog` command.
+fn photo_tag_from_tracklog_command(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    // a GPX file → GPS for the selected photos by capture time (one undo step)
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => Some(x.to_string()),
+        None => {
+            let req = PickRequest::file(crate::i18n::tr("Auto-Tag from Tracklog"), crate::i18n::tr("GPS Track Log"), &["gpx"]);
+            match crate::pick::ask(app, id, p, "path", req, |s| s.pick_tracklog.as_mut().map(|f| f())) {
+                Picked::Now(v) => v.into_iter().next(),
+                Picked::Later | Picked::Unavailable => None,
+            }
+        }
+    };
+    let Some(path) = path else { return Ok(Value::Null) };
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    params.insert("path".into(), json!(path));
+    let ask_zone = !params.contains_key("offset");
+    let params = Value::Object(params);
+    if ask_zone {
+        // GPX times are UTC, camera clocks are local: ask for the camera's zone, then come back here
+        crate::panels::dialogs::prompt(
+            app,
+            "Auto-Tag from Tracklog",
+            "Camera time zone, e.g. -07:00 (empty: UTC)",
+            "",
+            "photo.tagFromTracklog",
+            params,
+            "offset",
+        );
+        return Ok(Value::Null);
+    }
+    let r = app.run("photo.autoTagTracklog", params);
+    if let Ok(v) = &r {
+        let n = v["tagged"].as_u64().unwrap_or(0);
+        let sk = &v["skipped"];
+        let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
+        let outside = sk["outside"].as_u64().unwrap_or(0);
+        if outside > 0 {
+            msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
+        }
+        let kept = sk["hasGps"].as_u64().unwrap_or(0);
+        if kept > 0 {
+            msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
+        }
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        app.toast(&ctx, msg);
+    }
+    r
+}
+
+/// The files a command names in `paths`, else the ones picked in a dialog. `Err` is the command's own answer when
+/// there is nothing to import (the dialog is still open or was cancelled, or none is available).
+fn paths_or_pick(
+    app: &mut LightcraftApp,
+    id: &str,
+    p: &Value,
+    request: PickRequest,
+    now: impl FnOnce(&mut crate::services::Services) -> Option<Vec<String>>,
+) -> Result<Vec<String>, Result<Value, String>> {
+    let paths: Vec<String> = match p.get("paths").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => match crate::pick::ask(app, id, p, "paths", request, now) {
+            Picked::Now(paths) => paths,
+            Picked::Later => return Err(Ok(Value::Null)),
+            Picked::Unavailable => return Err(Err("no file dialog on this platform".into())),
+        },
+    };
+    if paths.is_empty() {
+        return Err(Ok(Value::Null));
+    }
+    Ok(paths)
+}
+
+/// What an import of presets and profiles has to say: one toast for both halves (a second toast would replace the first).
+#[derive(Default)]
+struct ImportNews {
+    parts: Vec<String>,
+    /// `name: reason` for each file that couldn't be imported
+    problems: Vec<String>,
+}
+
+/// `name: reason` for each `[name, reason]` of a `failed` list.
+fn failed_files(v: &Value) -> impl Iterator<Item = String> + '_ {
+    v["failed"].as_array().into_iter().flatten().map(|f| {
+        let name = f.get(0).and_then(Value::as_str).unwrap_or_default();
+        let reason = f.get(1).and_then(Value::as_str).unwrap_or_default();
+        format!("{name}: {reason}")
+    })
+}
+
+/// Import the `.cube` LUTs (and those inside zips / folders) as profiles; the answer to report back.
+fn import_luts(app: &mut LightcraftApp, lut_paths: &[&String], news: &mut ImportNews) -> Value {
+    match app.session.execute("profile.import", &json!({"paths": lut_paths})) {
+        Ok(v) => {
+            let profiles = v["imported"].as_array().map_or(0, Vec::len);
+            if profiles > 0 {
+                news.parts.push(crate::i18n::tr_format!(
+                    "Imported {profiles} profile{} (Profile browser ▸ their groups)",
+                    crate::i18n::plural_s(profiles),
+                    profiles = profiles
+                ));
+            }
+            news.problems.extend(failed_files(&v));
+            v
+        }
+        Err(e) => {
+            news.problems.push(e.to_string());
+            json!({"error": e.to_string()})
+        }
+    }
+}
+
+/// The settings of imported presets that have no counterpart here (the other editor's profiles, masks…), as a note.
+fn not_carried_over(v: &Value) -> String {
+    let mut skipped: Vec<&str> = v["imported"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|i| i["unmapped"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect();
+    skipped.sort_unstable();
+    skipped.dedup();
+    if skipped.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = skipped.iter().take(3).copied().collect();
+    crate::i18n::tr_format!(" — not carried over: {}{}", names.join(", "), if skipped.len() > 3 { "…" } else { "" })
+}
+
+/// The sentence for the presets of an import (none when the other half already says what happened).
+fn presets_sentence(v: &Value, profile_news: bool) -> Option<String> {
+    let n = v["imported"].as_array().map_or(0, Vec::len);
+    let failed = v["failed"].as_array().map_or(0, Vec::len);
+    let msg = match (n, failed) {
+        // a zip of LUTs (or only local presets): the other half already says what happened
+        (0, 0) if profile_news => return None,
+        (0, 0) => "No new presets".to_string(),
+        (n, 0) => crate::i18n::tr_format!("Imported {n} preset{}", crate::i18n::plural_s(n), n = n),
+        (n, f) => crate::i18n::tr_format!(
+            "Imported {n} preset{}, {f} file{} not readable",
+            crate::i18n::plural_s(n),
+            crate::i18n::plural_s(f),
+            f = f,
+            n = n
+        ),
+    };
+    Some(msg + &not_carried_over(v))
+}
+
+/// Import the preset files; adds to what `news` reports.
+fn import_preset_files(app: &mut LightcraftApp, preset_paths: &[&String], news: &mut ImportNews) -> Result<Value, String> {
+    if preset_paths.is_empty() {
+        return Ok(json!({"imported": [], "failed": [], "skipped": 0}));
+    }
+    let r = app.session.execute("preset.import", &json!({"paths": preset_paths})).map_err(|e| e.to_string());
+    if let Ok(v) = &r {
+        // Lightroom local adjustment presets land in the Masking panel's Effect menu: part of the same toast
+        if v["effects"].as_array().is_some_and(|e| !e.is_empty()) {
+            news.parts.push(crate::panels::mask_effects::import_toast(v));
+        }
+        let profile_news = !news.parts.is_empty() || !news.problems.is_empty();
+        news.parts.extend(presets_sentence(v, profile_news));
+        if v["imported"].as_array().is_some_and(|i| !i.is_empty()) {
+            app.ui.presets = true;
+        }
+    }
+    r
+}
+
+/// Show what an import did: errors if any file failed, else the parts.
+fn toast_import_news(app: &mut LightcraftApp, ctx: &egui::Context, news: &ImportNews) {
+    let mut msg = news.parts.join(" · ");
+    if news.problems.is_empty() {
+        if !msg.is_empty() {
+            app.toast(ctx, msg);
+        }
+        return;
+    }
+    let more = if news.problems.len() > 2 { "…" } else { "" };
+    let detail = format!("{}{more}", news.problems.iter().take(2).cloned().collect::<Vec<_>>().join("; "));
+    if msg.is_empty() {
+        msg = crate::i18n::tr_format!("Import failed: {e}", e = detail);
+    } else {
+        msg += &crate::i18n::tr_format!(" · {} failed: {}", news.problems.len(), detail);
+    }
+    app.toast_error(ctx, msg);
+}
+
+/// The `file.importPresets` command.
+fn file_import_presets_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    let request =
+        PickRequest::files(Some(crate::i18n::tr("Import Presets").into()), crate::i18n::tr("Presets & Profiles"), crate::pick::PRESET_EXTENSIONS);
+    let paths = match paths_or_pick(app, id, p, request, |s| s.pick_preset_files.as_mut().map(|f| f())) {
+        Ok(paths) => paths,
+        Err(answer) => return answer,
+    };
+    let lut_paths: Vec<&String> = paths
+        .iter()
+        .filter(|p| {
+            let l = p.to_ascii_lowercase();
+            l.ends_with(".cube") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
+        })
+        .collect();
+    let mut news = ImportNews::default();
+    let profiles = if lut_paths.is_empty() { Value::Null } else { import_luts(app, &lut_paths, &mut news) };
+    let preset_paths: Vec<&String> = paths.iter().filter(|p| !p.to_ascii_lowercase().ends_with(".cube")).collect();
+    let r = import_preset_files(app, &preset_paths, &mut news);
+    toast_import_news(app, ctx, &news);
+    r.map(|mut v| {
+        if !lut_paths.is_empty()
+            && let Some(o) = v.as_object_mut()
+        {
+            o.insert("profiles".into(), profiles);
+        }
+        v
+    })
+}
+
+/// The `file.importKeywords` command.
+fn file_import_keywords_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    // a keyword list file: Lightroom Classic's, Capture One's, Photo Supreme's (.utf8)
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => x.to_string(),
+        None => {
+            let req = PickRequest::file(crate::i18n::tr("Import Keywords"), crate::i18n::tr("Keyword Lists"), &["txt", "utf8"]);
+            match crate::pick::ask(app, id, p, "path", req, |s| s.pick_keyword_list.as_mut().map(|f| f())) {
+                Picked::Now(v) => match v.into_iter().next() {
+                    Some(x) => x,
+                    None => return Ok(Value::Null),
+                },
+                Picked::Later => return Ok(Value::Null),
+                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+            }
+        }
+    };
+    let r = app.session.execute("keyword.import", &json!({"path": path})).map_err(|e| e.to_string());
+    match &r {
+        Ok(v) => {
+            let (added, updated) = (v["added"].as_u64().unwrap_or(0), v["updated"].as_u64().unwrap_or(0));
+            let mut msg = crate::i18n::tr_format!("Added {n} keyword{}", if added == 1 { "" } else { "s" }, n = added);
+            if updated > 0 {
+                msg.push_str(&crate::i18n::tr_format!("; {n} gained synonyms", n = updated));
+            }
+            app.toast(ctx, msg);
+        }
+        Err(e) => app.toast(ctx, e.clone()),
+    }
+    r
+}
+
+/// The `file.exportKeywords` command.
+fn file_export_keywords_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => x.to_string(),
+        None => {
+            let name = "Keywords.txt";
+            let req = PickRequest::save(crate::i18n::tr("Export Keywords"), crate::i18n::tr("Keyword Lists"), &["txt"], name);
+            match crate::pick::ask(app, id, p, "path", req, |s| s.save_keyword_list.as_mut().map(|f| f(name).into_iter().collect())) {
+                Picked::Now(v) => match v.into_iter().next() {
+                    Some(x) => x,
+                    None => return Ok(Value::Null),
+                },
+                Picked::Later => return Ok(Value::Null),
+                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+            }
+        }
+    };
+    let r = app.session.execute("keyword.export", &json!({"path": path})).map_err(|e| e.to_string());
+    if let Err(e) = &r {
+        app.toast(ctx, e.clone());
+    }
+    if let Ok(v) = &r {
+        let n = v["keywords"].as_u64().unwrap_or(0);
+        let mut msg = crate::i18n::tr_format!("Exported {n} keyword{}", if n == 1 { "" } else { "s" }, n = n);
+        // Capture One's importer refuses ; , < > in a list: say which to rename first
+        let refuses: Vec<&str> = v["captureOneRefuses"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        if !refuses.is_empty() {
+            msg.push_str(&crate::i18n::tr_format!(
+                " — Capture One won't import a list with ; , < or > in a keyword: {names}",
+                names = refuses.iter().take(5).copied().collect::<Vec<_>>().join(" · ")
+            ));
+        }
+        // what the format can't hold (a name in brackets, a line break…) isn't in the file
+        let left: Vec<&str> = v["unwritable"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        if !left.is_empty() {
+            msg.push_str(&crate::i18n::tr_format!(
+                " — left out, as a keyword list can't hold them: {names}",
+                // escaped: a line break in a name would break the toast
+                names = left.iter().take(5).map(|n| n.escape_debug().to_string()).collect::<Vec<_>>().join(" · ")
+            ));
+        }
+        app.toast(ctx, msg);
+    }
+    r
+}
+
+/// The `file.exportMaskEffects` command.
+fn file_export_mask_effects_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => Some(x.to_string()),
+        None => {
+            let name = format!("{}.lceffect", p.get("group").and_then(Value::as_str).unwrap_or("Effect Presets"));
+            let req = PickRequest::save(
+                crate::i18n::tr("Export Effect Presets"),
+                crate::i18n::tr("LightCraft Effect Presets"),
+                &["lceffect"],
+                name.clone(),
+            );
+            match crate::pick::ask(app, id, p, "path", req, |s| s.save_preset_file.as_mut().map(|f| f(&name).into_iter().collect())) {
+                Picked::Now(v) => v.into_iter().next(),
+                Picked::Later => return Ok(Value::Null),
+                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+            }
+        }
+    };
+    let Some(path) = path else { return Ok(Value::Null) };
+    let mut params = json!({"path": path});
+    for k in ["names", "group"] {
+        if let Some(v) = p.get(k) {
+            params[k] = v.clone();
+        }
+    }
+    let r = app.session.execute("mask.exportEffects", &params).map_err(|e| e.to_string());
+    match &r {
+        Ok(v) => app.toast(ctx, crate::i18n::tr_format!("Exported {} effect preset{}", v["count"], if v["count"] == 1 { "" } else { "s" })),
+        Err(e) => app.toast_error(ctx, e.clone()),
+    }
+    r
+}
+
+/// The `file.importCurvePresets` command.
+fn file_import_curve_presets_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    let request = PickRequest::files(
+        Some(crate::i18n::tr("Import Point Curve Presets").into()),
+        crate::i18n::tr("Point Curve Presets"),
+        crate::pick::CURVE_PRESET_EXTENSIONS,
+    );
+    let paths = match paths_or_pick(app, id, p, request, |s| s.pick_curve_preset_files.as_mut().map(|f| f())) {
+        Ok(paths) => paths,
+        Err(answer) => return answer,
+    };
+    let r = app.session.execute("curve.importPresets", &json!({"paths": paths})).map_err(|e| e.to_string());
+    if let Ok(v) = &r {
+        app.toast(ctx, curve_import_message(v));
+    }
+    r
+}
+
+/// What an import of point curve presets did.
+fn curve_import_message(v: &Value) -> String {
+    let n = v["imported"].as_array().map_or(0, Vec::len);
+    let failed = v["failed"].as_array().map_or(0, Vec::len);
+    let imported = crate::i18n::tr_format!("Imported {n} point curve preset{}", crate::i18n::plural_s(n), n = n);
+    if failed == 0 {
+        return imported;
+    }
+    imported + &crate::i18n::tr_format!(", {failed} file{} not readable", crate::i18n::plural_s(failed), failed = failed)
+}
+
+/// The `file.exportCurvePresets` command.
+fn file_export_curve_presets_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(x) => Some(x.to_string()),
+        None => {
+            let req = PickRequest::save(
+                crate::i18n::tr("Export Point Curve Presets"),
+                crate::i18n::tr("Point Curve Presets"),
+                &["lccurve"],
+                "Point Curves.lccurve",
+            );
+            match crate::pick::ask(app, id, p, "path", req, |s| {
+                s.save_curve_preset_file.as_mut().map(|f| f("Point Curves.lccurve").into_iter().collect())
+            }) {
+                Picked::Now(v) => v.into_iter().next(),
+                Picked::Later => return Ok(Value::Null),
+                Picked::Unavailable => return Err("no file dialog on this platform".into()),
+            }
+        }
+    };
+    let Some(path) = path else { return Ok(Value::Null) };
+    let mut params = json!({"path": path});
+    if let Some(n) = p.get("names") {
+        params["names"] = n.clone();
+    }
+    let r = app.session.execute("curve.exportPresets", &params).map_err(|e| e.to_string());
+    if let Ok(v) = &r {
+        app.toast(ctx, crate::i18n::tr_format!("Exported {} point curve preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
+    }
+    r
 }

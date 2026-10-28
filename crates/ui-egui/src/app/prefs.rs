@@ -1,4 +1,4 @@
-use super::*;
+use super::{LightcraftApp, SCREEN_PROFILE, theme};
 
 impl LightcraftApp {
     /// The system's appearance: the host's answer first, then egui's (none: unknown).

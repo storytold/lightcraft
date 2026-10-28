@@ -1,7 +1,7 @@
 use super::albums::pointer_over_row;
 use super::local::{same_folder, subfolders};
-use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, out_of_sight, row, row_sensed, set_tree_open, tree_open, tree_toggle};
-use super::*;
+use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
+use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
 
 /// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
 /// subfolders. In the tree that holds the folder being browsed (`reveal`), the folders on the
@@ -36,70 +36,72 @@ pub(super) fn folder_tree(
             ui.data_mut(|d| d.insert_temp(revealed_id, target));
         }
     }
-    // at the tree's own indent, as in Albums and Folders: the triangle sits in the gutter and the
-    // icon lines up with the rows above
-    let resp = row(app, ui, &format!("local:{path}"), Icon::Folder, name, None, sel, indent).on_hover_text(path);
-    let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"));
-    if !tr.clicked()
-        && resp.clicked()
-        && let Err(e) = app.run("library.browse", json!({"path": path}))
-    {
-        app.toast(ui.ctx(), e);
-    }
-    crate::widgets::context_menu(&resp, |ui| {
-        // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
-        let library = app.caches.folder_tree(&app.session.catalog);
-        let held = library_node_for(&library, path);
-        if (transient || indent > 0.0)
-            && ui
-                .button(crate::i18n::tr(if transient { "Keep in Local" } else { "Add to Local" }))
-                .on_hover_text(crate::i18n::tr("List this folder in Local from now on"))
-                .clicked()
+    if !out_of_sight(app, ui, &format!("local:{path}"), name, None, indent, false) {
+        // at the tree's own indent, as in Albums and Folders: the triangle sits in the gutter and the
+        // icon lines up with the rows above
+        let resp = Row::new(&format!("local:{path}"), Icon::Folder, name).selected(sel).indent(indent).show(app, ui).on_hover_text(path);
+        let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"));
+        if !tr.clicked()
+            && resp.clicked()
+            && let Err(e) = app.run("library.browse", json!({"path": path}))
         {
-            let _ = app.run("local.addRoot", json!({"path": path}));
-            ui.close();
+            app.toast(ui.ctx(), e);
         }
-        if indent == 0.0
-            && ui
-                .button(crate::i18n::tr("Remove from Local"))
-                .on_hover_text(crate::i18n::tr("Hides this shortcut only; the folder and its photos stay as they are"))
-                .clicked()
-        {
-            let _ = app.run("local.hide", json!({"path": path}));
-            ui.close();
-        }
-        if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                title: crate::i18n::tr_format!("Rename “{name}”", name = name),
-                hint: "Folder name (renamed on disk; its photos follow)".into(),
-                value: name.to_string(),
-                command: "folder.rename".into(),
-                params: json!({"path": path}),
-                key: "name".into(),
-            });
-        }
-        if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
-            let into = app.services.pick_folder.as_mut().and_then(|f| f());
-            if let Some(into) = into {
-                match app.run("folder.move", json!({"path": path, "into": into})) {
-                    Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved; {} photo(s) relinked", r["relinked"])),
-                    Err(e) => app.toast(ui.ctx(), e),
+        crate::widgets::context_menu(&resp, |ui| {
+            // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
+            let library = app.caches.folder_tree(&app.session.catalog);
+            let held = library_node_for(&library, path);
+            if (transient || indent > 0.0)
+                && ui
+                    .button(crate::i18n::tr(if transient { "Keep in Local" } else { "Add to Local" }))
+                    .on_hover_text(crate::i18n::tr("List this folder in Local from now on"))
+                    .clicked()
+            {
+                let _ = app.run("local.addRoot", json!({"path": path}));
+                ui.close();
+            }
+            if indent == 0.0
+                && ui
+                    .button(crate::i18n::tr("Remove from Local"))
+                    .on_hover_text(crate::i18n::tr("Hides this shortcut only; the folder and its photos stay as they are"))
+                    .clicked()
+            {
+                let _ = app.run("local.hide", json!({"path": path}));
+                ui.close();
+            }
+            if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
+                app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+                    title: crate::i18n::tr_format!("Rename “{name}”", name = name),
+                    hint: "Folder name (renamed on disk; its photos follow)".into(),
+                    value: name.to_string(),
+                    command: "folder.rename".into(),
+                    params: json!({"path": path}),
+                    key: "name".into(),
+                });
+            }
+            if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
+                let into = app.services.pick_folder.as_mut().and_then(|f| f());
+                if let Some(into) = into {
+                    match app.run("folder.move", json!({"path": path, "into": into})) {
+                        Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved; {} photo(s) relinked", r["relinked"])),
+                        Err(e) => app.toast(ui.ctx(), e),
+                    }
                 }
             }
-        }
-        if app.services.reveal.is_some()
-            && ui.button(crate::i18n::tr(crate::menus::reveal_label())).clicked()
-            && let Some(f) = app.services.reveal.as_mut()
-        {
-            let _ = f(path);
-        }
-        if let Some(held) = &held {
-            synchronize_item(app, ui, &held.0, &held.1);
-        }
-    });
+            if app.services.reveal.is_some()
+                && ui.button(crate::i18n::tr(crate::menus::reveal_label())).clicked()
+                && let Some(f) = app.services.reveal.as_mut()
+            {
+                let _ = f(path);
+            }
+            if let Some(held) = &held {
+                synchronize_item(app, ui, &held.0, &held.1);
+            }
+        });
+    }
     if open && indent < INDENT_STEP * 8.0 {
-        for (n, p) in subfolders(ui, path) {
-            folder_tree(app, ui, place, &n, &p, indent + INDENT_STEP, current, reveal, false);
+        for (n, p) in subfolders(ui, path).iter() {
+            folder_tree(app, ui, place, n, p, indent + INDENT_STEP, current, reveal, false);
         }
     }
 }
@@ -339,7 +341,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
         None => name.to_string(),
     };
     let mark = n.label.map(crate::theme::label_color);
-    let resp = row_sensed(app, ui, id, Icon::Folder, name, Some(&spoken), Some(n.count), sel, indent, Sense::click(), mark);
+    let resp = Row::new(id, Icon::Folder, name).spoken(&spoken).count(Some(n.count)).selected(sel).indent(indent).mark(mark).show(app, ui);
     folder_drop_target(app, ui, &resp, n, open_id, open);
     let mut toggled = false;
     if !n.children.is_empty() {
