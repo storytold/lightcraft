@@ -175,6 +175,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
     let (backup_backend, backup_files) = (backend.clone(), files);
     let restore_backend = backend.clone();
     Services {
+        local_places: None,
         picker: None,
         pick_display_profile: None,
         screen_profile: None,

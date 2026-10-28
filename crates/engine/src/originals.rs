@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(any(unix, windows)))]
 use std::time::SystemTime;
 
-use lightcraft_catalog::safe_file::same_file;
+use lightcraft_catalog::safe_file::{same_file, same_file_strict};
 use lightcraft_catalog::{Catalog, Source};
 
 /// The directory entry a screenshot is about to write, pinned at request admission.
@@ -147,14 +147,30 @@ impl OriginalGuard {
         if let Some(n) = std::fs::canonicalize(target).ok().and_then(|c| c.file_name().map(|n| n.to_string_lossy().to_lowercase())) {
             names.push(n);
         }
+        // The identity check refuses a target whose file identity cannot be read, so an unreadable
+        // hard link to an original is not taken for an ordinary file.
+        let refuse_if_same = |p: &Path, what: &str| -> Result<(), String> {
+            let same = if hard_links {
+                same_file_strict(p, target).map_err(|e| {
+                    format!(
+                        "{}: LightCraft cannot tell whether this is {what} in the library ({e}) and never writes over an original (choose another folder or file name)",
+                        target.display()
+                    )
+                })?
+            } else {
+                same_file(p, target)
+            };
+            if same {
+                return Err(format!(
+                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                    target.display()
+                ));
+            }
+            Ok(())
+        };
         for n in &names {
             for (p, what) in self.by_name.get(n).into_iter().flatten() {
-                if same_file(p, target) {
-                    return Err(format!(
-                        "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
-                        target.display()
-                    ));
-                }
+                refuse_if_same(p, what)?;
             }
         }
         // An imported hard link or symlink can have a different name from its original. A write
@@ -166,12 +182,7 @@ impl OriginalGuard {
             if !hard_links && std::fs::read_link(p).is_err() {
                 continue;
             }
-            if same_file(p, target) {
-                return Err(format!(
-                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
-                    target.display()
-                ));
-            }
+            refuse_if_same(p, what)?;
         }
         Ok(())
     }
@@ -337,6 +348,34 @@ mod tests {
             symlink(&original, &link).unwrap();
             assert!(s.pin_write_target(&link.to_string_lossy()).unwrap_err().contains("original"));
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_hard_link_whose_identity_cannot_be_read_is_refused() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = std::env::temp_dir().join(format!("lc-unreadable-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut s = crate::Session::new();
+        let original = d.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let photo = Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let linked = d.join("shot.png");
+        std::fs::hard_link(&original, &linked).unwrap();
+
+        // A handle that shares nothing makes every other open of the file fail, so the file
+        // identity of either name cannot be read while it is held.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&original).unwrap();
+        let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
+        assert!(refused.contains("cannot tell whether"), "{refused}");
+        drop(held);
+
+        let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
+        assert!(refused.contains("original"), "{refused}");
+        assert!(!refused.contains("cannot tell whether"), "{refused}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

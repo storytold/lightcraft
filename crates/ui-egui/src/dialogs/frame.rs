@@ -1,5 +1,5 @@
 use super::export::LABEL_W;
-use super::*;
+use super::{BACKDROP_SHOWN, ControlSpec, Dialog, LightcraftApp, Tokens};
 
 /// A click on the dimmed backdrop around the dialog: it closes the dialog like Esc. Pressed and
 /// released outside the window, so a slider dragged past its edge doesn't close it; a press while a

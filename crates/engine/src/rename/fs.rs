@@ -1,5 +1,5 @@
 use super::sidecar::PacketVersion;
-use super::*;
+use super::{Path, PathBuf, SidecarNaming};
 
 /// Every sidecar that may belong to `path` (both naming conventions, `.xmp` and `.XMP`).
 pub(super) fn sidecars(path: &str) -> Vec<(PathBuf, SidecarNaming, bool)> {

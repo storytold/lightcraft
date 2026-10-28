@@ -1,4 +1,4 @@
-use super::*;
+use super::{GESTURE_TIMEOUT_MS, InjectedDrop, InjectedPress, LightcraftApp, drop_overlay, import, panels};
 
 impl LightcraftApp {
     /// Preserve the currently queued handles while a prompt or blocking library window owns
@@ -262,7 +262,7 @@ mod drop_tests {
     fn photo_sidecars_are_not_presets() {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let dropped = v(&["/a/IMG_1.CR2", "/a/IMG_1.xmp", "/a/IMG_2.jpg", "/a/IMG_2.jpg.XMP", "/a/Look.xmp", "/b/IMG_1.xmp"]);
-        let (presets, photos) = super::split_presets(dropped);
+        let (presets, photos) = crate::split_presets(dropped);
         assert_eq!(photos, v(&["/a/IMG_1.CR2", "/a/IMG_2.jpg"]));
         assert_eq!(presets, v(&["/a/Look.xmp", "/b/IMG_1.xmp"]));
     }
@@ -271,31 +271,31 @@ mod drop_tests {
     fn detection_results_are_summarised_in_words() {
         let r =
             |counts: &[usize]| serde_json::json!({"photos": counts.iter().map(|n| serde_json::json!({"faces": vec![0; *n]})).collect::<Vec<_>>()});
-        assert_eq!(super::detect_summary(&r(&[0])), "No faces found");
-        assert_eq!(super::detect_summary(&r(&[1])), "Found 1 face");
-        assert_eq!(super::detect_summary(&r(&[3])), "Found 3 faces");
-        assert_eq!(super::detect_summary(&r(&[0, 0])), "No faces found in 2 photos");
-        assert_eq!(super::detect_summary(&r(&[2, 0, 1])), "Found 3 faces in 2 photos");
-        assert_eq!(super::detect_summary(&serde_json::json!({})), "No faces found in 0 photos");
+        assert_eq!(crate::app::detect_summary(&r(&[0])), "No faces found");
+        assert_eq!(crate::app::detect_summary(&r(&[1])), "Found 1 face");
+        assert_eq!(crate::app::detect_summary(&r(&[3])), "Found 3 faces");
+        assert_eq!(crate::app::detect_summary(&r(&[0, 0])), "No faces found in 2 photos");
+        assert_eq!(crate::app::detect_summary(&r(&[2, 0, 1])), "Found 3 faces in 2 photos");
+        assert_eq!(crate::app::detect_summary(&serde_json::json!({})), "No faces found in 0 photos");
     }
 
     #[test]
     fn dropped_face_models_are_told_apart() {
         for p in ["/a/model.onnx", "/a/dir/M.ONNX"] {
-            assert!(super::is_model_file(p), "{p}");
+            assert!(crate::is_model_file(p), "{p}");
         }
         for p in ["/a/model.onnx.jpg", "/a/onnx", "/a/b.png"] {
-            assert!(!super::is_model_file(p), "{p}");
+            assert!(!crate::is_model_file(p), "{p}");
         }
     }
 
     #[test]
     fn dropped_presets_are_told_apart_from_photos() {
         for p in ["/a/Look.lrtemplate", "/a/b.XMP", "/a/pack.zip", "/a/x.lcpreset", "/a/Magic Hour.mplumpack", "/a/Pop.lmp", "/a/Bundle.LMP"] {
-            assert!(super::is_preset_file(p), "{p}");
+            assert!(crate::is_preset_file(p), "{p}");
         }
         for p in ["/a/IMG_1.CR2", "/a/b.dng", "/a/c.jpg", "/a/folder"] {
-            assert!(!super::is_preset_file(p), "{p}");
+            assert!(!crate::is_preset_file(p), "{p}");
         }
     }
 }

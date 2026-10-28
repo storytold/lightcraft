@@ -871,20 +871,8 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     h.settle(SETTLE);
 }
 
-/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
-/// without changing anything, a click applies, and the user's own templates are saved, updated,
-/// renamed and deleted from the browser.
-#[test]
-fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+fn tpl_hover_previews_without_changes(h: &mut Headless) -> lightcraft_engine::slide_template::SlideLook {
     use lightcraft_engine::slide_template::SlideLook;
-    let mut h = grid();
-    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    h.app.session.slide_templates_dir = Some(dir.clone());
-    let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [first.0]}));
-    run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap();
     for w in [
@@ -896,7 +884,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
         "field:slideshowTemplateName",
         "button:slideshowTemplateSave",
     ] {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     // hover: the preview shows Gallery Wall (its light grey wall in the margin), nothing changes
     let before = SlideLook::of(&h.app.session);
@@ -915,42 +903,55 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert!(h.step_until(SETTLE, grey), "the hovered template on the selected photo");
     assert_eq!(SlideLook::of(&h.app.session), before, "hovering changes nothing");
     assert!(h.app.session.slide_templates_previous.is_none());
+    before
+}
+
+fn tpl_click_applies_and_saves_own(h: &mut Headless, dir: &std::path::Path) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // a click applies it
-    reveal(&mut h, "template:builtin:gallery-wall");
+    reveal(h, "template:builtin:gallery-wall");
     let r = h.request("ui.clickWidget", json!({"id": "template:builtin:gallery-wall"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(h.app.session.slide_overlays.rating_stars.enabled && h.app.session.slide_layout.stroke_border);
-    assert!(has(&h, "template:previous"), "Previous settings appear");
+    assert!(has(h, "template:previous"), "Previous settings appear");
     // save as a template of our own
-    reveal(&mut h, "field:slideshowTemplateName");
+    reveal(h, "field:slideshowTemplateName");
     let r = h.request("ui.clickWidget", json!({"id": "field:slideshowTemplateName"}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Holiday / 2026"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    reveal(&mut h, "button:slideshowTemplateSave");
+    reveal(h, "button:slideshowTemplateSave");
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateSave"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(dir.join("Holiday _ 2026.json").exists(), "the separator never makes a folder");
     h.step();
-    assert!(has(&h, "template:user:Holiday _ 2026"));
+    assert!(has(h, "template:user:Holiday _ 2026"));
+}
+
+fn tpl_update_from_menu(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // update it from its menu with changed settings
-    run(&mut h, "slideshow.layout", json!({"backdropColor": "#123456"}));
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    run(h, "slideshow.layout", json!({"backdropColor": "#123456"}));
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     for w in ["button:slideshowTemplateUpdate", "button:slideshowTemplateRename", "button:slideshowTemplateExport", "button:slideshowTemplateDelete"]
     {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateUpdate"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.slide_template("user:Holiday _ 2026").unwrap().look.layout.backdrop_color, [0x12, 0x34, 0x56]);
+}
+
+fn tpl_rename_in_place(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // rename it in place
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -958,7 +959,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "field:slideshowTemplateRename"));
+    assert!(has(h, "field:slideshowTemplateRename"));
     let r = h.request("ui.key", json!({"key": "a", "cmd": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Summer"}), T);
@@ -967,9 +968,13 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+    assert!(has(h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+}
+
+fn tpl_delete_then_back_to_previous(h: &mut Headless, dir: &std::path::Path, before: &lightcraft_engine::slide_template::SlideLook) {
+    use lightcraft_engine::slide_template::SlideLook;
     // delete it (after confirming)
-    reveal(&mut h, "template:user:Summer");
+    reveal(h, "template:user:Summer");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Summer", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -983,11 +988,32 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert!(!dir.join("Summer.json").exists());
     // back to the settings before Gallery Wall
-    reveal(&mut h, "template:previous");
+    reveal(h, "template:previous");
     let r = h.request("ui.clickWidget", json!({"id": "template:previous"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
+    h.settle(SETTLE);
+}
+
+/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
+/// without changing anything, a click applies, and the user's own templates are saved, updated,
+/// renamed and deleted from the browser.
+#[test]
+fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+    let mut h = grid();
+    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.app.session.slide_templates_dir = Some(dir.clone());
+    let first = h.app.session.visible_cloned()[0];
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    let before = tpl_hover_previews_without_changes(&mut h);
+    tpl_click_applies_and_saves_own(&mut h, &dir);
+    tpl_update_from_menu(&mut h);
+    tpl_rename_in_place(&mut h);
+    tpl_delete_then_back_to_previous(&mut h, &dir, &before);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(dir);
 }

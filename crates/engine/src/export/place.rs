@@ -1,6 +1,6 @@
+use super::ExportOptions;
 use super::options::{Conflict, DestinationMode};
 use super::prepare::{Destination, Exported};
-use super::*;
 
 /// Write an exported or rendered file on disk: its folder is created if needed, and the file is
 /// replaced atomically ([`lightcraft_catalog::safe_file::write_atomic_nosync`]: a temp file
