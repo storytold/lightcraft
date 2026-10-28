@@ -20,6 +20,38 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// V3 positive Shadows, in scene EV. The broad roll-off avoids the old gate's abrupt loss of
+/// influence in lower midtones. Its slope stays positive even at +100 for a uniform ramp;
+/// the bounded detail term keeps small structures distinct without lifting the black point.
+#[inline]
+pub(crate) fn separated_shadows(base: f32, detail: f32, amount: f32) -> f32 {
+    let weight = 1.0 - smooth(-6.0, -1.0, base);
+    let mask = weight * (0.65 + 0.35 * (1.0 - weight).sqrt());
+    amount * (2.8 * mask + 1.5 * mask.sqrt() * detail)
+}
+
+/// V3 local Whites weights over the tone LUT's scene-EV domain. Use the source's neutral
+/// rendering so a camera's bright stone is treated as bright even below middle-grey scene EV.
+/// Global Contrast/Whites/Blacks and local Whites themselves must not feed back into the weights.
+pub(crate) fn local_whites_lut(info: &SourceInfo) -> Lut1 {
+    use crate::tone::{GREY, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
+    let neutral = base_tone(&DevelopSettings::default(), info, 1.0);
+    let step = (LUT_MAX_EV - LUT_MIN_EV) / (LUT_N - 1) as f32;
+    let mut previous = 0.0f32;
+    let v = (0..LUT_N)
+        .map(|i| {
+            let ev = LUT_MIN_EV + step * i as f32;
+            let display = linear_to_srgb(neutral.apply(GREY * ev.exp2()).clamp(0.0, 1.0));
+            let weight = smooth(0.35, 0.90, display);
+            // Limit dw/dEV to 1: even an unusually steep camera curve cannot reverse a
+            // uniform ramp under local Whites -100 (EV - 0.8*w retains slope >= 0.2).
+            previous = weight.clamp(previous, (previous + step).min(1.0));
+            previous
+        })
+        .collect();
+    Lut1 { v }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -142,6 +174,9 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    /// V3 local Whites weights, indexed over `tone::LUT_MIN_EV..LUT_MAX_EV`; absent for legacy
+    /// processes or while no visible, nonzero local Whites adjustment needs them.
+    pub local_whites: Option<Lut1>,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
@@ -160,6 +195,8 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// V3 tonal response branch, shared with the GPU parameter block.
+    pub v3_tone_response: bool,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -207,6 +244,10 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
+        let process = s.process.process();
+        let v3_tone_response = process == Process::V3;
+        let positive_whites = (s.light.whites / 100.0).clamp(0.0, 1.0) as f32;
+        let highlight_scale = if v3_tone_response { 1.0 - 0.98 * positive_whites } else { 1.0 };
         let grain = (s.grain.amount > 0.0 && effects).then(|| {
             let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
@@ -218,6 +259,9 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
+            local_whites: (process == Process::V3
+                && s.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.amount != 0.0 && m.adjust.whites != 0.0))
+            .then(|| local_whites_lut(info)),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
@@ -227,8 +271,9 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
+            hl: (s.light.highlights / 100.0) as f32 * highlight_scale,
             sh: (s.light.shadows / 100.0) as f32,
+            v3_tone_response: process == Process::V3,
             clar,
             tex,
             dehaze,
@@ -274,6 +319,11 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        },
+        Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+            Some(curve) => ToneMap::camera_hdr_v3(curve, l.contrast, l.whites, l.blacks, peak, l.shadows),
+            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+            None => ToneMap::display_hdr_v3(l.contrast, l.whites, l.blacks, peak, l.shadows),
         },
     }
 }
@@ -377,6 +427,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     } = fp;
     let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
         (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
+
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
@@ -474,11 +525,18 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let (hh, ss) = (hl + l_hl, sh + l_sh);
             if hh != 0.0 || ss != 0.0 {
                 let ws = 1.0 - smooth(-4.8, 0.3, base);
-                let wh = smooth(-1.0, 2.8, base);
-                delta += ss * 1.7 * ws * ws.sqrt() + hh * 1.7 * wh;
+                let wh = if fp.v3_tone_response { smooth(-2.8, 1.8, base) } else { smooth(-1.0, 2.8, base) };
+                let detail = (l1 - base).clamp(-1.0, 1.0);
+                let shadow_delta = if fp.v3_tone_response && ss > 0.0 { separated_shadows(base, detail, ss) } else { ss * 1.7 * ws * ws.sqrt() };
+                let highlight_delta = if fp.v3_tone_response { hh * 2.5 * wh.sqrt() } else { hh * 1.7 * wh };
+                delta += shadow_delta + highlight_delta;
             }
             if l_wh != 0.0 {
-                delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
+                let weight = match &fp.local_whites {
+                    Some(lut) => lut.eval((l1 - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV)),
+                    None => smooth(0.5, 3.0, l1),
+                };
+                delta += l_wh * 0.8 * weight;
             }
             if l_bl != 0.0 {
                 delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
@@ -526,6 +584,31 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- tone map on luminance, highlight desaturation
             let yl = luminance_2020(c);
+
+            // DEBUG: EV values entering the tone curve
+            // const DEBUG_EV: bool = false;
+
+            // if DEBUG_EV {
+            //     let ev = (yl.max(1e-12) / 0.18).log2();
+
+            //     let color = if ev < -7.0 {
+            //         [0.10, 0.20, 0.80] // Blue
+            //     } else if ev < -6.0 {
+            //         [0.00, 0.80, 0.90] // Cyan
+            //     } else if ev < -5.0 {
+            //         [0.80, 0.10, 0.70] // Magenta
+            //     } else if ev < -4.0 {
+            //         [0.95, 0.85, 0.10] // Yellow
+            //     } else if ev < -3.0 {
+            //         [0.95, 0.45, 0.10] // Orange
+            //     } else {
+            //         [0.50, 0.50, 0.50] // Grey
+            //     };
+
+            //     *px = store(color);
+            //     continue;
+            // }
+
             let o = tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
             let k = tone.chroma_scale(o);

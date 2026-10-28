@@ -23,6 +23,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("AIR_PRE", 1),
     ("HL", 1),
     ("SH", 1),
+    ("V3_TONE_RESPONSE", 1),
+    ("LOCAL_WHITES_OFF", 1),
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
@@ -150,6 +152,13 @@ pub struct Present {
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
+    let local_whites_off = if let Some(lut) = &fp.local_whites {
+        let off = aux.len();
+        aux.extend_from_slice(&lut.v);
+        off
+    } else {
+        0
+    };
     let srgb_off = aux.len();
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
@@ -179,6 +188,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
     p.f("SH", fp.sh);
+    p.b("V3_TONE_RESPONSE", fp.v3_tone_response);
+    p.u("LOCAL_WHITES_OFF", local_whites_off as u32);
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);
