@@ -585,30 +585,6 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- tone map on luminance, highlight desaturation
             let yl = luminance_2020(c);
 
-            // DEBUG: EV values entering the tone curve
-            // const DEBUG_EV: bool = false;
-
-            // if DEBUG_EV {
-            //     let ev = (yl.max(1e-12) / 0.18).log2();
-
-            //     let color = if ev < -7.0 {
-            //         [0.10, 0.20, 0.80] // Blue
-            //     } else if ev < -6.0 {
-            //         [0.00, 0.80, 0.90] // Cyan
-            //     } else if ev < -5.0 {
-            //         [0.80, 0.10, 0.70] // Magenta
-            //     } else if ev < -4.0 {
-            //         [0.95, 0.85, 0.10] // Yellow
-            //     } else if ev < -3.0 {
-            //         [0.95, 0.45, 0.10] // Orange
-            //     } else {
-            //         [0.50, 0.50, 0.50] // Grey
-            //     };
-
-            //     *px = store(color);
-            //     continue;
-            // }
-
             let o = tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
             let k = tone.chroma_scale(o);
