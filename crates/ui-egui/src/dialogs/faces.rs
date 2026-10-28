@@ -12,7 +12,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::panels::settings::{check, heading, hint};
+use crate::panels::settings::{check, heading, hint, row};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -164,6 +164,41 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// How many of a person's best matching faces a suggestion is based on (`faces.matching`).
+fn matching_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value) {
+    heading(ui, t, "Matching");
+    let current = list["topFaces"].as_u64().unwrap_or(2);
+    let (default, max) = (list["topFacesDefault"].as_u64().unwrap_or(2), list["topFacesMax"].as_u64().unwrap_or(8));
+    let label = |n: u64| if n == default { format!("{n} {}", crate::i18n::tr("(default)")) } else { n.to_string() };
+    let mut pick = None;
+    row(ui, t, "Faces per person in a match", |ui| {
+        let r = crate::widgets::combo_box("settingsFacesTopFaces").width(120.0).selected_text(label(current)).show_ui(ui, |ui| {
+            for n in 1..=max {
+                if ui.selectable_label(n == current, label(n)).clicked() && n != current {
+                    pick = Some(n);
+                }
+            }
+        });
+        crate::widgets::name_combo(&r.response, crate::i18n::tr("Faces per person in a match"));
+        register(ui, "combo:settingsFacesTopFaces", r.response.rect);
+    });
+    if let Some(n) = pick {
+        match app.run("faces.matching", json!({"topFaces": n})) {
+            Ok(_) => {
+                app.caches.faces_epoch += 1;
+                // a person's page asks again for the faces that look like them
+                app.caches.person_page = None;
+            }
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+    hint(
+        ui,
+        t,
+        "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos, fewer suggestions for people with few.",
+    );
+}
+
 /// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that
 /// keeps them on the CPU.
 fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
@@ -275,6 +310,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     let downloads =
         app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    matching_section(app, ui, t, &list);
     gpu_section(app, ui, t, &list["gpu"]);
     heading(ui, t, "Face detector");
     for m in all.iter().filter(|m| m["role"] == "detector") {
