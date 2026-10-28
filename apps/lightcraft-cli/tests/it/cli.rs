@@ -185,7 +185,7 @@ fn calibrate_reads_raf_inputs_and_reports_bad_files() {
 
 #[test]
 fn calibrate_pairs_options_check_their_inputs() {
-    let run = |args: &[&std::ffi::OsStr]| Command::new(BIN).arg("calibrate").args(args).output().unwrap();
+    let run = |args: &[&std::ffi::OsStr]| Command::new(binary()).arg("calibrate").args(args).output().unwrap();
     let text = |o: &std::process::Output| String::from_utf8_lossy(&o.stderr).into_owned();
     // nothing to fit from
     let r = run(&[]);
@@ -242,7 +242,7 @@ fn calibrate_pairs_only_exports_and_pools_pairs_files() {
     let (a, b, all) = (write("share-a.pairs", &refs[..4]), write("share-b.pairs", &refs[3..]), write("share-all.pairs", &refs));
     let fit = |inputs: &[&std::path::Path], dir: &str| {
         let out = tmp(dir);
-        let mut cmd = Command::new(BIN);
+        let mut cmd = Command::new(binary());
         cmd.args(["calibrate", "--out"]).arg(&out);
         for i in inputs {
             cmd.arg("--from-pairs").arg(i);
@@ -258,7 +258,7 @@ fn calibrate_pairs_only_exports_and_pools_pairs_files() {
     // `--pairs` alone re-exports the pooled photos and writes no profile
     let merged = tmp("share-merged.pairs");
     let default_dir = tmp("pairs-default-profiles");
-    let r = Command::new(BIN)
+    let r = Command::new(binary())
         .env("LIGHTCRAFT_CAMERA_PROFILES", &default_dir)
         .args(["calibrate", "--from-pairs"])
         .arg(&a)
