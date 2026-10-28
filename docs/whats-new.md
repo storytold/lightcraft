@@ -239,7 +239,8 @@
 
 ### One feedback row in the macOS Help menu
 - On macOS the Help menu showed macOS's own "Send LightCraft Feedback" row above LightCraft's Send Feedback…. Only
-  LightCraft's row is left; it opens a new issue on the project's GitHub.
+  LightCraft's row is left; it opens a new issue on the project's GitHub. (A `--memory` session doesn't change that
+  setting, so on a Mac where LightCraft only ever ran that way macOS's row stays.)
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.

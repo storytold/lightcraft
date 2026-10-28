@@ -8,7 +8,8 @@
 //!
 //! The value is written to the app's preferences (the safe `setBool:forKey:`; registering it only
 //! for the process takes `unsafe`, which this crate forbids) and written again at every start,
-//! except in a `--memory` session, which writes nothing (issue #164).
+//! except in a `--memory` session, which writes nothing (issue #164); a run with
+//! `LIGHTCRAFT_NO_PREFS` still writes it.
 
 use objc2_foundation::{NSString, NSUserDefaults};
 
