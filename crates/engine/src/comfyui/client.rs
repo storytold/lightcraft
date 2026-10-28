@@ -128,13 +128,27 @@ impl Client {
 /// Stable bindings for our original, bundled native-node workflow; the browser workflow is
 /// a standalone demonstration. Save raw decoded pixels: LightCraft composites exactly once.
 pub(super) fn workflow(settings: &Settings, image: &str, mask: &str) -> Result<Value, String> {
-    let mut v: Value = serde_json::from_str(include_str!("Lightcraft-masking-api.json")).map_err(|e| e.to_string())?;
+    // The supported GGUF preset is Qwen Image 2.1; safetensors checkpoints retain the SDXL
+    // workflow. Both expose the same image/mask/seed/output bindings to the caller.
+    let qwen = settings.model.to_ascii_lowercase().ends_with(".gguf");
+    let template = if qwen { include_str!("Lightcraft-masking-qwen21-api.json") } else { include_str!("Lightcraft-masking-api.json") };
+    let mut v: Value = serde_json::from_str(template).map_err(|e| e.to_string())?;
+    let (model, positive, negative, prompt) = if qwen {
+        (
+            "/1/inputs/unet_name",
+            "/4/inputs/prompt",
+            "/4/inputs/negative_prompt",
+            format!("Edit <image1>: {}. Preserve the surrounding scene, lighting and perspective. Return an opaque photograph.", settings.prompt),
+        )
+    } else {
+        ("/1/inputs/ckpt_name", "/4/inputs/text", "/5/inputs/text", settings.prompt.clone())
+    };
     for (path, value) in [
-        ("/1/inputs/ckpt_name", json!(settings.model)),
+        (model, json!(settings.model)),
         ("/2/inputs/image", json!(image)),
         ("/3/inputs/image", json!(mask)),
-        ("/4/inputs/text", json!(settings.prompt)),
-        ("/5/inputs/text", json!(settings.negative)),
+        (positive, json!(prompt)),
+        (negative, json!(settings.negative)),
         ("/7/inputs/seed", json!(settings.seed)),
     ] {
         *v.pointer_mut(path).ok_or("invalid bundled ComfyUI workflow")? = value;
@@ -160,5 +174,29 @@ mod tests {
         assert_eq!(v.pointer("/3/inputs/channel"), Some(&json!("red")));
         assert_eq!(v.pointer("/7/inputs/seed"), Some(&json!(99)));
         assert_eq!(v.pointer("/10/inputs/images"), Some(&json!(["8", 0])));
+    }
+
+    #[test]
+    fn qwen21_binds_edit_reference_mask_and_installed_gguf_without_sdxl_nodes() {
+        let s = Settings {
+            model: "qwen-image-2.1-UC-BF16.gguf".into(),
+            prompt: "replace the block with a blue vase".into(),
+            seed: 43,
+            ..Default::default()
+        };
+        let v = workflow(&s, "photo.png", "mask.png").unwrap();
+        assert_eq!(v.pointer("/1/inputs/unet_name"), Some(&json!(s.model)));
+        assert_eq!(v.pointer("/4/inputs/images.image_1"), Some(&json!(["2", 0])));
+        assert!(v.pointer("/4/inputs/prompt").unwrap().as_str().unwrap().contains(&s.prompt));
+        assert_eq!(v.pointer("/3/inputs/image"), Some(&json!("mask.png")));
+        assert_eq!(v.pointer("/9/inputs/mask"), Some(&json!(["3", 0])));
+        assert_eq!(v.pointer("/9/inputs/samples"), Some(&json!(["6", 0])));
+        assert_eq!(v.pointer("/6/class_type"), Some(&json!("VAEEncode")));
+        assert_eq!(v.pointer("/7/inputs/seed"), Some(&json!(43)));
+        assert_eq!(v.pointer("/7/inputs/cfg"), Some(&json!(1.0)));
+        assert_eq!(v.pointer("/7/inputs/steps"), Some(&json!(25)));
+        assert_eq!(v.pointer("/10/inputs/images"), Some(&json!(["15", 0])));
+        assert_eq!(v.pointer("/15/class_type"), Some(&json!("SplitImageWithAlpha")));
+        assert!(!v.to_string().contains("CheckpointLoaderSimple"));
     }
 }

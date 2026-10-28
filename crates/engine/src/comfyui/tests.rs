@@ -89,7 +89,19 @@ fn http_error_validation_failure_and_cancellation_are_errors_not_panics() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn command_roundtrip_previews_before_accepting_preserves_original_and_stacks_copy() {
-    let dir = std::env::temp_dir().join(format!("lightcraft-comfyui-test-{}", std::process::id()));
+    command_roundtrip("Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn qwen21_command_roundtrip_previews_before_accepting_preserves_original_and_stacks_copy() {
+    command_roundtrip("qwen-image-2.1-UC-BF16.gguf");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn command_roundtrip(model: &str) {
+    let preset = if model.ends_with(".gguf") { "qwen21" } else { "sdxl" };
+    let dir = std::env::temp_dir().join(format!("lightcraft-comfyui-test-{}-{preset}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("original.png");
     let mut original = Rgba8::new(64, 64);
@@ -111,7 +123,7 @@ fn command_roundtrip_previews_before_accepting_preserves_original_and_stacks_cop
     s.execute("mask.add", &json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.2, "ry": 0.2, "feather": 0.0})).unwrap();
     let before = (*s.develop_of(photo).unwrap()).clone();
     let rendered = s.render_now(photo, 64, 64).unwrap().image;
-    let settings = json!({"endpoint": url, "prompt": "blue vase", "seed": 42});
+    let settings = json!({"endpoint": url, "model": model, "prompt": "blue vase", "seed": 42});
     s.execute("mask.generate", &settings).unwrap();
     assert_eq!(s.activity.list().len(), 1);
     let deadline = Instant::now();
@@ -149,6 +161,7 @@ fn command_roundtrip_previews_before_accepting_preserves_original_and_stacks_cop
     assert_ne!(out.data[32 * 64 + 32], rendered.data[32 * 64 + 32]);
     let recipe: Value = serde_json::from_slice(&std::fs::read(result["provenance"].as_str().unwrap()).unwrap()).unwrap();
     assert_eq!(recipe["settings"]["seed"], 42);
+    assert_eq!(recipe["settings"]["model"], model);
     let requests = thread.join().unwrap();
     let graph: Value = serde_json::from_slice(&requests[2].1).unwrap();
     assert_eq!(graph.pointer("/prompt/2/inputs/image"), Some(&json!("inputs/actual-image.png")));

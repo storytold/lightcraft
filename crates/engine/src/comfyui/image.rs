@@ -36,10 +36,11 @@ pub(super) fn region(mask: &Rgba8) -> Result<Region, String> {
     Ok(Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
 }
 
-/// ComfyUI's VAE needs multiples of 8. Size is bounded regardless of the source resolution.
+/// Multiples of 32 support both the SDXL VAE and Qwen 2.1's reference encoder/VAE.
+/// Size is bounded regardless of the source resolution.
 pub(super) fn network_size(r: Region) -> (usize, usize) {
     let scale = 1024.0 / r.w.max(r.h).max(1) as f64;
-    let side = |v: usize| ((v as f64 * scale / 8.0).round() as usize * 8).clamp(64, 1024);
+    let side = |v: usize| ((v as f64 * scale / 32.0).round() as usize * 32).clamp(64, 1024);
     (side(r.w), side(r.h))
 }
 
@@ -124,7 +125,8 @@ mod tests {
         let r = region(&mask).unwrap();
         assert!(r.w < 200 && r.x < 100 && r.x + r.w > 101);
         let (w, h) = network_size(r);
-        assert!(w <= 1024 && h <= 1024 && w % 8 == 0 && h % 8 == 0);
+        assert!(w <= 1024 && h <= 1024 && w % 32 == 0 && h % 32 == 0);
+        assert_eq!(network_size(Region { x: 0, y: 0, w: 100, h: 73 }), (1024, 736));
         let mut generated = Rgba8::new(w, h);
         generated.data.fill([10, 20, 240, 255]);
         let out = composite(original.clone(), &mask, &generated, r).unwrap();

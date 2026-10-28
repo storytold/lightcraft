@@ -2,8 +2,9 @@
 
 LightCraft can use an independently operated ComfyUI server to replace pixels inside an existing
 mask. This is optional, desktop-only, and off until you press **Generate**. No model is downloaded
-and no service starts automatically. You need a running ComfyUI server with an SDXL checkpoint
-and the built-in nodes used by `crates/engine/src/comfyui/Lightcraft-masking-api.json`.
+and no service starts automatically. You need a running ComfyUI server with either the Qwen
+Image 2.1 GGUF preset below or an SDXL checkpoint. LightCraft selects the Qwen preset for `.gguf` filenames and the SDXL preset for
+other filenames; this is not support for arbitrary GGUF model architectures.
 
 ## In LightCraft
 
@@ -11,8 +12,9 @@ and the built-in nodes used by `crates/engine/src/comfyui/Lightcraft-masking-api
    range or combined masks all work). White in the mask preview is the replacement area.
 2. Expand **Generate replacement** below the mask-selection controls, then enter what should appear in that area.
 3. Expand **ComfyUI settings**. Enter your server URL (for example `http://127.0.0.1:8188`, or your
-   workstation's LAN address) and the exact installed checkpoint filename. The default checkpoint
-   name is `Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors`; change it if yours differs.
+   workstation's LAN address) and the exact installed model filename. For the installed Qwen
+   preset, use `qwen-image-2.1-UC-BF16.gguf`. SDXL remains available with a checkpoint such as
+   `Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors`.
 4. Press **Generate**. The activity list shows the background task and its cancel button.
 5. Inspect the preview. **Accept replacement** saves/imports a new PNG and stacks it above the
    original. **Try again** increments the seed and generates again for the original photo/mask
@@ -29,13 +31,14 @@ a mask, opening settings, starting LightCraft or reading generation status.
   current develop settings. Add/subtract/intersect components, inversion, refinement and Amount
   are evaluated by the same pipeline as the mask overlay.
 - LightCraft sends only the mask's bounding region with context, resized to at most 1024 pixels
-  per side (multiples of eight). A small selection can therefore use more model detail than a
+  per side (multiples of 32, shared by both VAEs). A small selection can therefore use more model detail than a
   whole-photo resize. Large selections are still limited to the model's resolution.
-- The bundled **Lightcraft-masking** API template uses native ComfyUI nodes: checkpoint loader,
-  image/mask loaders, CLIP text encoding, inpaint VAE encoding, KSampler, VAE decoding and image
-  saving. Photo, mask, prompt, negative prompt, model and seed are bound by LightCraft. This
-  bundled template is independent of a workflow edited/saved in the browser. No custom nodes
-  are installed, and ComfyUI's implementation is not bundled into LightCraft.
+- The bundled **Lightcraft-masking** API templates bind the photo, mask, prompt, negative
+  prompt, model and seed. SDXL uses its checkpoint, CLIP and inpaint VAE nodes. Qwen uses
+  reference-image conditioning, the encoded original photo and a latent noise mask, so it sees
+  the scene while sampling the selected area. Both decode to RGB for local compositing. The
+  templates are independent of a workflow edited/saved in the browser. ComfyUI's implementation
+  and custom-node code are not bundled into LightCraft.
 - The returned region is scaled back and blended once, in linear light, through the original
   full-resolution mask. Pixels whose evaluated mask value is zero remain byte identical to the
   developed 8-bit render. The new photo retains the rendered photo's full dimensions.
@@ -44,9 +47,32 @@ a mask, opening settings, starting LightCraft or reading generation status.
   intact. The copy has the develop adjustments baked in; it is not a generated layer on the RAW.
   It does not inherit all original embedded EXIF/IPTC metadata.
 
+## Qwen Image 2.1 preset
+
+This preset follows the user's existing ComfyUI Qwen setup. Install/configure models in ComfyUI
+independently; LightCraft does not download weights or install custom nodes. The preset requires:
+
+- Diffusion model: `qwen-image-2.1-UC-BF16.gguf` in `models/diffusion_models/` (or the exact
+  equivalent Qwen 2.1 GGUF filename entered in settings).
+- Text encoder: `qwen3vl_8b_bf16.safetensors` in `models/text_encoders/`.
+- VAE: `qwen_image_2.1_vae_bf16.safetensors` in `models/vae/`.
+- The already installed `UnetLoaderGGUF` node, plus ComfyUI's `ModelComputeDtype`,
+  `QwenImage21Cache` and `TextEncodeQwenImage21` nodes.
+
+Sampling uses BF16 computation, automatic cache placement, 25 Euler/simple steps and CFG 1.
+At CFG 1 **negative prompts have no effect**; leave that field empty. Prompt enhancement is not
+run, so the instruction entered in LightCraft reaches the edit model directly, with a short
+reference-image/preserve-surroundings instruction. Qwen may take longer than SDXL; actual
+quality depends on the scene, selection and prompt. SAM 3 still creates the mask locally.
+
+The source and mask are uploaded together at matching dimensions. LightCraft keeps compositing
+through the original full-resolution mask, so the model cannot alter zero-mask pixels. The saved
+browser workflow performs its own composite for standalone use; the application API template
+returns the raw RGB region to avoid blending a feathered edge twice.
+
 ## Limits and cancellation
 
-This first version supports SDR photos up to 80 megapixels and the bundled SDXL workflow.
+This first version supports SDR photos up to 80 megapixels and the bundled Qwen 2.1 GGUF and SDXL workflows.
 It does not offer arbitrary custom workflow bindings, HDR generation or lossless RAW editing.
 Generation has a ten-minute limit and individual network requests have a thirty-second timeout.
 URLs may use HTTP or HTTPS without embedded credentials; authenticated gateways are not yet

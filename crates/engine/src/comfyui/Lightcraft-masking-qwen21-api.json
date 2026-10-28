@@ -1,0 +1,203 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "qwen-image-2.1-UC-BF16.gguf"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 \u2014 installed BF16 GGUF"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Lightcraft-masking-input.png"
+    },
+    "_meta": {
+      "title": "Original photo"
+    }
+  },
+  "3": {
+    "class_type": "LoadImageMask",
+    "inputs": {
+      "image": "Lightcraft-masking-mask.png",
+      "channel": "red"
+    },
+    "_meta": {
+      "title": "Mask \u2014 white replaces, black preserves"
+    }
+  },
+  "4": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "clip": [
+        "13",
+        0
+      ],
+      "prompt": "",
+      "negative_prompt": "",
+      "resolution": 0,
+      "images.image_1": [
+        "2",
+        0
+      ],
+      "vae": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PROMPT \u2014 edit the selected area"
+    }
+  },
+  "6": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "2",
+        0
+      ],
+      "vae": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Encode original photo"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "12",
+        0
+      ],
+      "seed": 1,
+      "steps": 25,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "4",
+        1
+      ],
+      "latent_image": [
+        "9",
+        0
+      ],
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Qwen replacement \u2014 25 steps, CFG 1"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Decode Qwen image"
+    }
+  },
+  "9": {
+    "class_type": "SetLatentNoiseMask",
+    "inputs": {
+      "samples": [
+        "6",
+        0
+      ],
+      "mask": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Generate inside the mask"
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "15",
+        0
+      ],
+      "filename_prefix": "Lightcraft-masking/Lightcraft-masking-Qwen21"
+    },
+    "_meta": {
+      "title": "Lightcraft-masking \u2014 result"
+    }
+  },
+  "11": {
+    "class_type": "ModelComputeDtype",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "dtype": "bf16"
+    },
+    "_meta": {
+      "title": "BF16 computation"
+    }
+  },
+  "12": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "model": [
+        "11",
+        0
+      ],
+      "device": "auto",
+      "dtype": "default"
+    },
+    "_meta": {
+      "title": "Qwen 2.1 cache"
+    }
+  },
+  "13": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_bf16.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen3-VL 8B BF16"
+    }
+  },
+  "14": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 VAE"
+    }
+  },
+  "15": {
+    "class_type": "SplitImageWithAlpha",
+    "inputs": {
+      "image": [
+        "8",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "RGB output for LightCraft"
+    }
+  }
+}
