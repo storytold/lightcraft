@@ -192,10 +192,12 @@ impl Segmenter {
     }
 
     /// Delete the model's files and partial downloads from the model folder, nothing else (`segment.model.remove`):
-    /// `(paths removed, bytes freed)`. Refused while the model downloads or computes a mask. A file that cannot be
+    /// `(paths removed, bytes removed)`. Refused while the model downloads or computes a mask. A file that cannot be
     /// deleted (another program holds it open) is an error that names it; the others are gone by then. An idle worker
-    /// still holds the loaded model's files open (the system would keep their space until it unloads on its own), so it
-    /// is unloaded first; when that cannot be confirmed in a few seconds nothing is deleted.
+    /// still holds the loaded model's files open, so it is unloaded first (LightCraft's worker no longer holds them);
+    /// when that cannot be confirmed in a few seconds nothing is deleted. This removes the folder's entries only: a
+    /// link's target stays, and another program that has a file open can keep its space.
+    /// While a stop that timed out is still running, new requests are refused (see `Worker::submit`).
     pub fn remove_files(&mut self) -> Result<(Vec<String>, u64), String> {
         if self.busy() || self.detail_busy() || self.download_status().running {
             return Err(
@@ -829,7 +831,7 @@ mod tests {
     }
 
     /// A worker that is idle still holds the model it loaded (it unloads after ten minutes): Remove ends the worker
-    /// first, so the files' space is really freed when it reports the bytes.
+    /// first, so the worker no longer holds the files when they are deleted.
     #[cfg(feature = "sam")]
     #[test]
     fn remove_unloads_an_idle_worker_before_deleting_the_weights() {
