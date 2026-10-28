@@ -17,7 +17,7 @@
 use lightcraft_catalog::{Op, Photo, Source};
 use serde_json::json;
 
-use crate::{LibrarySource, Session, filter_chips};
+use crate::{LibrarySource, Selection, Session, filter_chips};
 
 fn source_folder(s: &mut Session, path: &str) -> serde_json::Value {
     s.execute("library.source", &json!({"kind": "libraryFolder", "path": path})).unwrap()
@@ -684,6 +684,44 @@ fn removing_a_made_folder_from_the_library_takes_its_row_away_and_undo_brings_it
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(rows_for(&mut s, &dir.path("b")).len(), 1);
     assert!(s.execute("library.removeFolder", &json!({"path": dir.path("nope")})).is_err(), "a folder the library never listed is still refused");
+}
+
+#[test]
+fn removing_an_empty_made_folder_leaves_the_selection_alone() {
+    let dir = Scratch::new("made-remove-selection");
+    let mut s = Session::new();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "b"})).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "c"})).unwrap();
+    let first = add_file(&mut s, &dir.path("c/x.jpg"), "X");
+    let second = add_file(&mut s, &dir.path("c/y.jpg"), "Y");
+    let (a, b) = (s.visible_cloned()[0], s.visible_cloned()[1]);
+    assert!([a, b].contains(&first) && [a, b].contains(&second));
+    s.selection = Selection::single(b);
+    s.execute("library.removeFolder", &json!({"path": dir.path("b")})).unwrap();
+    assert_eq!(s.selection, Selection::single(b), "no photo went and the view is the same: the selection stays");
+    // a folder that was shown and has been left again (the grid shows everything) is not the view either
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "e"})).unwrap();
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("e")})).unwrap();
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    s.selection = Selection::single(b);
+    s.execute("library.removeFolder", &json!({"path": dir.path("e")})).unwrap();
+    assert_eq!(s.selection, Selection::single(b), "the grid did not change, so the selection stays");
+    // a folder shown only because a made folder is inside it: removing that one empties the grid's name, so it shows everything
+    std::fs::create_dir_all(dir.0.join("p")).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path("p"), "name": "q"})).unwrap();
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("p")})).unwrap();
+    s.execute("library.removeFolder", &json!({"path": dir.path("p/q")})).unwrap();
+    assert_eq!(s.source, LibrarySource::All, "the folder shown is no longer listed");
+    let first_visible = s.visible_cloned()[0];
+    assert_eq!(s.selection, Selection::single(first_visible), "everything is shown now: its first photo is selected");
+    // a view that showed the removed folder is replaced, so the selection follows it
+    s.selection = Selection::single(b);
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("c")})).unwrap();
+    s.execute("folder.create", &json!({"parent": dir.path(""), "name": "d"})).unwrap();
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.path("d")})).unwrap();
+    s.execute("library.removeFolder", &json!({"path": dir.path("d")})).unwrap();
+    let first_visible = s.visible_cloned()[0];
+    assert_eq!(s.selection, Selection::single(first_visible), "the shown folder is gone: back to everything, first photo selected");
 }
 
 #[test]
