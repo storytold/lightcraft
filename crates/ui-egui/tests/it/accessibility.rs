@@ -25,6 +25,14 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     h
 }
 
+/// The empty Reference view's menu-path hint must render under the strict font policy.
+/// U+25B8 in the old hint panicked here even in an English-only build.
+#[test]
+fn reference_hint_uses_installed_glyphs() {
+    let mut h = harness(ViewMode::Reference, RightPanel::None);
+    h.run_steps(2);
+}
+
 fn interactive(role: Role) -> bool {
     matches!(
         role,

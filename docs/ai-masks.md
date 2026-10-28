@@ -252,3 +252,7 @@ python3 -m venv .venv-sam3 && .venv-sam3/bin/pip install -r tools/requirements-s
 .venv-sam3/bin/python tools/sam3_reference.py photo.jpg ref.safetensors
 LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=ref.safetensors cargo test -p lightcraft-segment --release -- --nocapture
 ```
+
+## Generate inside a mask
+
+After selecting a mask, **Generate replacement** in Masking sends its selected region to your own ComfyUI server. This has a separate replacement prompt; Describe above the mask list still describes the selection. See [ComfyUI setup and limits](comfyui.md).

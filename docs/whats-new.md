@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Generate a replacement inside a mask with ComfyUI
+- Select a mask, enter a replacement prompt in Masking, and configure your own ComfyUI server and SDXL checkpoint. Generate runs the bundled Lightcraft-masking workflow in the background. Accept saves a new full-size sRGB PNG stacked with the original; Try again changes the seed, and Discard leaves the library alone. Pixels outside the mask stay unchanged from the developed render. Nothing is sent until Generate is pressed. See [ComfyUI generation](comfyui.md) for setup and limitations.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

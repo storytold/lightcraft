@@ -54,3 +54,5 @@ Notes
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their licences and attribution in its
   `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
   releases). Never commit font files here; add new fonts to craft-fonts (craftrules `standards/fonts.md`).
+
+| `crates/engine/src/comfyui/Lightcraft-masking-api.json` | Lightcraft-masking native-node API workflow | LightCraft contributors | original work | MIT OR Apache-2.0 | 2026-10-28 | Parameterized photo, mask, model, prompts and seed; raw region output for local compositing |

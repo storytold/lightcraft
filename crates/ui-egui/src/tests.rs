@@ -27,6 +27,7 @@ mod error_kinds;
 mod filmstrip;
 mod focus_point;
 mod folder_drop;
+mod generation;
 mod grading;
 mod grid;
 mod guided_guides;

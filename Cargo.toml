@@ -45,6 +45,10 @@ lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
 lightcraft-testkit = { path = "crates/testkit" }
 
+# HTTP client: pure Rust TLS with the same RustCrypto provider as model downloads.
+ureq = { version = "3.4", default-features = false, features = ["json", "rustls-no-provider", "rustls-webpki-roots"] }
+rustls-rustcrypto = "0.0.2-alpha"
+
 # foundation
 thiserror = "2"
 sha2 = "0.10"
