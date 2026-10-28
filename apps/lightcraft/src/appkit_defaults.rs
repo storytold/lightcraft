@@ -48,7 +48,9 @@ mod tests {
         let defaults = NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(&suite)).expect("a test domain");
         let _domain = Domain(suite, defaults.clone());
         let key = NSString::from_str("NSShowFeedbackMenu");
-        // AppKit registers `true` for this key (measured), which is why its row shows
+        // the row shows while the default is on (AppKit registers `true`, measured); set it so the
+        // test doesn't depend on the developer's own defaults
+        defaults.setBool_forKey(true, &key);
         assert!(defaults.boolForKey(&key), "the row shows until the default says otherwise");
         switch_off(&defaults);
         assert!(!defaults.boolForKey(&key), "AppKit's Send Feedback row is off");
