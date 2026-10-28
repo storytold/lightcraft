@@ -277,21 +277,29 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
     // The retry record starts with the `{"seq":` marker, but that marker can also occur inside
     // the op body (a smart-album rule value such as `{"seq":1}`); then the last occurrence is
-    // nested, not the record start, and decoding it rejects a valid retry. Scan marker
-    // occurrences from the end of the line and decode the first one that is a complete record
-    // continuing the log (`seq <= last + 1`). The number of decodes is bounded, so a hostile
-    // line of repeated markers stays linear instead of quadratic, and the fragment that
-    // precedes the record stays to its left (`i > 0`).
-    const MAX_DECODES: usize = 8;
-    let mut end = line.len();
-    let mut decodes = 0;
-    while decodes < MAX_DECODES {
-        decodes += 1;
-        let Some(i) = line[..end].windows(START.len()).rposition(|w| w == START) else { break };
+    // nested, not the record start, and decoding it rejects a valid retry. Scan every marker
+    // once, left to right, then try them from the end. A marker nested inside the op body is
+    // followed by `}` or `,`, not by the `,"crc":` record header, so the cheap header check
+    // rejects it without a full decode; only a real record start reaches `decode_record`. This
+    // imposes no fixed limit on how many nested markers a valid record may contain, and stays
+    // linear in the line length instead of rescanning for each candidate, so a hostile line of
+    // repeated markers cannot become quadratic. The fragment that precedes the record stays to
+    // its left (`i > 0`).
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut from = 0;
+    while let Some(i) = line[from..].windows(START.len()).position(|w| w == START) {
+        let pos = from + i;
+        let after = &line[pos + START.len()..];
+        let digits = after.iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits > 0 && after[digits..].starts_with(b",\"crc\":") {
+            candidates.push(pos);
+        }
+        from = pos + START.len();
+    }
+    for &i in candidates.iter().rev() {
         if i == 0 {
             break; // the record must follow a fragment
         }
-        end = i;
         let Ok(text) = std::str::from_utf8(&line[i..]) else { continue };
         #[cfg(test)]
         RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
@@ -766,5 +774,40 @@ mod tests_resync {
         // a retry is still recognised past `last`: the fragment logs nothing valid, but the CRC
         // matches, so the double `Some` is only reached with `last >= 4`
         assert_eq!(resync(&line, 100).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+    }
+
+    /// A retry record whose op body holds more than eight nested `{"seq":` markers (a
+    /// `SetAlbumRules` with nine rule values of `{"seq":1}`) exhausts `resync`'s fixed
+    /// `MAX_DECODES = 8` decode budget on the nested markers, so the outer record's real
+    /// start is never decoded and the valid operation is truncated as damage.
+    #[test]
+    fn resync_recovers_retry_beyond_eight_nested_markers() {
+        let mut c = Catalog::new();
+        let album_id = c.alloc_album_id();
+        let mut rules = Vec::new();
+        for _ in 0..9 {
+            rules.push(crate::Rule::Field {
+                field: "title".into(),
+                op: "isEmpty".into(),
+                value: serde_json::json!({ "seq": 1 }),
+            });
+        }
+        let retry_op = Op::SetAlbumRules {
+            id: album_id,
+            rules: Box::new(crate::Filter {
+                rule_set: Some(crate::RuleSet { mode: crate::Match::All, rules }),
+                ..Default::default()
+            }),
+        };
+        let body = serde_json::to_string(&retry_op).unwrap();
+        let crc = crc32fast::hash(body.as_bytes());
+        let record = format!("{{\"seq\":5,\"crc\":{crc},\"op\":{body}}}");
+        let mut line = Vec::from(b"torn fragment" as &[u8]);
+        let fragment = line.len();
+        line.extend_from_slice(record.as_bytes());
+        assert_eq!(
+            resync(&line, 4).map(|(at, (seq, _))| (at, seq)),
+            Some((fragment, 5))
+        );
     }
 }
