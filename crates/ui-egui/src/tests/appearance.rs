@@ -21,6 +21,62 @@ fn frame(app: &mut LightcraftApp, ctx: &egui::Context) {
     output.textures_delta.clear();
 }
 
+/// Read the actual toast paint output, so changing a palette without using it cannot pass.
+fn toast_colors(kind: ThemeKind, label: Option<lightcraft_catalog::ColorLabel>) -> (egui::Color32, egui::Color32) {
+    let mut a = app();
+    a.canvas_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0)));
+    a.ui.toast = Some(("Edit on".into(), a.tick_now() + 10.0, label));
+    let ctx = egui::Context::default();
+    crate::theme::apply_kind(&ctx, kind);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| crate::panels::toast(&mut a, ui.ctx()));
+    output.textures_delta.clear();
+    let background = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) => Some(rect.fill),
+            _ => None,
+        })
+        .expect("toast background");
+    let foreground = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Edit on" => Some(text.galley.job.sections[0].format.color),
+            _ => None,
+        })
+        .expect("toast text");
+    (background, foreground)
+}
+
+#[test]
+fn neutral_toast_stays_readable_in_every_theme() {
+    use egui::Color32;
+    for kind in ThemeKind::ALL {
+        let (background, foreground) = toast_colors(kind, None);
+        // A photo behind a toast is independent of the UI theme. Check the brightest and
+        // darkest possible photo pixels before the toast's intentional final fade-out.
+        for photo in [Color32::BLACK, Color32::WHITE] {
+            let shade = photo.blend(background);
+            let ink = shade.blend(foreground);
+            let contrast = crate::button::contrast(ink, shade);
+            assert!(contrast >= 4.5, "{kind:?} toast over {photo:?}: {contrast:.2}:1");
+        }
+    }
+}
+
+#[test]
+fn colour_label_toasts_keep_their_pale_palette_in_every_theme() {
+    use lightcraft_catalog::ColorLabel;
+    for kind in ThemeKind::ALL {
+        for label in [ColorLabel::Red, ColorLabel::Yellow, ColorLabel::Green, ColorLabel::Blue, ColorLabel::Purple] {
+            let (background, foreground) = toast_colors(kind, Some(label));
+            assert_eq!((background, foreground), crate::theme::label_toast_colors(label), "{kind:?} {label:?}");
+            assert!(crate::button::contrast(foreground, background) >= 4.5, "{kind:?} {label:?}");
+        }
+    }
+}
+
 #[test]
 fn new_users_keep_the_dark_look_and_old_settings_load_unchanged() {
     let s = AppSettings::default();
