@@ -138,10 +138,10 @@ pub(super) fn fit_hue_sat(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3) -> Opti
     fit_hue_sat_grid(pairs, matrix, &TableGrid::FINE)
 }
 
-struct TableGrid {
+pub(super) struct TableGrid {
     hues: usize,
     sats: usize,
-    vals: usize,
+    pub(super) vals: usize,
     kernel_hue: f64,
     kernel_sat: f64,
     kernel_val: f64,
@@ -149,14 +149,14 @@ struct TableGrid {
 
 impl TableGrid {
     /// The per-photo table of [`fit_hue_sat`].
-    const FINE: TableGrid =
+    pub(super) const FINE: TableGrid =
         TableGrid { hues: TABLE_HUES, sats: TABLE_SATS, vals: TABLE_VALS, kernel_hue: KERNEL_HUE, kernel_sat: KERNEL_SAT, kernel_val: KERNEL_VAL };
     /// Few parameters for a photo with little colour to learn from (and for a camera JPEG that is already close):
     /// 24 hue nodes 15° apart, three saturation nodes and no value axis, each node reading ±20° around it.
-    const SMOOTH: TableGrid = TableGrid { hues: 24, sats: 3, vals: 1, kernel_hue: 10.0, kernel_sat: 0.4, kernel_val: f64::INFINITY };
+    pub(super) const SMOOTH: TableGrid = TableGrid { hues: 24, sats: 3, vals: 1, kernel_hue: 10.0, kernel_sat: 0.4, kernel_val: f64::INFINITY };
 }
 
-fn fit_hue_sat_grid(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3, grid: &TableGrid) -> Option<HsvTable> {
+pub(super) fn fit_hue_sat_grid(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3, grid: &TableGrid) -> Option<HsvTable> {
     let to = to_prophoto();
     let samples: Vec<(f64, f64, f64, f64, f64)> = pairs
         .iter()

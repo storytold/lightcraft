@@ -965,8 +965,7 @@ fn camera_look_in_lanes_matches_pixel_by_pixel() {
     let data = (0..72 * 5 * 5).map(|i| [((i * 37) % 61) as f32 - 30.0, 0.6 + ((i * 11) % 13) as f32 / 13.0, 1.0]).collect();
     let table = lightcraft_raw::profile::HsvTable { hue_divisions: 72, sat_divisions: 5, val_divisions: 5, data, srgb_value: true };
     let hue_sat = crate::camera_preview::HueSat::new(&table).unwrap();
-    let colour =
-        CameraColourModel { wb: [2.1, 1.0, 1.5], matrix: yellowing_look(), gain: 1.3, tables: None, hue_sat: Some(&hue_sat), bands: None };
+    let colour = CameraColourModel { wb: [2.1, 1.0, 1.5], matrix: yellowing_look(), gain: 1.3, tables: None, hue_sat: Some(&hue_sat), bands: None };
     let special = [0.0, -0.0, -0.01, 1e-30, 0.3, 1.0, 5.0, 1e30, f32::INFINITY, f32::NAN];
     let img = Rgb32f::from_fn(37, 5, |x, y| {
         let k = y * 37 + x;

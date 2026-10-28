@@ -36,8 +36,9 @@ use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
 use look_fit::{
-    FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
-    without_clipped,
+    DngColourProxy, FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, band_luminance, clips_more, correct_vignetting, display_error, dng_colour_proxy,
+    fit_bands, fit_chroma_offsets, fit_hue_chroma, fit_look, fit_look_with, near_white, sony_dro_off_tone, spatial_pair_sets,
+    validate_dng_colour_terms, with_chroma_stage, with_dro_off_tone, with_hue_term, without_clipped,
 };
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
@@ -50,7 +51,8 @@ use pairs::{
 pub(crate) use proxy::LensGeometry;
 #[cfg(test)]
 use proxy::{
-    Cr3Framing, MIN_PREVIEW_FRACTION, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at, sensor_proxy, structure_agrees,
+    CLIP_TOLERANCE, Cr3Framing, MIN_PREVIEW_FRACTION, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at, sensor_proxy,
+    structure_agrees,
 };
 pub(crate) use proxy::{fit_profile, lens_geometry, profile_pairs};
 #[cfg(test)]

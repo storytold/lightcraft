@@ -2425,8 +2425,7 @@ fn dng_hue_refinement_requires_agreement_on_the_fine_pair() {
     )
     .unwrap();
     // Apply a known hue-dependent camera rendering, equally present in both spatial folds.
-    let table =
-        HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.0, 1.0], [18.0, 1.25, 1.0]], srgb_value: false };
+    let table = HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.0, 1.0], [18.0, 1.25, 1.0]], srgb_value: false };
     let correction = HueSat::new(&table).unwrap();
     for p in &mut reference.data {
         *p = correction.apply(*p);
@@ -2501,8 +2500,7 @@ fn actual_colour_order_distinguishes_scalar_and_channel_gains() {
         }),
         ..ChromaBands::identity(nodes)
     };
-    let offsets =
-        ChromaBands { offsets: Some(std::array::from_fn(|i| if i < 4 { [0.0; 2] } else { [0.1, -0.1] })), ..ChromaBands::identity(nodes) };
+    let offsets = ChromaBands { offsets: Some(std::array::from_fn(|i| if i < 4 { [0.0; 2] } else { [0.1, -0.1] })), ..ChromaBands::identity(nodes) };
     let apply = |look: &CameraLook, input| {
         let table = look.hue_sat.as_ref().and_then(HueSat::new);
         let colour = crate::files::CameraColourModel {
@@ -2599,8 +2597,7 @@ fn dng_final_colour_guard_catches_a_clipped_minority_highlight() {
     assert!(!clips_more(&sensor, &reference, &plain, &plain));
     let hue = HsvTable { hue_divisions: 1, sat_divisions: 2, val_divisions: 1, data: vec![[-18.0, 1.25, 1.0]; 2], srgb_value: false };
     let bands = ChromaBands { matrices: [[1.0, 0.0, -1.0, 2.5]; BAND_NODES], ..ChromaBands::identity([0.01, 0.03, 0.08, 0.2, 0.4, 0.7, 1.0]) };
-    for (name, next) in [("hue", CameraLook { hue_sat: Some(hue), ..base.clone() }), ("band", CameraLook { bands: Some(bands), ..base.clone() })]
-    {
+    for (name, next) in [("hue", CameraLook { hue_sat: Some(hue), ..base.clone() }), ("band", CameraLook { bands: Some(bands), ..base.clone() })] {
         let table = next.hue_sat.as_ref().and_then(HueSat::new);
         let colour = crate::files::CameraColourModel {
             wb: [1.0; 3],
@@ -2612,10 +2609,7 @@ fn dng_final_colour_guard_catches_a_clipped_minority_highlight() {
         };
         let mut applied = sensor.clone();
         colour.apply(&mut applied);
-        assert!(
-            near_white(&applied, &plain) > near_white(&sensor, &plain) + CLIP_TOLERANCE,
-            "actual applied {name} colour must expose the clamp"
-        );
+        assert!(near_white(&applied, &plain) > near_white(&sensor, &plain) + CLIP_TOLERANCE, "actual applied {name} colour must expose the clamp");
         let kept = validate_dng_colour_terms(base.clone(), next, &sensor, &reference, &plain);
         assert!(kept.hue_sat.is_none() && kept.bands.is_none(), "{name}: median colour improvement cannot override lost highlights");
     }

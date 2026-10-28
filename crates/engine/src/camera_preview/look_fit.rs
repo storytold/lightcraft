@@ -1,9 +1,12 @@
 use super::colour::{PROXY, file_local_look};
+use super::hue_sat::{HueSat, TableGrid, fit_chroma, fit_hue_sat_grid};
 use super::mono::{fit_tone_only_with, monochrome};
-use super::pairs::{Attempt, TONE_FITS, fit_attempt, fit_partial, search_ordered};
+use super::pairs::{Attempt, EDGE_CONTRAST, Pairs, TONE_FITS, collect_pairs, displayed, fit_attempt, fit_partial, luma, search_ordered};
 use super::proxy::{CLIP_TOLERANCE, LensGeometry, MIN_PREVIEW_FRACTION, proxies, structure_agrees};
-use super::tone::{HighlightCheck, highlights};
-use super::{CameraLook, CameraTone, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
+use super::tone::{HighlightCheck, highlights, median};
+use super::{
+    BAND_NODES, CameraLook, CameraTone, CameraTransform, ChromaBands, HUE_NODES, HsvTable, Mat3, REC2020, RawImage, Rgb32f, ToneMap, luminance_2020,
+};
 
 /// The look fitted to the file's camera JPEG, and whether that JPEG is black and white ([`monochrome`]).
 /// `embedded`: the file's embedded lens correction, whose vignetting the render applies ([`look_proxies`]).
@@ -284,7 +287,7 @@ pub(super) fn fit_dng_tone(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DngColourProxy {
+pub(super) enum DngColourProxy {
     Faithful,
     ScalarVignette,
     DeferredGeometry,
@@ -293,16 +296,16 @@ enum DngColourProxy {
 }
 
 impl DngColourProxy {
-    fn homogeneous_terms(self) -> bool {
+    pub(super) fn homogeneous_terms(self) -> bool {
         matches!(self, Self::Faithful | Self::ScalarVignette)
     }
 
-    fn scene_luminance_terms(self) -> bool {
+    pub(super) fn scene_luminance_terms(self) -> bool {
         self == Self::Faithful
     }
 }
 
-fn dng_colour_proxy(raw: &RawImage, lens: Option<&lightcraft_develop::EmbeddedLens>) -> DngColourProxy {
+pub(super) fn dng_colour_proxy(raw: &RawImage, lens: Option<&lightcraft_develop::EmbeddedLens>) -> DngColourProxy {
     use lightcraft_raw::opcodes::Opcode;
     let geometry = raw
         .opcodes
@@ -358,7 +361,7 @@ fn lab_from_2020(p: [f64; 3]) -> [f64; 3] {
 
 /// Median CIELAB ΔE76 between what `look` displays for the scene pairs and the camera JPEG's colour (the median, as
 /// the measure of a render against its camera JPEG is: a few saturated or clipped outliers don't count).
-fn display_error(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> f64 {
+pub(super) fn display_error(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> f64 {
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let mut distances = Vec::with_capacity(pairs.len());
@@ -372,12 +375,12 @@ fn display_error(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> f64 {
     median(&mut distances).unwrap_or(0.0)
 }
 
-struct ProxyPairSets {
-    all: (Pairs, Pairs),
-    folds: [(Pairs, Pairs); 2],
+pub(super) struct ProxyPairSets {
+    pub(super) all: (Pairs, Pairs),
+    pub(super) folds: [(Pairs, Pairs); 2],
 }
 
-fn spatial_pair_sets(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], edge_limit: Option<f32>) -> Option<ProxyPairSets> {
+pub(super) fn spatial_pair_sets(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], edge_limit: Option<f32>) -> Option<ProxyPairSets> {
     let unclipped = without_clipped(sensor, clipped);
     let sensor = unclipped.as_ref().unwrap_or(sensor);
     let all = collect_pairs(sensor, reference, 0.005, edge_limit, true)?;
@@ -400,7 +403,7 @@ fn spatial_pair_sets(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], edge
 /// and [`TableGrid::FINE`]). Two folds (top and bottom half of the proxy): a table fitted on one, with the chroma
 /// curve refitted for it, must beat the look without it on the other by [`HUE_TERM_MARGIN`] in both; the better
 /// resolution is then fitted on everything. Otherwise `look` is returned as it is.
-fn with_hue_term(
+pub(super) fn with_hue_term(
     look: CameraLook,
     sensor: &Rgb32f,
     reference: &Rgb32f,
@@ -490,7 +493,7 @@ fn normalised_chroma(p: [f64; 3]) -> Option<[f64; 2]> {
 
 /// Scene luminance of each [`ChromaBands`] node: what the tone curve turns into the node's display lightness; `None`
 /// when they are not increasing.
-fn band_luminance(tone: &ToneMap) -> Option<[f32; BAND_NODES]> {
+pub(super) fn band_luminance(tone: &ToneMap) -> Option<[f32; BAND_NODES]> {
     let mut luminance = [0f32; BAND_NODES];
     for (node, lightness) in luminance.iter_mut().zip(BAND_LIGHTNESS) {
         let display = if lightness > 8.0 { ((lightness + 16.0) / 116.0).powi(3) } else { lightness / 903.3 } as f32;
@@ -507,7 +510,7 @@ fn band_luminance(tone: &ToneMap) -> Option<[f32; BAND_NODES]> {
 /// [`ChromaBands`] fitted to scene/JPEG pairs, on top of `look` (whose colour, tone and chroma curve the pairs are
 /// displayed through): per node the 2×2 matrix taking the displayed normalised chroma to the JPEG's, by ridge
 /// regression toward the identity, the pairs weighted by their scene luminance's place between the nodes.
-fn fit_bands(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
+pub(super) fn fit_bands(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let probe = ChromaBands::identity(band_luminance(&tone)?);
@@ -596,7 +599,7 @@ fn chroma_samples(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, nodes: &Chr
 
 /// `look`'s bands (or the identity) with a gain and rotation of the chroma per hue fitted to the pairs: per hue node
 /// the complex factor taking the displayed chroma to the JPEG's, by ridge regression toward 1.
-fn fit_hue_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
+pub(super) fn fit_hue_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
     let base = look.bands.clone().map_or_else(|| band_luminance(&ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)).map(ChromaBands::identity), Some)?;
     // per node: Σ|n_p|², Σ n_p·n_t, Σ n_p×n_t
     let mut sums = [[0.0f64; 3]; HUE_NODES];
@@ -633,7 +636,7 @@ fn fit_hue_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<C
 
 /// `look`'s bands with a normalised-chroma offset per luminance node fitted to the pairs (the mean remaining difference
 /// between the JPEG's chroma and the displayed one, shrunk toward 0).
-fn fit_chroma_offsets(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
+pub(super) fn fit_chroma_offsets(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
     let base = look.bands.clone().map_or_else(|| band_luminance(&ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)).map(ChromaBands::identity), Some)?;
     let mut sums = [[0.0f64; 3]; BAND_NODES];
     for (j, t, np, nt, k) in chroma_samples(pairs, look, &base) {
@@ -661,7 +664,7 @@ fn fit_chroma_offsets(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Opti
 }
 
 /// Keep each chroma term only when it improves both spatial holdouts and a mandatory finer pair.
-fn with_chroma_stage(
+pub(super) fn with_chroma_stage(
     look: CameraLook,
     training: &ProxyPairSets,
     fine: &dyn Fn() -> Option<(Rgb32f, Rgb32f)>,
@@ -735,7 +738,7 @@ fn with_band_term(
 /// The proxy already carries the file's transform, baseline exposure, profile tables and vignetting.
 /// Apply the remaining accepted colour stages through the actual render colour model, including
 /// its nonnegative clamp: signed-luminance preservation alone does not bound that clamp's result.
-fn validate_dng_colour_terms(base: CameraLook, next: CameraLook, sensor: &Rgb32f, reference: &Rgb32f, plain: &ToneMap) -> CameraLook {
+pub(super) fn validate_dng_colour_terms(base: CameraLook, next: CameraLook, sensor: &Rgb32f, reference: &Rgb32f, plain: &ToneMap) -> CameraLook {
     let hue_sat = next.hue_sat.as_ref().and_then(HueSat::new);
     let colour = crate::files::CameraColourModel {
         wb: [1.0; 3],
@@ -759,7 +762,7 @@ fn validate_dng_colour_terms(base: CameraLook, next: CameraLook, sensor: &Rgb32f
     }
 }
 
-fn near_white(sensor: &Rgb32f, tone: &ToneMap) -> f64 {
+pub(super) fn near_white(sensor: &Rgb32f, tone: &ToneMap) -> f64 {
     let n = sensor.data.iter().filter(|p| p.iter().all(|v| v.is_finite()) && tone.apply(luminance_2020(p.map(|v| v.max(0.0)))) >= 0.98).count();
     n as f64 / sensor.data.len().max(1) as f64
 }
