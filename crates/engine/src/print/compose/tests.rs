@@ -182,9 +182,9 @@ fn rotate_and_blit_are_clipped() {
     let r = img.rotated_cw().unwrap();
     assert_eq!((r.w, r.h), (2, 3));
     let mut p = page();
-    p.blit(&img, 0, 0, 99, 99, 10, 10);
+    p.blit(&img, BlitRect { x: 0, y: 0, w: 10, h: 10 }, BlitRect { x: 99, y: 99, w: 10, h: 10 });
     assert_eq!(at(&p, 99, 99), at(&img, 0, 0));
-    p.blit(&img, 5, 5, 0, 0, 3, 3);
+    p.blit(&img, BlitRect { x: 5, y: 5, w: 3, h: 3 }, BlitRect { x: 0, y: 0, w: 3, h: 3 });
     p.fill_rect(95, 95, 50, 50, RED);
     assert_eq!(at(&p, 99, 99), RED);
     p.fill_rect(usize::MAX, usize::MAX, usize::MAX, usize::MAX, RED);

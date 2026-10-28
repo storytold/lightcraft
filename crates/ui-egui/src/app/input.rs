@@ -1,15 +1,50 @@
-use super::*;
+use super::{GESTURE_TIMEOUT_MS, InjectedDrop, InjectedPress, LightcraftApp, drop_overlay, import, panels};
 
 impl LightcraftApp {
+    /// Preserve the currently queued handles while a prompt or blocking library window owns
+    /// drops. Hosts call this in their UI phase even if the app is not ready to draw yet.
+    pub fn defer_dropped_files(&mut self) {
+        self.deferred_dropped_file_count = self.dropped_files.len();
+    }
+
     /// Take the host's dropped files, exactly once. The queue is filled by `raw_input_hook`, so a
     /// hidden logic tick can never replay the last pass's drop. Web hosts call this in their UI
     /// phase (they need `bytes_async`, which is not available on a native file path).
     pub fn take_dropped_files(&mut self) -> Vec<egui::DroppedFileHandle> {
+        self.deferred_dropped_file_count = 0;
         std::mem::take(&mut self.dropped_files)
+    }
+
+    /// Take only drops that did not wait behind a prompt or blocking library window.
+    /// Hosts call this in the UI phase to refuse fresh arrivals behind an ordinary dialog
+    /// while preserving the earlier protected prefix for a later pass.
+    pub fn take_unprotected_dropped_files(&mut self) -> Vec<egui::DroppedFileHandle> {
+        if self.deferred_dropped_file_count == 0 {
+            return self.take_dropped_files();
+        }
+        self.dropped_files.split_off(self.deferred_dropped_file_count.min(self.dropped_files.len()))
     }
 
     /// Import native drops as presets, face models or photos.
     pub(super) fn import_dropped_files(&mut self, ctx: &egui::Context) {
+        // A drop that waited behind a prompt or the library window is not dropped again just
+        // because a dialog, Lightroom catalog import, a running Synchronize Folder or the import
+        // a library open started is still running when the barrier goes. Keep it queued and try
+        // the next pass. A drop made outside the barrier keeps the deliberate "close the
+        // dialog"/"An import is running" refusal below.
+        if self.deferred_dropped_file_count > 0
+            && (self.ui.dialog.is_some() || self.lightroom.is_some() || self.sync_run.is_some() || import::running(self))
+        {
+            // Only the earlier barrier-held prefix waits. Fresh drops must still be handled
+            // under the current dialog/import policy instead of inheriting that protection.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let fresh = self.take_unprotected_dropped_files();
+                self.handle_dropped_files(ctx, fresh);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
         let dropped = self.take_dropped_files();
         if dropped.is_empty() {
             return;
@@ -35,10 +70,15 @@ impl LightcraftApp {
             return;
         }
         let drop = drop_overlay::classify(dropped);
-        if let Some(model) = drop.models.first()
-            && let Err(e) = panels::faces::open_dialog(self, model)
-        {
-            self.toast(ctx, e);
+        if let Some(model) = drop.models.first() {
+            // no library open yet (the launch list, a library that failed to open): its licence
+            // dialog would open behind the window that owns input. The drop is refused like a
+            // preset; photos below still wait for the library chosen.
+            if panels::library_problem::holds_drops(self) {
+                self.toast(ctx, crate::i18n::tr("Open a library first, then drop the model again"));
+            } else if let Err(e) = panels::faces::open_dialog(self, model) {
+                self.toast(ctx, e);
+            }
         }
         if !drop.presets.is_empty() {
             // presets live in a library: with none open they would go with the session it replaces
@@ -222,7 +262,7 @@ mod drop_tests {
     fn photo_sidecars_are_not_presets() {
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let dropped = v(&["/a/IMG_1.CR2", "/a/IMG_1.xmp", "/a/IMG_2.jpg", "/a/IMG_2.jpg.XMP", "/a/Look.xmp", "/b/IMG_1.xmp"]);
-        let (presets, photos) = super::split_presets(dropped);
+        let (presets, photos) = crate::split_presets(dropped);
         assert_eq!(photos, v(&["/a/IMG_1.CR2", "/a/IMG_2.jpg"]));
         assert_eq!(presets, v(&["/a/Look.xmp", "/b/IMG_1.xmp"]));
     }
@@ -231,31 +271,31 @@ mod drop_tests {
     fn detection_results_are_summarised_in_words() {
         let r =
             |counts: &[usize]| serde_json::json!({"photos": counts.iter().map(|n| serde_json::json!({"faces": vec![0; *n]})).collect::<Vec<_>>()});
-        assert_eq!(super::detect_summary(&r(&[0])), "No faces found");
-        assert_eq!(super::detect_summary(&r(&[1])), "Found 1 face");
-        assert_eq!(super::detect_summary(&r(&[3])), "Found 3 faces");
-        assert_eq!(super::detect_summary(&r(&[0, 0])), "No faces found in 2 photos");
-        assert_eq!(super::detect_summary(&r(&[2, 0, 1])), "Found 3 faces in 2 photos");
-        assert_eq!(super::detect_summary(&serde_json::json!({})), "No faces found in 0 photos");
+        assert_eq!(crate::app::detect_summary(&r(&[0])), "No faces found");
+        assert_eq!(crate::app::detect_summary(&r(&[1])), "Found 1 face");
+        assert_eq!(crate::app::detect_summary(&r(&[3])), "Found 3 faces");
+        assert_eq!(crate::app::detect_summary(&r(&[0, 0])), "No faces found in 2 photos");
+        assert_eq!(crate::app::detect_summary(&r(&[2, 0, 1])), "Found 3 faces in 2 photos");
+        assert_eq!(crate::app::detect_summary(&serde_json::json!({})), "No faces found in 0 photos");
     }
 
     #[test]
     fn dropped_face_models_are_told_apart() {
         for p in ["/a/model.onnx", "/a/dir/M.ONNX"] {
-            assert!(super::is_model_file(p), "{p}");
+            assert!(crate::is_model_file(p), "{p}");
         }
         for p in ["/a/model.onnx.jpg", "/a/onnx", "/a/b.png"] {
-            assert!(!super::is_model_file(p), "{p}");
+            assert!(!crate::is_model_file(p), "{p}");
         }
     }
 
     #[test]
     fn dropped_presets_are_told_apart_from_photos() {
         for p in ["/a/Look.lrtemplate", "/a/b.XMP", "/a/pack.zip", "/a/x.lcpreset", "/a/Magic Hour.mplumpack", "/a/Pop.lmp", "/a/Bundle.LMP"] {
-            assert!(super::is_preset_file(p), "{p}");
+            assert!(crate::is_preset_file(p), "{p}");
         }
         for p in ["/a/IMG_1.CR2", "/a/b.dng", "/a/c.jpg", "/a/folder"] {
-            assert!(!super::is_preset_file(p), "{p}");
+            assert!(!crate::is_preset_file(p), "{p}");
         }
     }
 }

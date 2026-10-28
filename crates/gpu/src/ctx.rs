@@ -499,11 +499,31 @@ impl Gpu {
             self.over_limit(bytes.len() as u64);
             return Buf { buf: Some(Tracked::new(self.placeholder())), len };
         }
-        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        });
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+        if let Some(size) = wgpu::BufferSize::new(bytes.len() as u64).filter(|s| s.get() % wgpu::COPY_BUFFER_ALIGNMENT == 0) {
+            // through the queue: the bytes are copied once, into a staging buffer the next submission copies from, in
+            // parallel parts (`create_buffer_init` zeroes a staging buffer first and copies over that, two passes on
+            // one thread over a full-size photo's ~290 MB)
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: size.get(), usage, mapped_at_creation: false });
+            if let Some(mut view) = self.queue.write_buffer_with(&buf, 0, size) {
+                const PART: usize = 1 << 20;
+                {
+                    let (whole, mut tail) = view.slice(..).into_chunks::<PART>();
+                    let (src, src_tail) = bytes.as_chunks::<PART>();
+                    let mut parts: Vec<_> = whole.into_iter().zip(src).map(Some).collect();
+                    lightcraft_raster::par_rows(&mut parts, 1, |_, part| {
+                        for (d, s) in part.iter_mut().filter_map(Option::take) {
+                            wgpu::WriteOnly::<[u8]>::from(d).copy_from_slice(s);
+                        }
+                    });
+                    tail.copy_from_slice(src_tail);
+                }
+                // (dropping the view schedules the copy)
+                drop(view);
+                return Buf { buf: Some(Tracked::new(buf)), len };
+            }
+        }
+        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytes, usage });
         Buf { buf: Some(Tracked::new(buf)), len }
     }
 
@@ -612,7 +632,17 @@ impl Gpu {
             Ok(d) => d,
             Err(e) => return failed(format!("{e:?}")),
         };
-        let out: Vec<T> = bytemuck::cast_slice(&data).to_vec();
+        // copied out in parallel parts: one thread reads mapped memory slowly (~2 GB/s, so ~45 ms for a 24 MP
+        // export's pixels), and the new vector's pages are first touched there too
+        let src: &[u8] = &data;
+        // (`len` counts 32-bit words: as many `T` as they fill)
+        let mut out = vec![<T as bytemuck::Zeroable>::zeroed(); src.len() / std::mem::size_of::<T>().max(1)];
+        const PART: usize = 1 << 20;
+        lightcraft_raster::par_rows(bytemuck::cast_slice_mut::<T, u8>(&mut out), PART, |k, part| {
+            if let Some(s) = src.get(k * PART..k * PART + part.len()) {
+                part.copy_from_slice(s);
+            }
+        });
         drop(data);
         staging.unmap();
         out
@@ -811,6 +841,26 @@ mod tests {
         Some(stdout)
     }
 
+    /// An upload reaches the device whole: it is copied into staging memory in parallel parts, the last one
+    /// shorter than the others (and a small upload is that last part alone).
+    #[test]
+    fn uploads_read_back_exactly() {
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        for len in [1usize, 1000, (3 << 20) / 4 + 777] {
+            let data: Vec<u32> = (0..len as u32).map(|i| i.wrapping_mul(2_654_435_761)).collect();
+            let b = g.upload(&data);
+            let back: Vec<u32> = g.finish_and_read(g.encoder(), &b, len);
+            assert!(back == data, "{len} values");
+        }
+        // read back as wider values (`len` counts 32-bit words), as `read_rgb` does
+        let data: Vec<u32> = (0..3 << 20).collect();
+        let b = g.upload(&data);
+        let back: Vec<[u32; 3]> = g.finish_and_read(g.encoder(), &b, data.len());
+        assert!(back.len() == 1 << 20 && back.as_flattened() == data.as_slice());
+    }
     /// Issue #1858: once a Vulkan or DX12 device is lost, wgpu 30 panics in `Device::poll` instead of
     /// returning an error. A render's readback panicked; while it unwound, a buffer's way back to
     /// the pool polls again from a destructor, and that second panic aborted the app.

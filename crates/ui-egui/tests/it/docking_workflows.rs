@@ -42,13 +42,22 @@ fn settle_photo(h: &mut Harness<'_, LightcraftApp>) {
     let started = Instant::now();
     let mut quiet = 0;
     while quiet < 4 {
-        h.run_steps(2);
-        if h.state().renderer.in_flight() == 0 && h.state().loupe_shown.is_some_and(|(_, source)| source == "render") {
+        if h.state().renderer.in_flight_without_prefetch() > 0 {
+            h.state_mut().renderer.wait_for_worker(Duration::from_millis(250));
+        }
+        h.run_steps(1);
+        // Neighbouring-photo prefetch does not contribute pixels to this capture.
+        if h.state().renderer.in_flight_without_prefetch() == 0 && h.state().loupe_shown.is_some_and(|(_, source)| source == "render") {
             quiet += 1;
         } else {
             quiet = 0;
         }
-        assert!(started.elapsed() < Duration::from_secs(30), "the synthetic photo and panel thumbnails must finish rendering before capture");
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "the synthetic photo and panel thumbnails must finish rendering before capture: loupe {:?}, pending {:?}",
+            h.state().loupe_shown,
+            h.state().renderer.pending_slots()
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }

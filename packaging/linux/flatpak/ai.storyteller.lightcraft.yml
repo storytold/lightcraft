@@ -2,10 +2,13 @@
 #
 # Flatpak builds run offline, so the crate sources must be vendored first. From the repo root:
 #
-#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
-#   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
+#   ./packaging/linux/flatpak/generate-cargo-sources.py
 #   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/ai.storyteller.lightcraft.yml
 #   flatpak run ai.storyteller.lightcraft
+#
+# The wrapper downloads the pinned upstream flatpak-cargo-generator, verifies its checksum,
+# applies the two reviewed patches described in packaging/linux/flatpak/README.md, and writes
+# cargo-sources.json atomically. That README also covers dependencies and offline validation.
 #
 # For Flathub, replace the `dir` source with a `git` source pinned to a release tag and commit.
 #
@@ -32,10 +35,10 @@ finish-args:
   # drag-and-drop through the document portal, so picked folders elsewhere work without broad
   # filesystem access.
   - --filesystem=xdg-pictures
-  # Deliberately not granted: home/host filesystem access, and network. The network is only for
-  # the optional SAM 3 model download (AI Object/Describe masks, docs/ai-masks.md); without it
-  # that download fails with an error and everything else works. Users who want it run
-  # `flatpak override --user --share=network ai.storyteller.lightcraft`.
+  # Deliberately not granted: home/host filesystem access. Network is needed for update checks
+  # against GitHub and the optional SAM 3 model download (AI Object/Describe masks,
+  # docs/ai-masks.md).
+  - --share=network
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:

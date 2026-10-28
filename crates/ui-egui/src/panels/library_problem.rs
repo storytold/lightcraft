@@ -733,6 +733,30 @@ pub fn holds_drops(app: &LightcraftApp) -> bool {
     app.session.library.is_none() && app.library_problem.as_ref().is_some_and(|p| !p.dismissed)
 }
 
+/// Whether the blocking library window must hold file drops back. While a library is already
+/// open, that window (the launch list over it, or the error of a failed switch) owns input:
+/// importing a drop now would add photos, presets or a model dialog behind it. With no library
+/// open, the desktop drop handler's [`hold_dropped`] path takes the photos for the library the
+/// window opens instead, so the drop still has to be consumed.
+///
+/// The launch list hides itself behind its own New Library name prompt (`chooser_owns_dialog`).
+/// It still owns the library then: a queued drop must wait for the prompt to close, not be taken
+/// and refused by the drop handler's generic open-dialog check. After the prompt, New Library and
+/// Open Another… ask for a folder on the host's asynchronous picker; the library opens only when
+/// that answer arrives, so the queued drop waits too. With no library open a dialog (or a library
+/// picker that will open one) in front of the window would otherwise refuse the drop or consume it
+/// before the photos could reach [`hold_dropped`].
+pub fn blocks_file_drops(app: &LightcraftApp) -> bool {
+    if app.library_problem.as_ref().is_none_or(|p| p.dismissed) {
+        return false;
+    }
+    if app.session.library.is_none() {
+        let choosing = app.pending_picks.iter().any(|p| p.command == "app.newLibrary" || p.command == "app.openLibrary");
+        return app.ui.dialog.is_some() || choosing;
+    }
+    true
+}
+
 /// Photos dropped on the window while no library is open (the launch list, or the window of a
 /// library that failed to open): kept with the command line's files and imported once a library
 /// opens, instead of going into the session the next library replaces. Gives the photos back when

@@ -31,6 +31,10 @@ pub struct PreviewBuild {
     pub what: &'static str,
     /// Why the whole build failed (e.g. the smart previews folder isn't there).
     pub error: std::sync::Mutex<Option<String>>,
+    /// Test-only: the gate this build's lanes wait at before a photo's first render (see
+    /// [`test_gate`]). Captured by `build` on the calling thread; production builds never have one.
+    #[cfg(test)]
+    pub(crate) gate: Option<Arc<test_gate::PreviewGate>>,
 }
 
 impl PreviewBuild {
@@ -79,10 +83,15 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
-pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
+/// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
+        // between a photo's own previews too (a cancelled 1:1 view skips its grid thumbnail)
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return None;
+        }
         if let Some(src) = &decoded
             && !matches!(j.source, crate::media::SourceRef::Loaded(_))
         {
@@ -94,7 +103,13 @@ pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
             decoded = r.loaded;
         }
     }
-    ok
+    Some(ok)
+}
+
+/// [`run_photo_cancellable`] for callers that render a photo without a cancel flag.
+#[cfg(test)]
+pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
+    run_photo_cancellable(jobs, None) == Some(true)
 }
 
 /// How many photos render side by side: as many as an export batch for standard previews (each
@@ -103,6 +118,112 @@ pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
 fn lanes(n: usize, full: bool) -> usize {
     let l = crate::export::export_parallelism(n);
     if full { l.min(2) } else { l }
+}
+
+/// A test-only rendezvous at the start of a photo's jobs, so a cancel can be delivered at a known
+/// point instead of racing a render. One gate belongs to the build `build` starts on the test
+/// thread that installed it ([`install`]); it is never global and production builds have none.
+#[cfg(test)]
+pub(crate) mod test_gate {
+    use std::sync::{Arc, Condvar, Mutex, PoisonError};
+    use std::time::{Duration, Instant};
+
+    /// The longest a lane waits for a test to open the gate: if a test ends without its
+    /// [`ReleaseOnDrop`] running, the build still finishes instead of stranding its worker.
+    const MAX_HOLD: Duration = Duration::from_secs(30);
+    /// The longest a test waits for a lane to reach the gate.
+    const MAX_ENTER_WAIT: Duration = Duration::from_secs(10);
+
+    #[derive(Default)]
+    struct State {
+        entered: usize,
+        released: bool,
+    }
+
+    /// The gate a test's preview build waits at before rendering a photo (see `install`).
+    #[derive(Default)]
+    pub(crate) struct PreviewGate {
+        state: Mutex<State>,
+        opened: Condvar,
+    }
+
+    impl std::fmt::Debug for PreviewGate {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PreviewGate").finish_non_exhaustive()
+        }
+    }
+
+    impl PreviewGate {
+        pub(crate) fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        /// Called by a lane about to render a photo's first job; returns once the test opens the
+        /// gate, or after `MAX_HOLD` so a lost test cannot strand the worker.
+        pub(crate) fn enter(&self) {
+            let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            st.entered = st.entered.saturating_add(1);
+            self.opened.notify_all();
+            let deadline = Instant::now() + MAX_HOLD;
+            while !st.released {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let (next, _) = self.opened.wait_timeout(st, remaining).unwrap_or_else(|e| e.into_inner());
+                st = next;
+            }
+        }
+
+        /// Wait (at most `MAX_ENTER_WAIT`) until at least `n` lanes have reached the gate.
+        pub(crate) fn wait_entered(&self, n: usize) -> bool {
+            let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let deadline = Instant::now() + MAX_ENTER_WAIT;
+            loop {
+                if st.entered >= n {
+                    return true;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next, _) = self.opened.wait_timeout(st, remaining).unwrap_or_else(|e| e.into_inner());
+                st = next;
+            }
+        }
+
+        /// Open the gate: every lane waiting, or arriving later, passes without waiting.
+        pub(crate) fn release(&self) {
+            let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            st.released = true;
+            self.opened.notify_all();
+        }
+    }
+
+    /// Opens the gate when dropped, wherever a test ends (assertion failure, panic, early return).
+    pub(crate) struct ReleaseOnDrop(pub(crate) Arc<PreviewGate>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    thread_local! {
+        /// The gate for the next preview build started on this thread, taken by `build` so it is
+        /// per invocation (never shared by two builds or two tests).
+        static NEXT_GATE: std::cell::RefCell<Option<Arc<PreviewGate>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Have the next preview build started on this thread wait at `gate` before its first photo.
+    pub(crate) fn install(gate: Arc<PreviewGate>) {
+        NEXT_GATE.with(|g| *g.borrow_mut() = Some(gate));
+    }
+
+    /// Take the gate installed for this build, leaving none for later builds.
+    pub(crate) fn take() -> Option<Arc<PreviewGate>> {
+        NEXT_GATE.with(|g| g.borrow_mut().take())
+    }
 }
 
 fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, lanes: usize) {
@@ -115,7 +236,17 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
             }
             let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
             let Some(photo_jobs) = next else { break };
-            let ok = crate::guard::catch("building previews", || run_photo(photo_jobs)).unwrap_or(false);
+            // A cancel accepted while this lane waited for the queue (or for another lane's
+            // photo) stops before this photo's first render; a cancelled photo is not counted.
+            if state.cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            #[cfg(test)]
+            if let Some(gate) = &state.gate {
+                gate.enter();
+            }
+            let outcome = crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel))).unwrap_or(Some(false));
+            let Some(ok) = outcome else { break };
             if !ok {
                 state.failed.fetch_add(1, Ordering::Relaxed);
             }
@@ -143,6 +274,9 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
 
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
+    // tests: this invocation's gate, consumed here so an early error cannot attach it to a later build
+    #[cfg(test)]
+    let gate = test_gate::take();
     let edge = match str_param(p, "size").unwrap_or("standard") {
         "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
         "full" | "1:1" => None,
@@ -154,6 +288,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
     let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
+    #[cfg(test)]
+    let state = Arc::new(PreviewBuild { total: jobs.len(), gate, ..Default::default() });
+    #[cfg(not(test))]
     let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
     s.preview_build = Some(state.clone());
     let task = task_for(s, &state);

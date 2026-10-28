@@ -187,7 +187,16 @@ impl Metadata {
             orientation,
             gps,
             width,
-            height,
+            height
+        );
+        self.fill_missing_descriptive(other);
+    }
+
+    /// Fill descriptive metadata separately from the camera and image properties.
+    fn fill_missing_descriptive(&mut self, other: &Metadata) {
+        fill!(
+            self,
+            other,
             artist,
             copyright,
             copyright_marked,
@@ -405,11 +414,22 @@ mod tests {
 
     #[test]
     fn merge_rules() {
-        let mut a = Metadata { make: Some("A".into()), rating: Some(1), ..Default::default() };
-        let b = Metadata { make: Some("B".into()), model: Some("M".into()), rating: Some(4), keywords: vec!["k".into()], ..Default::default() };
+        let mut a = Metadata { make: Some("A".into()), title: Some("Original".into()), rating: Some(1), ..Default::default() };
+        let b = Metadata {
+            make: Some("B".into()),
+            model: Some("M".into()),
+            title: Some("Replacement".into()),
+            caption: Some("Caption".into()),
+            rating: Some(4),
+            keywords: vec!["k".into()],
+            ..Default::default()
+        };
         a.fill_missing(&b);
         assert_eq!(a.make.as_deref(), Some("A"));
         assert_eq!(a.model.as_deref(), Some("M"));
+        assert_eq!(a.title.as_deref(), Some("Original"));
+        assert_eq!(a.caption.as_deref(), Some("Caption"));
+        assert_eq!(a.keywords, vec!["k".to_string()]);
         assert_eq!(a.rating, Some(1));
         a.overlay_user_fields(&b);
         assert_eq!(a.rating, Some(4));

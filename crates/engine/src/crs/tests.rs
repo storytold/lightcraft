@@ -37,9 +37,16 @@ fn props(x: &str) -> Props {
 #[test]
 fn maps_common_fields() {
     let p = props(SIDECAR);
-    assert!(has_adjustments(&p));
     let partial = to_partial(&p, Target::RawAbsolute);
     let s = apply_partial(&DevelopSettings::for_raw(5000.0, 0.0), &partial, 1.0);
+    assert!(has_adjustments(&p));
+    assert_common_tone_fields(&s);
+    assert_common_color_fields(&s);
+    assert_common_detail_fields(&s);
+    assert_common_geometry_fields(&s);
+}
+
+fn assert_common_tone_fields(s: &DevelopSettings) {
     assert_eq!(s.wb.mode, WbMode::Custom);
     assert_eq!((s.wb.temp, s.wb.tint), (5150.0, 12.0));
     assert_eq!(s.light.exposure, 0.65);
@@ -54,15 +61,24 @@ fn maps_common_fields() {
     assert_eq!(s.curve.refine_saturation, 40.0);
     assert!((s.curve.master[1].x - 64.0 / 255.0).abs() < 1e-9 && (s.curve.master[1].y - 52.0 / 255.0).abs() < 1e-9);
     assert!(s.curve.red.is_empty(), "identity channel curve maps to no curve");
+}
+
+fn assert_common_color_fields(s: &DevelopSettings) {
     assert_eq!((s.grading.shadows.hue, s.grading.shadows.sat), (210.0, 14.0));
     assert_eq!((s.grading.highlights.hue, s.grading.highlights.sat), (40.0, 9.0));
     assert_eq!((s.grading.midtones.hue, s.grading.midtones.sat), (120.0, 6.0));
     assert_eq!((s.grading.balance, s.grading.blending), (20.0, 70.0));
+}
+
+fn assert_common_detail_fields(s: &DevelopSettings) {
     assert_eq!((s.detail.sharpen_amount, s.detail.sharpen_radius, s.detail.sharpen_detail, s.detail.sharpen_masking), (55.0, 1.2, 30.0, 12.0));
     assert_eq!((s.detail.nr_luminance, s.detail.nr_color), (18.0, 25.0));
     assert_eq!(s.vignette.amount, -21.0);
     assert_eq!(s.vignette.style, VignetteStyle::ColorPriority);
     assert_eq!((s.grain.amount, s.grain.size, s.grain.roughness), (15.0, 30.0, 60.0));
+}
+
+fn assert_common_geometry_fields(s: &DevelopSettings) {
     assert_eq!(s.geometry.upright, Upright::Level);
     assert_eq!(s.geometry.vertical, -10.0);
     assert!(s.optics.remove_ca);

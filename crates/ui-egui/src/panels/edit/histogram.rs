@@ -1,6 +1,9 @@
 #[cfg(test)]
 use super::sliders::reset_tip;
-use super::*;
+use super::{
+    Align2, Color32, Histogram, Icon, LightcraftApp, Mesh, PhotoId, Pos2, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, Vertex, divider,
+    hex, json, paint, pos2, register, vec2,
+};
 
 // ------------------------------------------------------------------------------ histogram
 

@@ -255,6 +255,15 @@ pub struct Image16 {
     pub rgb: Vec<u16>,
 }
 
+/// A rectangular image region used as a source or destination for `Image16::blit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlitRect {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
 impl Image16 {
     pub fn filled(w: usize, h: usize, c: [u16; 3]) -> Result<Self, String> {
         let n = w.checked_mul(h).and_then(|n| n.checked_mul(3)).ok_or("image too large")?;
@@ -284,9 +293,11 @@ impl Image16 {
     }
 
     /// Copies the `w` x `h` block of `src` at (`sx`, `sy`) to (`dx`, `dy`), clipped to both images.
-    pub fn blit(&mut self, src: &Image16, sx: usize, sy: usize, dx: usize, dy: usize, w: usize, h: usize) {
-        let w = w.min(src.w.saturating_sub(sx)).min(self.w.saturating_sub(dx));
-        let h = h.min(src.h.saturating_sub(sy)).min(self.h.saturating_sub(dy));
+    pub fn blit(&mut self, src: &Image16, source: BlitRect, destination: BlitRect) {
+        let BlitRect { x: sx, y: sy, .. } = source;
+        let BlitRect { x: dx, y: dy, .. } = destination;
+        let w = source.w.min(destination.w).min(src.w.saturating_sub(sx)).min(self.w.saturating_sub(dx));
+        let h = source.h.min(destination.h).min(src.h.saturating_sub(sy)).min(self.h.saturating_sub(dy));
         for row in 0..h {
             let from = src.rgb.get(((sy + row) * src.w + sx) * 3..((sy + row) * src.w + sx + w) * 3);
             let to = self.rgb.get_mut(((dy + row) * self.w + dx) * 3..((dy + row) * self.w + dx + w) * 3);
@@ -424,7 +435,7 @@ pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &Cell
     if border > 0 {
         page.fill_rect(dx - border, dy - border, w + 2 * border, h + 2 * border, style.border);
     }
-    page.blit(&img, sx, sy, dx, dy, w, h);
+    page.blit(&img, BlitRect { x: sx, y: sy, w, h }, BlitRect { x: dx, y: dy, w, h });
     let s = style.stroke_px.min(w.min(h) / 2);
     if s > 0 {
         page.fill_rect(dx, dy, w, s, style.stroke);

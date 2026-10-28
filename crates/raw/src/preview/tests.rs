@@ -300,19 +300,97 @@ fn scan_jpeg(nc: u8, n: usize) -> Vec<u8> {
     j
 }
 
-/// A crafted container full of JPEG-like starts (each walk running on through the ones after it)
-/// is scanned in linear time: the walks share a budget (without it this 40 MB file takes about a minute).
-#[test]
-fn a_scan_through_many_fake_jpegs_stays_linear() {
+/// `units` copies of a 200-byte record whose `d8 ff db` start runs each walk on through the
+/// starts after it (a crafted Minolta-like container).
+fn many_fake_jpegs(units: usize) -> Vec<u8> {
     let mut unit = vec![0u8, 0xd8, 0xff, 0xdb, 0x00, 0x02, 0xff, 0xda, 0x00, 0x02];
     unit.extend(std::iter::repeat_n(0x55u8, 190));
     let mut f = b"\0MRM\0\x01\0\0".to_vec();
-    for _ in 0..200_000 {
+    f.reserve(units * unit.len());
+    for _ in 0..units {
         f.extend_from_slice(&unit);
     }
-    let t = std::time::Instant::now();
+    f
+}
+
+/// The production scan's budget policy, restated here so the tests assert an expected bound
+/// independently instead of calling the helper under test: eight times the file's size, at
+/// least 1 MiB.
+fn policy_budget(len: usize) -> u64 {
+    (len as u64 * 8).max(1 << 20)
+}
+
+/// A crafted 40 MB container full of JPEG-like starts (each walk running on through the starts
+/// after it) is scanned in bounded work: the walks share a budget (without it this file would
+/// walk about 8·10^10 bytes), so the charged work stays within the policy budget plus one walk's
+/// reach. No wall clock: this cannot fail on a slow runner, and removing the budget shows up as
+/// the work exploding.
+#[test]
+fn a_scan_through_many_fake_jpegs_stays_linear() {
+    let f = many_fake_jpegs(200_000);
+    assert_eq!(f.len(), 40_000_008, "the adversarial fixture the budget was measured on");
+    let (found, walked) = scan_with_budget(&f, policy_budget(f.len()) as usize);
+    assert_eq!(found, None);
+    let bound = policy_budget(f.len()) + f.len() as u64;
+    assert!(walked <= bound, "walked {walked} bytes of a {} byte file (bound {bound})", f.len());
+}
+
+/// A walk whose final entropy search finds no `ff` has examined the rest of the file, so that
+/// search is charged to the budget before the walk fails. Without the charge the 40 MB tail is
+/// scanned for free and only the few KB before it are reported, while `left` stays positive and
+/// the budget no longer bounds the work.
+#[test]
+fn a_failed_terminal_search_is_charged_to_the_budget() {
+    let mut f = many_fake_jpegs(20);
+    f.extend(std::iter::repeat_n(0x55u8, 40_000_000));
+    let (found, walked) = scan_with_budget(&f, 1);
+    assert_eq!(found, None);
+    assert!(walked >= 40_000_000, "terminal search was not charged: {walked} of {} bytes", f.len());
+}
+
+/// The production wrapper stops at the same shared budget. Eighteen fake candidates each declare
+/// a segment length that makes their walk jump 0xFFF0 bytes, exhausting the tiny file's 1 MiB
+/// allowance before the valid JPEG after them: the wrapper finds nothing. A `usize::MAX` budget
+/// (or no budget at all) would walk on and return that JPEG.
+#[test]
+fn the_production_wrapper_stops_at_the_shared_budget() {
+    let mut f = b"\0MRM\0\x01\0\0".to_vec();
+    for _ in 0..18 {
+        f.extend_from_slice(&[0x00, 0xd8, 0xff, 0xe1, 0xff, 0xf0]);
+    }
+    f.extend_from_slice(&scan_jpeg(3, 100));
     assert_eq!(scan_for_jpeg(&f), None);
-    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+}
+
+/// The shared budget is what bounds the work, and the counter reports the work itself. The same
+/// generator at 200 starts is a 40 KB file: without the budget (never decremented, or restarted
+/// for each candidate) the scan walks all 200 walks, 4 MB, instead of about 1 MB — so a negative
+/// run costs megabytes, not the 8·10^10 bytes of the 40 MB fixture.
+#[test]
+fn the_scan_budget_bounds_the_work_a_crafted_file_can_cause() {
+    let f = many_fake_jpegs(200);
+    let budget = policy_budget(f.len());
+    let (found, walked) = scan_with_budget(&f, budget as usize);
+    assert_eq!(found, None);
+    assert!(walked >= (f.len() as u64) / 2, "the walks ran: {walked} bytes of {}", f.len());
+    assert!(walked <= budget + (f.len() as u64), "walked {walked} with a {budget} byte budget");
+    // The counter records the work, not the unspent budget: a budget of one file size is spent
+    // by the first walk, and the second walk is still counted in full (it overshoots).
+    let (_, spent) = scan_with_budget(&f, f.len());
+    let len = f.len() as u64;
+    assert!(spent > len && spent <= 2 * len, "spent {spent} with a {len}-byte budget");
+    // No candidate, no work counted.
+    let none = b"no jpeg here";
+    assert_eq!(scan_with_budget(none, policy_budget(none.len()) as usize).1, 0);
+    // One real candidate: the counter counts exactly the reach of its walk.
+    let mut one = vec![0u8];
+    let jpeg = scan_jpeg(3, 100);
+    one.extend_from_slice(&jpeg);
+    let (found, walked) = scan_with_budget(&one, policy_budget(one.len()) as usize);
+    assert!(found.is_some());
+    assert_eq!(walked, jpeg.len() as u64, "one walk of the JPEG's {} bytes", jpeg.len());
+    // The production wrapper takes the same path and returns the counter's preview.
+    assert_eq!(scan_for_jpeg(&one).as_deref(), found.as_deref());
 }
 
 /// Containers whose structure we do not walk give up their largest colour JPEG, found by scanning.

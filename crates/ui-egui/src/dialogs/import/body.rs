@@ -1,5 +1,5 @@
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-use super::*;
+use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, pos2, register, vec2};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];

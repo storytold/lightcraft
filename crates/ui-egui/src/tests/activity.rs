@@ -422,13 +422,15 @@ fn batch_merge_runs_each_set_in_turn() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut paths = Vec::new();
-    // different exposures, or the import would take set B for duplicates of set A
-    for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5]), ("C", [-1.0, 1.0, 3.0])] {
-        for (i, bytes) in lightcraft_merge::synth::bracket_dngs(1600, 1200, &evs).unwrap().into_iter().enumerate() {
-            let p = dir.join(format!("{set}_{i}.dng"));
-            std::fs::write(&p, bytes).unwrap();
-            paths.push(p.to_string_lossy().to_string());
-        }
+    // one `bracket_dngs` call renders the procedural scene once for all nine inputs (three calls
+    // would render it three times); the exposures stay different, or the import would take one
+    // set for duplicates of another
+    let evs = [-2.0, 0.0, 2.0, -1.5, 0.5, 2.5, -1.0, 1.0, 3.0];
+    let sets = ["A", "A", "A", "B", "B", "B", "C", "C", "C"];
+    for (i, (set, bytes)) in sets.into_iter().zip(lightcraft_merge::synth::bracket_dngs(1600, 1200, &evs).unwrap()).enumerate() {
+        let p = dir.join(format!("{set}_{}.dng", i % 3));
+        std::fs::write(&p, bytes).unwrap();
+        paths.push(p.to_string_lossy().to_string());
     }
     let mut session = lightcraft_engine::Session::new().with_fs();
     let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
@@ -440,7 +442,10 @@ fn batch_merge_runs_each_set_in_turn() {
     session.execute("library.select", &json!({"ids": ids})).unwrap();
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    h.settle(T);
+    // the merge ordering does not need the grid's nine thumbnails; one Detail render is enough
+    let r = h.request("ui.set", json!({"view": "detail", "filmstrip": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.settle(T), "the imported photos and the active preview settle");
     let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();
     assert_eq!(r["sets"], 3);
     assert_eq!(h.app.merge.batch.len(), 2, "one running, two queued");

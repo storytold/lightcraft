@@ -1,6 +1,6 @@
 //! Reading the pixel data of a TIFF IFD (strips or tiles; uncompressed, lossless/lossy JPEG, Deflate, JPEG XL), in parallel.
 
-use crate::unpack::*;
+use crate::unpack::{f16_to_f32, f24_to_f32, inflate, read_u16s, undo_diff_u16, undo_float_predictor, unpack_lsb, unpack_msb, unpack_words32_msb};
 use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
 use lightcraft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
 use lightcraft_tiff::{ByteOrder, tags::compression as comp};

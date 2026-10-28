@@ -43,6 +43,8 @@ pub mod window_place;
 mod tests;
 #[cfg(test)]
 use tests::panels as tests_panels;
+#[cfg(test)]
+use tests::{fixtures as tests_fixtures, render_fixtures as tests_render_fixtures};
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -191,6 +193,10 @@ pub struct LightcraftApp {
     slideshow_auto_paused: bool,
     /// Files dropped since the last UI pass, consumed exactly once by the UI phase.
     dropped_files: Vec<egui::DroppedFileHandle>,
+    /// Prefix of `dropped_files` that arrived behind a prompt, library window or its picker.
+    /// Preserve only this prefix through subsequent dialogs/imports; later arrivals still take
+    /// the ordinary refusal path unless they too arrive while the original barrier is up.
+    deferred_dropped_file_count: usize,
     /// A synthetic batch was injected into a pass and has not been consumed by a completed
     /// (nondiscarded) UI pass yet: a hidden logic tick must not inject another one.
     synthetic_in_flight: bool,

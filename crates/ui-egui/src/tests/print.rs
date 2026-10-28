@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::headless::Headless;
 use crate::state::Dialog;
+use crate::tests_fixtures::SyntheticLibrary;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(30);
@@ -402,8 +403,14 @@ fn print_job_colour_controls_reach_the_job_and_the_pdf() {
 
 #[test]
 fn the_print_preview_does_not_rebuild_thumbnails_every_frame() {
-    let mut h = demo(Services { png: None, ..Default::default() });
+    // This counts thumbnail requests across print-cell sizes, not native-image throughput.
+    // Keep the demo's twelve-photo contact sheet with real files that decode cheaply.
+    let library = SyntheticLibrary::with_photos("print-thumbnail-reuse", 12);
+    let mut h = Headless::new(library.app(), [1400.0, 900.0], 1.0);
+    assert!(h.settle(T), "the print thumbnail fixture settles");
+    assert_eq!(h.app.session.catalog.len(), 12, "the contact sheet retains twelve photos");
     let before = h.app.renderer.thumb_jobs_built;
+    assert!(before > 0, "the fixture exercises actual thumbnail jobs");
     cmd(&mut h, "dialog.print", json!({}));
     for style in ["contactSheet", "picturePackage", "singleImage"] {
         cmd(&mut h, "print.set", json!({"layout": {"style": style}}));
