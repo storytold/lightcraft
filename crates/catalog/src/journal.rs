@@ -786,18 +786,11 @@ mod tests_resync {
         let album_id = c.alloc_album_id();
         let mut rules = Vec::new();
         for _ in 0..9 {
-            rules.push(crate::Rule::Field {
-                field: "title".into(),
-                op: "isEmpty".into(),
-                value: serde_json::json!({ "seq": 1 }),
-            });
+            rules.push(crate::Rule::Field { field: "title".into(), op: "isEmpty".into(), value: serde_json::json!({ "seq": 1 }) });
         }
         let retry_op = Op::SetAlbumRules {
             id: album_id,
-            rules: Box::new(crate::Filter {
-                rule_set: Some(crate::RuleSet { mode: crate::Match::All, rules }),
-                ..Default::default()
-            }),
+            rules: Box::new(crate::Filter { rule_set: Some(crate::RuleSet { mode: crate::Match::All, rules }), ..Default::default() }),
         };
         let body = serde_json::to_string(&retry_op).unwrap();
         let crc = crc32fast::hash(body.as_bytes());
@@ -805,9 +798,6 @@ mod tests_resync {
         let mut line = Vec::from(b"torn fragment" as &[u8]);
         let fragment = line.len();
         line.extend_from_slice(record.as_bytes());
-        assert_eq!(
-            resync(&line, 4).map(|(at, (seq, _))| (at, seq)),
-            Some((fragment, 5))
-        );
+        assert_eq!(resync(&line, 4).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
     }
 }
