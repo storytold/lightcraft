@@ -257,6 +257,16 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
+## 2026-10-28
+
+### Choose how many of a person's faces a name suggestion is based on
+- Settings ▸ Faces ▸ Matching ▸ Faces per person in a match: a face was always matched to a person by the mean of the
+  2 of their faces most like it, so in a large library two odd photos of someone (blurred, in profile) were enough for
+  a stranger to be suggested as them, and confirming the suggestions in a batch then snowballed. Choose 1 to 8 (2 is
+  still the default): more faces mean fewer wrong suggestions for people with many photos, and fewer suggestions for
+  people with few. It applies to name suggestions, a person's More faces and the unnamed faces. Agents:
+  `faces.matching {topFaces}`; `faces.suggest` and `faces.evaluate` take `topFaces` too, so `faces.evaluate` can
+  compare counts on your own photos. (#3250)
 
 ## 2026-10-24
 
