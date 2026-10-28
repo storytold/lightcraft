@@ -130,24 +130,15 @@ impl Client {
 pub(super) fn workflow(settings: &Settings, image: &str, mask: &str) -> Result<Value, String> {
     // The supported GGUF preset is Qwen Image 2.1; safetensors checkpoints retain the SDXL
     // workflow. Both expose the same image/mask/seed/output bindings to the caller.
-    let qwen = settings.model.to_ascii_lowercase().ends_with(".gguf");
+    let qwen = settings.is_qwen();
     let template = if qwen { include_str!("Lightcraft-masking-qwen21-api.json") } else { include_str!("Lightcraft-masking-api.json") };
     let mut v: Value = serde_json::from_str(template).map_err(|e| e.to_string())?;
-    let (model, positive, negative, prompt) = if qwen {
-        (
-            "/1/inputs/unet_name",
-            "/4/inputs/prompt",
-            "/4/inputs/negative_prompt",
-            format!(
-                "Replace the entire white region shown in <image2> of <image1> with the following: {}. \
-                Remove the existing objects in that white region and reconstruct it as the requested replacement. \
-                Black regions are context: keep them unchanged. Return an opaque photograph.",
-                settings.prompt
-            ),
-        )
+    let (model, positive, negative) = if qwen {
+        ("/1/inputs/unet_name", "/4/inputs/prompt", "/4/inputs/negative_prompt")
     } else {
-        ("/1/inputs/ckpt_name", "/4/inputs/text", "/5/inputs/text", settings.prompt.clone())
+        ("/1/inputs/ckpt_name", "/4/inputs/text", "/5/inputs/text")
     };
+    let prompt = settings.resolved_prompt();
     for (path, value) in [
         (model, json!(settings.model)),
         ("/2/inputs/image", json!(image)),
@@ -207,5 +198,8 @@ mod tests {
         assert_eq!(v.pointer("/10/inputs/images"), Some(&json!(["15", 0])));
         assert_eq!(v.pointer("/15/class_type"), Some(&json!("SplitImageWithAlpha")));
         assert!(!v.to_string().contains("CheckpointLoaderSimple"));
+        let custom = Settings { qwen_instruction: "Edit <image1>: {prompt}".into(), ..s };
+        let v = workflow(&custom, "photo.png", "mask.png").unwrap();
+        assert_eq!(v.pointer("/4/inputs/prompt"), Some(&json!("Edit <image1>: replace the block with a blue vase")));
     }
 }

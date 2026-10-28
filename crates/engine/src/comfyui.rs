@@ -25,7 +25,19 @@ pub struct Settings {
     pub prompt: String,
     pub negative: String,
     pub seed: u64,
+    /// The instruction sent to Qwen (`.gguf` models): `{prompt}` is replaced by [`Self::prompt`].
+    /// SDXL checkpoints receive the prompt alone.
+    pub qwen_instruction: String,
 }
+
+/// The default [`Settings::qwen_instruction`]: names the mask reference and asks Qwen to replace
+/// everything in the white region, keeping the black context unchanged.
+pub const DEFAULT_QWEN_INSTRUCTION: &str = "Replace the entire white region shown in <image2> of <image1> with the following: {prompt}. \
+Remove the existing objects in that white region and reconstruct it as the requested replacement. \
+Black regions are context: keep them unchanged. Return an opaque photograph.";
+
+/// The placeholder in [`Settings::qwen_instruction`] that the prompt replaces.
+pub const PROMPT_PLACEHOLDER: &str = "{prompt}";
 
 impl Default for Settings {
     fn default() -> Self {
@@ -35,6 +47,7 @@ impl Default for Settings {
             prompt: String::new(),
             negative: "blurry, low quality, text, watermark".into(),
             seed: 1,
+            qwen_instruction: DEFAULT_QWEN_INSTRUCTION.into(),
         }
     }
 }
@@ -47,7 +60,20 @@ impl Settings {
         if self.model.trim().is_empty() || self.model.len() > 512 || self.model.chars().any(char::is_control) || self.seed > 9_007_199_254_740_991 {
             return Err("choose an installed ComfyUI checkpoint and a seed from 0 to 9007199254740991".into());
         }
+        if !self.qwen_instruction.contains(PROMPT_PLACEHOLDER) || self.qwen_instruction.len() > 8192 {
+            return Err("the Qwen instruction must contain {prompt} (at most 8192 bytes); see Settings ▸ ComfyUI".into());
+        }
         Ok(())
+    }
+
+    /// Whether the model runs the Qwen Image 2.1 workflow (a `.gguf` filename) instead of SDXL.
+    pub fn is_qwen(&self) -> bool {
+        self.model.to_ascii_lowercase().ends_with(".gguf")
+    }
+
+    /// The positive prompt exactly as it is sent to ComfyUI.
+    pub fn resolved_prompt(&self) -> String {
+        if self.is_qwen() { self.qwen_instruction.replace(PROMPT_PLACEHOLDER, &self.prompt) } else { self.prompt.clone() }
     }
 }
 
@@ -198,7 +224,7 @@ pub(crate) fn start(s: &mut crate::Session, settings: Settings, mask_id: Option<
                 }
                 let output = image::composite(original_image, &mask, &decoded.to_srgb8(), region)?;
                 let preview = Arc::new(crate::media::fit_for_display(&output, 1024, 768));
-                let provenance = json!({"workflow": "Lightcraft-masking", "version": 1, "settings": worker.settings,
+                let provenance = json!({"workflow": "Lightcraft-masking", "version": 1, "settings": worker.settings, "sentPrompt": worker.settings.resolved_prompt(),
                 "maskId": mask_id, "original": original, "region": region,
                 "width": output.width, "height": output.height,
                 "created": chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()).to_rfc3339()});

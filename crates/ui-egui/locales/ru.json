@@ -2352,8 +2352,6 @@
   "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
   "Accept replacement": "",
   "Accept saves a new image stacked with the original. Your original stays unchanged.": "",
-  "Checkpoint filename": "",
-  "ComfyUI settings": "",
   "Describe what should replace the masked area": "",
   "Discard": "",
   "Generate": "",
@@ -2363,5 +2361,17 @@
   "Generating replacement": "",
   "Negative prompt": "",
   "Seed": "",
-  "Server URL": ""
+  "Server URL": "",
+  "A .gguf filename runs the Qwen Image 2.1 workflow (for example qwen-image-2.1-UC-BF16.gguf); any other filename runs the SDXL workflow.": "",
+  "ComfyUI": "",
+  "ComfyUI settings…": "",
+  "Generate replacement in the Masking panel sends the selected region and mask to this ComfyUI server. Nothing is sent until you press Generate.": "",
+  "Generate replacement needs the desktop app.": "",
+  "Model filename": "",
+  "Prompt sent to ComfyUI": "",
+  "Qwen instruction": "",
+  "Reset to default": "",
+  "The instruction must contain {prompt}.": "",
+  "Used by SDXL. The Qwen preset ignores it.": "",
+  "What Qwen receives: {prompt} is replaced by the prompt you type in the Masking panel.": ""
 }

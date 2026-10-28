@@ -3,7 +3,7 @@
 ## 2026-10-28
 
 ### Generate a replacement inside a mask with ComfyUI
-- Select a mask, enter a replacement prompt in Masking, and configure your own ComfyUI server and SDXL checkpoint. Generate runs the bundled Lightcraft-masking workflow in the background. Accept saves a new full-size sRGB PNG stacked with the original; Try again changes the seed, and Discard leaves the library alone. Pixels outside the mask stay unchanged from the developed render. Nothing is sent until Generate is pressed. See [ComfyUI generation](comfyui.md) for setup and limitations.
+- Select a mask, enter a replacement prompt in Masking, and configure your own ComfyUI server and model (Qwen Image 2.1 GGUF or an SDXL checkpoint) in Settings ▸ ComfyUI, where the instruction sent to Qwen can be edited. Generate runs the bundled Lightcraft-masking workflow in the background. Accept saves a new full-size sRGB PNG stacked with the original; Try again changes the seed, and Discard leaves the library alone. Pixels outside the mask stay unchanged from the developed render. Nothing is sent until Generate is pressed. See [ComfyUI generation](comfyui.md) for setup and limitations.
 
 ## 2026-10-24
 

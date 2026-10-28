@@ -10,19 +10,23 @@ other filenames; this is not support for arbitrary GGUF model architectures.
 
 1. Open a photo and create/select a mask in **Masking** (SAM 3 Object/Describe, brush, gradient,
    range or combined masks all work). White in the mask preview is the replacement area.
-2. Expand **Generate replacement** below the mask-selection controls, then enter what should appear in that area.
-3. Expand **ComfyUI settings**. Enter your server URL (for example `http://127.0.0.1:8188`, or your
-   workstation's LAN address) and the exact installed model filename. For the installed Qwen
-   preset, use `qwen-image-2.1-UC-BF16.gguf`. SDXL remains available with a checkpoint such as
-   `Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors`.
+2. Expand **Generate replacement** below the mask-selection controls, then enter what should
+   appear in that area (and, optionally, a seed). **Prompt sent to ComfyUI** shows the exact
+   positive prompt the server will receive.
+3. Once, open **Settings ▸ ComfyUI** (or **ComfyUI settings…** in the panel). Enter your server URL
+   (for example `http://127.0.0.1:8188`, or your workstation's LAN address) and the exact installed
+   model filename. For the installed Qwen preset, use `qwen-image-2.1-UC-BF16.gguf`. SDXL remains
+   available with a checkpoint such as `Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors`. The
+   same page holds the negative prompt (SDXL only) and the **Qwen instruction** (below).
 4. Press **Generate**. The activity list shows the background task and its cancel button.
 5. Inspect the preview. **Accept replacement** saves/imports a new PNG and stacks it above the
    original. **Try again** increments the seed and generates again for the original photo/mask
    (available while that photo is selected). **Discard**, or closing the preview, changes nothing
    in the library. Errors appear beneath the prompt; fix the settings and generate again.
 
-The prompt, server, model, negative prompt and seed are retained with the app's UI preferences.
-They are also available through `ui.set` under `generation`. No requests are made when selecting
+The prompt, server, model, negative prompt, seed and Qwen instruction are retained with the app's
+UI preferences. They are also available through `ui.set` under `generation` (the instruction as
+`qwenInstruction`) and as `mask.generate` parameters. No requests are made when selecting
 a mask, opening settings, starting LightCraft or reading generation status.
 
 ## Image handling
@@ -62,8 +66,11 @@ independently; LightCraft does not download weights or install custom nodes. The
 
 Sampling uses BF16 computation, automatic cache placement, 25 Euler/simple steps and CFG 1.
 At CFG 1 **negative prompts have no effect**; leave that field empty. Prompt enhancement is not
-run, so the instruction entered in LightCraft reaches the edit model directly, with a short
-reference-image/preserve-surroundings instruction. Qwen may take longer than SDXL; actual
+run: Qwen receives the **Qwen instruction** from Settings ▸ ComfyUI with `{prompt}` replaced by
+the prompt typed in the panel. The default names the two references and asks Qwen to replace the
+entire white region and keep the black context; edit it freely, but it must keep `{prompt}`
+(**Reset to default** restores it). The accepted image's JSON recipe records the exact prompt sent
+(`sentPrompt`). Qwen may take longer than SDXL; actual
 quality depends on the scene, selection and prompt. SAM 3 still creates the mask locally.
 
 The source and combined mask (all Add/Subtract/Intersect components evaluated together) are

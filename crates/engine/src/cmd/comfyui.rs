@@ -58,7 +58,7 @@ fn accept(_: &mut Session, _: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "mask.generate", "Generate replacement", [], None,
-            "{endpoint?, model?, prompt, negative?, seed?, maskId?} — send the active developed photo's selected mask region to the user-configured ComfyUI server; starts a cancellable background task; the result is a preview until explicitly accepted",
+            "{endpoint?, model?, prompt, negative?, seed?, qwenInstruction?, maskId?} — send the active developed photo's selected mask region to the user-configured ComfyUI server; starts a cancellable background task; the result is a preview until explicitly accepted",
             has_active, generate),
         cmd!(query "mask.generationStatus", "Generation status", [], None,
             "{} → {running, ready, cancelled, error, id, photo}; no request is made to ComfyUI",

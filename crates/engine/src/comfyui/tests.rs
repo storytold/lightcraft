@@ -60,6 +60,32 @@ fn validates_prompt_and_model_before_starting() {
     assert!(s.validate().is_err());
 }
 
+#[test]
+fn qwen_instruction_is_editable_and_must_keep_the_prompt_placeholder() {
+    let qwen = Settings { prompt: "a red door".into(), model: "qwen-image-2.1-UC-BF16.gguf".into(), ..Default::default() };
+    assert!(qwen.validate().is_ok());
+    assert!(qwen.resolved_prompt().starts_with("Replace the entire white region"));
+    assert!(qwen.resolved_prompt().contains("with the following: a red door. Remove the existing objects"));
+    let custom = Settings { qwen_instruction: "Paint {prompt} into <image2>".into(), ..qwen.clone() };
+    assert_eq!(custom.resolved_prompt(), "Paint a red door into <image2>");
+    let missing = Settings { qwen_instruction: "Paint something".into(), ..qwen.clone() };
+    assert!(missing.validate().unwrap_err().contains("{prompt}"));
+    let huge = Settings { qwen_instruction: format!("{{prompt}}{}", "x".repeat(9000)), ..qwen };
+    assert!(huge.validate().is_err());
+    // SDXL checkpoints get the prompt alone, whatever the Qwen instruction says.
+    let sdxl = Settings { prompt: "a red door".into(), qwen_instruction: "Paint {prompt}".into(), ..Default::default() };
+    assert_eq!(sdxl.resolved_prompt(), "a red door");
+}
+
+#[test]
+fn saved_settings_without_an_instruction_get_the_default() {
+    let s: Settings = serde_json::from_value(json!({"endpoint": "http://192.168.0.56:8188", "model": "x.gguf", "prompt": "p"})).unwrap();
+    assert_eq!(s.qwen_instruction, DEFAULT_QWEN_INSTRUCTION);
+    let round: Settings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+    assert_eq!(round.qwen_instruction, DEFAULT_QWEN_INSTRUCTION);
+    assert!(serde_json::to_value(&s).unwrap().get("qwenInstruction").is_some());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn http_error_validation_failure_and_cancellation_are_errors_not_panics() {

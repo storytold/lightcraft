@@ -1,10 +1,10 @@
 //! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Faces,
-//! AI Denoise.
+//! AI Denoise, ComfyUI.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
 //!   preview size, filmstrip/grid badges, last library, monitor profile, whether Import Lightroom
-//!   Catalog… asks where a catalog goes) and Auto Advance live in
+//!   Catalog… asks where a catalog goes, the ComfyUI connection) and Auto Advance live in
 //!   the UI state,
 //!   saved by the host in its config folder (`ui.json`);
 //! - **library settings** (import defaults, XMP sidecars, thumbnail cache size, slideshow
@@ -55,6 +55,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("comfyui", "ComfyUI"),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -73,6 +74,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
+        "comfyui" => crate::panels::generation::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }

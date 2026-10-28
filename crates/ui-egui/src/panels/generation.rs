@@ -1,8 +1,14 @@
-//! The selected mask's prompt and the explicit accept/discard step for ComfyUI results.
+//! The selected mask's prompt and the explicit accept/discard step for ComfyUI results, and the
+//! ComfyUI page of Settings (server, model, negative prompt, Qwen instruction).
 use serde_json::json;
 
+use lightcraft_engine::comfyui::{DEFAULT_QWEN_INSTRUCTION, PROMPT_PLACEHOLDER};
+
+use super::settings::{heading, hint, row};
 use crate::LightcraftApp;
 use crate::i18n::tr;
+use crate::text_field::TextField;
+use crate::theme::Tokens;
 use crate::widgets::{divider, register};
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -17,28 +23,30 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let running = app.session.generation.as_ref().is_some_and(|g| g.running());
             let pending = app.session.generation.as_ref().is_some_and(|g| g.preview().is_some());
             ui.add_enabled_ui(!running && !pending, |ui| {
-                let r = ui.add(
-                    egui::TextEdit::multiline(&mut app.ui.generation.prompt)
-                        .hint_text(tr("Describe what should replace the masked area"))
-                        .desired_rows(3)
-                        .desired_width(f32::INFINITY),
-                );
-                register(ui, "generation:prompt", r.rect);
-                ui.collapsing(tr("ComfyUI settings"), |ui| {
-                    ui.label(tr("Server URL"));
-                    let r = ui.text_edit_singleline(&mut app.ui.generation.endpoint);
-                    register(ui, "generation:endpoint", r.rect);
-                    ui.label(tr("Checkpoint filename"));
-                    let r = ui.text_edit_singleline(&mut app.ui.generation.model);
-                    register(ui, "generation:model", r.rect);
-                    ui.label(tr("Negative prompt"));
-                    let r = ui.text_edit_multiline(&mut app.ui.generation.negative);
-                    register(ui, "generation:negative", r.rect);
-                    ui.horizontal(|ui| {
-                        ui.label(tr("Seed"));
-                        let r = ui.add(egui::DragValue::new(&mut app.ui.generation.seed).range(0..=9_007_199_254_740_991_u64));
-                        register(ui, "generation:seed", r.rect);
+                TextField::multiline("generation:prompt", &mut app.ui.generation.prompt)
+                    .hint(tr("Describe what should replace the masked area"))
+                    .rows(3)
+                    .width(f32::INFINITY)
+                    .show(ui);
+                ui.horizontal(|ui| {
+                    ui.label(tr("Seed"));
+                    let r = ui.add(egui::DragValue::new(&mut app.ui.generation.seed).range(0..=9_007_199_254_740_991_u64));
+                    register(ui, "generation:seed", r.rect);
+                });
+                if !app.ui.generation.prompt.trim().is_empty() {
+                    let sent = app.ui.generation.resolved_prompt();
+                    egui::CollapsingHeader::new(tr("Prompt sent to ComfyUI")).id_salt("generation-sent").show(ui, |ui| {
+                        let r = ui.add(egui::Label::new(egui::RichText::new(sent).small()).wrap().selectable(true));
+                        register(ui, "generation:sentPrompt", r.rect);
                     });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    let kind = if app.ui.generation.is_qwen() { "Qwen" } else { "SDXL" };
+                    ui.small(format!("{kind} · {}", app.ui.generation.model));
+                    let r = crate::button::Button::new("ComfyUI settings…").small().ghost().widget("generation:settings").show(ui);
+                    if r.clicked() {
+                        app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "comfyui".into() });
+                    }
                 });
                 ui.small(tr("Generate sends the selected region and mask to your ComfyUI server."));
                 let r = ui.add_enabled(!app.ui.generation.prompt.trim().is_empty(), egui::Button::new(tr("Generate")));
@@ -61,6 +69,46 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
         register(ui, "generation:section", section.header_response.rect);
     });
+}
+
+/// Settings ▸ ComfyUI: the server, model, negative prompt and the instruction Qwen receives.
+/// Saved with the app settings (`ui.json`); nothing is sent until Generate.
+pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, "ComfyUI");
+    if cfg!(target_arch = "wasm32") {
+        hint(ui, t, "Generate replacement needs the desktop app.");
+        return;
+    }
+    hint(
+        ui,
+        t,
+        "Generate replacement in the Masking panel sends the selected region and mask to this ComfyUI server. Nothing is sent until you press Generate.",
+    );
+    let g = &mut app.ui.generation;
+    row(ui, t, "Server URL", |ui| TextField::singleline("generation:endpoint", &mut g.endpoint).width(f32::INFINITY).show(ui));
+    row(ui, t, "Model filename", |ui| TextField::singleline("generation:model", &mut g.model).width(f32::INFINITY).show(ui));
+    hint(
+        ui,
+        t,
+        "A .gguf filename runs the Qwen Image 2.1 workflow (for example qwen-image-2.1-UC-BF16.gguf); any other filename runs the SDXL workflow.",
+    );
+    heading(ui, t, "Negative prompt");
+    TextField::multiline("generation:negative", &mut g.negative).rows(2).width(f32::INFINITY).show(ui);
+    hint(ui, t, "Used by SDXL. The Qwen preset ignores it.");
+    heading(ui, t, "Qwen instruction");
+    hint(ui, t, "What Qwen receives: {prompt} is replaced by the prompt you type in the Masking panel.");
+    TextField::multiline("generation:qwenInstruction", &mut g.qwen_instruction).rows(5).width(f32::INFINITY).show(ui);
+    if !g.qwen_instruction.contains(PROMPT_PLACEHOLDER) {
+        ui.colored_label(ui.visuals().error_fg_color, tr("The instruction must contain {prompt}."));
+    }
+    let r = crate::button::Button::new("Reset to default")
+        .small()
+        .enabled(g.qwen_instruction != DEFAULT_QWEN_INSTRUCTION)
+        .widget("generation:resetInstruction")
+        .show(ui);
+    if r.clicked() {
+        g.qwen_instruction = DEFAULT_QWEN_INSTRUCTION.into();
+    }
 }
 
 pub fn preview(app: &mut LightcraftApp, ctx: &egui::Context) {
