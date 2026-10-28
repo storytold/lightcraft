@@ -305,7 +305,8 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
         // and a Ctrl+Cmd binding (⌃⌘F) wants both keys; on macOS ⌃⌘F is not ⌘F with Control held (there
         // `mac_cmd` is ⌘, and Control held is no ⌘)
         let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || (modifiers.command && !modifiers.mac_cmd) };
-        let cmd_ok = if m.ctrl { !m.command || modifiers.command } else { modifiers.command == m.command };
+        // with ⌘ held on macOS (`mac_cmd`) a Control binding needs the ⌘ in it too; elsewhere Ctrl is Command
+        let cmd_ok = if m.ctrl && !modifiers.mac_cmd { !m.command || modifiers.command } else { modifiers.command == m.command };
         // winit can report shifted digits as punctuation (Shift+1 = `!`). Recognize the
         // physical number key for culling, without changing layout-aware letter shortcuts.
         let shifted_digit = m.shift

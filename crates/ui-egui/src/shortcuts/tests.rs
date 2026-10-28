@@ -53,6 +53,21 @@ fn control_command_f_is_window_full_screen_and_not_find_and_control_f_is_nothing
     assert!(!h.app.ui.focus_search && !h.app.text_focus, "and it doesn't also run Find (⌘F)");
 }
 
+/// On macOS a Control binding (⌃H, HDR…) is Control alone: ⌃⌘H, which is Command's, doesn't run it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_control_binding_does_not_match_with_command_held_on_macos() {
+    let mut h = library();
+    let t = std::time::Duration::from_secs(20);
+    h.app.session.execute("library.select", &json!({"ids": [1, 2, 3]})).unwrap();
+    h.request("ui.key", json!({"key": "h", "cmd": true, "ctrl": true}), t);
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "⌃⌘H is not ⌃H");
+    h.request("ui.key", json!({"key": "h", "ctrl": true}), t);
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "⌃H opens HDR…");
+}
+
 /// ⌃⌘F, the macOS default of window full screen, survives Restore and recording: Control is never
 /// Command there, so the saved text keeps both, and Find (⌘F) keeps its own key.
 #[cfg(target_os = "macos")]
