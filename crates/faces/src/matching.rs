@@ -8,8 +8,12 @@
 
 use std::cmp::Ordering;
 
-/// How many of a person's best matching faces are averaged into their score.
+/// How many of a person's best matching faces are averaged into their score, unless the user chose otherwise
+/// (Settings ▸ Faces). More faces make a stranger who happens to match two odd photos of someone (blurred, in
+/// profile) less likely to be suggested as them, at the cost of fewer suggestions for people with few photos.
 pub const TOP_FACES: usize = 2;
+/// The most faces a score may be based on.
+pub const MAX_TOP_FACES: usize = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ranked {
@@ -39,6 +43,13 @@ pub fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
 /// Rank the people in `gallery` (a name and one face's embedding per entry; a person appears once per face),
 /// best first. Names are compared case-insensitively and shown as first seen.
 pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
+    rank_top(query, gallery, TOP_FACES)
+}
+
+/// [`rank`], with each person's score the mean of their `top` best matching faces (1 to [`MAX_TOP_FACES`]; a person
+/// with fewer faces is scored on those they have).
+pub fn rank_top(query: &[f32], gallery: &[(&str, &[f32])], top: usize) -> Vec<Ranked> {
+    let top = top.clamp(1, MAX_TOP_FACES);
     let mut people: Vec<(String, String, Vec<f32>)> = Vec::new(); // (key, shown name, similarities)
     for (name, emb) in gallery {
         let Some(c) = cosine(query, emb) else { continue };
@@ -52,7 +63,7 @@ pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
         .into_iter()
         .map(|(_, name, mut sims)| {
             sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-            let top = sims.get(..sims.len().min(TOP_FACES)).unwrap_or(&[]);
+            let top = sims.get(..sims.len().min(top)).unwrap_or(&[]);
             Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: sims.len() }
         })
         .collect();
@@ -93,6 +104,26 @@ mod tests {
         let g2: Vec<(&str, &[f32])> = vec![("Cy", &c_good), ("Cy", &c_bad), ("Di", &a1), ("Di", &a2)];
         let r2 = rank(&unit(&[1.0, 0.0, 0.0]), &g2);
         assert_eq!(r2[0].name, "Di", "{r2:?}");
+    }
+
+    #[test]
+    fn more_faces_in_a_score_keep_two_odd_photos_from_carrying_a_stranger() {
+        // Eve matches two odd photos of Ann very well, but none of her usual ones; Bob looks like Eve on all of his
+        let (odd1, odd2, usual) = (unit(&[1.0, 0.05, 0.0]), unit(&[1.0, 0.0, 0.05]), unit(&[0.0, 0.0, 1.0]));
+        let (b1, b2, b3) = (unit(&[0.8, 0.6, 0.0]), unit(&[0.8, 0.0, 0.6]), unit(&[0.8, 0.3, 0.3]));
+        let gallery: Vec<(&str, &[f32])> =
+            vec![("Ann", &odd1), ("Ann", &odd2), ("Ann", &usual), ("Ann", &usual), ("Bob", &b1), ("Bob", &b2), ("Bob", &b3)];
+        let eve = unit(&[1.0, 0.0, 0.0]);
+        assert_eq!(rank(&eve, &gallery)[0].name, "Ann", "two faces: the odd photos carry Ann");
+        let four = rank_top(&eve, &gallery, 4);
+        assert_eq!(four[0].name, "Bob", "{four:?}");
+        assert!(four.iter().find(|r| r.name == "Ann").is_some_and(|r| r.score < 0.6), "{four:?}");
+        // out-of-range counts are clamped, never a panic or an empty score
+        assert_eq!(rank_top(&eve, &gallery, 0), rank_top(&eve, &gallery, 1));
+        assert_eq!(rank_top(&eve, &gallery, 1000), rank_top(&eve, &gallery, MAX_TOP_FACES));
+        // a person with fewer faces than asked is scored on the ones they have
+        let one: Vec<(&str, &[f32])> = vec![("Cy", &odd1)];
+        assert!(rank_top(&eve, &one, 4)[0].score > 0.99);
     }
 
     #[test]
