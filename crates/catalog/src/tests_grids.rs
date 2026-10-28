@@ -362,3 +362,31 @@ fn empty_shared_grid_table_clears_dangling_references() {
     let MaskShape::Object { seg: Some(seg), .. } = &p.history[0].settings.masks[0].components[0].shape else { panic!("an Object mask") };
     assert_eq!(seg.data, blob, "the history step's inline grid is untouched");
 }
+
+/// A snapshot that omits the shared grid table entirely (no `grids` key) but whose masks still
+/// refer into it: an absent table deserializes to an empty Vec, so a reference past it is
+/// dangling and is cleared and reported, just like the empty-table case.
+#[test]
+fn omitted_shared_grid_table_clears_dangling_references() {
+    let (live, _, id, blob) = masked_catalog(1);
+    let inline = live.to_snapshot();
+
+    // a damaged snapshot: no table at all, but the develop mask still refers to entry 0
+    let body = inline.replacen(&format!("\"data\":\"{blob}\""), "\"grid\":0", 1);
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{{} }} }}\n", &body[1..body.len() - 1])
+            .into_bytes(),
+    );
+    let (_, damaged, report) = open(&m);
+    assert_eq!(report.repaired.len(), 1, "{:?}", report.repaired);
+    assert!(report.repaired[0].contains("pointed past the shared table"), "{:?}", report.repaired);
+    let p = damaged.photo(id).unwrap();
+    let MaskShape::Object { seg: Some(seg), .. } = &p.develop.masks[0].components[0].shape else { panic!("an Object mask") };
+    assert_eq!((seg.data.as_str(), seg.grid), ("", None), "the dangling reference is cleared even with no table");
+
+    // the history step carries its grid inline: nothing there to resolve, left as it was
+    let MaskShape::Object { seg: Some(seg), .. } = &p.history[0].settings.masks[0].components[0].shape else { panic!("an Object mask") };
+    assert_eq!(seg.data, blob, "the history step's inline grid is untouched");
+}
