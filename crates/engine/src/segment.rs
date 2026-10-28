@@ -193,14 +193,18 @@ impl Segmenter {
 
     /// Delete the model's files and partial downloads from the model folder, nothing else (`segment.model.remove`):
     /// `(paths removed, bytes freed)`. Refused while the model downloads or computes a mask. A file that cannot be
-    /// deleted (another program holds it open) is an error that names it; the others are gone by then.
-    pub fn remove_files(&self) -> Result<(Vec<String>, u64), String> {
+    /// deleted (another program holds it open) is an error that names it; the others are gone by then. An idle worker
+    /// still holds the loaded model's files open (the system would keep their space until it unloads on its own), so it
+    /// is unloaded first; when that cannot be confirmed in a few seconds nothing is deleted.
+    pub fn remove_files(&mut self) -> Result<(Vec<String>, u64), String> {
         if self.busy() || self.detail_busy() || self.download_status().running {
             return Err(
                 "the SAM 3 model is in use (a download or an AI mask is running); wait for it to finish (or stop the download), then remove it"
                     .into(),
             );
         }
+        #[cfg(feature = "sam")]
+        self.worker.unload(std::time::Duration::from_secs(5))?;
         let dir = self.dir.as_ref().ok_or("no folder is set for the SAM 3 model")?;
         let (mut removed, mut bytes, mut failed) = (Vec::new(), 0u64, Vec::new());
         for name in MODEL_FILES.iter().flat_map(|n| [n.to_string(), format!("{n}.part")]) {
@@ -821,6 +825,39 @@ mod tests {
         s.segmenter.worker.shared.detail.store(0, Ordering::SeqCst);
         let r = s.execute("segment.model.remove", &serde_json::json!({"id": "sam3"})).unwrap();
         assert_eq!(r["removed"].as_array().map(Vec::len), Some(1), "{r}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A worker that is idle still holds the model it loaded (it unloads after ten minutes): Remove ends the worker
+    /// first, so the files' space is really freed when it reports the bytes.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn remove_unloads_an_idle_worker_before_deleting_the_weights() {
+        let dir = std::env::temp_dir().join(format!("lc-sam3-remove-idle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        let mut s = Session::with_demo();
+        s.segmenter.dir = Some(dir.clone());
+        // (the token stands for the model: the worker keeps it until it unloads)
+        let token = std::sync::Arc::new(());
+        let job = worker::Job {
+            dir: dir.clone(),
+            key: 1,
+            render: None,
+            missing: None,
+            kind: worker::Kind::Hold(token.clone()),
+            tag: Tag::Prepare,
+            reply: s.segmenter.results.0.clone(),
+        };
+        s.segmenter.worker.submit(job).unwrap();
+        s.segmenter.results.1.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert!(!s.segmenter.busy() && !s.segmenter.detail_busy());
+        assert_eq!(std::sync::Arc::strong_count(&token), 2, "the idle worker still holds it");
+        let r = s.execute("segment.model.remove", &serde_json::json!({"id": "sam3"})).unwrap();
+        assert_eq!(std::sync::Arc::strong_count(&token), 1, "the worker let go before the files were deleted: {r}");
+        assert_eq!(r["bytes"], 2, "{r}");
+        assert!(!dir.join("vocab.json").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 

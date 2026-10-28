@@ -56,6 +56,9 @@ pub enum Kind {
     FailOnGpu {
         panic: bool,
     },
+    /// Keeps the token in the worker's state, like the model it holds open (tests of [`Worker::unload`]).
+    #[cfg(test)]
+    Hold(Arc<()>),
 }
 
 /// One request.
@@ -218,6 +221,27 @@ impl Worker {
         !self.dead() && self.shared.loaded.load(Ordering::SeqCst)
     }
 
+    /// Stop the (idle) worker thread and wait, up to `wait`, until it has ended: it drops the model
+    /// when it does, so the model's files are no longer held open (the system keeps a deleted
+    /// file's space while a program has it open). The next request starts a new thread.
+    pub fn unload(&mut self, wait: Duration) -> Result<(), String> {
+        // (the thread sees the channel close, finishes what it has queued and returns)
+        self.tx = None;
+        let Some(thread) = self.thread.take() else { return Ok(()) };
+        let t = web_time::Instant::now();
+        while !thread.is_finished() {
+            if t.elapsed() >= wait {
+                self.thread = Some(thread);
+                return Err("the SAM 3 model is still in use (it did not unload in time); try again in a moment".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // (a worker that panicked has dropped its model all the same)
+        let _ = thread.join();
+        self.shared.loaded.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Queue `job`; returns at once.
     pub fn submit(&mut self, job: Job) -> Result<(), String> {
         if self.dead() {
@@ -257,6 +281,8 @@ struct State {
     model: Option<(PathBuf, Sam3)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<remote::Client>,
+    #[cfg(test)]
+    held: Option<Arc<()>>,
 }
 
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
@@ -443,7 +469,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
             }
         }
         #[cfg(test)]
-        Kind::Panic | Kind::FailOnGpu { .. } => return Err("test panic request".into()),
+        Kind::Panic | Kind::FailOnGpu { .. } | Kind::Hold(_) => return Err("test panic request".into()),
     };
     let input = if region.is_some() || client.key != Some(job.key) { render(job)? } else { Input { rgb: Vec::new(), w: 0, h: 0 } };
     let request = Request { width: input.w, height: input.h, temporary: region.is_some(), operation };
@@ -490,6 +516,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             Placement::Gpu => Err(Failure::Model("a test error on the GPU".into())),
             Placement::Cpu => Ok(None),
         },
+        #[cfg(test)]
+        Kind::Hold(token) => {
+            state.held = Some(token);
+            Ok(None)
+        }
         Kind::Detail { prompt, region } => {
             let input = render(job)?;
             let m = model(state, shared, &job.dir, placement)?;
