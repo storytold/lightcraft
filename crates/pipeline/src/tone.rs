@@ -114,7 +114,13 @@ impl ToneMap {
         Self::camera_hdr_process(curve, contrast, whites, blacks, peak, 0.0, false)
     }
 
-    /// V3 combines broader negative Blacks with the positive Shadows response.
+    /// Builds the V3 tone map for a raw source with a fitted camera tone curve.
+    ///
+    /// V3 combines broader negative Blacks with its RAW shadow-transition correction. `contrast`,
+    /// `whites`, `blacks`, and `shadows` use Lightroom slider units (−100..100). `peak` is the
+    /// linear output peak relative to SDR white, clamped to at least 1; values above 1 preserve
+    /// highlight headroom for HDR output. `shadows` controls the dark-transition correction and
+    /// the range used by negative Blacks.
     pub fn camera_hdr_v3(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32, shadows: f64) -> ToneMap {
         Self::camera_hdr_process(curve, contrast, whites, blacks, peak, shadows, true)
     }
@@ -199,7 +205,13 @@ impl ToneMap {
         Self::display_hdr_process(contrast, whites, blacks, peak, 0.0, false)
     }
 
-    /// V3 tone map for display sources, with broader midtone response for Whites and Blacks.
+    /// Builds the V3 tone map for an SDR or HDR display-referred source.
+    ///
+    /// Compared with [`ToneMap::display_hdr`], V3 extends positive Whites farther into the
+    /// midtones and negative Blacks across a wider lower-tone range. `contrast`, `whites`,
+    /// `blacks`, and `shadows` use Lightroom slider units (−100..100). `shadows` adjusts the range
+    /// of the negative-Blacks response. `peak` is the linear output peak relative to SDR white,
+    /// clamped to at least 1; at 1, this is an SDR tone map.
     pub fn display_hdr_v3(contrast: f64, whites: f64, blacks: f64, peak: f32, shadows: f64) -> ToneMap {
         Self::display_hdr_process(contrast, whites, blacks, peak, shadows, true)
     }

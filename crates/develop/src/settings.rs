@@ -85,7 +85,10 @@ pub enum Process {
     /// is taken of a fine median of log luminance (issue #632).
     V2,
     /// Final tonal process: broader positive Shadows with local separation, neutral-camera local
-    /// Whites, and midtone-safe global Whites and Blacks.
+    /// Whites, and midtone-safe global Whites and Blacks. Positive Whites also reduce the global
+    /// Highlights contribution; RAW shadows receive a small correction in the dark transition band.
+    /// V1 and V2 retain their earlier rendering, so existing edits change only when explicitly
+    /// updated to this process.
     V3,
 }
 
