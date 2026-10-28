@@ -295,10 +295,10 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
         let Ok(text) = std::str::from_utf8(&line[i..]) else { continue };
         #[cfg(test)]
         RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
-        if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}')) {
-            if seq <= last.saturating_add(1) {
-                return Some((i, (seq, op)));
-            }
+        if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}'))
+            && seq <= last.saturating_add(1)
+        {
+            return Some((i, (seq, op)));
         }
     }
     None
