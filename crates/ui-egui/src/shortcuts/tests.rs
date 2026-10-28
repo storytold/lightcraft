@@ -53,6 +53,26 @@ fn control_command_f_is_window_full_screen_and_not_find_and_control_f_is_nothing
     assert!(!h.app.ui.focus_search && !h.app.text_focus, "and it doesn't also run Find (⌘F)");
 }
 
+/// ⌃⌘F, the macOS default of window full screen, survives Restore and recording: Control is never
+/// Command there, so the saved text keeps both, and Find (⌘F) keeps its own key.
+#[cfg(target_os = "macos")]
+#[test]
+fn control_command_f_survives_restore_and_recording_without_taking_finds_key() {
+    let mut keymap = crate::shortcuts::Keymap::new();
+    crate::shortcuts::assign(&mut keymap, "view.enterFullScreen", None).unwrap();
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.enterFullScreen"), None, "cleared");
+    let lost = crate::shortcuts::reset(&mut keymap, "view.enterFullScreen").unwrap();
+    assert!(lost.is_empty(), "Restore takes no other command's key: {lost:?}");
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.enterFullScreen"), Some("Ctrl+Cmd+F"));
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.focusSearch"), Some("Cmd+F"));
+    // recording the chord: the dialog hands over what `format` writes for the key press
+    let recorded = crate::shortcuts::format(egui::Modifiers { ctrl: true, mac_cmd: true, command: true, ..Default::default() }, egui::Key::F);
+    assert_eq!(recorded.as_deref().and_then(crate::shortcuts::parse), crate::shortcuts::parse("Ctrl+Cmd+F"));
+    let lost = crate::shortcuts::assign(&mut keymap, "view.enterFullScreen", recorded.as_deref()).unwrap();
+    assert!(lost.is_empty(), "recording ⌃⌘F takes no other command's key: {lost:?}");
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.focusSearch"), Some("Cmd+F"));
+}
+
 #[test]
 fn select_only_active_keeps_the_active_photo_and_the_edit_undo_step() {
     use crate::state::ViewMode;

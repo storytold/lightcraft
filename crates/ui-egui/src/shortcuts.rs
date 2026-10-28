@@ -192,8 +192,9 @@ pub fn format(m: Modifiers, k: Key) -> Option<String> {
     if m.command || m.mac_cmd {
         s.push_str("Cmd+");
     }
-    // off macOS Ctrl *is* Cmd; on macOS it is the separate Control key
-    if m.ctrl && (m.mac_cmd || !m.command) {
+    // off macOS Ctrl *is* Cmd; on macOS it is the separate Control key (⌃⌘F is both, `parse` makes it
+    // `command` without `mac_cmd`)
+    if m.ctrl && (m.mac_cmd || !m.command || cfg!(target_os = "macos")) {
         s.push_str("Ctrl+");
     }
     if m.alt {
