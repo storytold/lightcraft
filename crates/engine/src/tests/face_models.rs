@@ -641,3 +641,26 @@ fn the_cpu_only_switch_is_kept_and_bad_values_are_refused() {
     assert_eq!(again.execute("faces.gpu", &json!({"cpuOnly": false})).unwrap()["cpuOnly"], false);
     let _ = std::fs::remove_dir_all(d);
 }
+
+#[test]
+fn the_faces_a_match_is_based_on_are_kept_and_bad_values_are_refused() {
+    let d = temp("top-faces");
+    let mut s = session(&d);
+    let v = s.execute("faces.matching", &json!({})).unwrap();
+    assert_eq!((v["topFaces"].clone(), v["default"].clone()), (json!(2), json!(2)), "{v}");
+    assert_eq!(s.execute("faces.matching", &json!({"topFaces": 4})).unwrap()["topFaces"], 4);
+    // kept with the models, beside the other face settings, which it leaves alone
+    assert_eq!(s.execute("faces.gpu", &json!({"cpuOnly": true})).unwrap()["cpuOnly"], true);
+    let mut again = session(&d);
+    let l = again.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!((l["topFaces"].clone(), l["gpu"]["cpuOnly"].clone()), (json!(4), json!(true)), "{l}");
+    for bad in [json!(0), json!(9), json!(-1), json!(2.5), json!("3")] {
+        assert!(again.execute("faces.matching", &json!({"topFaces": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(again.execute("faces.matching", &json!({})).unwrap()["topFaces"], 4, "a refused value changes nothing");
+    assert_eq!(again.execute("faces.matching", &json!({"topFaces": null})).unwrap()["topFaces"], 2, "null is the default again");
+    // a hand-edited file out of range is read within range, not trusted
+    std::fs::write(d.join("models").join("settings.json"), br#"{"topFaces":1000}"#).unwrap();
+    assert_eq!(session(&d).execute("faces.matching", &json!({})).unwrap()["topFaces"], 8);
+    let _ = std::fs::remove_dir_all(d);
+}
