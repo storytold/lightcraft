@@ -53,7 +53,7 @@ fn sharpens(w: usize, h: usize, target: SharpenFor) -> bool {
     target != SharpenFor::None && w >= 3 && h >= 3
 }
 
-// How far a sharpened pixel may pass the darkest and lightest of its 3×3 neighbours, as a share
+/// How far a sharpened pixel may pass the darkest and lightest of its 3×3 neighbours, as a share
 /// of their difference: enough for crisp edges, too little for the light and dark rims (halos)
 /// a plain unsharp mask draws along strong edges.
 const SHARPEN_OVERSHOOT: f32 = 0.1;

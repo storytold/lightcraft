@@ -209,7 +209,7 @@ fn sharpen_increases_edge_contrast() {
     assert!(img.data[3][0] < 80 && img.data[4][0] > 170);
 }
 
-/// Output sharpening's pixels for every target and amount, pinned (its box blurs run row-parallel, which must not
+/// Output sharpening's pixels for every target and amount, pinned (its separable passes run row-parallel, which must not
 /// change a bit), on 8- and 16-bit images; with no target the image is left as it is.
 #[test]
 fn sharpened_pixels_are_pinned() {
@@ -234,15 +234,15 @@ fn sharpened_pixels_are_pinned() {
     assert_eq!(img, test_image());
 }
 const SHARPENED: [u64; 9] = [
-    0x1494_273e_0bdc_a61c,
-    0x3fbb_40c4_74f4_b0c3,
-    0xa27f_8ff5_82a0_99f9,
-    0x6550_6571_a38d_4d9f,
-    0x5e28_f4f3_fc8a_9685,
-    0xdc2b_6f65_9138_3b1d,
-    0x8ce6_f0b8_d8ed_8026,
-    0x92d8_12e7_4b2e_81fe,
-    0x139f_6d78_b1f2_a910,
+    0x1a04_82d5_edaa_37c8,
+    0xcb78_18b7_938e_beda,
+    0x0490_bb9e_2b64_3d00,
+    0x1662_0293_b8a2_2538,
+    0xa3f7_7957_1af3_1b39,
+    0x30b0_919c_7c6a_705b,
+    0x27ef_4e5b_42e6_d1ed,
+    0x1dc3_3b96_b2f9_c1b6,
+    0xdab7_1280_a47a_ffeb,
 ];
 
 /// Output sharpening (#2970): each step crisper than the one before, Screen / Standard roughly a
