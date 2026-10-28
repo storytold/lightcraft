@@ -1,7 +1,7 @@
 use super::view::LoupeInfo;
 #[cfg(test)]
 use super::view::{InfoOverlay, LoupeInfoField};
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// Which view the app opens in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

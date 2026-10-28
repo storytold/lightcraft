@@ -96,13 +96,13 @@ The release packages ship `lightcraft-cli` alongside the desktop app, so no buil
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\LightCraft\lightcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\LightCraft\lightcraft-cli.exe` by default (`C:\Program Files\ArtCraft\LightCraft\lightcraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/lightcraft-cli` |
 | macOS | the separate `lightcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows, default install folder
-claude mcp add lightcraft -- "C:\Program Files\LightCraft\lightcraft-cli.exe" mcp
+# Windows (PowerShell), default install folder
+claude mcp add lightcraft -- "$env:LOCALAPPDATA\Programs\ArtCraft\LightCraft\lightcraft-cli.exe" mcp
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add lightcraft -- lightcraft-cli mcp
 ```

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
+    shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+};
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -215,9 +218,15 @@ impl LightcraftApp {
         self.last_time = t;
         panels::denoise::pump_ui_input(self, ctx, now);
         panels::faces::pump_ui_input(self, ctx, now);
-        // A prompt owns the library too: files dropped while it is up wait in the queue and are
-        // imported on the first UI pass after it goes away, never behind it.
-        if !panels::notices::blocks_input(self) {
+        // A prompt or the blocking library window owns the library too: files dropped while either
+        // is up wait in the queue and are imported on the first UI pass after it goes away, never
+        // behind it. With no library open the window's `hold_dropped` path still takes the photos
+        // once its own dialog and asynchronous library picker are gone, so `blocks_file_drops`
+        // only holds them back until then. Mark those drops: once the barrier opens they may find
+        // a dialog, Lightroom import or import that the library's own open started still running.
+        if panels::notices::blocks_input(self) || panels::library_problem::blocks_file_drops(self) {
+            self.defer_dropped_files();
+        } else {
             self.import_dropped_files(ctx);
         }
         self.check_external_editor(ctx);

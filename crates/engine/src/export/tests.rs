@@ -209,6 +209,42 @@ fn sharpen_increases_edge_contrast() {
     assert!(img.data[3][0] < 80 && img.data[4][0] > 170);
 }
 
+/// Output sharpening's pixels for every target and amount, pinned (its box blurs run row-parallel, which must not
+/// change a bit), on 8- and 16-bit images; with no target the image is left as it is.
+#[test]
+fn sharpened_pixels_are_pinned() {
+    let fnv = |b: &[u8]| b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3));
+    let mut got = Vec::new();
+    for target in [SharpenFor::Screen, SharpenFor::Matte, SharpenFor::Glossy] {
+        for amount in [SharpenAmount::Low, SharpenAmount::High] {
+            let mut img = test_image();
+            output_sharpen(&mut img, target, amount);
+            got.push(fnv(img.data.as_flattened()));
+        }
+        let src = test_image();
+        let samples = src.data.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| u16::from(v) * 257)).collect();
+        let mut deep = DeepImage { width: src.width, height: src.height, samples: DeepSamples::U16(samples), space: OutputSpace::Srgb };
+        output_sharpen_deep(&mut deep, target, SharpenAmount::Standard);
+        let DeepSamples::U16(v) = &deep.samples else { unreachable!() };
+        got.push(fnv(&v.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<u8>>()));
+    }
+    assert_eq!(got, SHARPENED, "{got:#x?}");
+    let mut img = test_image();
+    output_sharpen(&mut img, SharpenFor::None, SharpenAmount::High);
+    assert_eq!(img, test_image());
+}
+const SHARPENED: [u64; 9] = [
+    0x1494_273e_0bdc_a61c,
+    0x3fbb_40c4_74f4_b0c3,
+    0xa27f_8ff5_82a0_99f9,
+    0x6550_6571_a38d_4d9f,
+    0x5e28_f4f3_fc8a_9685,
+    0xdc2b_6f65_9138_3b1d,
+    0x8ce6_f0b8_d8ed_8026,
+    0x92d8_12e7_4b2e_81fe,
+    0x139f_6d78_b1f2_a910,
+];
+
 /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
 /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
 /// a keyword left out of export. They used to carry the `a|b` paths in `dc:subject`.
@@ -1031,6 +1067,11 @@ fn avif_ten_bit() {
 /// unknown keys (naming the nearest known one) and values of the wrong kind or range.
 #[test]
 fn export_params_are_validated() {
+    assert_invalid_export_params();
+    assert_export_options_round_trip();
+}
+
+fn assert_invalid_export_params() {
     use serde_json::json;
     let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
     let e = err(json!({"longEdgee": 400}));
@@ -1056,6 +1097,11 @@ fn export_params_are_validated() {
             .to_string()
             .starts_with("invalid parameters for `export.savePreset`")
     );
+}
+
+fn assert_export_options_round_trip() {
+    use serde_json::json;
+    let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
     // everything the presets, the dialog, Export with Previous and `render --opt` send passes
     for p in builtin_presets() {
         ExportOptions::from_params(&p.params).unwrap_or_else(|e| panic!("{}: {e}", p.name));

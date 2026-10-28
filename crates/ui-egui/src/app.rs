@@ -1,7 +1,13 @@
 use super::clock::{AppClock, monotonic_ms};
 use super::services::Services;
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
-use super::*;
+use super::{
+    AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
+    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
+    SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
+    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
+    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+};
 
 mod control;
 mod frame;
@@ -53,6 +59,7 @@ impl LightcraftApp {
             slideshow_hidden_at: None,
             slideshow_auto_paused: false,
             dropped_files: vec![],
+            deferred_dropped_file_count: 0,
             synthetic_in_flight: false,
             ui_passes: 0,
             #[cfg(test)]

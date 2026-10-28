@@ -1,6 +1,6 @@
 use super::files::{expand, probe_all};
 use super::types::ImportCandidate;
-use super::*;
+use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).

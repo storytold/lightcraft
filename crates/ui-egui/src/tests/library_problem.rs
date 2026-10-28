@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::panels::library_problem::LibraryProblem;
+use crate::tests_fixtures::SyntheticLibrary;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -163,10 +164,10 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
 /// own buttons are covered: the click then reports a no-op success and the state never changes.
 #[test]
 fn a_backdrop_press_keeps_the_library_window_above_its_dim() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1000.0, 760.0], 1.0);
+    let files = SyntheticLibrary::new("library-backdrop-press");
+    let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
-    assert!(h.settle(Duration::from_secs(20)), "the library window settles");
+    assert!(h.settle(Duration::from_secs(20)), "the library window settles (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(has(&h, "button:libraryTemporary"), "the window is laid out");
     // Outside the centred window: on the full-screen dim, which egui raises when pressed.
     let at = egui::pos2(10.0, 10.0);
@@ -189,17 +190,14 @@ fn a_backdrop_press_keeps_the_library_window_above_its_dim() {
 /// handlers must stay still while it is on screen, then the dialog keeps its ordinary behaviour.
 #[test]
 fn the_library_window_blocks_settings_escape_and_the_backdrop() {
-    let mut h = Headless::new(
-        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() }),
-        [1200.0, 900.0],
-        1.0,
-    );
+    let files = SyntheticLibrary::new("library-blocks-settings");
+    let mut h = Headless::new(files.app(), [1200.0, 900.0], 1.0);
     h.step();
     assert!(h.app.run("app.settings", json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(20)), "Settings settles");
+    assert!(h.settle(Duration::from_secs(20)), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     h.app.ui.settings.close_dialogs_outside = true;
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
-    assert!(h.settle(Duration::from_secs(20)), "the library window settles");
+    assert!(h.settle(Duration::from_secs(20)), "the library window settles (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(has(&h, "button:libraryRetry"), "the library window is laid out");
     // Escape belongs to the window, not to Settings behind it (the window has no Escape action
     // for this error; the launch list handles its own keys separately).
@@ -386,14 +384,11 @@ fn alt_launch_creation_after_raw_input_cancels_an_injected_gesture() {
 /// become a background click.
 #[test]
 fn a_held_background_press_is_released_when_a_library_window_appears_after_raw_input() {
-    let mut h = Headless::new(
-        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() }),
-        [1200.0, 900.0],
-        1.0,
-    );
+    let files = SyntheticLibrary::new("library-after-raw-press");
+    let mut h = Headless::new(files.app(), [1200.0, 900.0], 1.0);
     h.step();
     assert!(h.app.run("app.settings", json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(T), "Settings settles");
+    assert!(h.settle(T), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let at = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| rect.center()).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -738,11 +733,8 @@ fn clipboard_pastes_into_the_launch_lists_own_text_prompt() {
 /// same field must accept typing again once the window is gone.
 #[test]
 fn a_settled_library_window_keeps_a_background_dialogs_text_draft_unchanged() {
-    let mut h = Headless::new(
-        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() }),
-        [1200.0, 760.0],
-        1.0,
-    );
+    let files = SyntheticLibrary::new("library-text-draft");
+    let mut h = Headless::new(files.app(), [1200.0, 760.0], 1.0);
     h.settle(T);
     h.app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: "Trip".into(), folder: false, parent: None, include_selected: false });
     for _ in 0..4 {
@@ -750,7 +742,7 @@ fn a_settled_library_window_keeps_a_background_dialogs_text_draft_unchanged() {
     }
     assert!(h.view.ctx.text_edit_focused(), "the dialog's field takes the focus while it is the top modal");
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
-    assert!(h.settle(T), "the library window settles over the dialog");
+    assert!(h.settle(T), "the library window settles over the dialog (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(has(&h, "button:libraryRetry"), "the library window is laid out");
     assert!(crate::panels::library_problem::blocks_dialog_input(&h.app), "the library window owns input");
     assert!(!h.view.ctx.text_edit_focused(), "the background dialog's field must not regain the focus behind the library window");
@@ -766,7 +758,7 @@ fn a_settled_library_window_keeps_a_background_dialogs_text_draft_unchanged() {
     assert!(!h.view.ctx.text_edit_focused(), "several settled barrier frames still leave the field unfocused");
     // Positive control: with the library window gone, the same field takes focus and typing again.
     h.app.library_problem = None;
-    assert!(h.settle(T), "the dialog settles once the library window is gone");
+    assert!(h.settle(T), "the dialog settles once the library window is gone (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(!crate::panels::library_problem::blocks_dialog_input(&h.app), "there is no barrier now");
     assert!(h.view.ctx.text_edit_focused(), "the dialog's field is usable again");
     h.events.push(egui::Event::Text("Holiday".into()));

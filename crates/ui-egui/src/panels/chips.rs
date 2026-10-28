@@ -29,6 +29,31 @@ fn chip_width(ui: &egui::Ui, label: &str, font: egui::FontId) -> f32 {
     ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE).size().x + 12.0 + 22.0
 }
 
+/// The colour labels a label chip names, in words ("Red or Blue").
+fn label_names(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
+    use crate::i18n::tr;
+    let shown = filter.labels_shown().unwrap_or_default();
+    let name = |label: &lightcraft_catalog::ColorLabel| crate::i18n::color_label(catalog, *label);
+    let or = |labels: &[lightcraft_catalog::ColorLabel]| labels.iter().map(name).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
+    if !shown.is_empty() {
+        return or(&shown);
+    }
+    let plural = if filter.labels.len() > 1 { format!("({})", or(&filter.labels)) } else { or(&filter.labels) };
+    format!("{} {} {plural}", filter.label.as_ref().map(name).unwrap_or_default(), tr("and"))
+}
+
+/// The value of a `prefix: value` chip, localised.
+fn prefixed_value(prefix: &str, value: &str, filter: &lightcraft_catalog::Filter) -> String {
+    use crate::i18n::{date_group_label, tr};
+    let date = match prefix {
+        "Flag" | "Type" => return tr(value).to_string(),
+        "Date" => &filter.date,
+        "Imported" => &filter.imported,
+        _ => return value.to_string(),
+    };
+    date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+}
+
 /// Localise generated chip labels without rewriting search text or metadata values.
 pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
     use crate::i18n::{date_group_label, rules_label, tr};
@@ -41,16 +66,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{}: {}", tr("Rules"), rules_label(rules, catalog));
     }
     if chip.clear.get("label").is_some() {
-        let shown = filter.labels_shown().unwrap_or_default();
-        let name = |label: &lightcraft_catalog::ColorLabel| crate::i18n::color_label(catalog, *label);
-        let or = |labels: &[lightcraft_catalog::ColorLabel]| labels.iter().map(name).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
-        let names = if shown.is_empty() {
-            let plural = if filter.labels.len() > 1 { format!("({})", or(&filter.labels)) } else { or(&filter.labels) };
-            format!("{} {} {plural}", filter.label.as_ref().map(name).unwrap_or_default(), tr("and"))
-        } else {
-            or(&shown)
-        };
-        return format!("{}: {names}", tr("Label"));
+        return format!("{}: {}", tr("Label"), label_names(filter, catalog));
     }
     if chip.clear.get("dateFrom").is_some() || chip.clear.get("dateTo").is_some() {
         return match (&filter.date_from, &filter.date_to) {
@@ -64,16 +80,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = if filter.only_none { 0 } else { filter.only.len() }));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
-        let value = if matches!(prefix, "Flag" | "Type") {
-            tr(value).to_string()
-        } else if prefix == "Date" {
-            filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
-        } else if prefix == "Imported" {
-            filter.imported.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
-        } else {
-            value.to_string()
-        };
-        return format!("{}: {value}", tr(prefix));
+        return format!("{}: {}", tr(prefix), prefixed_value(prefix, value, filter));
     }
     if let Some(value) = chip.label.strip_prefix("Rating ") {
         return format!("{} {value}", tr("Rating"));

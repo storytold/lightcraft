@@ -601,6 +601,12 @@ fn degenerate_crops_render_with_spots_and_masks() {
         s.execute("develop.set", &json!({"control": "effects.clarity", "value": 80})).unwrap();
         s.execute("develop.set", &json!({"control": "effects.dehaze", "value": 50})).unwrap();
         set_crop_unchecked(&mut s, rect, 30.0);
+        // Measure the degenerate render, not procedural demo generation. Load exactly the
+        // source level this crop requests; keep the original photo, effects and output size.
+        let level = s.render_job(id, 700, 450, false, true).unwrap().level;
+        let source = s.source_now(id, level).unwrap();
+        assert!(source.width > 0 && source.height > 0);
+        assert!(s.media.has_source(id, level), "the timed render must reuse the prepared source");
         let t = std::time::Instant::now();
         let r = s.render_now(id, 700, 450).unwrap();
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
@@ -1194,18 +1200,51 @@ fn preview_build_shows_in_activity_until_it_finishes() {
     assert_eq!(s.execute("library.previewProgress", &json!({})).unwrap()["running"], false);
 }
 
-/// Issue #345: `activity.cancel` stops a preview build like `library.cancelPreviews`.
+/// Issue #345: `activity.cancel` stops a preview build like `library.cancelPreviews`. A test-only
+/// gate holds the lane at its first photo, so the cancel lands before any render instead of racing
+/// a 24 MP one; the accepted cancel must not count that photo.
 #[test]
 fn activity_cancel_stops_a_preview_build() {
+    use crate::cmd::previews::test_gate::{self, PreviewGate, ReleaseOnDrop};
     let mut s = demo();
-    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
-    s.execute("library.buildPreviews", &json!({"ids": ids, "size": "full"})).unwrap();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    let gate = PreviewGate::new();
+    // also opens the gate if an assertion below panics, so the worker is never stranded
+    let release = ReleaseOnDrop(gate.clone());
+    test_gate::install(gate.clone());
+    s.execute("library.buildPreviews", &json!({"ids": ids, "size": "standard", "edge": 256})).unwrap();
     let id = s.activity.list().first().map(|t| t.id).expect("a previews row");
+    assert!(gate.wait_entered(1), "a lane reached its first photo");
     s.execute("activity.cancel", &json!({"id": id})).unwrap();
+    let row = s.activity.list().into_iter().find(|t| t.id == id).expect("the row stays while the lane is held");
+    assert!(row.cancelling, "the row shows the accepted cancel: {row:?}");
+    drop(release);
     wait_activity_empty(&s);
     let p = s.execute("library.previewProgress", &json!({})).unwrap();
     assert_eq!(p["cancelled"], true, "{p}");
-    assert!(p["done"].as_u64() < p["total"].as_u64(), "stopped part-way: {p}");
+    assert_eq!(p["done"], json!(0), "no photo rendered after the accepted cancel: {p}");
+    assert_eq!(p["running"], false, "{p}");
+}
+
+/// The gated fixture is real work: without a cancel, both photos render and are counted.
+#[test]
+fn preview_build_at_the_test_gate_completes_without_cancel() {
+    use crate::cmd::previews::test_gate::{self, PreviewGate, ReleaseOnDrop};
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    let gate = PreviewGate::new();
+    let release = ReleaseOnDrop(gate.clone());
+    test_gate::install(gate.clone());
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids, "size": "standard", "edge": 256})).unwrap();
+    assert_eq!(r["total"], json!(2), "{r}");
+    assert!(gate.wait_entered(1), "a lane reached its first photo");
+    drop(release);
+    wait_activity_empty(&s);
+    let p = s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(p["running"], false, "{p}");
+    assert_eq!(p["cancelled"], false, "{p}");
+    assert_eq!(p["done"], json!(2), "both photos rendered: {p}");
+    assert_eq!(p["failed"], json!(0), "{p}");
 }
 
 /// Colour range: a click samples the colour under it, so the mask selects that colour (white

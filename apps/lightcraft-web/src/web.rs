@@ -175,6 +175,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
     let (backup_backend, backup_files) = (backend.clone(), files);
     let restore_backend = backend.clone();
     Services {
+        local_places: None,
         picker: None,
         pick_display_profile: None,
         screen_profile: None,
@@ -422,6 +423,33 @@ struct WebApp {
     ui_written: Vec<u8>,
 }
 
+/// The browser host's drop queues, taken only through the shared gate: a prompt or blocking
+/// library window leaves both untouched for a later UI pass.
+impl crate::drop_gate::QueuedDrops for WebApp {
+    type Dropped = egui::DroppedFileHandle;
+    type Pending = String;
+
+    fn drops_wait(&self) -> bool {
+        crate::drop_gate::drops_wait(&self.app)
+    }
+
+    fn defer_dropped(&mut self) {
+        self.app.defer_dropped_files();
+    }
+
+    fn take_dropped(&mut self) -> Vec<Self::Dropped> {
+        self.app.take_dropped_files()
+    }
+
+    fn take_unprotected_dropped(&mut self) -> Vec<Self::Dropped> {
+        self.app.take_unprotected_dropped_files()
+    }
+
+    fn take_pending(&mut self) -> Vec<Self::Pending> {
+        self.originals.take_pending()
+    }
+}
+
 impl WebApp {
     /// Construct the web app from the boot options: install originals and open the library from
     /// browser storage (a read failure starts an empty session and a blocking `LibraryProblem`),
@@ -534,14 +562,18 @@ impl WebApp {
     /// Consume the drops the raw-input hook queued once (never re-read `raw.dropped_files` in a
     /// hidden logic tick), and add originals whose bytes have arrived.
     fn import_dropped(&mut self, ctx: &egui::Context) {
-        let dropped = self.app.take_dropped_files();
+        // A prompt or the blocking library window (including the chooser's own New Library name
+        // prompt or asynchronous folder picker) holds both queues for a later UI pass: nothing is
+        // read or imported behind it. `drain_ready` is the same orchestration the native tests run.
+        let dialog_open = self.app.ui.dialog.is_some();
+        let Some(drained) = crate::drop_gate::drain_ready(self, dialog_open) else { return };
         // a dialog is on screen (the card said so while the files hovered): nothing is read or imported
         // (files read from an earlier drop still finish below)
-        if !dropped.is_empty() && self.app.ui.dialog.is_some() {
+        if !drained.dropped.is_empty() && dialog_open {
             self.app.toast(ctx, lightcraft_ui_egui::i18n::tr("Close the open dialog, then drop the files again"));
             return;
         }
-        for f in dropped {
+        for f in drained.dropped {
             let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
             wasm_bindgen_futures::spawn_local(async move {
                 let name = egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string();
@@ -551,7 +583,7 @@ impl WebApp {
                 }
             });
         }
-        let paths = self.originals.take_pending();
+        let Some(paths) = drained.pending else { return };
         if !paths.is_empty() {
             match self.app.run("library.import", json!({"paths": paths})) {
                 // what the import did, not what was submitted: duplicates and unsupported files add nothing,
@@ -723,12 +755,10 @@ impl eframe::App for WebApp {
     /// page title, and advance the benchmark once per root pass.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Drops are the UI phase's: a hidden `logic`/`run_logic` tick must not import them twice.
-        // A prompt owns the library too: keep taking the queue only after it is gone, so a drop
-        // during a notice cannot add photos behind it.
+        // `import_dropped` itself takes both queues only through the gate, so a prompt or the
+        // blocking library window (over an already open library) keeps a stored drop queued.
         let ctx = ui.ctx().clone();
-        if !lightcraft_ui_egui::panels::notices::blocks_input(&self.app) {
-            self.import_dropped(&ctx);
-        }
+        self.import_dropped(&ctx);
         self.app.ui(ui);
         // eframe's web runner ignores `ViewportCommand::Title`: name the open photo in the page title
         let title = self.app.page_title(self.files.is_dirty() || self.flushing.get());

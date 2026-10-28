@@ -41,6 +41,73 @@ fn size_of(h: &Headless) -> (f32, f32) {
     (p.width as f32, p.height as f32)
 }
 
+/// Keep an old same-photo texture on screen while the replacement is deliberately held.
+/// Geometry must follow the edit immediately, independently of renderer throughput.
+#[test]
+fn a_pending_crop_or_rotation_does_not_reuse_the_old_textures_aspect() {
+    use crate::render::{RenderOffload, Slot, Tex, geometry_look};
+    use crate::state::{RightPanel, Zoom};
+
+    struct Held;
+    impl RenderOffload for Held {
+        fn try_start(&mut self, _: Slot, job: lightcraft_engine::RenderJob) -> Option<lightcraft_engine::RenderJob> {
+            Some(job)
+        }
+        fn finished(&mut self) -> Vec<(Slot, lightcraft_engine::media::RenderResult, f64)> {
+            Vec::new()
+        }
+    }
+
+    let fixture = crate::tests_fixtures::SyntheticLibrary::new("zoom-stale-geometry");
+    let mut h = Headless::new(fixture.app(), [1400.0, 900.0], 1.0);
+    h.app.renderer.set_offload(Box::new(Held));
+    let response = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
+    assert_eq!(response["ok"], true, "{response}");
+    h.step();
+    h.app.ui.zoom = Zoom::Percent(100.0);
+    let id = h.app.session.active().expect("fixture photo");
+    let old_look = geometry_look(&h.app.session.develop_of(id).expect("settings"));
+    let tex = h.view.ctx.load_texture("old loupe", egui::ColorImage::filled([4, 3], egui::Color32::BLACK), Default::default());
+    h.app.renderer.textures.insert(
+        Slot::Main,
+        Tex { look: Some((old_look, true)), key: 0, photo: id, tex, size: [64, 48], histogram: None, ms: 0.0, quick: None, pixels: None },
+    );
+    edit(&mut h, |d| d.crop.geometry.rect = lightcraft_geom::Rect::new(0.25, 0.2, 0.75, 0.2 + 1.0 / 3.0));
+    for (rotate, expected) in [(false, egui::vec2(32.0, 16.0)), (true, egui::vec2(16.0, 32.0))] {
+        if rotate {
+            edit(&mut h, |d| {
+                d.orientation = lightcraft_geom::Orientation::Rotate90;
+                // Crop coordinates live in the oriented frame, as in library.rotateRight.
+                d.crop.geometry.rect = lightcraft_geom::Orientation::Rotate90.map_norm_rect(d.crop.geometry.rect);
+            });
+        }
+        h.app.ui.zoom_anim = false;
+        h.step();
+        let shown = h.app.image_rect.expect("loupe geometry");
+        assert!((shown.size() - expected).abs().max_elem() < 0.01, "pending edit: {shown:?}, expected {expected:?}");
+        assert_eq!(h.app.renderer.textures[&Slot::Main].look, Some((old_look, true)), "old pixels remain visible");
+        assert!(h.app.renderer.is_pending(Slot::Main), "the edited render is still pending");
+    }
+    // Crop mode shows the full oriented image; leaving it must immediately restore the crop.
+    h.app.ui.right = RightPanel::Crop;
+    h.app.ui.zoom_anim = false;
+    h.step();
+    assert!((h.app.image_rect.expect("crop tool geometry").size() - egui::vec2(48.0, 64.0)).abs().max_elem() < 0.01);
+    h.app.ui.right = RightPanel::None;
+    h.app.ui.zoom_anim = false;
+    h.step();
+    assert!((h.app.image_rect.expect("restored crop geometry").size() - egui::vec2(16.0, 32.0)).abs().max_elem() < 0.01);
+    // An actual current-settings render can still correct metadata that differs from the
+    // decoded image (unsupported RAWs may provide only a differently cropped embedded JPEG).
+    let current = geometry_look(&h.app.session.develop_of(id).expect("settings"));
+    let tex = h.app.renderer.textures.get_mut(&Slot::Main).expect("old texture");
+    tex.look = Some((current, true));
+    tex.size = [16, 48];
+    h.step();
+    let shown = h.app.image_rect.expect("current render geometry");
+    assert!((shown.size() - egui::vec2(16.0, 48.0)).abs().max_elem() < 0.01, "current pixels correct metadata: {shown:?}");
+}
+
 // Given an uncropped photo, 100 % is its pixel size
 #[test]
 fn an_uncropped_photo_at_100_is_its_pixel_size() {

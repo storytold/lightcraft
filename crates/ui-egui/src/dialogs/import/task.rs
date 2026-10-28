@@ -1,5 +1,5 @@
 use super::scan::{busy_synchronizing, running};
-use super::*;
+use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, LightcraftApp, Ordering, Value, json};
 
 /// Files per batch in the browser build (each batch joins the catalog as it is ready, so the
 /// progress window updates); the desktop's worker uses [`lightcraft_engine::import::batch_size`].
@@ -422,33 +422,24 @@ fn xmp_warnings_text(warnings: &[ImportWarning]) -> String {
     )
 }
 
+/// The name of the import's one undo step.
+fn undo_label(task: &ImportTask) -> String {
+    if task.imported == 0 && task.restored > 0 {
+        crate::i18n::tr_format!("Restore {} Photo{}", task.restored, crate::i18n::plural_s(task.restored))
+    } else if task.restored > 0 {
+        crate::i18n::tr_format!("Add {} Photo{}, restore {}", task.imported, crate::i18n::plural_s(task.imported), task.restored)
+    } else {
+        crate::i18n::tr_format!("Add {} Photo{}", task.imported, crate::i18n::plural_s(task.imported))
+    }
+}
+
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
 fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     let steps = app.session.undo.len().saturating_sub(task.undo0);
-    let plural = |n: usize| if n == 1 { "" } else { "s" };
-    let label = if task.imported == 0 && task.restored > 0 {
-        crate::i18n::tr_format!("Restore {} Photo{}", task.restored, plural(task.restored))
-    } else if task.restored > 0 {
-        crate::i18n::tr_format!("Add {} Photo{}, restore {}", task.imported, plural(task.imported), task.restored)
-    } else {
-        crate::i18n::tr_format!("Add {} Photo{}", task.imported, if task.imported == 1 { "" } else { "s" })
-    };
-    app.session.merge_undo(steps, &label);
-    if task.auto {
-        if !task.warnings.is_empty() {
-            app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
-        } else if task.imported > 0 {
-            app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" }));
-        }
-        return;
-    }
-    if task.browse {
-        if !task.warnings.is_empty() {
-            app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
-        } else if task.failed > 0 {
-            app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, if task.failed == 1 { "" } else { "s" }));
-        }
+    app.session.merge_undo(steps, &undo_label(&task));
+    if task.auto || task.browse {
+        quiet_finish(app, ctx, &task);
         return;
     }
     if let Some(f) = task.first.filter(|_| !task.moved_on) {
@@ -459,7 +450,6 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         }
         let _ = app.run("library.select", json!({"ids": [f]}));
     }
-    let plural = |n: usize| if n == 1 { "" } else { "s" };
     // nothing new, only files the library already has: show where they are (Recently Deleted is
     // easy to miss, and the side panel that lists it starts collapsed)
     if task.imported == 0
@@ -471,12 +461,35 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     {
         return;
     }
-    let mut msg = if task.cancelled {
-        crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, plural(task.imported))
-    } else if task.imported == 0 && task.restored > 0 {
-        crate::i18n::tr_format!("Restored {} photo{} from Recently Deleted", task.restored, plural(task.restored))
+    let mut msg = import_summary(app, &task);
+    if task.warnings.is_empty() {
+        app.toast(ctx, msg);
     } else {
-        crate::i18n::tr_format!("Imported {} photo{}", task.imported, plural(task.imported))
+        msg.push_str("\n\n");
+        msg.push_str(&xmp_warnings_text(&task.warnings));
+        app.toast_for(ctx, msg, 8.0);
+    }
+}
+
+/// The end of an automatic import or of one that only browses: a toast only when there is something to warn about.
+fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask) {
+    if !task.warnings.is_empty() {
+        app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+    } else if task.auto && task.imported > 0 {
+        app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, crate::i18n::plural_s(task.imported)));
+    } else if !task.auto && task.failed > 0 {
+        app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, crate::i18n::plural_s(task.failed)));
+    }
+}
+
+/// What an import did, in a sentence.
+fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
+    let mut msg = if task.cancelled {
+        crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, crate::i18n::plural_s(task.imported))
+    } else if task.imported == 0 && task.restored > 0 {
+        crate::i18n::tr_format!("Restored {} photo{} from Recently Deleted", task.restored, crate::i18n::plural_s(task.restored))
+    } else {
+        crate::i18n::tr_format!("Imported {} photo{}", task.imported, crate::i18n::plural_s(task.imported))
     };
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
@@ -484,11 +497,11 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     if task.params["mode"] == "move" {
         msg.push_str(&crate::i18n::tr_format!(" · {} moved", task.moved));
         if task.kept > 0 {
-            msg.push_str(&crate::i18n::tr_format!(" · {} original{} left at the source", task.kept, plural(task.kept)));
+            msg.push_str(&crate::i18n::tr_format!(" · {} original{} left at the source", task.kept, crate::i18n::plural_s(task.kept)));
         }
     }
     if task.duplicates > 0 {
-        msg.push_str(&crate::i18n::tr_format!(" · {} duplicate{} skipped", task.duplicates, if task.duplicates == 1 { "" } else { "s" }));
+        msg.push_str(&crate::i18n::tr_format!(" · {} duplicate{} skipped", task.duplicates, crate::i18n::plural_s(task.duplicates)));
         let deleted = deleted_of(app, &task.existing).len();
         if deleted > 0 {
             msg.push_str(&crate::i18n::tr_format!(" ({} in Recently Deleted)", deleted));
@@ -497,13 +510,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
     }
-    if task.warnings.is_empty() {
-        app.toast(ctx, msg);
-    } else {
-        msg.push_str("\n\n");
-        msg.push_str(&xmp_warnings_text(&task.warnings));
-        app.toast_for(ctx, msg, 8.0);
-    }
+    msg
 }
 
 /// The photos among `ids` that are in Recently Deleted (each once).

@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn reject_opcode_counts_whose_bytes_exceed_the_remaining_data() {
+    let mut gain_map = Vec::new();
+    for value in [u32::MAX, 1] {
+        gain_map.extend_from_slice(&value.to_be_bytes());
+    }
+    gain_map.extend(be(&[1.0, 1.0, 0.0, 0.0]));
+    gain_map.extend_from_slice(&1u32.to_be_bytes());
+    assert!(parse_gain_map(Area::default(), &mut Rd { d: &gain_map, p: 0 }).is_none());
+
+    let delta_count = u32::MAX.to_be_bytes();
+    assert!(parse_delta_scale(10, Area::default(), &mut Rd { d: &delta_count, p: 0 }).is_none());
+}
+
 pub(crate) struct ListWriter(pub Vec<u8>, pub u32);
 
 impl ListWriter {

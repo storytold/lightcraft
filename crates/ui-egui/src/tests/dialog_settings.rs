@@ -67,6 +67,11 @@ fn controls(h: &Headless) -> Vec<(String, egui::Rect)> {
     h.app.widgets.iter().filter(|(id, _)| named(id)).cloned().collect()
 }
 
+/// Whether egui has a visible tooltip area, independent of unrelated window text.
+fn tooltip_shown(h: &Headless) -> bool {
+    h.view.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().any(|layer| layer.order == egui::Order::Tooltip))
+}
+
 fn same(a: egui::Rect, b: egui::Rect) -> bool {
     (a.min - b.min).abs().max_elem() < 0.5 && (a.max - b.max).abs().max_elem() < 0.5
 }
@@ -184,7 +189,10 @@ fn a_long_library_folder_is_cut_short_and_its_tooltip_has_all_of_it() {
     );
     // And resting the pointer on it shows the whole path
     assert_eq!(h.request("ui.hoverWidget", json!({"id": "text:settingsLocation"}), T)["ok"], true);
-    assert!(h.step_until(T, |h| h.painted_text().iter().any(|text| text.contains(&path))), "the tooltip has the whole path");
+    assert!(
+        h.step_until(T, |h| tooltip_shown(h) && h.painted_text().iter().any(|text| text.contains(&path))),
+        "the tooltip layer shows the whole path"
+    );
 
     // And the same holds for the folder Auto Import watches, which stays on one line
     let watched = h.app.run("library.autoImport", json!({"folder": path}));
@@ -256,13 +264,23 @@ fn a_short_path_is_shown_whole_and_has_no_tooltip() {
     // Given the in-memory library, whose Location is a short sentence
     let mut h = demo([1600.0, 1000.0]);
     show(&mut h, "general");
-    assert!(h.painted_text().iter().any(|text| text == "In memory — nothing is saved"), "it is all there");
-    let before = h.painted_text().len();
-    // When the pointer rests on it
+    let location = "In memory — nothing is saved";
+    assert!(h.painted_text().iter().any(|text| text == location), "it is all there");
+    assert!(!tooltip_shown(&h), "no tooltip before hovering the location");
     assert_eq!(h.request("ui.hoverWidget", json!({"id": "text:settingsLocation"}), T)["ok"], true);
-    let _ = h.step_until(Duration::from_secs(2), |h| h.painted_text().len() > before);
-    // Then nothing more is drawn: there is nothing a tooltip could add
-    assert_eq!(h.painted_text().len(), before, "no tooltip for a path that is all there");
+    // Observe every frame for two simulated seconds beyond the configured tooltip delay.
+    // A render completing or a toast disappearing may change other text in the window.
+    let rest_until = h.time() + f64::from(h.view.ctx.global_style().interaction.tooltip_delay) + 2.0;
+    assert!(!tooltip_shown(&h), "no tooltip when hovering the complete location");
+    while h.time() < rest_until {
+        h.step();
+        assert!(!tooltip_shown(&h), "no tooltip for a path that is all there at {}", h.time());
+        assert_eq!(
+            h.painted_text().iter().filter(|text| text.as_str() == location).count(),
+            1,
+            "the full location is drawn once throughout the hover"
+        );
+    }
 }
 
 /// How many pixels of `rect` are not `colour` (one pixel per point here).

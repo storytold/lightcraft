@@ -2,7 +2,7 @@ use super::defaults::apply_import_defaults;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
-use super::*;
+use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
 #[derive(Default)]

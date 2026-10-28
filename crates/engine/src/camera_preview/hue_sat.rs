@@ -1,6 +1,6 @@
 use super::mono::to_prophoto;
 use super::pairs::{displayed, luma};
-use super::*;
+use super::{CameraLook, CameraTone, HsvTable, Mat3, ToneMap, luminance_2020};
 
 /// [`HueSat::apply`] restores the luminance in full only if the table kept at least this share of it. A colour
 /// the table darkens to [`NO_LUMINANCE_KEPT`] or less (only near-black noise, whose channels go negative) keeps

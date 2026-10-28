@@ -3,7 +3,7 @@
 //! The rule engine works on a small, metadata-independent model so it can be
 //! unit-tested; `from_metadata` builds that model from `cargo metadata`.
 
-use super::*;
+use super::{layers, metadata};
 use serde_json::Value;
 
 /// Where a workspace crate sits.

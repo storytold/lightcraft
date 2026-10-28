@@ -30,14 +30,21 @@ fn set(app: &mut LightcraftApp, p: Value) {
     let _ = app.run("slideshow.overlays", p);
 }
 
-/// A slider (`slider:{id}`) over `lo..=hi`; `wrap(value)` makes the `slideshow.overlays` request.
-fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: f64, lo: f64, hi: f64, unit: Unit, wrap: &dyn Fn(f64) -> Value) {
-    let (k, suffix) = match unit {
+/// The span of a slider and how its value is shown.
+struct Range {
+    lo: f64,
+    hi: f64,
+    unit: Unit,
+}
+
+/// A slider (`slider:{id}`) over `range`; `wrap(value)` makes the `slideshow.overlays` request.
+fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: f64, range: Range, wrap: &dyn Fn(f64) -> Value) {
+    let (k, suffix) = match range.unit {
         Unit::Percent => (100.0, " %"),
         Unit::Degrees => (1.0, "°"),
     };
     let mut v = value * k;
-    let r = ui.add(egui::Slider::new(&mut v, lo * k..=hi * k).suffix(suffix).max_decimals(1));
+    let r = ui.add(egui::Slider::new(&mut v, range.lo * k..=range.hi * k).suffix(suffix).max_decimals(1));
     register(ui, format!("slider:{id}"), r.rect);
     let p = wrap(v / k);
     if r.changed()
@@ -125,10 +132,14 @@ fn placement(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &str, p
         });
     }
     row(ui, t, "Offset X", |ui| {
-        slider(app, ui, &format!("{id}OffsetX"), p.offset_x, -OFFSET_MAX / 2.0, OFFSET_MAX / 2.0, Unit::Percent, &|v| wrap(json!({"offsetX": v})))
+        slider(app, ui, &format!("{id}OffsetX"), p.offset_x, Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent }, &|v| {
+            wrap(json!({"offsetX": v}))
+        })
     });
     row(ui, t, "Offset Y", |ui| {
-        slider(app, ui, &format!("{id}OffsetY"), p.offset_y, -OFFSET_MAX / 2.0, OFFSET_MAX / 2.0, Unit::Percent, &|v| wrap(json!({"offsetY": v})))
+        slider(app, ui, &format!("{id}OffsetY"), p.offset_y, Range { lo: -OFFSET_MAX / 2.0, hi: OFFSET_MAX / 2.0, unit: Unit::Percent }, &|v| {
+            wrap(json!({"offsetY": v}))
+        })
     });
 }
 
@@ -171,8 +182,12 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             row(ui, t, "Text", |ui| text(app, ui, "slideshowPlateText", &p.text, "Your name or studio", &|v| plate(json!({"text": v}))));
             row(ui, t, "Colour", |ui| colour(app, ui, "slideshowPlateColor", p.color, &|c| plate(json!({"color": c}))));
         }
-        row(ui, t, "Size", |ui| slider(app, ui, "slideshowPlateSize", p.size, 0.01, PLATE_SIZE_MAX, Unit::Percent, &|v| plate(json!({"size": v}))));
-        row(ui, t, "Opacity", |ui| slider(app, ui, "slideshowPlateOpacity", p.opacity, 0.0, 1.0, Unit::Percent, &|v| plate(json!({"opacity": v}))));
+        row(ui, t, "Size", |ui| {
+            slider(app, ui, "slideshowPlateSize", p.size, Range { lo: 0.01, hi: PLATE_SIZE_MAX, unit: Unit::Percent }, &|v| plate(json!({"size": v})))
+        });
+        row(ui, t, "Opacity", |ui| {
+            slider(app, ui, "slideshowPlateOpacity", p.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| plate(json!({"opacity": v})))
+        });
         placement(app, ui, t, "slideshowPlate", &p.place, true, &plate);
         toggle(app, ui, "slideshowPlateBehind", p.behind, "Render behind image", &|v| plate(json!({"behind": v})));
     }
@@ -183,7 +198,9 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let stars = |v: Value| json!({ "ratingStars": v });
     if toggle(app, ui, "slideshowStars", r.enabled, "Rating stars", &|v| stars(json!({"enabled": v}))) {
         row(ui, t, "Colour", |ui| colour(app, ui, "slideshowStarsColor", r.color, &|c| stars(json!({"color": c}))));
-        row(ui, t, "Size", |ui| slider(app, ui, "slideshowStarsSize", r.size, 0.01, STAR_SIZE_MAX, Unit::Percent, &|v| stars(json!({"size": v}))));
+        row(ui, t, "Size", |ui| {
+            slider(app, ui, "slideshowStarsSize", r.size, Range { lo: 0.01, hi: STAR_SIZE_MAX, unit: Unit::Percent }, &|v| stars(json!({"size": v})))
+        });
         placement(app, ui, t, "slideshowStars", &r.place, true, &stars);
     }
 
@@ -205,24 +222,36 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             return; // removed: the indices moved; drawn again next frame
         }
         row(ui, t, "Size", |ui| {
-            slider(app, ui, &format!("{id}Size"), o.size, 0.01, TEXT_SIZE_MAX / 2.0, Unit::Percent, &|v| wrap(json!({"size": v})))
+            slider(app, ui, &format!("{id}Size"), o.size, Range { lo: 0.01, hi: TEXT_SIZE_MAX / 2.0, unit: Unit::Percent }, &|v| {
+                wrap(json!({"size": v}))
+            })
         });
         row(ui, t, "Colour", |ui| colour(app, ui, &format!("{id}Color"), o.color, &|c| wrap(json!({"color": c}))));
-        row(ui, t, "Opacity", |ui| slider(app, ui, &format!("{id}Opacity"), o.opacity, 0.0, 1.0, Unit::Percent, &|v| wrap(json!({"opacity": v}))));
+        row(ui, t, "Opacity", |ui| {
+            slider(app, ui, &format!("{id}Opacity"), o.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| wrap(json!({"opacity": v})))
+        });
         placement(app, ui, t, &id, &o.place, true, &wrap);
         let sh = o.shadow;
         if toggle(app, ui, &format!("{id}Shadow"), sh.on, "Shadow", &|v| wrap(json!({"shadow": v}))) {
             row(ui, t, "Opacity", |ui| {
-                slider(app, ui, &format!("{id}ShadowOpacity"), sh.opacity, 0.0, 1.0, Unit::Percent, &|v| wrap(json!({"shadowOpacity": v})))
+                slider(app, ui, &format!("{id}ShadowOpacity"), sh.opacity, Range { lo: 0.0, hi: 1.0, unit: Unit::Percent }, &|v| {
+                    wrap(json!({"shadowOpacity": v}))
+                })
             });
             row(ui, t, "Offset", |ui| {
-                slider(app, ui, &format!("{id}ShadowOffset"), sh.offset, 0.0, SHADOW_OFFSET_MAX, Unit::Percent, &|v| wrap(json!({"shadowOffset": v})))
+                slider(app, ui, &format!("{id}ShadowOffset"), sh.offset, Range { lo: 0.0, hi: SHADOW_OFFSET_MAX, unit: Unit::Percent }, &|v| {
+                    wrap(json!({"shadowOffset": v}))
+                })
             });
             row(ui, t, "Radius", |ui| {
-                slider(app, ui, &format!("{id}ShadowRadius"), sh.radius, 0.0, SHADOW_RADIUS_MAX, Unit::Percent, &|v| wrap(json!({"shadowRadius": v})))
+                slider(app, ui, &format!("{id}ShadowRadius"), sh.radius, Range { lo: 0.0, hi: SHADOW_RADIUS_MAX, unit: Unit::Percent }, &|v| {
+                    wrap(json!({"shadowRadius": v}))
+                })
             });
             row(ui, t, "Angle", |ui| {
-                slider(app, ui, &format!("{id}ShadowAngle"), sh.angle, -180.0, 180.0, Unit::Degrees, &|v| wrap(json!({"shadowAngle": v})))
+                slider(app, ui, &format!("{id}ShadowAngle"), sh.angle, Range { lo: -180.0, hi: 180.0, unit: Unit::Degrees }, &|v| {
+                    wrap(json!({"shadowAngle": v}))
+                })
             });
         }
     }
@@ -241,9 +270,13 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let wm = |v: Value| json!({ "watermark": v });
     if toggle(app, ui, "slideshowWatermark", s.show_watermark, "Watermark", &|v| json!({"showWatermark": v})) {
         row(ui, t, "Text", |ui| text(app, ui, "slideshowWatermarkText", &w.text, "© Your Name", &|v| wm(json!({"text": v}))));
-        row(ui, t, "Size", |ui| slider(app, ui, "slideshowWatermarkSize", w.size as f64, 0.01, 0.15, Unit::Percent, &|v| wm(json!({"size": v}))));
+        row(ui, t, "Size", |ui| {
+            slider(app, ui, "slideshowWatermarkSize", w.size as f64, Range { lo: 0.01, hi: 0.15, unit: Unit::Percent }, &|v| wm(json!({"size": v})))
+        });
         row(ui, t, "Opacity", |ui| {
-            slider(app, ui, "slideshowWatermarkOpacity", w.opacity as f64, 0.05, 1.0, Unit::Percent, &|v| wm(json!({"opacity": v})))
+            slider(app, ui, "slideshowWatermarkOpacity", w.opacity as f64, Range { lo: 0.05, hi: 1.0, unit: Unit::Percent }, &|v| {
+                wm(json!({"opacity": v}))
+            })
         });
         row(ui, t, "Position", |ui| {
             let mut a = w.anchor;

@@ -324,7 +324,13 @@ fn walk_jpeg(b: &[u8], i: &mut usize) -> Option<(usize, u8)> {
         if m == 0xda {
             // entropy-coded data up to the next marker that is not a stuffed 0xff or a restart
             loop {
-                *i += b.get(*i..)?.iter().position(|&x| x == 0xff)?;
+                let Some(p) = b.get(*i..)?.iter().position(|&x| x == 0xff) else {
+                    // the terminal search examined the rest of the slice: charge it before failing,
+                    // or a crafted file can repeat full-file searches while the budget stays positive
+                    *i = b.len();
+                    return None;
+                };
+                *i += p;
                 match *b.get(*i + 1)? {
                     0x00 | 0xd0..=0xd7 => *i += 2,
                     0xff => *i += 1,
@@ -348,9 +354,29 @@ fn walk_jpeg(b: &[u8], i: &mut usize) -> Option<(usize, u8)> {
 /// share a budget of eight times the file's size, so the scan stays linear (a real file's candidates
 /// fail within a few bytes, or are the preview itself).
 fn scan_for_jpeg(data: &[u8]) -> Option<Vec<u8>> {
+    scan_with_budget(data, scan_budget(data.len())).0
+}
+
+/// The walks' shared budget: eight times the file's size, at least 1 MiB (a tiny file still gets a
+/// useful allowance), saturating so a hostile length cannot wrap it.
+fn scan_budget(len: usize) -> usize {
+    len.saturating_mul(8).max(1 << 20)
+}
+
+/// [`scan_for_jpeg`] with the walks' shared budget passed in, returning the walks' charged extent:
+/// `(preview, bytes charged)`. The counter records the work each walk did whether or not budget
+/// remains, so it stays a measure of work rather than of `budget - left`; a last walk may overshoot
+/// the remaining budget by its own reach. It is a conservative charged-work measure, not literally
+/// the bytes read: marker payloads skipped by `*i += len` are charged without being read, and a
+/// failed terminal search is charged to the end of the slice. That over-count is safe for the
+/// budget. It is a `u64` with saturating addition because the unbudgeted worst case is quadratic in
+/// the file size (32-bit `usize` could otherwise overflow), and it costs one addition per
+/// candidate, no allocation.
+fn scan_with_budget(data: &[u8], budget: usize) -> (Option<Vec<u8>>, u64) {
     let mut best: Option<(usize, usize)> = None;
     let mut at = 1;
-    let mut budget = data.len().saturating_mul(8).max(1 << 20);
+    let mut left = budget;
+    let mut walked = 0u64;
     while let Some(off) = data.get(at..).and_then(|s| s.iter().position(|&b| b == 0xd8)) {
         let d8 = at + off;
         at = d8 + 1;
@@ -360,8 +386,10 @@ fn scan_for_jpeg(data: &[u8]) -> Option<Vec<u8>> {
         let start = d8 - 1; // `at` starts at 1, so d8 >= 1
         let mut reach = start;
         let found = jpeg_extent(data, start, &mut reach);
-        budget = budget.saturating_sub(reach.saturating_sub(start));
-        if budget == 0 {
+        let spent = reach.saturating_sub(start);
+        left = left.saturating_sub(spent);
+        walked = walked.saturating_add(spent as u64);
+        if left == 0 {
             break;
         }
         if let Some((end, 3)) = found {
@@ -371,12 +399,14 @@ fn scan_for_jpeg(data: &[u8]) -> Option<Vec<u8>> {
             at = end;
         }
     }
-    let (start, end) = best?;
-    let mut jpeg = data.get(start..end)?.to_vec();
-    if let Some(first) = jpeg.first_mut() {
-        *first = 0xff;
-    }
-    Some(jpeg)
+    let jpeg = best.and_then(|(start, end)| {
+        let mut jpeg = data.get(start..end)?.to_vec();
+        if let Some(first) = jpeg.first_mut() {
+            *first = 0xff;
+        }
+        Some(jpeg)
+    });
+    (jpeg, walked)
 }
 
 /// Canon CR3: the full-size JPEG track (see [`lightcraft_meta::cr3`]), else the `PRVW` / `THMB` boxes.
