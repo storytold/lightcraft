@@ -398,6 +398,64 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path
 /// How long [`files_in_parallel`] waits for a listing before it looks at `cancel` again.
 const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// What the readers made of `path`, once they have: waits while one is still listing it. `None`
+/// when they did not get to it (a queued folder they now pass by, or one they never had).
+fn take_read(shared: &Shared, path: &Path) -> Option<Listing> {
+    let mut pool = shared.lock();
+    loop {
+        match pool.slots.get(path) {
+            Some(Slot::Running) => pool = shared.changed.wait(pool).unwrap_or_else(PoisonError::into_inner),
+            Some(Slot::Done(_)) => {
+                if let Some(Slot::Done(l)) = pool.slots.remove(path) {
+                    pool.buffered = pool.buffered.saturating_sub(l.held());
+                    shared.changed.notify_all();
+                    return Some(l);
+                }
+            }
+            Some(Slot::Queued) => {
+                pool.slots.remove(path); // the readers pass it by
+                return None;
+            }
+            None => return None,
+        }
+    }
+}
+
+/// [`files_in_parallel`]'s next listing: the next one to come back; or, when no reader can take
+/// the next folder (none started, or they stop reading at the entry limit), the next folder to
+/// list on the calling thread (no listing). `None` when `cancel` is set or nothing is left.
+fn next_listing(shared: &Shared, cancel: &std::sync::atomic::AtomicBool, max_entries: usize) -> Option<(PathBuf, usize, Option<Listing>)> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut pool = shared.lock();
+    loop {
+        if cancel.load(Relaxed) {
+            return None;
+        }
+        if let Some((p, d)) = pool.finished.pop_front() {
+            if let Some(Slot::Done(l)) = pool.slots.remove(&p) {
+                pool.buffered = pool.buffered.saturating_sub(l.held());
+                shared.changed.notify_all();
+                return Some((p, d, Some(l)));
+            }
+            continue;
+        }
+        if pool.slots.is_empty() {
+            return None; // nothing left to read, nothing being read
+        }
+        if (pool.live == 0 || pool.read_entries >= max_entries)
+            && let Some((p, d)) = pool.queue.pop_front()
+        {
+            if matches!(pool.slots.get(&p), Some(Slot::Queued)) {
+                pool.slots.remove(&p);
+                return Some((p, d, None));
+            }
+            continue;
+        }
+        // (woken when a listing ends; the timeout notices `cancel`)
+        pool = shared.changed.wait_timeout(pool, CANCEL_POLL).unwrap_or_else(PoisonError::into_inner).0;
+    }
+}
+
 /// [`files_in`] for a folder that may be on a slow (network) share, as browsing it with its
 /// subfolders reads it: `threads` readers (the pool's, as the ordered walk's) list folders at the
 /// same time, and each folder's files that `keep` accepts are handed to `found` (sorted) as soon
@@ -446,38 +504,7 @@ pub fn files_in_parallel(
             }
         }
         'walk: loop {
-            // the next listing to come back; or, when no reader can take the next folder (none
-            // started, or they stop reading at the entry limit), the next folder to list here
-            let (path, depth, taken) = {
-                let mut pool = shared.lock();
-                loop {
-                    if cancel.load(Relaxed) {
-                        break 'walk;
-                    }
-                    if let Some((p, d)) = pool.finished.pop_front() {
-                        if let Some(Slot::Done(l)) = pool.slots.remove(&p) {
-                            pool.buffered = pool.buffered.saturating_sub(l.held());
-                            shared.changed.notify_all();
-                            break (p, d, Some(l));
-                        }
-                        continue;
-                    }
-                    if pool.slots.is_empty() {
-                        break 'walk; // nothing left to read, nothing being read
-                    }
-                    if (pool.live == 0 || pool.read_entries >= limits.max_entries)
-                        && let Some((p, d)) = pool.queue.pop_front()
-                    {
-                        if matches!(pool.slots.get(&p), Some(Slot::Queued)) {
-                            pool.slots.remove(&p);
-                            break (p, d, None);
-                        }
-                        continue;
-                    }
-                    // (woken when a listing ends; the timeout notices `cancel`)
-                    pool = shared.changed.wait_timeout(pool, CANCEL_POLL).unwrap_or_else(PoisonError::into_inner).0;
-                }
-            };
+            let Some((path, depth, taken)) = next_listing(&shared, cancel, limits.max_entries) else { break 'walk };
             // (as many entries as may still be counted, and one more to know it stops)
             let room = limits.max_entries.saturating_sub(counted);
             let (listing, own) = match taken {
@@ -617,27 +644,7 @@ fn walk_with(
                 }
                 continue;
             }
-            // what the readers made of it, if they got to it
-            let taken = {
-                let mut pool = shared.lock();
-                loop {
-                    match pool.slots.get(&path) {
-                        Some(Slot::Running) => pool = shared.changed.wait(pool).unwrap_or_else(PoisonError::into_inner),
-                        Some(Slot::Done(_)) => {
-                            if let Some(Slot::Done(l)) = pool.slots.remove(&path) {
-                                pool.buffered = pool.buffered.saturating_sub(l.held());
-                                shared.changed.notify_all();
-                                break Some(l);
-                            }
-                        }
-                        Some(Slot::Queued) => {
-                            pool.slots.remove(&path); // the readers pass it by
-                            break None;
-                        }
-                        None => break None,
-                    }
-                }
-            };
+            let taken = take_read(&shared, &path);
             // (as many entries as the walk may still count, and one more to know it stops)
             let room = limits.max_entries.saturating_sub(out.entries);
             let (listing, own) = match taken {
