@@ -24,6 +24,10 @@ record in it costs the records after it, which are kept as `catalog.log.damaged-
 Writing a few times the final snapshot during an import holds up to a snapshot of 1 GB (four times the 256 MB cap).
 Beyond it the cap is what makes a log due, and the snapshot is rewritten once per 256 MB of log.
 
+In the browser (`Store::appends_in_place` is `false`) an append is not an append: IndexedDB reads the file's value and puts
+it back whole, and OPFS copies the file it extends, so every save costs the log's length. There the log is compacted by
+its length alone, as before (2000 records or 16 MB), whatever the snapshot's size.
+
 ## Measurements
 
 `cargo run --release -p lightcraft-catalog --example persist_bench -- <scratch dir> <photos…>`, on an Apple M1 Max

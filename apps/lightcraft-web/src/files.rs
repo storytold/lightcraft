@@ -193,6 +193,11 @@ impl Store for FilesStore {
     fn describe(&self) -> String {
         "browser storage".into()
     }
+    /// The backend writes an append at its offset: IndexedDB reads the file's value and puts it back whole, OPFS's
+    /// `keepExistingData` writable copies the file first (`Backend::write_at`), so a save costs the log's length.
+    fn appends_in_place(&self) -> bool {
+        false
+    }
 }
 
 /// Names of the library files read at start-up.

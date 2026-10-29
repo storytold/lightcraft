@@ -73,6 +73,49 @@ fn a_large_library_compacts_when_the_log_is_a_quarter_of_the_snapshot() {
     assert!(!j.wants_snapshot());
 }
 
+/// A store whose append rewrites the whole log, as the browser's does (IndexedDB, OPFS).
+struct WholeFile(MemStore);
+
+impl Store for WholeFile {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.0.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.0.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        "whole-file appends".into()
+    }
+    fn appends_in_place(&self) -> bool {
+        false
+    }
+}
+
+/// Given a large library in a store whose appends rewrite the whole log (the browser's), when 2000 small changes
+/// were logged, then the log is compacted: each save rewrites the log, so it must not wait for a quarter of the
+/// snapshot (up to 256 MB). The same library in a store that appends in place is left alone.
+#[test]
+fn a_store_whose_appends_rewrite_the_log_compacts_by_length_alone() {
+    for (whole_file, due) in [(true, true), (false, false)] {
+        let (m, j, _) = library(20_000);
+        drop(j);
+        let store: Box<dyn Store> = if whole_file { Box::new(WholeFile(m)) } else { Box::new(m) };
+        let (mut j, mut c, _) = Journal::open(store).unwrap();
+        for k in 0..2000 {
+            let op = rate(&mut c, k);
+            j.append(&[op]).unwrap();
+        }
+        assert!(j.log_bytes() < j.snapshot_bytes() / 4, "{} of {} bytes: well under a quarter", j.log_bytes(), j.snapshot_bytes());
+        assert_eq!(j.wants_snapshot(), due, "whole-file appends: {whole_file}");
+    }
+}
+
 /// The size the rule goes by is the snapshot's, also right after the library was opened.
 #[test]
 fn the_snapshot_size_is_known_after_reopening() {
