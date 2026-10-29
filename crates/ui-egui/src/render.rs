@@ -1081,6 +1081,12 @@ impl Renderer {
         self.failed.get(&slot).map(|f| f.1.as_str())
     }
 
+    /// Why a photo has no grid thumbnail and won't get one: the thumbnail's own render failed, or the embedded
+    /// preview failed and nothing else is on its way (an unedited raw asks for no other: see `request_thumb`).
+    pub fn thumb_failure(&self, id: PhotoId) -> Option<&str> {
+        self.failure(Slot::Thumb(id)).or_else(|| if self.is_pending(Slot::Thumb(id)) { None } else { self.failure(Slot::ThumbQuick(id)) })
+    }
+
     /// Why the last render of `photo` for `slot` failed: a view slot shows one photo after
     /// another, and another photo's error isn't this one's.
     pub fn failure_of(&self, slot: Slot, photo: PhotoId) -> Option<&str> {
