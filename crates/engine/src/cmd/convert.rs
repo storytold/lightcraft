@@ -308,8 +308,12 @@ pub(crate) fn reload_ops(
     }
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(fill_missing_meta(c.id, c, info))
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -465,6 +469,20 @@ mod tests {
         let ops = fill_missing_meta(PhotoId(1), &ph, &info);
         let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
         assert_eq!(meta.film_simulation, "Classic Chrome");
+        // a virtual copy made before the field was read gets it from the same reload
+        let mut copy = ph.clone();
+        copy.id = PhotoId(2);
+        copy.copy_of = Some(PhotoId(1));
+        let mut c = lightcraft_catalog::Catalog::default();
+        c.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        c.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&c, PhotoId(1), &info, &mut ops, &mut changed);
+        for op in ops {
+            c.apply(op).unwrap();
+        }
+        assert_eq!(c.photo(PhotoId(2)).unwrap().meta.film_simulation, "Classic Chrome");
+        assert!(changed.contains(&PhotoId(2)), "{changed:?}");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {
