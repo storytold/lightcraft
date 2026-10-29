@@ -78,7 +78,7 @@ pub fn rank_top(query: &[f32], gallery: &[(&str, &[f32])], top: usize) -> Vec<Ra
         .map(|(_, name, mut sims)| {
             sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
             let top = sims.get(..sims.len().min(top)).unwrap_or(&[]);
-            Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: sims.len() }
+            Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: top.len() }
         })
         .collect();
     out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
@@ -163,6 +163,9 @@ mod tests {
         // a person with fewer faces than asked is scored on the ones they have
         let one: Vec<(&str, &[f32])> = vec![("Cy", &odd1)];
         assert!(rank_top(&eve, &one, 4)[0].score > 0.99);
+        // and the count says how many faces the score is based on
+        assert_eq!(rank_top(&eve, &gallery, 1).iter().find(|r| r.name == "Ann").map(|r| r.faces), Some(1));
+        assert_eq!(rank_top(&eve, &one, 4)[0].faces, 1);
     }
 
     #[test]

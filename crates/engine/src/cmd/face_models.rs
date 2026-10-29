@@ -31,8 +31,14 @@ pub(super) struct FaceSettings {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(super) cpu_only: bool,
     /// How many of a person's best matching faces a match is based on (`None`: [`lightcraft_faces::matching::TOP_FACES`]).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient_count", skip_serializing_if = "Option::is_none")]
     pub(super) top_faces: Option<usize>,
+}
+
+/// A saved count that is not a whole number (a hand-edited `-1`, `"3"`) is read as no choice: the file is not taken for a
+/// damaged one, which would drop every other face setting with it (recognition switched off, the model forgotten).
+fn lenient_count<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<usize>, D::Error> {
+    Ok(Value::deserialize(d)?.as_u64().and_then(|n| usize::try_from(n).ok()))
 }
 
 impl FaceSettings {
