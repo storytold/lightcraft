@@ -67,36 +67,50 @@ pub fn parse(v: &Value) -> PersonPage {
     }
 }
 
-/// What a person page is made from, as a number: every face of the library (where, which box, which name), and whether
-/// its photo is in the library. A catalog change that leaves it alone (a rating, an edit, a photo opened and checked)
-/// does not need the page made again.
-pub(crate) fn faces_signature(cat: &lightcraft_catalog::Catalog) -> u64 {
+/// What a person page is made from, as two numbers: the library's named faces (where, which box, which name, whether the
+/// photo is in the library), and all its faces, unnamed ones too. A catalog change that leaves both alone (a rating, an
+/// edit, a photo opened and checked) does not need the page made again.
+pub(crate) fn faces_signature(cat: &lightcraft_catalog::Catalog) -> (u64, u64) {
     use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let (mut named, mut all) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
     for p in cat.photos() {
-        let faces = p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face);
-        for r in faces {
-            (p.id.0, p.in_library(), r.name.as_deref()).hash(&mut h);
-            [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits).hash(&mut h);
+        for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+            let face = (p.id.0, p.in_library(), r.name.as_deref(), [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits));
+            face.hash(&mut all);
+            if r.name.is_some() {
+                face.hash(&mut named);
+            }
         }
     }
-    h.finish()
+    (named.finish(), all.finish())
 }
 
-/// The page for `name`, asked for again only when a face of the library or a chosen picture changed, or, while the scan
-/// learns more faces, at most once a second (and no more than a tenth of the time, when making it takes long: a person
-/// page in a large library takes seconds).
+/// Whether a person page made earlier still holds: no named face changed, and either nothing else about the faces did
+/// (the scan's embeddings, unnamed faces it found) or it was made too recently to be made again yet.
+fn keep_page(named_same: bool, all_same: bool, scan_same: bool, waited: bool) -> bool {
+    named_same && (!waited || (all_same && scan_same))
+}
+
+/// The page for `name`, asked for again when a named face of the library or a chosen picture changed. While the scan
+/// learns faces (new embeddings, new unnamed faces found), at most once a second, and no more than a tenth of the time
+/// making it takes: a person page in a large library takes seconds.
 fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
-    let (made_from, cost) = app.caches.person_page_made;
+    let ((made_named, made_all), cost) = app.caches.person_page_made;
     let mut keep = None;
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
         && app.caches.person_page_gen == app.session.people_gen
-        && (*i == indexed || now - *at < (cost * 10.0).max(1.0))
     {
-        // another catalog change than a face's: the page as it is
-        if *r == rev || faces_signature(&app.session.catalog) == made_from {
+        let waited = now - *at >= (cost * 10.0).max(1.0);
+        // the faces are looked at only when the catalog changed
+        let (named_same, all_same) = if *r == rev {
+            (true, true)
+        } else {
+            let (named, all) = faces_signature(&app.session.catalog);
+            (named == made_named, all == made_all)
+        };
+        if keep_page(named_same, all_same, *i == indexed, waited) {
             keep = Some(page.clone());
         }
     }
@@ -556,6 +570,18 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3317: a person page is made again at once when a named face changes; when the scan only finds unnamed faces or
+    /// embeds some, no sooner than the wait (a page takes seconds in a large library); and never for a rating or an edit.
+    #[test]
+    fn a_person_page_is_made_again_when_it_must_and_no_more() {
+        // (named faces the same, all faces the same, scan the same, waited) → kept
+        assert!(keep_page(true, true, true, true), "a rating, an edit: kept however long ago");
+        assert!(!keep_page(false, true, true, false), "a face named: made again at once");
+        assert!(keep_page(true, false, true, false), "the scan found unnamed faces a moment ago: not yet");
+        assert!(!keep_page(true, false, true, true), "and after the wait: made again");
+        assert!(keep_page(true, true, false, false) && !keep_page(true, true, false, true), "new embeddings: the same wait");
+    }
 
     #[test]
     fn all_above_uses_score_including_later_ties_and_only_visible_faces() {
