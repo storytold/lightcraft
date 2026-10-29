@@ -839,16 +839,18 @@ pub fn command(id: String, params: String) -> js_sys::Promise {
 /// Call a control method from JavaScript (`docs/control-protocol.md`, the methods the desktop control
 /// server and MCP use): `await request("ui.inspect", {})` resolves to the method's `result` and
 /// rejects with an `Error` carrying its message. `params` is an object, or JSON text as for
-/// [`command`]; anything else rejects and runs nothing. VectorCraft's and PhotoCraft's pages take the
+/// [`command`]; anything else (a number, `NaN`, a boolean, a function) rejects and runs nothing. VectorCraft's and PhotoCraft's pages take the
 /// same calls, so one agent or host app can drive them all.
 #[wasm_bindgen]
 pub fn request(method: String, params: JsValue) -> js_sys::Promise {
-    // Params that have no JSON (a cyclic object, a function, a throwing `toJSON`) reject: as `{}` they
-    // would run the method with its defaults.
+    // Params that are not an object, or have no JSON (a cyclic object, a throwing `toJSON`), reject:
+    // as `{}` they would run the method with its defaults. `NaN` and the like stringify to `null`.
     let text = if params.is_undefined() || params.is_null() {
         Ok(String::new())
     } else if let Some(s) = params.as_string() {
         Ok(s)
+    } else if !params.is_object() {
+        Err("params must be an object or JSON text".to_string())
     } else {
         js_sys::JSON::stringify(&params)
             .ok()
