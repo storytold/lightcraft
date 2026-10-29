@@ -1263,7 +1263,7 @@ pub fn specs() -> Vec<CommandSpec> {
             set_name
         ),
         cmd!(
-            query "faces.setCover",
+            "faces.setCover",
             "Use as Person's Picture",
             [],
             None,
