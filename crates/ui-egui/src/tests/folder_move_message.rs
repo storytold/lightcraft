@@ -67,6 +67,32 @@ fn a_folder_without_library_photos_leaves_the_count_out() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The folder's catalog photos that are not the library's (browsed in Local, in Recently Deleted) went along on disk
+/// too, and a virtual copy shares its original's file: none of them is a library photo moved.
+#[test]
+fn the_count_is_of_library_photos_not_of_local_deleted_or_virtual_copies() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let (root, trip, archive) = folders("kinds");
+    let mut h = app(&trip, true);
+    let path = trip.join("beach.png").to_string_lossy().to_string();
+    let original = h.app.session.catalog.photos().next().unwrap().id;
+    let mut photos = Vec::new();
+    for kind in ["local", "deleted", "copy"] {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: path.clone() }, "beach.png", "PNG", 8, 8, "2026-01-01T10:00:00");
+        match kind {
+            "local" => p.local = true,
+            "deleted" => p.deleted = true,
+            _ => p.copy_of = Some(original),
+        }
+        photos.push(Op::AddPhoto { photo: Box::new(p) });
+    }
+    h.app.session.catalog.apply(Op::Batch { ops: photos }).unwrap();
+    let text = move_into(&mut h, &trip, &archive);
+    assert_eq!(text, "Moved “trip” into “archive”. Photos: 1. Edit → Undo moves it back.");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn the_message_follows_the_language() {
     let (root, trip, archive) = folders("german");
