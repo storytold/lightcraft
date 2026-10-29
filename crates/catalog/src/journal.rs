@@ -312,6 +312,14 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
 /// by index, so an unchanged mask does not repeat with every history step (issue #2154). Fills
 /// in the serialise / write+sync times and the size.
 fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io::Result<SnapshotTiming> {
+    write_snapshot_owned(store, seq, catalog.clone())
+}
+
+/// The same write, taking the catalog by value: the background path hands over the copy it
+/// already made, so a snapshot in flight holds one catalog, not two ([`Catalog::clone`] copies
+/// the photo pointers and the small tables, and the derived indexes start empty — real work on a
+/// large library).
+fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) -> std::io::Result<SnapshotTiming> {
     let t0 = web_time::Instant::now();
     let mut serialize_ms = 0.0;
     let bytes = store.write_atomic_with(SNAPSHOT, &mut |w| {
@@ -322,29 +330,26 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
         let mut b = std::io::BufWriter::with_capacity(1 << 20, w);
         write!(b, "{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":{seq},\"catalog\":")?;
         // The shared grids, in first-appearance order. The pool is a serialization detail:
-        // `catalog` itself is never modified (log records, presets and XMP stay inline).
+        // `snapshot` itself is never modified (log records, presets and XMP stay inline).
         let mut pool: Vec<String> = Vec::new();
         let mut index: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         {
             let mut see = |s: &lightcraft_develop::DevelopSettings| {
                 s.visit_seg_masks(&mut |m| {
-                    if !m.data.is_empty()
-                        && let std::collections::hash_map::Entry::Vacant(e) = index.entry(m.data.clone())
-                    {
-                        pool.push(e.key().clone());
-                        e.insert((pool.len() - 1) as u32);
+                    // borrowed lookup: a grid every history step shares is not cloned just to
+                    // find it already indexed (only a new grid is copied, into pool and table)
+                    if !m.data.is_empty() && !index.contains_key(m.data.as_str()) {
+                        index.insert(m.data.clone(), pool.len() as u32);
+                        pool.push(m.data.clone());
                     }
                 });
             };
-            for p in catalog.photos.values() {
+            for p in snapshot.photos.values() {
                 for settings in p.settings_holders() {
                     see(settings);
                 }
             }
         }
-        // `photos` holds `Arc<Photo>`, so this copies one pointer per photo, not the photos. The
-        // other tables (albums, stacks, folders, keywords) are copied; the derived indexes start empty.
-        let mut snapshot = catalog.clone();
         snapshot.grids = pool;
         match lightcraft_develop::with_grid_interner(index, || serde_json::to_writer(&mut b, &snapshot)) {
             // no interner can be active here (snapshot writes don't nest), so `None` is a bug:
@@ -637,7 +642,7 @@ impl Journal {
         let Some(mut writer) = self.store.background_writer() else { return self.snapshot(catalog) };
         let copy = catalog.clone();
         let seq = self.seq;
-        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot(writer.as_mut(), seq, &copy));
+        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot_owned(writer.as_mut(), seq, copy));
         let worker = match spawned {
             Ok(w) => w,
             Err(e) => {
