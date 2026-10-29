@@ -223,7 +223,8 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
     })
 }
 
-/// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
+/// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time, focus point, film
+/// simulation) from a fresh probe.
 fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
@@ -243,6 +244,10 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     // the camera's focus point: photos imported before it was read get it here
     if m.focus.is_none() {
         m.focus = src.focus.clone();
+    }
+    // the Fujifilm film simulation, likewise
+    if m.film_simulation.is_empty() {
+        m.film_simulation = src.film_simulation.clone();
     }
     let mut ops = Vec::new();
     if m != before {
@@ -449,6 +454,17 @@ mod tests {
         assert_eq!(meta.focus, Some(fp(0.3)));
         ph.meta.focus = Some(fp(0.1));
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known focus point is kept");
+    }
+
+    #[test]
+    fn reload_fills_a_missing_film_simulation() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.raf".into() }, "x.raf", "RAF", 6240, 4160, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        info.meta.film_simulation = "Classic Chrome".into();
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.film_simulation, "Classic Chrome");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {
