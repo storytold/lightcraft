@@ -309,13 +309,23 @@ impl Section {
     }
 }
 
+/// The key [`sections`] sets in the context it reads the pages in.
+const READING_FOR_FILTER: &str = "settingsReadingForFilter";
+
+/// Whether `ctx` is the context the filter reads the pages in ([`sections`]): a page draws as usual but starts no work
+/// (a render, say) for text nobody sees.
+pub(crate) fn reading_for_filter(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(READING_FOR_FILTER))).unwrap_or(false)
+}
+
 /// Every section of every tab with the text it draws, read by drawing each tab's page once in a
 /// context of its own: nothing of it reaches the screen, the list of widgets or the window's own
 /// memory, and whatever a tab draws is found without a list kept by hand. Drawing a page asks
 /// what opening its tab asks (the smart previews folder, the installed models): the answers the
-/// app keeps (the installed denoise models) are filled as opening the tab fills them, those a
-/// page keeps in its own context (the smart previews folder, the face models) are asked again,
-/// and the slide preview of Slideshow may be asked to render, as that page does. No setting is
+/// app keeps (the installed denoise models) are filled as opening the tab fills them, and those a
+/// page keeps in its own context (the smart previews folder, the face models) are asked again.
+/// The pages know they are only being read ([`reading_for_filter`]): the slide preview of
+/// Slideshow is not asked to render, as nothing of it is shown. No setting is
 /// changed by it, as nothing is clicked. What a page does not draw is not found: the choices of
 /// a closed list, tooltips, and rows scrolled out of a list inside a page.
 fn sections(app: &mut LightcraftApp, now: f64) -> Vec<Section> {
@@ -327,6 +337,7 @@ fn sections(app: &mut LightcraftApp, now: f64) -> Vec<Section> {
         }
     }
     let scratch = egui::Context::default();
+    scratch.data_mut(|d| d.insert_temp(egui::Id::unique(READING_FOR_FILTER), true));
     crate::theme::install_fonts(&scratch);
     // (tall enough that no page is cut off: what is outside the screen is not drawn)
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PAGE_SIZE.x + 32.0, 20_000.0));
