@@ -14,8 +14,10 @@ library was, byte for byte, beside it:
 - `catalog.snap.v<format>-<seq>` and `catalog.log.v<format>-<seq>`, where `<format>` is the format they are in and
   `<seq>` the number of the last change the library held when it was upgraded (or, where the upgrade was left for a
   later snapshot, when the library was opened; a library that had no log, or only a log, has only the one file). `Journal::open` reports their names (`LoadReport::kept`) and logs them.
-- The kept files stay unless the library is known to be in its old format still: once the upgrade is written,
-  nothing that fails after it takes them away.
+- The files kept at open stay unless the library is known to be in its old format still, because the upgrade at open
+  did not happen (then they keep nothing, and are removed again): once the upgrade is written, nothing that fails
+  after it takes them away. The files a later snapshot keeps (below) stay too, even if that snapshot then fails and
+  the library is still in its old format.
 - A library whose files can't be kept, or whose upgrade can't be written (a full disk, a folder that can't be written
   to), is not upgraded: it opens as it is, with no copy left lying about, and the next open tries again. If what is on
   disk after a failed write can't be read back to say whether the upgrade was written, the library is refused instead
