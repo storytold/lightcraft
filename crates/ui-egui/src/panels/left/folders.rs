@@ -517,7 +517,7 @@ fn last_name(path: &str) -> String {
 pub(crate) fn folder_moved_message(r: &serde_json::Value) -> Option<String> {
     let to = r["path"].as_str()?;
     let into = std::path::Path::new(to).parent().map_or_else(String::new, |p| p.to_string_lossy().to_string());
-    Some(folder_moved_text(&last_name(to), &last_name(&into), r["relinked"].as_u64().unwrap_or(0)))
+    Some(folder_moved_text(&last_name(to), &last_name(&into), r["inLibrary"].as_u64().unwrap_or(0)))
 }
 
 /// Move Folder To…, from the Folders tree and from Local: move the folder `path` into `into`
