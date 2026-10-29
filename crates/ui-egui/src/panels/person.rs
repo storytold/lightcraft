@@ -83,9 +83,9 @@ pub(crate) fn faces_signature(cat: &lightcraft_catalog::Catalog) -> u64 {
     h.finish()
 }
 
-/// The page for `name`, asked for again only when a face of the library or a chosen picture changed, or, while the scan learns more
-/// faces, at most once a second (and no more than a tenth of the time, when making it takes long: a person page in a
-/// large library takes seconds).
+/// The page for `name`, asked for again only when a face of the library or a chosen picture changed, or, while the scan
+/// learns more faces, at most once a second (and no more than a tenth of the time, when making it takes long: a person
+/// page in a large library takes seconds).
 fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
     let (made_from, cost) = app.caches.person_page_made;
@@ -268,7 +268,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     let ppp = ui.ctx().pixels_per_point();
     let edge = super::people::tile_edge(app.ui.thumb_size);
     let mut hit: Option<(Hit, Face)> = None;
-    egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
+    // each person's page keeps its own scroll position, and leaves the People index's alone
+    egui::ScrollArea::vertical().id_salt(("person-page", shown_name.to_lowercase())).auto_shrink(false).show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();
         let cols = super::people::columns(width, edge);
         let row_h = edge + super::people::TILE_GAP;
