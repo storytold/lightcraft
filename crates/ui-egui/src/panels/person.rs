@@ -67,22 +67,51 @@ pub fn parse(v: &Value) -> PersonPage {
     }
 }
 
-/// The page for `name`, asked for again only when the catalog or a chosen picture changed, or (while the scan runs) at
-/// most once a second as it learns more faces.
+/// What a person page is made from, as a number: every face of the library (where, which box, which name), and whether
+/// its photo is in the library. A catalog change that leaves it alone (a rating, an edit, a photo opened and checked)
+/// does not need the page made again.
+pub(crate) fn faces_signature(cat: &lightcraft_catalog::Catalog) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in cat.photos() {
+        let faces = p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face);
+        for r in faces {
+            (p.id.0, p.in_library(), r.name.as_deref()).hash(&mut h);
+            [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits).hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// The page for `name`, asked for again only when a face of the library or a chosen picture changed, or, while the scan learns more
+/// faces, at most once a second (and no more than a tenth of the time, when making it takes long: a person page in a
+/// large library takes seconds).
 fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
+    let (made_from, cost) = app.caches.person_page_made;
+    let mut keep = None;
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
-        && *r == rev
         && app.caches.person_page_gen == app.session.people_gen
-        && (*i == indexed || now - *at < 1.0)
+        && (*i == indexed || now - *at < (cost * 10.0).max(1.0))
     {
-        return page.clone();
+        // another catalog change than a face's: the page as it is
+        if *r == rev || faces_signature(&app.session.catalog) == made_from {
+            keep = Some(page.clone());
+        }
     }
+    if let Some(page) = keep {
+        if let Some(cached) = app.caches.person_page.as_mut() {
+            cached.1 = rev;
+        }
+        return page;
+    }
+    let started = web_time::Instant::now();
     let v = app.session.execute("faces.person", &json!({"name": name})).unwrap_or(Value::Null);
     let page = Arc::new(parse(&v));
     app.caches.person_page = Some((name.to_string(), rev, indexed, now, page.clone()));
     app.caches.person_page_gen = app.session.people_gen;
+    app.caches.person_page_made = (faces_signature(&app.session.catalog), started.elapsed().as_secs_f64());
     page
 }
 
@@ -176,6 +205,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         if rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
+        // straight to the faces that look like them, below hundreds of their own
+        let jump = ui.button(crate::i18n::tr("Go to Suggestions")).on_hover_text(crate::i18n::tr("The faces that look like them, below theirs"));
+        register(ui, "person:jumpMore", jump.rect);
+        if jump.clicked() {
+            app.ui.person_jump_more = true;
+        }
         let count = if page.total == 1 { "1 face".to_string() } else { format!("{} faces", page.total) };
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -242,6 +277,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         let more_top = PAD + confirmed_rows as f32 * row_h + 12.0;
         let total_h = more_top + SECTION_H + more_rows as f32 * row_h + PAD;
         let (area, _) = ui.allocate_exact_size(vec2(width, total_h), Sense::hover());
+        if std::mem::take(&mut app.ui.person_jump_more) {
+            let target = Rect::from_min_size(pos2(area.left(), area.top() + more_top), vec2(width, viewport.height().max(1.0)));
+            ui.scroll_to_rect(target, Some(egui::Align::TOP));
+        }
         let visible = |top: f32, rows: usize| {
             let first = ((viewport.top() - top) / row_h).floor().max(0.0) as usize;
             let last = (((viewport.bottom() - top) / row_h).ceil().max(0.0) as usize).min(rows);
