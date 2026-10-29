@@ -105,12 +105,14 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
         let waited = now - *at >= (cost * 10.0).max(1.0);
         // the faces are looked at only when the catalog changed
         let (named_same, all_same) = if *r == rev {
-            (true, true)
+            (true, !app.caches.person_page_stale)
         } else {
             let (named, all) = faces_signature(&app.session.catalog);
             (named == made_named, all == made_all)
         };
         if keep_page(named_same, all_same, *i == indexed, waited) {
+            // kept for now although unnamed faces changed: remembered, so the page is made again after the wait
+            app.caches.person_page_stale = !all_same;
             keep = Some(page.clone());
         }
     }
@@ -125,6 +127,7 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let page = Arc::new(parse(&v));
     app.caches.person_page = Some((name.to_string(), rev, indexed, now, page.clone()));
     app.caches.person_page_gen = app.session.people_gen;
+    app.caches.person_page_stale = false;
     app.caches.person_page_made = (faces_signature(&app.session.catalog), started.elapsed().as_secs_f64());
     page
 }

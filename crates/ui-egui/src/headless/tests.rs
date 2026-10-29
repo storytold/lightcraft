@@ -1180,6 +1180,28 @@ fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
     h.request("engine.execute", json!({"command": "faces.setName", "params": {"id": ids[0].0, "index": 0, "name": "Ann"}}), t);
     h.settle(SETTLE);
     assert_ne!(asked(&h), first, "made again after a face changed");
+    let first = asked(&h);
+    // an unnamed face found by the scan waits a moment, then the page is made again even if nothing else happens
+    let mut meta = h.app.session.catalog.photo(ids[1]).unwrap().meta.clone();
+    meta.regions.push(lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.9, y0: 0.9, x1: 0.95, y1: 0.95 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: None,
+        description: None,
+    });
+    h.app.session.commit("found", lightcraft_catalog::Op::SetMeta { id: ids[1], meta: Box::new(meta) }).unwrap();
+    h.step();
+    assert_eq!(asked(&h), first, "not at once");
+    let mut later = first;
+    for _ in 0..240 {
+        h.step();
+        later = asked(&h);
+        if later != first {
+            break;
+        }
+    }
+    assert_ne!(later, first, "made again once the wait is over");
+
     // Go to Suggestions: the first row of her faces scrolls out of sight
     let top_face = format!("person-face:{}:1", ids[0].0);
     assert!(h.app.widgets.iter().any(|(w, _)| *w == top_face), "her first faces are on screen");
