@@ -4400,6 +4400,39 @@ fn custom_cache_size(h: &mut Headless, t: Duration) {
     assert_eq!(h.app.session.cache_mb, 512);
 }
 
+/// A custom size still being typed is dropped by a preset chosen meanwhile, and saved when the tab is left. (The
+/// Performance tab is open, at 512 MB; it is again at the end.)
+fn custom_cache_size_pending(h: &mut Headless, t: Duration) {
+    let type_size = |h: &mut Headless, text: &str| {
+        h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+        h.step();
+        h.request("ui.clickWidget", json!({"id": "drag:settingsCacheCustom"}), t);
+        h.step();
+        h.request("ui.key", json!({"key": "a", "modifiers": ["command"]}), t);
+        h.request("ui.text", json!({"text": text}), t);
+        h.step();
+    };
+    // 3 typed, then 1 GB chosen: Custom… again starts from 1 GB, and the 3 is not saved behind it
+    type_size(h, "3");
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-1"}), t);
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 1024);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(h.app.session.cache_mb, 1024, "the preset stays");
+    // 5 typed, then another tab: saved on the way out
+    type_size(h, "5");
+    assert_eq!(h.app.session.cache_mb, 1024, "still being typed");
+    h.request("ui.clickWidget", json!({"id": "button:settingsTab-display"}), t);
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 5120, "saved when the tab is left");
+    h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+    assert_eq!(h.app.session.cache_mb, 512);
+}
+
 #[test]
 fn settings_dialog_by_keyboard_and_clicks() {
     let mut h = demo([1300.0, 820.0]);
@@ -4442,6 +4475,7 @@ fn settings_dialog_by_keyboard_and_clicks() {
     h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
     assert_eq!(h.app.session.cache_mb, 512);
     custom_cache_size(&mut h, t);
+    custom_cache_size_pending(&mut h, t);
     h.request("ui.clickWidget", json!({"id": "button:settingsPreview-3"}), t);
     assert_eq!(h.app.ui.settings.preview_limit, 3840);
     {
