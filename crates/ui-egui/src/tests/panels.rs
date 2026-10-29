@@ -2272,7 +2272,13 @@ fn a_long_name_stops_at_the_count_and_shows_in_full_on_hover() {
     let c = widget(&h, &format!("source:libfolder:{long}")).center();
     let r = h.request("ui.move", json!({"x": c.x, "y": c.y}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.step_until(Duration::from_secs(5), tooltip_shown), "the full name appears on hover");
+    // (the tooltip waits out egui's delay in the app's own time, a frame at a time: counted in
+    // frames, not in seconds of a machine that may be busy)
+    let shown = (0..120).any(|_| {
+        h.step();
+        tooltip_shown(&h)
+    });
+    assert!(shown, "the full name appears on hover");
 }
 
 /// More room shows more of the name.
