@@ -1067,6 +1067,12 @@ impl Renderer {
         self.pool.wait(timeout)
     }
 
+    /// Test seam: a failure left by an earlier request of `slot` for `photo` (a key no later job has).
+    #[cfg(test)]
+    pub(crate) fn record_failure_for_test(&mut self, slot: Slot, photo: PhotoId) {
+        self.failed.insert(slot, (0, "an earlier failure".into(), 0, photo));
+    }
+
     /// Test seam: make the renderer look busy without starting a job (capture deadlines).
     #[cfg(test)]
     pub(crate) fn force_in_flight_for_test(&mut self, count: usize) {
@@ -1083,8 +1089,13 @@ impl Renderer {
 
     /// Why a photo has no grid thumbnail and won't get one: the thumbnail's own render failed, or the embedded
     /// preview failed and nothing else is on its way (an unedited raw asks for no other: see `request_thumb`).
+    /// A new embedded-preview request (another size or look) is on its way too; a retry of the very
+    /// request that failed keeps the failure until it answers.
     pub fn thumb_failure(&self, id: PhotoId) -> Option<&str> {
-        self.failure(Slot::Thumb(id)).or_else(|| if self.is_pending(Slot::Thumb(id)) { None } else { self.failure(Slot::ThumbQuick(id)) })
+        let quick = Slot::ThumbQuick(id);
+        self.failure(Slot::Thumb(id)).or_else(|| {
+            if self.is_pending(Slot::Thumb(id)) || (self.is_pending(quick) && !self.retrying(quick)) { None } else { self.failure(quick) }
+        })
     }
 
     /// Why the last render of `photo` for `slot` failed: a view slot shows one photo after

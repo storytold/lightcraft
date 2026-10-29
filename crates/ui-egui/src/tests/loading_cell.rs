@@ -94,3 +94,41 @@ fn the_filmstrip_tells_loading_from_unreadable_too() {
     assert!(h.settle(SETTLE));
     assert!(ids(&h, "film:badge:loading:").is_empty(), "gone once the failure is known");
 }
+
+/// A failure left by an earlier request is not this tile's verdict: the filmstrip asks for its
+/// thumbnail before it reads the failure, so its first frame says loading, not "!".
+#[test]
+fn a_filmstrip_tile_asks_for_its_thumbnail_before_it_reads_an_old_failure() {
+    let (mut h, _open) = app_with_held_thumbnails(ViewMode::Detail);
+    for i in 1..=12u64 {
+        h.app.renderer.record_failure_for_test(Slot::ThumbQuick(PhotoId(i)), PhotoId(i));
+    }
+    // the first frame that draws the strip: nothing was asked for yet
+    let mut drawn = false;
+    for _ in 0..20 {
+        h.step();
+        if !ids(&h, "film:").is_empty() {
+            drawn = true;
+            break;
+        }
+    }
+    assert!(drawn, "the strip is drawn");
+    assert!(!h.painted_text().iter().any(|t| t == "!"), "no tile says it can't be opened on an old failure");
+}
+
+/// The smallest square cells still hold the cue: its size is judged against the cell, and the cue
+/// itself must fit the placeholder left inside it.
+#[test]
+fn the_smallest_square_cells_still_show_the_loading_cue() {
+    let (mut h, _open) = app_with_held_thumbnails(ViewMode::SquareGrid);
+    h.app.ui.thumb_size = crate::state::THUMB_SIZE_MIN;
+    first_grid_frame(&mut h);
+    let cues = ids(&h, "badge:loading:");
+    assert!(!cues.is_empty(), "the cells on screen are loading and say so: {:?}", ids(&h, "thumb:"));
+    for id in cues {
+        let photo = id.trim_start_matches("badge:loading:");
+        let cue = h.app.widgets.iter().find(|(w, _)| *w == id).map(|(_, r)| *r).unwrap();
+        let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("thumb:{photo}")).map(|(_, r)| *r).unwrap();
+        assert!(cell.contains_rect(cue), "{cue:?} in {cell:?}");
+    }
+}

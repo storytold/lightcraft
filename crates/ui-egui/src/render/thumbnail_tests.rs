@@ -1960,3 +1960,16 @@ fn thumb_failure_reports_only_a_thumbnail_that_will_not_arrive() {
     r.failed.insert(Slot::Thumb(id), (2, "decode failed".into(), 0, id));
     assert_eq!(r.thumb_failure(id), Some("decode failed"));
 }
+
+#[test]
+fn thumb_failure_waits_for_a_new_quick_request_but_not_for_a_retry_of_the_failed_one() {
+    let id = PhotoId(6);
+    let mut r = Renderer::default();
+    r.failed.insert(Slot::ThumbQuick(id), (1, "no embedded preview".into(), 0, id));
+    // the size changed: a new embedded-preview request (another key) is on its way, so the cell is loading
+    r.pending.insert(Slot::ThumbQuick(id), (3, 10));
+    assert_eq!(r.thumb_failure(id), None, "a replacement of the failed quick render is pending");
+    // the very request that failed is asked for again (after an eviction): until it answers the failure stands
+    r.pending.insert(Slot::ThumbQuick(id), (1, 10));
+    assert_eq!(r.thumb_failure(id), Some("no embedded preview"));
+}

@@ -858,7 +858,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         } else {
-            paint_loading_cue(p, t, ph, "badge:loading:", id.0);
+            paint_loading_cue(p, t, img_rect, ph, "badge:loading:", id.0);
         }
         ph
     }
@@ -866,12 +866,16 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
 
 /// A quiet cue on a thumbnail's placeholder while the picture is still on its way (an unreadable one
 /// says "!" instead): three small dots in the middle, in the icon color (3:1 on every theme's placeholder). It stands still, so
-/// Reduce motion has nothing to stop, and it is left off tiles too small to hold it. Registered as
-/// `{prefix}{id}` (the grid's `badge:loading:{id}`, the filmstrip's `film:badge:loading:{id}`).
-pub(crate) fn paint_loading_cue(p: &egui::Painter, t: &Tokens, rect: Rect, prefix: &str, id: u64) {
+/// Reduce motion has nothing to stop. It is left off tiles too small to hold it: judged by the
+/// `tile` (the placeholder's cell, smaller than 32 pt either way) and by the `rect` (the
+/// placeholder, which must have room for the dots). Registered as `{prefix}{id}` (the grid's
+/// `badge:loading:{id}`, the filmstrip's `film:badge:loading:{id}`).
+pub(crate) fn paint_loading_cue(p: &egui::Painter, t: &Tokens, tile: Rect, rect: Rect, prefix: &str, id: u64) {
     const RADIUS: f32 = 1.75;
     const GAP: f32 = 7.0;
-    if rect.width().min(rect.height()) < 32.0 {
+    const CUE_W: f32 = 2.0 * (GAP + RADIUS);
+    const CUE_H: f32 = 2.0 * RADIUS;
+    if tile.width().min(tile.height()) < 32.0 || rect.width() < CUE_W || rect.height() < CUE_H {
         return;
     }
     let middle = rect.center();
