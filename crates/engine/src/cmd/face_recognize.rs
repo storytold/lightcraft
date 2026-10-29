@@ -740,7 +740,14 @@ mod imp {
             return ready;
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // with Settings ▸ Faces ▸ Ignore a person's odd faces, only their typical faces: a face from behind named after
+        // them would bring every other back of a head along
+        let skip_odd = read_settings(&dir).skip_odd;
+        fn faces_of(faces: &[Arc<[f32]>], skip_odd: bool) -> Vec<&[f32]> {
+            let all: Vec<&[f32]> = faces.iter().map(|e| &e[..]).collect();
+            if skip_odd { matching::typical(&all) } else { all }
+        }
+        let refs: Vec<&[f32]> = faces_of(&gallery, skip_odd);
         // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
         // in a library of 90 000, so on every core (minutes on one)
         let top = top_faces(s);
@@ -756,14 +763,12 @@ mod imp {
         // margin name suggestions ask for: one that looks more like someone else is theirs (two people who look alike),
         // and one that looks about as much like everybody is a poor face (tiny, blurred, from behind) that would fill
         // the page. Best first, a batch at a time until the page is full
-        let others: Vec<Vec<&[f32]>> = others.values().map(|faces| faces.iter().map(|e| &e[..]).collect()).collect();
+        let others: Vec<Vec<&[f32]>> = others.values().map(|faces| faces_of(faces, skip_odd)).collect();
         let mut kept = Vec::with_capacity(limit);
         for batch in scored.chunks(256) {
             let theirs: Vec<bool> = batch
                 .par_iter()
-                .map(|(score, .., e)| {
-                    others.iter().any(|g| matching::person_score(e, g, top).is_some_and(|o| o > *score - DEFAULT_MARGIN))
-                })
+                .map(|(score, .., e)| others.iter().any(|g| matching::person_score(e, g, top).is_some_and(|o| o > *score - DEFAULT_MARGIN)))
                 .collect();
             kept.extend(batch.iter().zip(theirs).filter(|(_, theirs)| !theirs).map(|(c, _)| (c.0, c.1, c.2, c.3)));
             if kept.len() >= limit {

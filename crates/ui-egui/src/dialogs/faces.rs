@@ -198,6 +198,21 @@ fn matching_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list
         t,
         "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos. A person with fewer faces than that is scored on the ones they have.",
     );
+    let mut skip = list["skipOdd"].as_bool().unwrap_or(false);
+    if check(ui, "settings.facesSkipOdd", &mut skip, "Ignore a person's odd faces (from behind, misnamed)") {
+        match app.run("faces.matching", json!({"skipOdd": skip})) {
+            Ok(_) => {
+                app.caches.faces_epoch += 1;
+                app.caches.person_page = None;
+            }
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+    hint(
+        ui,
+        t,
+        "Improves suggestions by leaving out faces seen from behind or misnamed. Double-edged: it also leaves out some for photos that look very different (childhood, beard…). Best used for a while, if you have many photos.",
+    );
 }
 
 /// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that

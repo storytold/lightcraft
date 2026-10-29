@@ -111,6 +111,30 @@ pub fn person_score(query: &[f32], gallery: &[&[f32]], top: usize) -> Option<f32
     (n > 0).then(|| best[..n].iter().sum::<f32>() / n as f32)
 }
 
+/// How close to a person's average face one of theirs must be to stand for them when looking for look-alikes.
+pub const TYPICAL: f32 = 0.3;
+
+/// A person's faces without the odd ones: those far from their average face ([`TYPICAL`]), mostly a face from behind
+/// or in the dark named after whoever was in the photo, or someone else named by mistake. Such a face looks like every
+/// other face of its kind in the library (backs of heads all look alike), so it would bring them all along as
+/// look-alikes. All of them are kept when fewer than three would be left.
+pub fn typical<'a>(faces: &[&'a [f32]]) -> Vec<&'a [f32]> {
+    let Some(dim) = faces.first().map(|f| f.len()) else { return Vec::new() };
+    let mut mean = vec![0f32; dim];
+    for f in faces.iter().filter(|f| f.len() == dim) {
+        for (m, v) in mean.iter_mut().zip(f.iter()) {
+            *m += v;
+        }
+    }
+    let norm = dot(&mean, &mean).sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return faces.to_vec();
+    }
+    mean.iter_mut().for_each(|m| *m /= norm);
+    let kept: Vec<&[f32]> = faces.iter().copied().filter(|f| cosine(f, &mean).is_some_and(|c| c >= TYPICAL)).collect();
+    if kept.len() < 3 { faces.to_vec() } else { kept }
+}
+
 /// The best person if they pass both bars: a score of at least `threshold`, and at least `margin` ahead of the
 /// next person (when there is one).
 pub fn suggest(ranked: &[Ranked], threshold: f32, margin: f32) -> Option<Suggestion> {
@@ -203,6 +227,19 @@ mod tests {
         assert_eq!(person_score(&q, &[&nan[..]], 2), None);
         assert_eq!(person_score(&q, &refs, 0), person_score(&q, &refs, 1));
         assert_eq!(person_score(&q, &refs, 1000), person_score(&q, &refs, 8));
+    }
+
+    #[test]
+    fn a_persons_odd_faces_are_left_out_unless_too_few_would_be_left() {
+        let (a, b, c) = (unit(&[1.0, 0.1, 0.0]), unit(&[0.9, 0.2, 0.0]), unit(&[1.0, 0.0, 0.1]));
+        let odd = unit(&[-0.2, 0.0, 1.0]);
+        let faces: Vec<&[f32]> = vec![&a, &b, &odd, &c];
+        assert_eq!(typical(&faces), vec![&a[..], &b[..], &c[..]], "the face from behind is left out");
+        let few: Vec<&[f32]> = vec![&a, &odd];
+        assert_eq!(typical(&few).len(), 2, "kept when fewer than three would be left");
+        assert!(typical(&[]).is_empty());
+        let zero = [0.0f32; 3];
+        assert_eq!(typical(&[&zero[..], &zero[..], &zero[..]]).len(), 3, "nothing to average: all kept");
     }
 
     #[test]
