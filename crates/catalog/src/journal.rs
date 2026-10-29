@@ -68,19 +68,21 @@
 //! - **Opening an older format upgrades it**: right after loading, [`Journal::open`] writes a
 //!   snapshot in this build's format (also for a new library), before anything is appended — so a
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
+//!   (Except where the upgrade can't be written or its files can't be kept: see *Format versions*.)
 //!   [`LoadReport::upgraded_from`] says when that happened.
 //! - **An upgrade keeps what it replaces**: older builds can't read the upgraded library, so the
 //!   files it was are first kept beside it as `catalog.snap.v<format>-<seq>` and
 //!   `catalog.log.v<format>-<seq>` (`seq`: the last change they hold), byte for byte
 //!   ([`LoadReport::kept`]; a damaged log is kept under its own name instead). Put back under
 //!   their own names, they are the library as the older build left it. They stay unless the
-//!   library on disk is known to be in its old format still: an upgrade that did not happen
-//!   leaves no copy, and one that was written keeps its copy whatever fails after it. Nothing
-//!   removes them afterwards: they are the user's to delete. (Not where the store says there is
-//!   no going back, [`Store::keeps_replaced_formats`].) A library left in its old format at open
-//!   (its files couldn't be kept, or the upgrade couldn't be written) is upgraded by a later
-//!   snapshot (compaction, or closing), which keeps the files as they are then first and is not
-//!   written when it can't.
+//!   library on disk is known to be in its old format still: an upgrade at open that did not
+//!   happen leaves no copy, and one that was written keeps its copy whatever fails after it.
+//!   Nothing removes them afterwards: they are the user's to delete. (Not where the store says
+//!   there is no going back, [`Store::keeps_replaced_formats`].) A library left in its old format
+//!   at open (its files couldn't be kept, or the upgrade couldn't be written) is upgraded by a
+//!   later snapshot (compaction, or closing), which first keeps the files as they were at open
+//!   (the snapshot, and the log up to where it ended then) and is not written when it can't. Those
+//!   files stay even if that snapshot then fails and the library is still in its old format.
 //! - **A newer format is refused, untouched**: a snapshot whose `version` is above [`VERSION`],
 //!   or a log record whose CRC matches (so it is exactly what was written) but whose op doesn't
 //!   parse, fails [`Journal::open`] with [`CatalogError::Newer`] before any file is modified — it
@@ -391,8 +393,9 @@ struct SnapFile {
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
     /// tail. Fails if the snapshot is unreadable or a newer LightCraft's (then nothing is
-    /// modified), or if the library is in an older format and its damaged log can't be replaced
-    /// or its snapshot can't be kept (see the module docs → *Format versions*).
+    /// modified), or if the library is in an older format and its damaged log can't be replaced,
+    /// its snapshot can't be kept, or it can't be told whether its upgrade was written (see the
+    /// module docs → *Format versions*).
     pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;
