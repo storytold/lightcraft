@@ -154,6 +154,32 @@ fn explanations_placeholders_and_the_accent_as_text_can_be_read_in_every_theme()
         show(&mut h, "interface");
         let in_use = text_colour(&h, "In Use");
         assert!(contrast(in_use, t.inset) >= 4.5, "{kind:?}: In Use is {:.2}:1", contrast(in_use, t.inset));
+        // The Faces tab (with a folder for the models, or it only says it has none): the hint beside "Add a model
+        // file…", and the marks on a model's row
+        let models = std::env::temp_dir().join(format!("lc-settings-contrast-faces-{}", std::process::id()));
+        std::fs::create_dir_all(&models).unwrap();
+        h.app.session.face_models_dir = Some(models.clone());
+        // (an installed model is the one in use, and has a size)
+        let file = models.join("m.onnx");
+        std::fs::write(&file, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
+        h.app.session.execute("faces.models.install", &json!({"path": file.to_string_lossy(), "acknowledged": true})).unwrap();
+        h.app.caches.faces_epoch += 1;
+        show(&mut h, "faces");
+        let drop = text_colour(&h, "or drop a .onnx file");
+        assert!(contrast(drop, t.chrome) >= 4.5, "{kind:?}: the Faces hint is {:.2}:1", contrast(drop, t.chrome));
+        // the Processor section's labels and the license line of the model (its terms are unclear: the warning color)
+        for part in ["Detection", "Recognition", "terms unclear"] {
+            let colour = text_colour(&h, part);
+            assert!(contrast(colour, t.chrome) >= 4.5, "{kind:?}: \"{part}\" is {:.2}:1", contrast(colour, t.chrome));
+        }
+        let painted = h.painted_text();
+        let marks: Vec<&str> = ["in use", "installed"].into_iter().filter(|m| painted.iter().any(|text| text.as_str() == *m)).collect();
+        assert!(!marks.is_empty(), "{kind:?}: no model is marked in use or installed");
+        for mark in marks {
+            let colour = text_colour(&h, mark);
+            assert!(contrast(colour, t.chrome) >= 4.5, "{kind:?}: \"{mark}\" is {:.2}:1", contrast(colour, t.chrome));
+        }
+        let _ = std::fs::remove_dir_all(&models);
     }
 }
 
@@ -181,6 +207,19 @@ fn the_lines_that_say_where_a_control_is_stand_out_in_every_theme() {
         );
         let share = edge_share(&image, edge, t.chrome, 3.0, true);
         assert!(share >= STRAIGHT, "{kind:?}: only {share:.2} of a button's border stands 3:1");
+        // A text button's border (the tab bar's, and a row of choices: Preview size), which are drawn by
+        // `widgets::text_button`, not by egui's button: the top edge of one that is not chosen
+        for (what, id) in [("a tab", "button:settingsTab-general"), ("a choice", "button:settingsPreview-1")] {
+            show(&mut h, "performance");
+            let image = h.paint();
+            let button = rect(&h, id);
+            let edge = egui::Rect::from_min_max(
+                egui::pos2(button.center().x - 12.0, button.top() - 1.0),
+                egui::pos2(button.center().x + 12.0, button.top() + 2.0),
+            );
+            let share = edge_share(&image, edge, t.chrome, 3.0, true);
+            assert!(share >= STRAIGHT, "{kind:?}: only {share:.2} of {what}'s border stands 3:1");
+        }
         // A checkbox's border: the left edge of its box (unticked: the GPU is off here)
         show(&mut h, "performance");
         let image = h.paint();
@@ -289,9 +328,20 @@ fn a_models_licence_line_and_a_favourite_star_can_be_read_in_every_theme() {
 }
 
 #[test]
-fn the_gpu_line_and_the_smart_previews_folder_read_as_they_did_in_english() {
-    use crate::dialogs::settings::{gpu_line, smart_folder_default};
+fn the_gpu_line_reads_as_it_did_in_english_and_in_the_language_shown() {
+    use crate::dialogs::settings::gpu_line;
 
     assert_eq!(gpu_line(Some("Apple M2".into())), "GPU: Apple M2");
-    assert_eq!(smart_folder_default(), "(library default)");
+    // (no adapter known yet: the word is the language's, not English)
+    crate::i18n::set_language(crate::i18n::Locale::De);
+    let line = gpu_line(None);
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    assert_eq!(line, format!("GPU: {}", crate::i18n::Locale::De.tr("starting…")));
+    assert_eq!(gpu_line(None), "GPU: starting…");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_smart_previews_folder_reads_as_it_did_in_english() {
+    assert_eq!(crate::dialogs::settings::smart_folder_default(), "(library default)");
 }
