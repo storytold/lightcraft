@@ -721,6 +721,7 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     assert_eq!(r["cover"]["photo"], a.0, "{r}");
     assert_eq!(picture(&s, "Ann"), Some(a));
     assert_eq!((s.catalog.revision, s.undo.len()), (revision, undo), "the catalog is not touched");
+    assert!(s.journal.iter().any(|(id, p)| id == "faces.setCover" && p["photo"] == a.0), "recorded in the command journal");
     assert_ne!(s.people_gen, generation, "the People view is told");
     assert_eq!(s.execute("faces.person", &json!({"name": "ann"})).unwrap()["cover"], json!({"photo": a.0, "index": 1}));
     assert_eq!(s.execute("faces.person", &json!({"name": "Bea"})).unwrap()["cover"], Value::Null);
