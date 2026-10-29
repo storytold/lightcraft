@@ -4366,6 +4366,26 @@ fn previews_follow_the_screen_profile_while_none_is_chosen() {
 
 /// Settings (⌘,): tabs switch, app settings change the UI state, library settings go through
 /// the engine; the delete confirmation guards ⌫.
+/// #3252: Settings ▸ Performance ▸ Custom… opens a cache size of one's own, in GB; a custom size is shown as such, not as
+/// 2 GB. (The Performance tab is open.)
+fn custom_cache_size(h: &mut Headless, t: Duration) {
+    let custom_field = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "drag:settingsCacheCustom");
+    assert!(!custom_field(h));
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-5"}), t);
+    h.step();
+    assert!(custom_field(h), "the size field");
+    assert_eq!(h.app.session.cache_mb, 512, "nothing changed until a size is chosen");
+    h.app.session.execute("library.preferences", &json!({"cacheMb": 16384})).unwrap();
+    h.step();
+    h.step();
+    assert!(custom_field(h) && h.app.session.cache_mb == 16384, "16 GB stays, shown as custom");
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-3"}), t);
+    h.step();
+    assert!(!custom_field(h) && h.app.session.cache_mb == 4096);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
+    assert_eq!(h.app.session.cache_mb, 512);
+}
+
 #[test]
 fn settings_dialog_by_keyboard_and_clicks() {
     let mut h = demo([1300.0, 820.0]);
@@ -4407,6 +4427,7 @@ fn settings_dialog_by_keyboard_and_clicks() {
     h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), t);
     h.request("ui.clickWidget", json!({"id": "button:settingsCache-0"}), t);
     assert_eq!(h.app.session.cache_mb, 512);
+    custom_cache_size(&mut h, t);
     h.request("ui.clickWidget", json!({"id": "button:settingsPreview-3"}), t);
     assert_eq!(h.app.ui.settings.preview_limit, 3840);
     {

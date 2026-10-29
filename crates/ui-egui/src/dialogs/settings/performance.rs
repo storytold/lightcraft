@@ -5,6 +5,9 @@ use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Token
 
 // --------------------------------------------------------------------------------- Performance
 
+/// The largest thumbnail cache Custom… offers (1 TB).
+const MAX_CACHE_GB: u32 = 1024;
+
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
@@ -51,13 +54,30 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     });
     heading(ui, t, crate::i18n::tr("Thumbnail cache"));
     let cur = (app.session.cache_bytes() >> 20) as u32;
+    // a size of the user's own, in whole GB: a large library outgrows 8 GB (#3252)
+    let custom_id = egui::Id::unique("settings-cache-custom");
+    let mut custom = !CACHE_SIZES.contains(&cur) || ui.data(|d| d.get_temp::<bool>(custom_id)).unwrap_or(false);
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
-        let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB")];
-        let mut v = if CACHE_SIZES.contains(&cur) { cur } else { 2048 };
+        const CUSTOM: u32 = u32::MAX;
+        let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB"), (CUSTOM, crate::i18n::tr("Custom…"))];
+        let mut v = if custom { CUSTOM } else { cur };
         if choices(ui, "settingsCache", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"cacheMb": v}));
+            custom = v == CUSTOM;
+            if !custom {
+                let _ = app.run("library.preferences", json!({"cacheMb": v}));
+            }
+        }
+        if custom {
+            let mut gb = cur.div_ceil(1024).clamp(1, MAX_CACHE_GB);
+            let r = ui.add(egui::DragValue::new(&mut gb).range(1..=MAX_CACHE_GB).suffix(" GB"));
+            crate::widgets::announce(&r, crate::i18n::tr("Custom size limit, in GB").to_string());
+            register(ui, "drag:settingsCacheCustom", r.rect);
+            if r.changed() {
+                let _ = app.run("library.preferences", json!({"cacheMb": gb * 1024}));
+            }
         }
     });
+    ui.data_mut(|d| d.insert_temp(custom_id, custom));
     let used = app.session.media.rendered.disk().map(|d| d.size());
     row(ui, t, crate::i18n::tr("In use"), |ui| {
         ui.label(

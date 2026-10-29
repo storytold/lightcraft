@@ -257,6 +257,12 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
+## 2026-10-29
+
+### A thumbnail cache of any size
+- Settings ▸ Performance ▸ Thumbnail cache ▸ Size limit has Custom…, a size of your own in GB (up to 1 TB): a large
+  library outgrows 8 GB, and its grid thumbnails and standard previews then push each other out. A size set before
+  (`library.preferences {cacheMb}`, 16 GB say) is shown as custom instead of as 2 GB. (#3252)
 
 ## 2026-10-24
 
