@@ -4375,6 +4375,20 @@ fn custom_cache_size(h: &mut Headless, t: Duration) {
     h.step();
     assert!(custom_field(h), "the size field");
     assert_eq!(h.app.session.cache_mb, 512, "nothing changed until a size is chosen");
+    // typed in: nothing is saved before the edit is over (typing 16 must not set 1 GB on the way)
+    let r = h.request("ui.clickWidget", json!({"id": "drag:settingsCacheCustom"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.request("ui.key", json!({"key": "a", "modifiers": ["command"]}), t);
+    h.request("ui.text", json!({"text": "1"}), t);
+    h.step();
+    h.request("ui.text", json!({"text": "6"}), t);
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 512, "still being typed");
+    h.request("ui.key", json!({"key": "enter"}), t);
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.cache_mb, 16384, "saved when the edit is over");
     h.app.session.execute("library.preferences", &json!({"cacheMb": 16384})).unwrap();
     h.step();
     h.step();
