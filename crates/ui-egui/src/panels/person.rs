@@ -64,13 +64,14 @@ pub fn parse(v: &Value) -> PersonPage {
     }
 }
 
-/// The page for `name`, asked for again only when the catalog changed, or (while the scan runs) at most once a second
-/// as it learns more faces.
+/// The page for `name`, asked for again only when the catalog or a chosen picture changed, or (while the scan runs) at
+/// most once a second as it learns more faces.
 fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
         && *r == rev
+        && app.caches.person_page_gen == app.session.people_gen
         && (*i == indexed || now - *at < 1.0)
     {
         return page.clone();
@@ -78,6 +79,7 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let v = app.session.execute("faces.person", &json!({"name": name})).unwrap_or(Value::Null);
     let page = Arc::new(parse(&v));
     app.caches.person_page = Some((name.to_string(), rev, indexed, now, page.clone()));
+    app.caches.person_page_gen = app.session.people_gen;
     page
 }
 
@@ -320,6 +322,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                         {
                             let cover = (what == Hit::MakeCover).then_some((f.photo, f.index));
                             *page = Arc::new(PersonPage { cover, ..(**page).clone() });
+                            // the page as patched is current: a change made elsewhere (a script) is asked for again
+                            app.caches.person_page_gen = app.session.people_gen;
                         }
                         let done = if what == Hit::MakeCover {
                             "This face is now their picture in People"
