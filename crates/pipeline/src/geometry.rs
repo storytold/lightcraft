@@ -15,6 +15,16 @@ use crate::optics::{Warp, reorient_lens};
 /// Linear value of areas outside the source after a warp (a light neutral, like an empty canvas).
 pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
 
+/// The most pixels a render enlarged past its photo's own size can have: 512 megapixels,
+/// Lightroom's ceiling too, and the same cap the export path applies (`MAX_ENLARGED_PIXELS` in
+/// `crates/engine/src/export/options.rs`; that path was already bounded — this bounds the pipeline
+/// itself, so every caller of [`Frame::fit`] is covered). An output at or under the photo's own
+/// pixel count is never held to the ceiling, so a full-size render of a photo larger than this is
+/// unaffected. [`Frame::fit`] scales an over-ceiling output down to it instead of allocating it: a
+/// request box far beyond the photo aborted the process on allocation, which `catch_unwind` cannot
+/// catch (issue #3320).
+pub const MAX_RENDER_PIXELS: f64 = 512e6;
+
 /// The geometric frame of a render.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
@@ -181,16 +191,47 @@ impl Frame {
         (r.width(), r.height())
     }
 
+    /// The output size that fits in `max_w × max_h` at this frame's aspect: the box itself when it
+    /// already matches up to rounding (an export size), otherwise the largest aspect-true size
+    /// inside it. A result of more pixels than the ceiling ([`MAX_RENDER_PIXELS`], or this frame's
+    /// own pixel count when larger) is scaled down to it, both sides by the same factor, so the
+    /// aspect survives: every size the ceiling allows is returned exactly as before the ceiling
+    /// existed, and a request box far beyond the photo comes back at the ceiling instead of being
+    /// allocated, which aborted the process (issue #3320).
     pub fn fit(&self, max_w: usize, max_h: usize) -> (usize, usize) {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
         // a box that is already this aspect up to rounding (an export size) is the size: fitting
         // into it again rounds twice and can lose a pixel of the edge that was asked for
-        if (mw - 0.5) / a <= mh + 0.5 && (mw + 0.5) / a >= mh - 0.5 {
-            return (max_w.max(1), max_h.max(1));
-        }
-        let (w, h) = if mw / mh > a { (mh * a, mh) } else { (mw, mw / a) };
+        let box_is_size = (mw - 0.5) / a <= mh + 0.5 && (mw + 0.5) / a >= mh - 0.5;
+        let (w, h) = if box_is_size {
+            (mw, mh)
+        } else if mw / mh > a {
+            (mh * a, mh)
+        } else {
+            (mw, mw / a)
+        };
+        // the sizing is all f64 (a `usize::MAX` box overflows the byte count in usize before the
+        // allocation could even fail) and the cast happens only on the clamped result
+        let ceiling = self.pixel_ceiling();
+        let px = w * h;
+        let (w, h) = if px > ceiling {
+            let k = (ceiling / px).sqrt();
+            // (at least one pixel a side, as the engine's resize does: for an aspect more extreme
+            // than the ceiling itself the limit wins and the sides stay whole pixels)
+            ((w * k).max(1.0), (h * k).max(1.0))
+        } else {
+            (w, h)
+        };
         ((w.round() as usize).max(1), (h.round() as usize).max(1))
+    }
+
+    /// The most pixels this frame's render may have: [`MAX_RENDER_PIXELS`], or this frame's own
+    /// (cropped) pixel count when that is larger — a render is never held below the photo's own
+    /// size.
+    fn pixel_ceiling(&self) -> f64 {
+        let (nw, nh) = self.native_size();
+        (nw * nh).max(MAX_RENDER_PIXELS)
     }
 
     /// Output pixels per unit of the oriented image's long edge.
@@ -431,5 +472,54 @@ mod tests {
         // the whole image, mirrored: output top-left is the image's bottom-right
         let p = f.out_to_norm(400, 200).apply(Point::new(0.0, 0.0));
         assert!((p.x - 1.0).abs() < 1e-9 && (p.y - 1.0).abs() < 1e-9, "{p:?}");
+    }
+
+    /// A request box far beyond the photo comes back at the render pixel ceiling instead of the
+    /// 2e10 px the caller asked for (which the render then allocated, aborting the process;
+    /// issue #3320): 200000×100000 lands at exactly 512 megapixels.
+    #[test]
+    fn an_oversized_box_is_clamped_to_the_pixel_ceiling() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(8, 4, &s, true); // 2:1, 32 px of its own
+        let (w, h) = f.fit(200_000, 100_000);
+        assert!((w as i64 - 32_000).abs() <= 1 && (h as i64 - 16_000).abs() <= 1, "{w}×{h}");
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS * 1.001, "{} px", w * h);
+        assert!(((w as f64) / (h as f64) - 2.0).abs() < 0.01, "the frame's 2:1 aspect: {w}×{h}");
+    }
+
+    /// A `usize::MAX` box used to overflow the byte count in usize before the allocation could
+    /// even fail (debug builds panicked at the multiply). The sizing is all f64 now and the
+    /// ceiling wins.
+    #[test]
+    fn a_usize_max_box_clamps_without_overflow() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(8, 4, &s, true);
+        let (w, h) = f.fit(usize::MAX, usize::MAX);
+        assert!((1..=100_000).contains(&w) && (1..=100_000).contains(&h), "{w}×{h}");
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS * 1.001, "{} px", w * h);
+        assert!(((w as f64) / (h as f64) - 2.0).abs() < 0.01, "the frame's 2:1 aspect: {w}×{h}");
+    }
+
+    /// Every size the ceiling allows is returned exactly as before: a large-but-legal enlargement
+    /// (2e8 px < 5.12e8) passes through untouched.
+    #[test]
+    fn a_legal_request_is_returned_unchanged() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(8, 4, &s, true);
+        assert_eq!(f.fit(20_000, 10_000), (20_000, 10_000));
+        assert_eq!(f.fit(1000, 500), (1000, 500));
+        assert_eq!(f.fit(3000, 3000), (3000, 1500));
+        assert_eq!(f.fit(1, 1), (1, 1));
+    }
+
+    /// A photo with more than 512 megapixels of its own is never held below its own size (a Frame
+    /// is pure math: building one allocates no pixels), and an enlargement past its own size stops
+    /// at its own size, not the ceiling.
+    #[test]
+    fn a_frame_larger_than_the_ceiling_is_not_clamped_below_its_own_size() {
+        let s = DevelopSettings::default();
+        let f = Frame::new(400_000_000, 200_000_000, &s, true); // 8e16 px of its own
+        assert_eq!(f.fit(400_000_000, 200_000_000), (400_000_000, 200_000_000));
+        assert_eq!(f.fit(800_000_000, 400_000_000), (400_000_000, 200_000_000));
     }
 }

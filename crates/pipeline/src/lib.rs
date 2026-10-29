@@ -129,7 +129,9 @@ pub enum Quality {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderRequest {
-    /// Output must fit in `max_w × max_h` (aspect preserved).
+    /// Output must fit in `max_w × max_h` (aspect preserved). A box far beyond the photo is held
+    /// to the render pixel ceiling (`geometry::MAX_RENDER_PIXELS`, or the photo's own pixels when
+    /// larger) rather than allocated: see [`geometry::Frame::fit`].
     pub max_w: usize,
     pub max_h: usize,
     pub quality: Quality,
@@ -174,6 +176,7 @@ impl PixelWindow {
 }
 
 impl RenderRequest {
+    /// A request fitting in `max_w × max_h` (the size ceiling of [`Self::max_w`] applies).
     pub fn fit(max_w: usize, max_h: usize) -> Self {
         Self {
             max_w,
