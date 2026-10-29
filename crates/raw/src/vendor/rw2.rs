@@ -638,6 +638,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         metadata.iso = ifd0.u32(ISO).or_else(|| ifd0.u32(ISO_32)).filter(|v| *v > 0);
     }
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Rw2,
         width: w,
         height: h,

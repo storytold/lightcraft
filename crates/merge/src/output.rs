@@ -97,6 +97,7 @@ pub fn write_linear_dng(
     meta.height = Some(h as u32);
     meta.orientation = Some(orientation);
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

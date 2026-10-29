@@ -97,6 +97,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     metadata.height = Some(p.image.1 as u32);
     let orientation = tiff.as_ref().and_then(|t| t.ifds.first()).and_then(|i| i.u16(t::ORIENTATION)).unwrap_or(1);
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Mrw,
         width: w,
         height: h,

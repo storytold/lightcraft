@@ -800,6 +800,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         record.distortion.status = crate::lens_metadata::SonyLensStatus::Applied;
     }
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Arw,
         width: w,
         height: h,

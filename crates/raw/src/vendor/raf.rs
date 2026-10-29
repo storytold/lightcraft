@@ -211,6 +211,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     metadata.height = Some(active.height as u32);
     let orientation = metadata.orientation.unwrap_or(Orientation::Normal);
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Raf,
         width: w,
         height: hgt,
