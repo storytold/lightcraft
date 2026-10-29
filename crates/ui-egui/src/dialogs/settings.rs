@@ -110,6 +110,9 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
         for (id, label) in TABS {
             if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, tab == id).clicked() {
+                if tab.as_str() == "performance" && *id != "performance" {
+                    performance::save_pending_cache_size(app, ui);
+                }
                 *tab = id.to_string();
             }
         }
