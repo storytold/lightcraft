@@ -58,20 +58,25 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     let custom_id = egui::Id::unique("settings-cache-custom");
     let mut custom = !CACHE_SIZES.contains(&cur) || ui.data(|d| d.get_temp::<bool>(custom_id)).unwrap_or(false);
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
-        const CUSTOM: u32 = u32::MAX;
-        let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB"), (CUSTOM, crate::i18n::tr("Custom…"))];
-        let mut v = if custom { CUSTOM } else { cur };
+        let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB")];
+        // none of the five lit while a custom size is chosen
+        let mut v = if custom { 0 } else { cur };
         if choices(ui, "settingsCache", &opts, &mut v) {
-            custom = v == CUSTOM;
-            if !custom {
-                let _ = app.run("library.preferences", json!({"cacheMb": v}));
-            }
+            custom = false;
+            let _ = app.run("library.preferences", json!({"cacheMb": v}));
+        }
+    });
+    // a size of one's own, on its own line: the field keeps its unit beside it, also while it is typed in
+    row(ui, t, "", |ui| {
+        if crate::widgets::text_button(ui, "settingsCacheCustom", "Custom…", custom).clicked() {
+            custom = true;
         }
         if custom {
             let mut gb = cur.div_ceil(1024).clamp(1, MAX_CACHE_GB);
-            let r = ui.add(egui::DragValue::new(&mut gb).range(1..=MAX_CACHE_GB).suffix(" GB"));
+            let r = ui.add(egui::DragValue::new(&mut gb).range(1..=MAX_CACHE_GB));
             crate::widgets::announce(&r, crate::i18n::tr("Custom size limit, in GB").to_string());
             register(ui, "drag:settingsCacheCustom", r.rect);
+            ui.label(RichText::new("GB").color(t.text));
             if r.changed() {
                 let _ = app.run("library.preferences", json!({"cacheMb": gb * 1024}));
             }

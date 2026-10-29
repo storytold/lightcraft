@@ -4371,7 +4371,7 @@ fn previews_follow_the_screen_profile_while_none_is_chosen() {
 fn custom_cache_size(h: &mut Headless, t: Duration) {
     let custom_field = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "drag:settingsCacheCustom");
     assert!(!custom_field(h));
-    h.request("ui.clickWidget", json!({"id": "button:settingsCache-5"}), t);
+    h.request("ui.clickWidget", json!({"id": "button:settingsCacheCustom"}), t);
     h.step();
     assert!(custom_field(h), "the size field");
     assert_eq!(h.app.session.cache_mb, 512, "nothing changed until a size is chosen");
