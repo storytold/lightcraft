@@ -393,8 +393,7 @@
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
 
-
-### Settings text can be read in every theme
+### Settings text can be read in more themes
 
 - What Settings says can be read in more themes. Its explanations, the text a box shows while it is empty, "In Use"
   on a theme's card and the warnings and refusals on the AI Denoise and Faces tabs now stand at least 4.5:1 against
@@ -410,6 +409,7 @@
 - Sentences and names in Settings that some languages had no word for (External Editing and its hints, the
   Monitor tab, the model installation messages) are in every language now. "(library default)" and "starting…" are
   translated too.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
