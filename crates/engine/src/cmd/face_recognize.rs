@@ -183,11 +183,8 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         };
         if changed {
             s.people_gen = s.people_gen.wrapping_add(1);
-            // the rename stands; a people.json that cannot be written now is tried again by the next command and
-            // the frame loop (Session::persist), and counts as unsaved until then
-            if let Err(e) = s.save_people() {
-                log::warn!("faces: {e}");
-            }
+            // the rename stands; a people.json that cannot take it now counts as unsaved
+            s.save_people_or_keep_unsaved();
         }
     }
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {

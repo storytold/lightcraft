@@ -790,3 +790,39 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     assert_eq!(picture(&s, "Ann"), Some(b));
     let _ = std::fs::remove_dir_all(d);
 }
+
+/// A people.json that couldn't be read when the library opened is never overwritten that session (#3246): a picture
+/// can't be chosen, and a rename carrying one counts as unsaved, without the frame loop trying to write the file.
+#[test]
+fn a_rename_counts_as_unsaved_when_people_json_was_unreadable_at_opening() {
+    use lightcraft_catalog::{Filter, Photo, Source};
+    let d = temp("cover-blocked");
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+    p.meta.regions = vec![region(0.1, Some("Bea")), region(0.5, Some("Ann"))];
+    s.commit("add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    std::fs::remove_file(lib.join("people.json")).ok();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.take_library_warnings().iter().any(|w| w.starts_with("people.json")));
+    assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": id.0, "index": 1})).is_err(), "nothing chosen that can't be kept");
+    assert_eq!(s.unsaved(), None, "and nothing left unsaved");
+    // a picture held in the session (as no command can set it then) still follows a rename, and is reported unsaved
+    let cover = lightcraft_catalog::PersonCover { photo: id, face: s.catalog.photo(id).unwrap().meta.regions[1].rect };
+    s.person_covers.insert("ann".into(), cover);
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    let ada = s.catalog.people_in_with(&Filter::default(), &s.person_covers).into_iter().find(|p| p.name == "Ada").map(|p| p.photo);
+    assert_eq!(ada, Some(id));
+    assert!(s.unsaved().is_some_and(|(n, why)| n == 1 && why.contains("people.json")), "{:?}", s.unsaved());
+    s.persist_if_dirty();
+    s.persist().unwrap();
+    assert!(s.unsaved().is_some(), "still unsaved: the file is not written this session");
+    assert!(lib.join("people.json").join("in-the-way").is_dir(), "the unreadable people.json is left alone");
+    let _ = std::fs::remove_dir_all(d);
+}
