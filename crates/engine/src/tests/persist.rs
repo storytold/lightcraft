@@ -241,6 +241,51 @@ fn an_upgraded_library_says_where_what_it_was_is_kept() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The v6 fixture's log with its second record replaced by garbage (a record after it is still good, so it is damage, not a torn tail).
+fn damaged_v6_log() -> String {
+    let log = include_str!("../../../catalog/src/fixtures/v6-catalog.log.jsonl");
+    log.lines().enumerate().map(|(i, l)| if i == 1 { "not a record" } else { l }).collect::<Vec<_>>().join("\n") + "\n"
+}
+
+/// Given a library from an earlier version that has only a damaged log, when it is opened and upgraded, then the person is told
+/// where the damaged log is kept (there is no kept snapshot to name it beside).
+#[test]
+fn an_upgraded_library_with_only_a_damaged_log_says_where_the_log_is_kept() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-kept-dmg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("catalog.log"), damaged_v6_log()).unwrap();
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    let told = s.take_library_warnings();
+    assert!(told.iter().any(|w| w.contains("upgraded") && w.contains("catalog.log.damaged-")), "{told:?}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A library already in this version's format whose log was damaged was not upgraded: it is not told it was.
+#[test]
+fn a_current_library_with_a_damaged_log_is_not_told_it_was_upgraded() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-cur-dmg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new();
+    s.open_library(&dir, true).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 3})).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 4})).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 5})).unwrap();
+    drop(s);
+    let log = std::fs::read_to_string(dir.join("catalog.log")).unwrap();
+    let broken: Vec<&str> = log.lines().enumerate().map(|(i, l)| if i == 1 { "not a record" } else { l }).collect();
+    std::fs::write(dir.join("catalog.log"), broken.join("\n") + "\n").unwrap();
+    let mut s = Session::new();
+    let damaged = s.open_library(&dir, false).unwrap().damaged.clone();
+    assert!(damaged.is_some_and(|name| dir.join(name).exists()), "the log was found damaged and kept");
+    let told = s.take_library_warnings();
+    assert!(!told.iter().any(|w| w.contains("upgraded")), "{told:?}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An older library (format 6) that could not keep its files at open: a directory sits where the
 /// first kept file goes.
 fn library_that_could_not_keep_its_files(name: &str) -> std::path::PathBuf {

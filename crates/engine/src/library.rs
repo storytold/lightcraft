@@ -395,7 +395,7 @@ struct SettingsLoad {
 /// What to tell the person when opening the library upgraded it: the files it was are kept
 /// beside it (as large as it was), and are theirs to delete.
 fn kept_note(kept: &[String], damaged: Option<&String>) -> Option<String> {
-    if kept.is_empty() {
+    if kept.is_empty() && damaged.is_none() {
         return None;
     }
     // (a library whose log was damaged: that log is the other half of what it was)
@@ -690,7 +690,8 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
-        let kept = kept_note(&report.kept, report.damaged.as_ref());
+        // (a damaged log is only part of "what the library was" when opening upgraded it: a library in this format that lost its log's tail was not upgraded)
+        let kept = kept_note(&report.kept, report.damaged.as_ref().filter(|_| report.upgraded_from.is_some()));
         self.library = Some(Library {
             dir,
             on_disk,
