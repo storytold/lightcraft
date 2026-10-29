@@ -633,6 +633,10 @@ impl PersonCover {
     }
 }
 
+/// One face, by its photo and its box: a [`PersonCover`] says which face stands for a person, a `FaceRef` names any
+/// face kept outside the catalog (the faces set aside as "not this person", for one).
+pub type FaceRef = PersonCover;
+
 /// A person named on faces in the library ([`Catalog::people`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Person {

@@ -173,19 +173,36 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     let photos = ops.len();
     s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
     s.skip_auto_write = true;
-    // their chosen picture follows them (and stays under the old name too, for an undo). The new name's own entry
-    // counts only when someone bears that name (a merge, where theirs is kept); otherwise it is left over from an
-    // earlier rename and is replaced, or dropped when they have no chosen picture
-    if from_key != to_key && !(other && s.person_covers.contains_key(&to_key)) {
-        let changed = match s.person_covers.get(&from_key).copied() {
-            Some(c) => s.person_covers.insert(to_key.clone(), c) != Some(c),
-            None => s.person_covers.remove(&to_key).is_some(),
-        };
-        if changed {
-            s.people_gen = s.people_gen.wrapping_add(1);
-            // the rename stands; a people.json that cannot take it now counts as unsaved
-            s.save_people_or_keep_unsaved();
+    // what they chose follows them, and stays under the old name too, for an undo. What the new name held counts only
+    // when someone bears that name (a merge): then their picture is kept and the faces set aside for both add up;
+    // otherwise it is left over from an earlier rename and is replaced (or dropped when there is nothing to carry)
+    let mut changed = false;
+    if from_key != to_key {
+        let set_aside = s.person_dismissed.get(&from_key).cloned().unwrap_or_default();
+        if other {
+            let list = s.person_dismissed.entry(to_key.clone()).or_default();
+            for f in set_aside {
+                if !list.iter().any(|g| g.is(f.photo, &f.face)) {
+                    list.push(f);
+                    changed = true;
+                }
+            }
+        } else if set_aside.is_empty() {
+            changed |= s.person_dismissed.remove(&to_key).is_some();
+        } else {
+            changed |= s.person_dismissed.insert(to_key.clone(), set_aside.clone()).as_ref() != Some(&set_aside);
         }
+        if !(other && s.person_covers.contains_key(&to_key)) {
+            changed |= match s.person_covers.get(&from_key).copied() {
+                Some(c) => s.person_covers.insert(to_key.clone(), c) != Some(c),
+                None => s.person_covers.remove(&to_key).is_some(),
+            };
+        }
+    }
+    if changed {
+        s.people_gen = s.people_gen.wrapping_add(1);
+        // the rename stands; a people.json that cannot take it now counts as unsaved
+        s.save_people_or_keep_unsaved();
     }
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
@@ -235,6 +252,58 @@ fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(e);
     }
     Ok(json!({"name": name, "cover": cover.map(|c| json!({"photo": c.photo.0, "rect": rect_json(&c.face)}))}))
+}
+
+/// Most faces set aside as "not this person" for one person.
+const MAX_DISMISSED: usize = 100_000;
+
+/// `faces.dismiss {name, photo, index}`: this face is not `name`; it is never suggested for them again (it may still be
+/// for someone else). `{name, restore: true}` gives all of their set-aside faces back. Kept in the library's
+/// people.json, outside the catalog (#3249).
+fn dismiss(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.dismiss";
+    let name = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?;
+    let key = name.to_lowercase();
+    // a change people.json cannot take is undone in the session too, so it says what the file will say at the next
+    // opening
+    let before = s.person_dismissed.get(&key).cloned();
+    let undo = |s: &mut Session, e| {
+        match before.clone() {
+            Some(b) => s.person_dismissed.insert(key.clone(), b),
+            None => s.person_dismissed.remove(&key),
+        };
+        Err(e)
+    };
+    if super::bool_or(p, "restore", false) {
+        let restored = s.person_dismissed.remove(&key).map_or(0, |v| v.len());
+        s.people_gen = s.people_gen.wrapping_add(1);
+        if let Err(e) = s.save_people() {
+            return undo(s, e);
+        }
+        return Ok(json!({"name": name, "restored": restored, "dismissed": 0}));
+    }
+    let id = lightcraft_catalog::PhotoId(p.get("photo").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing or invalid `photo`"))?);
+    let index = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
+    let rect = s
+        .catalog
+        .photo(id)
+        .and_then(|ph| ph.meta.regions.get(index))
+        .filter(|r| r.kind == lightcraft_meta::RegionKind::Face)
+        .ok_or_else(|| bad(C, "no such face"))?
+        .rect;
+    let list = s.person_dismissed.entry(key.clone()).or_default();
+    if !list.iter().any(|f| f.is(id, &rect)) {
+        if list.len() >= MAX_DISMISSED {
+            return Err(bad(C, format!("at most {MAX_DISMISSED} faces can be set aside for one person")));
+        }
+        list.push(lightcraft_catalog::FaceRef { photo: id, face: rect });
+    }
+    let dismissed = list.len();
+    s.people_gen = s.people_gen.wrapping_add(1);
+    if let Err(e) = s.save_people() {
+        return undo(s, e);
+    }
+    Ok(json!({"name": name, "dismissed": dismissed}))
 }
 
 /// Most faces `faces.unnamed` lists.
@@ -323,7 +392,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let similar = if total > 0 { imp::similar(s, &key, limit) } else { Similar { items: Vec::new(), ready: false, pending: 0 } };
     Ok(
-        json!({"name": shown, "total": total, "cover": cover, "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
+        json!({"name": shown, "total": total, "cover": cover, "dismissed": s.person_dismissed.get(&key).map_or(0, Vec::len), "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
     )
 }
 
@@ -773,6 +842,14 @@ mod imp {
         }
         let Ok(embedder) = current_with(s, "faces.person", false) else { return none };
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
+        // the faces set aside as "not this person" are left out
+        let mut dismissed: std::collections::HashMap<PhotoId, Vec<Rect>> = std::collections::HashMap::new();
+        for f in s.person_dismissed.get(key).into_iter().flatten() {
+            dismissed.entry(f.photo).or_default().push(f.face);
+        }
+        let set_aside = |photo: PhotoId, rect: &Rect| {
+            dismissed.get(&photo).is_some_and(|v| v.iter().any(|d| lightcraft_catalog::FaceRef { photo, face: *d }.is(photo, rect)))
+        };
         let (mut gallery, mut candidates): (Vec<Arc<[f32]>>, Vec<(u64, usize, Rect, Arc<[f32]>)>) = (Vec::new(), Vec::new());
         for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
             for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
@@ -780,7 +857,8 @@ mod imp {
                 match r.name.as_deref() {
                     Some(n) if n.trim().to_lowercase() == key => gallery.push(e.clone()),
                     Some(_) => {}
-                    None => candidates.push((ph.id.0, index, r.rect, e.clone())),
+                    None if !set_aside(ph.id, &r.rect) => candidates.push((ph.id.0, index, r.rect, e.clone())),
+                    None => {}
                 }
             }
         }
@@ -1239,6 +1317,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?, index, name} — name a face region (null or empty clears it); undoable; the sidecar is not touched",
             super::always,
             set_name
+        ),
+        cmd!(
+            query "faces.dismiss",
+            "Not This Person",
+            [],
+            None,
+            "{name, photo, index} → {name, dismissed} — this face is not `name`: it is no longer among their look-alikes (`faces.person` → more), now or later; it can still be suggested for someone else. `{name, restore: true}` → {restored} gives all their set-aside faces back. Kept in the library's people.json, outside the catalog; `faces.person` counts them (`dismissed`)",
+            super::always,
+            dismiss
         ),
         cmd!(
             "faces.setCover",
