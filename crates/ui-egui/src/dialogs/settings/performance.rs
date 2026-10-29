@@ -62,12 +62,19 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             custom = true;
         }
         if custom {
-            let mut gb = cur.div_ceil(1024).clamp(1, MAX_CACHE_GB);
-            let r = ui.add(egui::DragValue::new(&mut gb).range(1..=MAX_CACHE_GB));
-            crate::widgets::announce(&r, crate::i18n::tr("Custom size limit, in GB").to_string());
+            // the size being typed or dragged is held here, and saved once the edit is over: typing 16 must not set
+            // 1 GB on the way
+            let edit_id = egui::Id::unique("settings-cache-custom-gb");
+            let mut gb = ui.data(|d| d.get_temp::<u32>(edit_id)).unwrap_or_else(|| cur.div_ceil(1024).clamp(1, MAX_CACHE_GB));
+            let r = crate::widgets::named(ui.add(egui::DragValue::new(&mut gb).range(1..=MAX_CACHE_GB)), crate::i18n::tr("Custom size limit, in GB"));
             register(ui, "drag:settingsCacheCustom", r.rect);
             ui.label(RichText::new("GB").color(t.text));
             if r.changed() {
+                ui.data_mut(|d| d.insert_temp(edit_id, gb));
+            }
+            let editing = r.has_focus() || r.dragged();
+            if !editing && ui.data(|d| d.get_temp::<u32>(edit_id)).is_some() {
+                ui.data_mut(|d| d.remove::<u32>(edit_id));
                 let _ = app.run("library.preferences", json!({"cacheMb": gb * 1024}));
             }
         }
