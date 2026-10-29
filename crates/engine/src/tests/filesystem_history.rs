@@ -764,3 +764,27 @@ fn what_is_left_of_a_rollback_follows_each_file_as_far_as_it_went_back() {
 fn what_is_left_of_a_failed_rename_follows_each_file_as_far_as_it_went_back() {
     three_photos_whose_old_names_are_empty(false, true);
 }
+
+/// The files of a rename moved, then the catalog refused the change, then moving them back failed for the photo and
+/// stranded a sidecar: the sidecar's repair is kept (the next rename or a retry puts it back), not dropped with the
+/// error text.
+#[test]
+fn a_refused_rename_whose_files_cannot_all_go_back_keeps_the_stranded_sidecar_repair() {
+    use crate::rename::tests::FakeFs;
+    let store = lightcraft_catalog::MemStore::new();
+    let mut s = memory_library(&store);
+    let fs = FakeFs::new(false, &[("/p/a.jpg", "Photo"), ("/p/a.xmp", "Edits")]);
+    let photo = Photo::new(PhotoId(1), Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 16, 16, "");
+    s.commit("Synthetic File", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    s.persist().unwrap();
+    s.undo.clear();
+    select(&mut s, &[1], 1);
+    let mut plans = s.plan_rename_with(&fs, &[PhotoId(1)], "Trip", 1);
+    // the catalog refuses an empty file name, after the files moved (renames 0: the photo, 1: its sidecar)
+    plans[0].to = String::new();
+    // moving back: the photo goes (2), its sidecar can't (3), and the photo can't be put where it was (4)
+    *fs.fail_renames.borrow_mut() = vec![3, 4];
+    let error = slash(&s.apply_rename_with(&fs, &plans).unwrap_err().to_string());
+    assert!(error.contains("the renamed files could not all be moved back"), "{error}");
+    assert_eq!(s.pending_sidecar_repairs.len(), 1, "the stranded sidecar is kept for a repair: {error}");
+}

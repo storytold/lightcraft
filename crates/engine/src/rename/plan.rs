@@ -219,6 +219,15 @@ impl Session {
                 }
             }
             if let Err(e) = moved_back {
+                // sidecars left apart from their photo are repaired later: with the partial step (undo retries them) or,
+                // when the catalog changed nothing, with the next rename
+                if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                    && let Some(step) = self.undo.last_mut()
+                {
+                    step.retry_sidecars.extend(e.pending_sidecars);
+                } else {
+                    self.pending_sidecar_repairs.extend(e.pending_sidecars);
+                }
                 return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
             }
             return Err(err);
