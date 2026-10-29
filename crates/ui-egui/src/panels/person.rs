@@ -86,6 +86,11 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     page
 }
 
+/// Whether `f` was set aside for the person named `name` this session (hidden before the engine's next page says so).
+fn hidden(set: &std::collections::HashSet<(String, u64, usize)>, name: &str, f: &Face) -> bool {
+    set.contains(&(name.to_lowercase(), f.photo, f.index))
+}
+
 #[derive(PartialEq)]
 enum Hit {
     Nothing,
@@ -133,13 +138,13 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     let target = page
         .more
         .iter()
-        .filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index)))
+        .filter(|f| !hidden(&app.ui.dismissed_faces, &name, f))
         .find(|f| {
             let widget = format!("more-face:{}:{}", f.photo, f.index);
             app.widgets.iter().any(|(id, rect)| id == &widget && pointer.is_some_and(|p| rect.contains(p)))
         })
         .or_else(|| {
-            page.more.iter().filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index))).find(|f| {
+            page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &name, f)).find(|f| {
                 ctx.memory(|m| {
                     m.has_focus(egui::Id::unique(("more-face", f.photo, f.index)))
                         || m.has_focus(egui::Id::unique(("more-face-above", f.photo, f.index)))
@@ -147,7 +152,7 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
             })
         });
     let Some(target) = target else { return false };
-    let more: Vec<&Face> = page.more.iter().filter(|f| !app.ui.dismissed_faces.contains(&(f.photo, f.index))).collect();
+    let more: Vec<&Face> = page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &name, f)).collect();
     confirm_above(app, ctx, &name, &more, target.score);
     true
 }
@@ -183,7 +188,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                     match app.run("faces.dismiss", json!({"name": shown_name, "restore": true})) {
                         Ok(_) => {
                             // they are offered again: the page is asked for anew
-                            app.ui.dismissed_faces.clear();
+                            let key = shown_name.to_lowercase();
+                            app.ui.dismissed_faces.retain(|(n, ..)| *n != key);
                             app.caches.person_page = None;
                         }
                         Err(e) => app.toast(ui.ctx(), e),
@@ -208,8 +214,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         );
         return;
     }
-    let dismissed = &app.ui.dismissed_faces;
-    let more: Vec<&Face> = page.more.iter().filter(|f| !dismissed.contains(&(f.photo, f.index))).collect();
+    let more: Vec<&Face> = page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &shown_name, f)).collect();
     // what the "More" section says when it has no faces to show
     let recognising = app.caches.faces_active || page.ready;
     // with a model installed the button switches recognition on; without one it opens Settings ▸ Faces
@@ -328,7 +333,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             Hit::ConfirmAbove => confirm_above(app, ui.ctx(), &shown_name, &more, f.score),
             Hit::Dismiss => {
                 // hidden at once; kept as "not them" for good (#3249), so a later page leaves it out too
-                app.ui.dismissed_faces.insert((f.photo, f.index));
+                let key = (shown_name.to_lowercase(), f.photo, f.index);
+                app.ui.dismissed_faces.insert(key.clone());
                 match app.run("faces.dismiss", json!({"name": shown_name, "photo": f.photo, "index": f.index})) {
                     Ok(v) => {
                         if let Some((n, _, _, _, page)) = app.caches.person_page.as_mut()
@@ -340,7 +346,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                             app.caches.person_page_gen = app.session.people_gen;
                         }
                     }
-                    Err(e) => app.toast(ui.ctx(), e),
+                    Err(e) => {
+                        // not kept: shown again, to be set aside once it can be
+                        app.ui.dismissed_faces.remove(&key);
+                        app.toast(ui.ctx(), e);
+                    }
                 }
             }
             Hit::MakeCover | Hit::AutoCover => {
