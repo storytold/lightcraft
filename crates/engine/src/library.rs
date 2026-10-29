@@ -142,6 +142,9 @@ pub struct Library {
     /// and why; refreshed by every persist and every frame ([`Session::persist_if_dirty`]). While
     /// set they count as unsaved ([`Session::unsaved`]), so quitting asks first.
     log_held: Option<(usize, String)>,
+    /// Why the last write of people.json failed; `None` once it is written. While set, the chosen pictures exist only
+    /// in memory: retried like presets.json, and counted as unsaved.
+    people_error: Option<String>,
     /// When the frame loop may retry a failed append ([`Session::persist_if_dirty`] backs off).
     retry_at: Option<web_time::Instant>,
     /// What forgetting untouched Local records did when the library opened.
@@ -689,6 +692,7 @@ impl Session {
             unsaved_error: None,
             presets_error: None,
             log_held: None,
+            people_error: None,
             retry_at: None,
             forgot_local: None,
             presets_saved,
@@ -756,6 +760,10 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // a people.json that could not be written (during a rename, say) is tried again
+        if self.library.as_ref().is_some_and(|l| l.people_error.is_some() && !l.blocked.contains(&"people.json")) {
+            let _ = self.save_people();
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -786,7 +794,7 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
+        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || l.people_error.is_some());
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
         let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || log_held) && !backing_off {
@@ -829,8 +837,10 @@ impl Session {
         let ops = lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty());
         let presets = lib.presets_error.as_deref();
         let held = lib.log_held.as_ref().map(|(n, why)| (*n, why.as_str()));
-        let n = ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some());
-        ops.or(held.map(|(_, why)| why)).or(presets).map(|why| (n, why))
+        let people = lib.people_error.as_deref();
+        let n =
+            ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some()) + usize::from(people.is_some());
+        ops.or(held.map(|(_, why)| why)).or(presets).or(people).map(|why| (n, why))
     }
 
     /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
@@ -919,7 +929,21 @@ impl Session {
                 "people: people.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save the change".into(),
             ));
         }
-        lib.files.write_atomic("people.json", &v).map_err(|e| EngineError::Other(format!("people: {e}")))
+        match lib.files.write_atomic("people.json", &v) {
+            Ok(()) => {
+                if lib.people_error.take().is_some() {
+                    log::info!("library: people.json written to disk");
+                }
+                Ok(())
+            }
+            Err(e) => {
+                // retried by the next command and the frame loop, and counted as unsaved meanwhile
+                let why = format!("people: {e}");
+                lib.people_error = Some(why.clone());
+                lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
+                Err(EngineError::Other(why))
+            }
+        }
     }
 
     /// Save the library preferences (no-op for in-memory sessions).

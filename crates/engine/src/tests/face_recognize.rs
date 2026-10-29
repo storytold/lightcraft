@@ -768,7 +768,22 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
     assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
     assert_eq!(picture(&s, "Ann"), Some(b), "unchanged in the session too");
+    // a rename while people.json cannot be written stands; the picture follows it in memory, counts as unsaved, and is
+    // written as soon as it can be
     std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
+    std::fs::remove_file(lib.join("people.json")).unwrap();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(picture(&s, "Ada"), Some(b));
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("people")), "{:?}", s.unsaved());
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.persist().unwrap();
+    assert_eq!(s.unsaved(), None);
+    let file: Value = serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap();
+    assert_eq!(file["covers"]["ada"]["photo"], b.0, "{file}");
+    s.execute("faces.setCover", &json!({"name": "Ada", "photo": null})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
     // a face that loses the name no longer stands for the person
     s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).unwrap();
     s.execute("faces.setName", &json!({"id": a.0, "index": 1, "name": null})).unwrap();
