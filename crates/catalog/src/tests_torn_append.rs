@@ -368,3 +368,61 @@ fn resync_recovers_rules_retry_with_many_nested_values_on_the_final_line() {
     assert_eq!(after.len(), damaged.len() + 1, "the log must keep the fragment and the recovered record");
     assert_eq!(&after[..damaged.len()], &damaged[..]);
 }
+
+/// A crafted final line of many header-shaped markers (`{"seq":1,"crc":2,"op":`) passes the
+/// record-header filter, so every marker becomes a resync candidate, and each attempt decodes the
+/// whole rest of the line: trying all of them is quadratic in the line length, a stall of
+/// `Journal::open` on a hostile log (CWE-407). The per-line scan budget must bound the candidate
+/// decodes (counted, not timed) and open must still finish safely. A CRC-valid retry placed after
+/// the junk must stay recoverable: it is the last candidate, so the scan reaches it first.
+#[test]
+fn resync_scan_budget_bounds_a_line_of_header_shaped_markers() {
+    let probe = MemStore::new();
+
+    let (mut j, mut c, _) = Journal::open(Box::new(probe.clone())).unwrap();
+    let add = add_photo(&mut c);
+    j.append(&apply(&mut c, vec![add])).unwrap();
+    let good = probe.get(LOG).unwrap();
+
+    const MARKERS: usize = 5_000;
+    let marker: &[u8] = b"{\"seq\":1,\"crc\":2,\"op\":";
+    let mut hostile = good.clone();
+    hostile.extend_from_slice(b"torn fragment"); // so no marker sits at line position 0
+    for _ in 0..MARKERS {
+        hostile.extend_from_slice(marker);
+    }
+    let hostile_len = (hostile.len() - good.len()) as u64;
+    probe.set(LOG, hostile);
+
+    RESYNC_CANDIDATES.with(|count| count.set(0));
+    let (j2, _loaded, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    let candidates = RESYNC_CANDIDATES.with(|count| count.get());
+    assert!(
+        candidates < MARKERS,
+        "resync tried all {candidates} candidates of a hostile {hostile_len}-byte line; the scan budget must bound the work"
+    );
+    assert!(report.damaged.is_none(), "{report:?}");
+    assert_eq!(report.torn_fragments, 0);
+    assert_eq!(report.torn_bytes, hostile_len, "the hostile line must be dropped as a torn tail");
+    assert_eq!(j2.seq(), 1, "the records before the hostile line must survive");
+    assert_eq!(probe.get(LOG).unwrap().len(), good.len(), "the log must be cut back to the last good record");
+
+    let retry_op = Op::SetRating { id: c.photos().next().unwrap().id, rating: 5 };
+    let next_seq = j2.seq() + 1;
+    let body = serde_json::to_string(&retry_op).unwrap();
+    let crc = crc32fast::hash(body.as_bytes());
+    let mut log = good.clone();
+    for _ in 0..MARKERS {
+        log.extend_from_slice(marker);
+    }
+    log.extend_from_slice(format!("{{\"seq\":{next_seq},\"crc\":{crc},\"op\":{body}}}\n").as_bytes());
+    probe.set(LOG, log);
+
+    RESYNC_CANDIDATES.with(|count| count.set(0));
+    let (j3, _loaded, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    let candidates = RESYNC_CANDIDATES.with(|count| count.get());
+    assert_eq!(candidates, 1, "the retry is the last candidate and must decode first");
+    assert_eq!(j3.seq(), next_seq, "the retried record after the junk must be recovered");
+    assert_eq!(report.torn_fragments, 1, "the junk before the retry is one skipped fragment");
+    assert_eq!(report.torn_bytes, 0, "the valid retry record must not be cut away");
+}

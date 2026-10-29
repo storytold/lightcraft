@@ -269,6 +269,13 @@ thread_local! {
     pub(crate) static RESYNC_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Total bytes of candidate suffixes `resync` may decode per damaged line: every attempt reads
+/// the rest of the line, so trying every candidate of a crafted line would make
+/// [`Journal::open`] quadratic in the line length (CWE-407). The budget is far above any
+/// fragment-plus-retry a failed append can leave, but caps the stall; past it the line reads as
+/// damage, which is handled safely.
+pub(crate) const MAX_SCAN: usize = 64 << 20;
+
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
 /// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
@@ -278,29 +285,40 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     // The retry record starts with the `{"seq":` marker, but that marker can also occur inside
     // the op body (a smart-album rule value such as `{"seq":1}`); then the last occurrence is
     // nested, not the record start, and decoding it rejects a valid retry. Scan every marker
-    // once, left to right, then try them from the end. A marker nested inside the op body is
-    // followed by `}` or `,`, not by the `,"crc":` record header, so the cheap header check
-    // rejects it without a full decode; only a real record start reaches `decode_record`. This
-    // imposes no fixed limit on how many nested markers a valid record may contain, and stays
-    // linear in the line length instead of rescanning for each candidate, so a hostile line of
-    // repeated markers cannot become quadratic. The fragment that precedes the record stays to
-    // its left (`i > 0`).
+    // once, left to right, then try them from the end. A candidate must match the record header
+    // shape — `{"seq":<digits>,"crc":<digits>,"op":`, what `encode_record` writes — so a marker
+    // nested inside the op body (followed by `}` or `,`) or plain junk never reaches
+    // `decode_record`; only a real record start does. This imposes no fixed limit on how many
+    // nested markers a valid record may contain. Each attempt then decodes the rest of the line,
+    // so the scan budget bounds the total when a hostile line still holds many header-shaped
+    // markers, keeping the work near-linear instead of quadratic. The fragment that precedes the
+    // record stays to its left (`i > 0`).
+    let digits = |b: &[u8]| b.iter().take_while(|x| x.is_ascii_digit()).count();
     let mut candidates: Vec<usize> = Vec::new();
     let mut from = 0;
     while let Some(i) = line[from..].windows(START.len()).position(|w| w == START) {
         let pos = from + i;
-        let after = &line[pos + START.len()..];
-        let digits = after.iter().take_while(|b| b.is_ascii_digit()).count();
-        if digits > 0 && after[digits..].starts_with(b",\"crc\":") {
+        let Some(after) = line.get(pos + START.len()..) else { break };
+        let seq_digits = digits(after);
+        let crc_field = after.get(seq_digits..).and_then(|rest| rest.strip_prefix(b",\"crc\":"));
+        let crc_digits = crc_field.map(digits).unwrap_or(0);
+        let op_field = crc_field.and_then(|rest| rest.get(crc_digits..)).and_then(|rest| rest.strip_prefix(b",\"op\":"));
+        if seq_digits > 0 && crc_digits > 0 && op_field.is_some() {
             candidates.push(pos);
         }
         from = pos + START.len();
     }
+    let mut scanned = 0usize;
     for &i in candidates.iter().rev() {
         if i == 0 {
             break; // the record must follow a fragment
         }
-        let Ok(text) = std::str::from_utf8(&line[i..]) else { continue };
+        let Some(suffix) = line.get(i..) else { continue };
+        scanned = match scanned.checked_add(suffix.len()) {
+            Some(total) if total <= MAX_SCAN => total,
+            _ => break, // the budget is spent: stop trying further candidates
+        };
+        let Ok(text) = std::str::from_utf8(suffix) else { continue };
         #[cfg(test)]
         RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
         if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}'))
