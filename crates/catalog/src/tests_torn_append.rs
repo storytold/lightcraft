@@ -315,3 +315,56 @@ fn resync_preserves_retry_record_with_nested_start_marker() {
     assert_eq!(report.torn_bytes, 0, "the valid retry record must not be truncated as torn");
     assert_eq!(loaded.to_snapshot(), c.to_snapshot(), "the recovered smart-album rule should be preserved");
 }
+
+/// The maintainer's regression for issue #2124, with the damaged line as the file's LAST one: a
+/// torn fragment glued to a CRC-valid `SetAlbumRules` retry whose rules hold several nested
+/// `{"seq":1}` values. Picking the last raw `{"seq":` occurrence as the record start (as the
+/// original `rposition` scan did) lands in a nested value, rejects the whole record, and cuts the
+/// final line away — losing the valid operation. `resync` must recover the retry (its real start
+/// is followed by the `,"crc":` header no nested rule value has) and leave the log file whole.
+#[test]
+fn resync_recovers_rules_retry_with_many_nested_values_on_the_final_line() {
+    let probe = MemStore::new();
+
+    let (mut j, mut c, _) = Journal::open(Box::new(probe.clone())).unwrap();
+    let add = add_photo(&mut c);
+    j.append(&apply(&mut c, vec![add])).unwrap();
+
+    let album_id = c.alloc_album_id();
+    let add_album = Op::AddAlbum { album: Album { smart: Some(Box::new(Filter::default())), ..Album::new(album_id, "Smart") } };
+    j.append(&apply(&mut c, vec![add_album])).unwrap();
+
+    let rules =
+        (0..12).map(|_| Rule::Field { field: "title".into(), op: "isEmpty".into(), value: serde_json::json!({ "seq": 1 }) }).collect::<Vec<_>>();
+    let retry_op =
+        Op::SetAlbumRules { id: album_id, rules: Box::new(Filter { rule_set: Some(RuleSet { mode: Match::All, rules }), ..Default::default() }) };
+    apply(&mut c, vec![retry_op.clone()]);
+
+    // Encode the retry exactly as the journal writes records, so `decode_record` accepts it once
+    // resync finds its real start: `seq` continues the log and the CRC matches the body.
+    let next_seq = j.seq() + 1;
+    let body = serde_json::to_string(&retry_op).unwrap();
+    let crc = crc32fast::hash(body.as_bytes());
+    let retry = format!("{{\"seq\":{next_seq},\"crc\":{crc},\"op\":{body}}}");
+
+    // The failed append's fragment glued to the retry, and nothing after: the damaged line is the
+    // file's last, without a closing newline.
+    let mut log = probe.get(LOG).unwrap();
+    log.extend_from_slice(b"torn fragment without a newline");
+    log.extend_from_slice(retry.as_bytes());
+    let damaged = log.clone();
+    probe.set(LOG, log);
+
+    let (j2, loaded, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    assert_eq!(report.torn_fragments, 1, "the fragment must be reported and the retry recovered");
+    assert_eq!(report.torn_bytes, 0, "the retry record must not be cut away as a torn tail");
+    assert_eq!(j2.seq(), next_seq, "the retried SetAlbumRules must be recovered");
+    assert_eq!(report.replayed, 3);
+    assert_eq!(loaded.to_snapshot(), c.to_snapshot(), "the smart-album rules must survive the reload");
+
+    // The log file is preserved: its bytes stay (plus only the newline that closes the final
+    // line), instead of the damaged line being truncated away.
+    let after = probe.get(LOG).unwrap();
+    assert_eq!(after.len(), damaged.len() + 1, "the log must keep the fragment and the recovered record");
+    assert_eq!(&after[..damaged.len()], &damaged[..]);
+}
