@@ -1150,16 +1150,17 @@ fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
     // enough faces of hers to fill more than a screen
     for id in &ids {
         let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
-        meta.regions = (0..16)
+        // 16 faces of hers, and 16 nobody has named (a long list below everyone in People)
+        meta.regions = (0..32)
             .map(|i| lightcraft_meta::Region {
                 rect: lightcraft_geom::Rect {
-                    x0: 0.05 * f64::from(i % 4),
-                    y0: 0.2 * f64::from(i / 4),
-                    x1: 0.05 * f64::from(i % 4) + 0.04,
-                    y1: 0.2 * f64::from(i / 4) + 0.1,
+                    x0: 0.05 * f64::from(i % 8),
+                    y0: 0.2 * f64::from(i / 8),
+                    x1: 0.05 * f64::from(i % 8) + 0.04,
+                    y1: 0.2 * f64::from(i / 8) + 0.1,
                 },
                 kind: lightcraft_meta::RegionKind::Face,
-                name: Some("Jane Doe".into()),
+                name: (i % 8 < 4).then(|| "Jane Doe".into()),
                 description: None,
             })
             .collect();
@@ -1186,6 +1187,10 @@ fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(!h.app.widgets.iter().any(|(w, _)| *w == top_face), "scrolled down to More");
+    // back to everyone: the People index is where it was, at the top, not scrolled down with her page
+    h.request("engine.execute", json!({"command": "view.people"}), t);
+    h.settle(SETTLE);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "person:Jane Doe"), "her card at the top is on screen");
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both

@@ -6,7 +6,8 @@
 - Coming back to a person's page from a photo, or after rating or editing, no longer works out its More faces again
   (seconds in a large library): only a change to a face does. While the scan learns new faces, the page is refreshed
   no more than a tenth of the time it takes to make. Go to Suggestions, next to their name, scrolls past their own
-  faces, often hundreds, to the ones that look like them.
+  faces, often hundreds, to the ones that look like them. The People index keeps its own place: coming back from a person's page
+  scrolled down to their suggestions no longer leaves everyone scrolled to the end of the unnamed faces.
 
 ### Open a face's photo from a right click
 - In People, a right click on an unnamed face, or on a face offered in More on a person's page, has Open Photo: the
