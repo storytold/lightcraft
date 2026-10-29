@@ -691,3 +691,41 @@ fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
     assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
     assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
 }
+
+/// A face that looks like a person but even more like someone else already named (two people who look alike) is not offered
+/// on that person's page: it is offered on the other one's. A face about as much like both is offered to neither.
+#[test]
+fn a_face_that_looks_more_like_someone_else_is_offered_to_them_only() {
+    let d = temp("elsewhere");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Paul")), region(0.5, Some("Paul Jr"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    let unit = |parts: &[(usize, f32)]| {
+        let mut v = vec![0.0f32; 64];
+        for (i, x) in parts {
+            v[*i] = *x;
+        }
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.iter().map(|x| x / n).collect::<Vec<f32>>()
+    };
+    // Paul and Paul Jr look alike; the first unnamed face is Paul Jr's, the second Paul's
+    let (paul, junior) = (unit(&[(0, 1.0), (1, 0.6)]), unit(&[(0, 0.6), (1, 1.0)]));
+    let (like_junior, like_paul) = (unit(&[(0, 0.55), (1, 1.0)]), unit(&[(0, 1.0), (1, 0.55)]));
+    for (id, x, v) in [(a, 0.1, paul), (a, 0.5, junior), (b, 0.1, like_junior), (b, 0.5, like_paul)] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    let more = |s: &mut Session, name: &str| -> Vec<u64> {
+        let r = s.execute("faces.person", &json!({"name": name})).unwrap();
+        r["more"].as_array().unwrap().iter().map(|f| f["index"].as_u64().unwrap()).collect()
+    };
+    assert_eq!(more(&mut s, "Paul"), vec![1], "Paul Jr's face, alike enough to pass the bar, is not offered to Paul");
+    assert_eq!(more(&mut s, "Paul Jr"), vec![0]);
+    // a poor face, about as much like both, is offered to neither (it would fill both pages)
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None), region(0.7, None)]);
+    s.faces.index.insert(b.0, &region(0.7, None).rect, unit(&[(0, 1.0), (1, 0.97)]));
+    assert_eq!(more(&mut s, "Paul"), vec![1]);
+    assert_eq!(more(&mut s, "Paul Jr"), vec![0]);
+    let _ = std::fs::remove_dir_all(&d);
+}
