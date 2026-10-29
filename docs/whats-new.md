@@ -198,8 +198,8 @@
 ### A shuffled grid says so, and Reshuffle is one click away
 - When the photos are sorted at random, the grid's header now shows "Shuffled" beside the photo count with a Reshuffle
   button: one click gives a new order, with the Sort menu's Reshuffle unchanged. Recently Added keeps its own order
-  (newest import first), so it shows no chip. In a narrow window the button stands alone, and a very long count
-  leaves it out, so the count always stays in view.
+  (newest import first), so it shows no chip. In a narrow window the button stands alone, and when even it would
+  leave the title no room (a very narrow window or a very long count) the chip is left out, so the count always stays in view.
 - The sort button's tooltip and its name for screen readers now say which sort is chosen ("Sort: Capture
   Date, Descending", "Sort: Random") instead of just "Sort".
 
