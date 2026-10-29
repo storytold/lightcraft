@@ -768,6 +768,7 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
     assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
     assert_eq!(picture(&s, "Ann"), Some(b), "unchanged in the session too");
+    assert_eq!(s.unsaved(), None, "and nothing is left unsaved");
     // a rename while people.json cannot be written stands; the picture follows it in memory, counts as unsaved, and is
     // written as soon as it can be
     std::fs::remove_dir_all(lib.join("people.json")).unwrap();
@@ -777,6 +778,7 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
     assert_eq!(picture(&s, "Ada"), Some(b));
     assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("people")), "{:?}", s.unsaved());
+    assert!(s.close_library().is_err(), "the library stays open (and the picture kept) while it can still be written");
     std::fs::remove_dir_all(lib.join("people.json")).unwrap();
     s.persist().unwrap();
     assert_eq!(s.unsaved(), None);
