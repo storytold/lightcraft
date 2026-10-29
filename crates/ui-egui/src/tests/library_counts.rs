@@ -225,6 +225,40 @@ fn show_in_folders_is_offered_while_the_sidebar_is_hidden_and_the_tally_trails()
     h.app.run("app.showInFolders", json!({"id": id.0})).unwrap();
 }
 
+/// The tree kept while the counts lag (the sidebar drew it from the old tally) is not the tree of the counts that
+/// come after: when another reader of the counts (the Keywords section, By Date) takes the finished count while the
+/// Folders section is hidden, a folder the batch made must still have its row.
+#[test]
+fn the_tree_kept_while_the_counts_lagged_is_not_taken_for_the_one_of_the_new_counts() {
+    let mut h = app(400);
+    assert_eq!(folder_count(&mut h, "Z"), Some(200));
+    let gate = Arc::new(Mutex::new(()));
+    let held = gate.lock().unwrap_or_else(PoisonError::into_inner);
+    let g = gate.clone();
+    h.app.caches.library.count_with(Arc::new(move |cat: &Catalog| {
+        drop(g.lock().unwrap_or_else(PoisonError::into_inner));
+        LibraryTally::of(cat)
+    }));
+    batch(&mut h, MAX_FOLLOWED + 1, "Entities/New");
+    let new = h.app.session.catalog.photos().find(|p| matches!(&p.source, Source::File { path } if path.contains("/New/"))).unwrap().id;
+    // the sidebar draws the folders from the old tally: that tree is kept, its revision moved on to the batch's
+    h.step();
+    assert!(h.app.caches.library.busy(), "counted in the background");
+    let r = h.request("ui.set", json!({"leftPanel": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    drop(held);
+    let start = std::time::Instant::now();
+    while h.app.caches.library.busy() {
+        assert!(start.elapsed() < T, "the count did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // something else takes the finished count; nothing asks for the folders
+    let library = h.app.session.library_generation();
+    h.app.caches.keyword_tree(&h.app.session.catalog, library);
+    assert!(h.app.caches.library.is_current(&h.app.session.catalog, library), "the counts are the library's now");
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(new)), "the folder the batch made has its row");
+}
+
 /// A count that finished while the sidebar was hidden is taken by the command's own look at the folders: the entry
 /// must not stay off waiting for a sidebar nobody opens.
 #[test]

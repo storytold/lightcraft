@@ -105,11 +105,16 @@ impl LibraryWork {
         self.tally.as_ref().map(|(_, t)| t)
     }
 
-    /// Whether the tally is of library `library` and counts `cat` as it is now: not while the
+    /// The tally, when it is of library `library` and counts `cat` as it is now: not while the
     /// photos of a change too large to follow are counted again (the tally then shows an older
     /// state), nor before the first count. A read-only look: it counts nothing.
+    pub fn current_tally(&self, cat: &Catalog, library: u64) -> Option<&LibraryTally> {
+        self.tally.as_ref().filter(|(of, t)| *of == library && t.revision() == cat.revision && t.exact()).map(|(_, t)| t)
+    }
+
+    /// Whether [`LibraryWork::current_tally`] has one.
     pub fn is_current(&self, cat: &Catalog, library: u64) -> bool {
-        self.tally.as_ref().is_some_and(|(of, t)| *of == library && t.revision() == cat.revision && t.exact())
+        self.current_tally(cat, library).is_some()
     }
 
     /// Whether a count of every photo is still running and the tally of library `library` is not what it shows: it

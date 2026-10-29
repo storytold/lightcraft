@@ -61,16 +61,16 @@ impl Caches {
     }
     /// The folder tree as last built, when it still holds (a read-only check cannot rebuild it). Not
     /// while the library's tally lags the catalog ([`library_work::LibraryWork::is_current`]): the
-    /// tree then shows the folders as they were before the change being counted.
+    /// tree then shows the folders as they were before the change being counted. Nor a tree built from an older
+    /// tally than the current one: one kept while the counts lagged moved its revision on with the catalog's, but
+    /// its stamp is the old tally's.
     pub(crate) fn folder_tree_if_fresh(
         &self,
         cat: &lightcraft_catalog::Catalog,
         library: u64,
     ) -> Option<std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>> {
-        if !self.library.is_current(cat, library) {
-            return None;
-        }
-        self.folder_tree.as_ref().filter(|(_, r, _)| still_right(cat, *r, READS_FILE)).map(|(_, _, t)| t.clone())
+        let stamp = self.library.current_tally(cat, library)?.folders_stamp();
+        self.folder_tree.as_ref().filter(|(s, r, _)| *s == stamp && still_right(cat, *r, READS_FILE)).map(|(_, _, t)| t.clone())
     }
     /// The library's keyword tree.
     pub fn keyword_tree(&mut self, cat: &lightcraft_catalog::Catalog, library: u64) -> std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>> {
