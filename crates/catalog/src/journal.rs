@@ -75,13 +75,15 @@
 //! - **Opening an older format upgrades it**: right after loading, [`Journal::open`] writes a
 //!   snapshot in this build's format (also for a new library), before anything is appended — so a
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
-//!   (Except where the upgrade can't be written or its files can't be kept: see *Format versions*.)
-//!   [`LoadReport::upgraded_from`] says when that happened.
+//!   (Except where the upgrade can't be written or its files can't be kept: see the next rule.)
+//!   [`LoadReport::upgraded_from`] says when the upgrade happened at open.
 //! - **An upgrade keeps what it replaces**: older builds can't read the upgraded library, so the
 //!   files it was are first kept beside it as `catalog.snap.v<format>-<seq>` and
 //!   `catalog.log.v<format>-<seq>` (`seq`: the last change they hold), byte for byte
 //!   ([`LoadReport::kept`]; a damaged log is kept under its own name instead). Put back under
-//!   their own names, they are the library as the older build left it. They stay unless the
+//!   their own names, they are the library as the older build left it (what a later snapshot
+//!   keeps is the library as it was at open: a torn tail already cut, and what a session of this
+//!   build appended while it stayed in its old format, which an older build may refuse). They stay unless the
 //!   library on disk is known to be in its old format still: an upgrade at open that did not
 //!   happen leaves no copy, and one that was written keeps its copy whatever fails after it.
 //!   Nothing removes them afterwards: they are the user's to delete. (Not where the store says
