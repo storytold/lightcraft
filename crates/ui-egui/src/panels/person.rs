@@ -307,6 +307,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                     chosen: false,
                 };
                 match tile(app, ui, &spec) {
+                    Hit::Open => hit = Some((Hit::Open, (*f).clone())),
                     Hit::Confirm => hit = Some((Hit::Confirm, (*f).clone())),
                     Hit::ConfirmAbove => hit = Some((Hit::ConfirmAbove, (*f).clone())),
                     Hit::Dismiss => hit = Some((Hit::Dismiss, (*f).clone())),
@@ -457,7 +458,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         p.line_segment([pos2(ac.x, ac.y - 5.0), pos2(ac.x + 4.0, ac.y - 1.0)], arrow);
     }
     if more {
-        let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm.", f.score);
+        let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm, right-click to open the photo.", f.score);
         let _ = resp.clone().on_hover_text(tip);
         if let Some(x) = x_resp.as_ref() {
             let _ = x.clone().on_hover_text(format!("Not {name}: no longer offered for them (the button at the top brings these faces back)"));
@@ -467,7 +468,17 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
                 "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A."
             ));
         }
-        if x_resp.as_ref().is_some_and(|x| x.clicked()) {
+        // a right click offers to open the photo before deciding
+        crate::widgets::context_menu(&resp, |ui| {
+            let item = ui.button(crate::i18n::tr("Open Photo"));
+            register(ui, "more-face-menu:open", item.rect);
+            if item.clicked() {
+                hit = Hit::Open;
+            }
+        });
+        if hit == Hit::Open {
+            // the menu's choice wins
+        } else if x_resp.as_ref().is_some_and(|x| x.clicked()) {
             hit = Hit::Dismiss;
         } else if above_resp.as_ref().is_some_and(|x| x.clicked()) {
             hit = Hit::ConfirmAbove;
