@@ -836,7 +836,7 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
 }
 
 /// A people.json that couldn't be read when the library opened is never overwritten that session (#3246): a picture
-/// can't be chosen, and a rename carrying one counts as unsaved, without the frame loop trying to write the file.
+/// can't be chosen nor a face set aside, and a rename carrying one counts as unsaved, without the frame loop trying to write the file.
 #[test]
 fn a_rename_counts_as_unsaved_when_people_json_was_unreadable_at_opening() {
     use lightcraft_catalog::{Filter, Photo, Source};
@@ -856,6 +856,9 @@ fn a_rename_counts_as_unsaved_when_people_json_was_unreadable_at_opening() {
     s.open_library(&lib, false).unwrap();
     assert!(s.take_library_warnings().iter().any(|w| w.starts_with("people.json")));
     assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": id.0, "index": 1})).is_err(), "nothing chosen that can't be kept");
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": id.0, "index": 0})).is_err(), "nor a face set aside");
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).is_err(), "nor any brought back");
+    assert!(s.person_dismissed.is_empty());
     assert_eq!(s.unsaved(), None, "and nothing left unsaved");
     // a picture held in the session (as no command can set it then) still follows a rename, and is reported unsaved
     let cover = lightcraft_catalog::PersonCover { photo: id, face: s.catalog.photo(id).unwrap().meta.regions[1].rect };
