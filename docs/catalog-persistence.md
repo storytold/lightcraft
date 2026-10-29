@@ -34,8 +34,10 @@ library was, byte for byte, beside it:
   those changes, and tells so; the files kept earlier stay beside it.)
 - A library whose log was damaged is upgraded like any other. What it was is then its snapshot, kept under the name
   above, and its log, kept as `catalog.log.damaged-<seq>`: the snapshot alone is the library without the changes
-  that log held. If the snapshot can't be kept, or the damaged log can't be replaced, the library is refused and left
-  as it was (changes made in it would be appended after the damage, where the next open would not read them).
+  that log held. If the snapshot can't be kept, the library is refused and left as it was; if the damaged log can't
+  be replaced after the upgrade was written, it is refused too, and its way back (the kept snapshot and
+  `catalog.log.damaged-<seq>`) stays (changes made in it would be appended after the damage, where the next open
+  would not read them).
 - Nothing removes the kept files. They are as large as the library was; LightCraft says so once when it has upgraded
   a library (and `library.info` lists it under `settingsWarnings`). Delete them once the older version is no longer
   wanted. The browser build keeps none (it always runs the newest version).
