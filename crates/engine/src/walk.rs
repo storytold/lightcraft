@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 /// How far a walk may go.
@@ -180,7 +181,10 @@ impl Skip<'_> {
 /// Reads folder `path`: everything the walk needs from the disk for it, in the order the
 /// listing gives, but no more than `cap` entries (a folder with more is `cut`: nothing past the
 /// cap is asked of the disk). `want_all`: hidden entries' kinds too (the listing is handed on).
-fn load(path: &Path, skip: Skip, want_all: bool, cap: usize) -> Listing {
+/// Reading stops where `stop` is set, and the listing is `cut` there: a reader the walk no longer needs does not
+/// finish a folder of 200,000 entries first (on a network share each costs a round trip). The walk's own calls pass
+/// [`NEVER_STOP`].
+fn load(path: &Path, skip: Skip, want_all: bool, cap: usize, stop: &AtomicBool) -> Listing {
     if skip.skips(path) {
         return Listing::none(true);
     }
@@ -193,7 +197,7 @@ fn load(path: &Path, skip: Skip, want_all: bool, cap: usize) -> Listing {
             entries.push(Err(()));
             continue;
         };
-        if oks >= cap {
+        if oks >= cap || stop.load(Ordering::Relaxed) {
             cut = true;
             break;
         }
@@ -212,6 +216,9 @@ fn load(path: &Path, skip: Skip, want_all: bool, cap: usize) -> Listing {
     }
     Listing { skipped: false, entries: Some(entries), oks, cut }
 }
+
+/// A `stop` that is never set, for the reads the walk makes itself.
+static NEVER_STOP: AtomicBool = AtomicBool::new(false);
 
 enum Slot {
     Queued,
@@ -244,6 +251,8 @@ struct Pool {
 struct Shared {
     pool: Mutex<Pool>,
     changed: Condvar,
+    /// [`Pool::stop`] where a reader can look without the lock: set by [`Shared::halt`].
+    stopped: AtomicBool,
 }
 
 impl Shared {
@@ -277,6 +286,8 @@ impl Shared {
 
     /// The walk is done or needs no more: nothing more is read ahead.
     fn halt(&self) {
+        // (set first, outside the lock: a reader in the middle of a folder sees it without taking the lock)
+        self.stopped.store(true, Ordering::Relaxed);
         let mut pool = self.lock();
         pool.stop = true;
         pool.queue.clear();
@@ -371,7 +382,7 @@ fn read_ahead(shared: &Shared, cfg: ReadCfg) {
             }
         };
         let mut reading = Reading { shared, path, requeue: cfg.completion.then_some(depth), handed_over: false };
-        let listing = load(&reading.path, cfg.skip, cfg.want_all, cap);
+        let listing = load(&reading.path, cfg.skip, cfg.want_all, cap, &shared.stopped);
         let mut pool = shared.lock();
         pool.read_entries = pool.read_entries.saturating_add(listing.oks.max(1));
         if !listing.cut {
@@ -479,7 +490,7 @@ pub fn files_in_parallel(
     }
     let skipper = Skip { path: None, canonical: None };
     let cfg = ReadCfg { skip: skipper, want_all: false, completion: true, max_depth: limits.max_depth, max_entries: limits.max_entries };
-    let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new() };
+    let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new(), stopped: AtomicBool::new(false) };
     // canonical folders reached through a link, so a link loop is walked at most once
     let mut linked: HashSet<PathBuf> = HashSet::new();
     if let Ok(c) = std::fs::canonicalize(root) {
@@ -510,7 +521,7 @@ pub fn files_in_parallel(
             let (listing, own) = match taken {
                 Some(l) if !l.cut || l.oks >= room => (l, false),
                 _ => {
-                    let l = load(&path, skipper, false, room);
+                    let l = load(&path, skipper, false, room, &NEVER_STOP);
                     let mut pool = shared.lock();
                     pool.read_entries = pool.read_entries.saturating_add(l.oks.max(1));
                     (l, true)
@@ -624,7 +635,7 @@ fn walk_with(
     let skipper = Skip { path: skip, canonical: skip_canonical.as_ref() };
     let want_all = note.is_some();
     let cfg = ReadCfg { skip: skipper, want_all, completion: false, max_depth: limits.max_depth, max_entries: limits.max_entries };
-    let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new() };
+    let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new(), stopped: AtomicBool::new(false) };
     let read_by_workers = std::thread::scope(|scope| {
         let _halt = Halt(&shared);
         let mut readers = Vec::new();
@@ -650,7 +661,7 @@ fn walk_with(
             let (listing, own) = match taken {
                 Some(l) if !l.cut || l.oks >= room => (l, false),
                 _ => {
-                    let l = load(&path, skipper, want_all, room);
+                    let l = load(&path, skipper, want_all, room, &NEVER_STOP);
                     let mut pool = shared.lock();
                     pool.read_entries = pool.read_entries.saturating_add(l.oks.max(1));
                     (l, true)
@@ -1190,11 +1201,11 @@ mod tests {
             std::fs::write(d.join(format!("{i:02}.jpg")), b"x").unwrap();
         }
         let none = Skip { path: None, canonical: None };
-        let l = load(&d, none, false, 21);
+        let l = load(&d, none, false, 21, &NEVER_STOP);
         assert_eq!((l.oks, l.cut, l.held()), (21, true, 21));
-        let l = load(&d, none, false, 50);
+        let l = load(&d, none, false, 50, &NEVER_STOP);
         assert_eq!((l.oks, l.cut), (50, false));
-        let l = load(&d, none, false, 0);
+        let l = load(&d, none, false, 0, &NEVER_STOP);
         assert_eq!((l.oks, l.cut), (0, true));
         let _ = std::fs::remove_dir_all(&d);
 
@@ -1210,26 +1221,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Given a folder of many files next to one of thousands of empty folders, when the entry limit
-    /// is reached in the files, then the readers have not listed the empty folders: they list at
-    /// most `max_entries + WORKERS` folders (an empty one costs one entry's worth).
+    /// Given a queue of empty folders and a limit of a few entries, when a reader works through it, then it
+    /// pauses once as many have been read as the limit allows (an empty folder costs one entry's worth), not
+    /// after the last of them.
     #[test]
     fn readers_do_not_run_through_empty_folders_past_the_limit() {
         let d = tmp("empties");
-        std::fs::create_dir_all(d.join("a")).unwrap();
-        for i in 0..200 {
-            std::fs::write(d.join(format!("a/{i:03}.jpg")), b"x").unwrap();
+        std::fs::create_dir_all(&d).unwrap();
+        let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new(), stopped: AtomicBool::new(false) };
+        {
+            let mut pool = shared.lock();
+            for i in 0..100 {
+                let p = d.join(format!("{i:03}"));
+                std::fs::create_dir_all(&p).unwrap();
+                pool.slots.insert(p.clone(), Slot::Queued);
+                pool.queue.push_back((p, 1));
+            }
         }
-        for i in 0..600 {
-            std::fs::create_dir_all(d.join(format!("b/{i:03}"))).unwrap();
+        let cfg = ReadCfg { skip: Skip { path: None, canonical: None }, want_all: false, completion: false, max_depth: MAX_DEPTH, max_entries: 10 };
+        let listed = std::thread::scope(|scope| {
+            let reader = scope.spawn(|| read_ahead(&shared, cfg));
+            let t0 = std::time::Instant::now();
+            while shared.lock().read_by_workers < 10 {
+                assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the reader did not list ten folders");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            // (room to run on, were the pause not there)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let listed = shared.lock().read_by_workers;
+            shared.halt();
+            reader.join().unwrap();
+            listed
+        });
+        assert_eq!(listed, 10, "the reader paused at the limit");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Given a folder of many files, when the walk stops and tells the readers, then a reader in the middle of a
+    /// folder stops there (its listing is `cut`) instead of finishing the folder first.
+    #[test]
+    fn a_listing_in_progress_stops_when_the_readers_are_told_to() {
+        let d = tmp("stop-mid-listing");
+        std::fs::create_dir_all(&d).unwrap();
+        for i in 0..50 {
+            std::fs::write(d.join(format!("{i:02}.jpg")), b"x").unwrap();
         }
-        let limits = Limits { max_depth: MAX_DEPTH, max_entries: 100 };
-        for _ in 0..20 {
-            let (walked, by_workers) = seen(&d, None, limits, 8);
-            assert_eq!(walked, seen(&d, None, limits, 0).0);
-            assert!(by_workers <= limits.max_entries + WORKERS, "{by_workers} listed by readers");
-            assert!(by_workers < 600, "{by_workers}");
-        }
+        let none = Skip { path: None, canonical: None };
+        let stop = AtomicBool::new(false);
+        let l = load(&d, none, false, 1000, &stop);
+        assert_eq!((l.oks, l.cut), (50, false), "not told to stop: all of it");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let l = load(&d, none, false, 1000, &stop);
+        assert!(l.cut && l.oks < 50, "told to stop: {} of 50 read, cut: {}", l.oks, l.cut);
         let _ = std::fs::remove_dir_all(&d);
     }
 
