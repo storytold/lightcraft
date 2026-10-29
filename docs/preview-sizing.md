@@ -17,6 +17,8 @@ past a cap. At 0%, or a pixel limit below 8, it keeps an 8 px minimum long edge.
   previews use the limits. Smaller previews reduce the rendering work and look softer.
 - Zoomed detail retains the separate sharp window of the original, as before: these
   limits do not reduce the resolution of the visible region at 100% zoom and above.
+  Explicit percentage zoom also stays sharp when the photo fits inside its pane.
+  Whole-pixel rounding in tiny previews preserves the photo's geometry and sharp zoom.
   At Fit, an intentional cap is respected without a native-detail window bypassing it.
 - **Build Standard-Sized Previews** uses the percentage per photo and the pixel cap
   (2560 px when no user pixel cap is set). Grid thumbnails and **Build 1:1 Previews**

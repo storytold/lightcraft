@@ -294,6 +294,12 @@ fn median_after_first(samples: &[f64]) -> Option<f64> {
 /// The loupe's render plan. The cost of a render follows the canvas, not the zoom: the whole-frame
 /// render is canvas-sized, and the window holds only the pixels on screen at no more than 100 %.
 pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
+    plan_for_zoom(settings, v, crate::state::Zoom::Fit)
+}
+
+/// Only Fit trades sharpness for a chosen preview cap. An explicit zoom ratio still asks for
+/// sharp pixels when its image happens to fit inside a larger canvas.
+pub fn plan_for_zoom(settings: &crate::state::AppSettings, v: ViewSizes, zoom: crate::state::Zoom) -> LoupePlan {
     let canvas_long = if v.canvas_long.is_finite() { v.canvas_long.max(8.0) } else { 8.0 };
     let drawn_long = if v.drawn_long.is_finite() { v.drawn_long.max(8.0) } else { canvas_long };
     let scale = v.draft.map_or(1.0, |s| if s.is_finite() { s.clamp(0.1, 1.0) } else { 1.0 });
@@ -312,7 +318,7 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     let edge_at = |scale: f32| settings.loupe_edge(drawn_long.min(canvas_long) * scale, v.native_long, v.texture_side).min(source_cap);
     let frame_edge = settings.window_frame_edge(drawn_long, v.native_long);
     // a user who capped the preview size has chosen speed over sharpness at fit
-    let fit = drawn_long <= canvas_long * 1.05;
+    let fit = matches!(zoom, crate::state::Zoom::Fit) && drawn_long <= canvas_long * 1.05;
     // (against the undrafted whole-frame render: a drag must not switch the window off and on)
     let window_edge = (frame_edge as f32 > edge_at(1.0) as f32 * WINDOW_RATIO && !(fit && settings.preview_is_limited())).then_some(frame_edge);
     // with a window over it, the whole-frame draft is hidden (it feeds the histogram and stands in
@@ -409,11 +415,29 @@ pub fn defer_window(window_pending: bool, original_held: bool) -> bool {
     window_pending && !original_held
 }
 
-/// Whether the picture on screen has the frame's aspect (to the one pixel a texture's whole-pixel
-/// size is off by): a window is a part of the frame, so it can only be placed over a picture that
-/// is the frame (an unsupported raw's embedded JPEG may be cropped differently).
+/// Whether two geometric aspects agree within the existing embedded-preview tolerance.
 pub fn same_aspect(shown: f32, frame: f32) -> bool {
     shown.is_finite() && frame.is_finite() && frame > 0.0 && (shown / frame - 1.0).abs() <= 0.02
+}
+
+/// Preserve the frame's geometry across whole-pixel preview sizing, including tiny caps.
+/// The short edge can be truncated or rounded (and is at least one pixel). A genuinely different
+/// embedded-preview crop retains its own aspect instead of receiving a misplaced sharp window.
+pub fn texture_aspect([w, h]: [usize; 2], frame: f32) -> f32 {
+    let shown = w.max(1) as f32 / h.max(1) as f32;
+    if same_aspect(shown, frame) {
+        return frame;
+    }
+    if w != 0 && h != 0 && frame.is_finite() && frame > 0.0 {
+        let (short, expected) = if frame >= 1.0 { (h as f64, w as f64 / f64::from(frame)) } else { (w as f64, h as f64 * f64::from(frame)) };
+        let expected = expected.max(1.0);
+        let delta = expected - short;
+        let epsilon = expected * f64::from(f32::EPSILON) * 2.0;
+        if delta >= -0.5 - epsilon && delta < 1.0 + epsilon {
+            return frame;
+        }
+    }
+    shown
 }
 
 /// The window of a `full_w × full_h` frame to render so that `visible` — `(x0, y0, x1, y1)` in the

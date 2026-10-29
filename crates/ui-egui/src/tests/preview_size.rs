@@ -191,6 +191,56 @@ fn preview_size_caps_compare_and_reference_whole_frames() {
     }
 }
 
+/// An 8 px preview's unavoidable aspect rounding must not disable native detail.
+#[test]
+fn preview_size_tiny_whole_frames_keep_sharp_zoom_windows() {
+    use std::time::Duration;
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let mut h = crate::headless::Headless::new(app, [1400.0, 1000.0], 1.0);
+    h.app.run("app.previewSize", json!({"percent": 0, "pixelLimit": -1})).unwrap();
+    for mode in ["view.detail", "view.compare", "view.reference"] {
+        h.app.run(mode, json!({})).unwrap();
+        h.app.run("view.zoomFit", json!({})).unwrap();
+        h.settle(Duration::from_secs(120));
+        h.app.run("view.zoom100", json!({})).unwrap();
+        h.settle(Duration::from_secs(120));
+        let slot = if mode == "view.detail" { crate::render::Slot::Region } else { crate::render::Slot::CompareRegion(0) };
+        assert!(h.app.renderer.textures.contains_key(&slot), "{mode}: an 8 px whole frame must not suppress sharp zoom");
+    }
+}
+
+/// Explicit percentage zoom remains sharp even when that image fits inside the pane.
+#[test]
+fn preview_size_fitting_percentage_zoom_keeps_sharp_windows() {
+    use std::time::Duration;
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let mut h = crate::headless::Headless::new(app, [1400.0, 1000.0], 1.0);
+    h.app.run("app.previewSize", json!({"percent": 100, "pixelLimit": 113})).unwrap();
+    for mode in ["view.detail", "view.compare", "view.reference"] {
+        h.app.run(mode, json!({})).unwrap();
+        h.app.ui.zoom = crate::state::Zoom::Percent(5.0);
+        h.settle(Duration::from_secs(120));
+        let slot = if mode == "view.detail" { crate::render::Slot::Region } else { crate::render::Slot::CompareRegion(0) };
+        assert!(h.app.renderer.textures.contains_key(&slot), "{mode}: explicit percentage zoom must stay sharp inside its pane");
+    }
+}
+
+/// Quantization tolerance follows the short edge, preserving genuine embedded-preview crops.
+#[test]
+fn preview_size_texture_aspects_allow_quantization_without_hiding_crops() {
+    use crate::region::texture_aspect;
+    for (size, aspect) in [([8, 5], 1.5), ([5, 8], 2.0 / 3.0), ([37, 25], 1.5), ([8, 1], 100.0)] {
+        assert_eq!(texture_aspect(size, aspect), aspect, "{size:?}");
+    }
+    assert_eq!(texture_aspect([8, 4], 1.5), 2.0);
+    assert_eq!(texture_aspect([400, 400], 1.5), 1.0);
+    assert_eq!(texture_aspect([600, 300], 1.5), 2.0);
+    for frame in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(texture_aspect([8, 5], frame), 1.6);
+    }
+    assert!(texture_aspect([0, 0], 1.5).is_finite());
+}
+
 /// Changing both controls resizes the real loupe texture and leaves the photo's edits untouched.
 #[test]
 fn preview_size_changes_actual_loupe_renders_without_changing_edits() {

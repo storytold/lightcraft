@@ -158,11 +158,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let split_view = matches!(app.ui.before_after, BeforeAfter::Split | BeforeAfter::SplitTopBottom);
     let areas = view_areas(app.ui.before_after, area);
     let main_area = *areas.last().unwrap_or(&area);
-    let visible_texture_aspect = visible_texture_aspect(app, id, &d, crop_tool);
+    let visible_texture_aspect = visible_texture_aspect(app, id, &d, crop_tool, aspect);
     // Follow the texture only where it really differs (an unsupported raw's embedded JPEG with
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
     // tool's overlays need the frame's own geometry.
-    let display_aspect = visible_texture_aspect.filter(|a| !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
+    let display_aspect = visible_texture_aspect.filter(|_| !crop_tool).unwrap_or(aspect);
     let resp = ui.interact(canvas, egui::Id::unique("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
@@ -609,7 +609,7 @@ fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowVi
 }
 
 /// The aspect of the texture on screen for this photo and geometry, if one is.
-fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings, crop_tool: bool) -> Option<f32> {
+fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings, crop_tool: bool, aspect: f32) -> Option<f32> {
     // A previous crop/rotation can stay visible while its replacement renders. Its pixels
     // must not override the current frame geometry, even when it is the same photo.
     let current_texture = |t: &&crate::render::Tex| t.photo == id && t.look == Some((crate::render::geometry_look(d), !crop_tool));
@@ -619,7 +619,7 @@ fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings,
         .filter(current_texture)
         .or_else(|| app.renderer.textures.get(&Slot::Preview).filter(current_texture))
         .or_else(|| app.renderer.thumb(id).filter(current_texture))
-        .map(|tex| tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32)
+        .map(|tex| crate::region::texture_aspect(tex.size, aspect))
 }
 
 /// Whether the GPU draws the view (by the GPU's own rule, `handles`; `ready` first: `available`
@@ -698,9 +698,9 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
 
 /// The loupe's render plan, without a window for a view the GPU already refused one for.
 fn loupe_plan(app: &LightcraftApp, id: PhotoId, look: u64, sizes: crate::region::ViewSizes) -> crate::region::LoupePlan {
-    let plan = crate::region::plan(&app.ui.settings, sizes);
+    let plan = crate::region::plan_for_zoom(&app.ui.settings, sizes, app.ui.zoom);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
-        return crate::region::plan(&app.ui.settings, crate::region::ViewSizes { windows: false, ..sizes });
+        return crate::region::plan_for_zoom(&app.ui.settings, crate::region::ViewSizes { windows: false, ..sizes }, app.ui.zoom);
     }
     plan
 }

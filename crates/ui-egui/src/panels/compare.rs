@@ -249,7 +249,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         Slot::Compare(i) if i < WINDOW_PANES && matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) => Some(i),
         _ => None,
     };
-    let shown_aspect = app.renderer.textures.get(&slot).filter(|x| x.photo == id).map(|t| t.size[0].max(1) as f32 / t.size[1].max(1) as f32);
+    let shown_aspect = app.renderer.textures.get(&slot).filter(|x| x.photo == id).map(|t| crate::region::texture_aspect(t.size, aspect));
     let window = pane.and_then(|i| {
         let tile = TileView {
             pane: i,
@@ -276,14 +276,14 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     let mut display = img;
     if let Some(tex) = app.renderer.textures.get(&slot).filter(|x| x.photo == id) {
-        let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
+        let texture_aspect = crate::region::texture_aspect(tex.size, aspect);
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
         if let Some(i) = window {
             draw_window(&p, app, i, id, photo.develop.hash64(), display);
         }
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
-        let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
+        let texture_aspect = crate::region::texture_aspect(tex.size, aspect);
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
@@ -406,7 +406,7 @@ struct TileView {
 /// time. It is drawn magnified or with the old value until the gesture is quiet.
 fn request_window(app: &mut LightcraftApp, v: &TileView) -> Option<crate::region::RegionView> {
     let fit = v.img.width() <= v.visible.width() * 1.05 && v.img.height() <= v.visible.height() * 1.05;
-    if fit && app.ui.settings.preview_is_limited() {
+    if matches!(app.ui.zoom, Zoom::Fit) && fit && app.ui.settings.preview_is_limited() {
         return None;
     }
     let drawn_long = v.img.width().max(v.img.height()) * v.ppp;
