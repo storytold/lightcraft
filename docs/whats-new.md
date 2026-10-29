@@ -295,6 +295,9 @@
 - A copy you only browsed in Local (another path with the same content) no longer makes the import report "already in
   the library", even after the library photo was permanently deleted and the library reopened, and a library photo
   with the same content is matched before a browsed copy is promoted. Several browsed copies of one file import once.
+- Files with the same content as a browsed photo are listed as identical copies in the folder, not as already in the
+  library, which doesn't have them. With Copy or Move, which leave the browsed photo out, the first of those files is
+  offered and checked instead, so that content can still be copied in from the folder.
 
 ### A one-field white balance edit no longer shifts the other one
 - Settings that name only a white balance temperature, or only a tint — `develop.merge`,

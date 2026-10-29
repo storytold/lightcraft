@@ -143,6 +143,12 @@ pub struct ImportCandidate {
     /// the library, so it is not a duplicate and importing it promotes that record.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub local: bool,
+    /// On a `"content"` duplicate that no library photo accounts for: the path of the browsed
+    /// candidate (`local`) earlier in this list that has the same bytes. It is the one the import
+    /// brings in (adding in place), so this one is a copy in the source; when copying leaves that
+    /// browsed photo out, the first such copy is what comes in instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browsed_twin: Option<String>,
     /// Not readable.
     pub error: Option<String>,
     /// A raw variant that can't be decoded yet (why): it imports as preview only.

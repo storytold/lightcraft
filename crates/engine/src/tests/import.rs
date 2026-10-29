@@ -274,6 +274,30 @@ fn local_twins_are_deduplicated_when_promoted_in_one_import() {
 }
 
 #[test]
+fn twins_of_a_browsed_photo_are_copies_in_the_source_not_library_duplicates() {
+    let src = temp_dir("local-twin-scan");
+    let a = src.join("a.png");
+    let b = src.join("b.png");
+    let c = src.join("c.png");
+    write_png(&a, 75);
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &c).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, c]})).unwrap();
+    let found = scan["candidates"].as_array().unwrap();
+    assert_eq!(found.len(), 3, "{scan}");
+    assert_eq!(found[0]["local"], true, "{scan}");
+    assert!(found[0]["duplicate"].is_null(), "the first browsed copy is offered: {scan}");
+    for twin in &found[1..] {
+        assert_eq!(twin["duplicate"], "content", "{scan}");
+        assert!(twin["existing"].is_null(), "no library photo has these bytes, a browsed record isn't one: {scan}");
+        assert_eq!(twin["browsedTwin"], found[0]["path"], "a copy of what the first browsed photo is: {scan}");
+    }
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
 fn local_twin_promotion_counts_across_background_import_batches() {
     use crate::import::{ImportJob, ImportOptions, commit_prepared};
     let src = temp_dir("local-twin-worker");
