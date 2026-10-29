@@ -398,6 +398,14 @@ impl PartialEq for Changes {
     }
 }
 
+/// `op` and, when it is a batch, the ops in it (nested batches too), each alone and in the order the batch lists them.
+fn unbatch(op: Op, out: &mut Vec<Op>) {
+    match op {
+        Op::Batch { ops } => ops.into_iter().for_each(|op| unbatch(op, out)),
+        op => out.push(op),
+    }
+}
+
 impl Catalog {
     pub fn new() -> Catalog {
         Catalog { next_photo: 1, next_album: 1, next_stack: 1, ..Default::default() }
@@ -1127,14 +1135,16 @@ impl Catalog {
                         Ok(inv) => inverses.push(inv),
                         Err(e) => {
                             // roll back what was applied: first what a batch inside this one could not take back
-                            // (it was done last), then the inverses, newest first
-                            let mut todo = std::mem::take(&mut self.changes.leftover);
-                            todo.extend(inverses.into_iter().rev());
+                            // (it was done last), then the inverses, newest first. A batch among them (the inverse
+                            // of one that went through) goes op by op, in the order it lists them: as a whole it would
+                            // stop at the first op that cannot go yet and be kept whole, to stop there again at the
+                            // retry, while its later ops (the one that makes the first possible) never ran.
+                            let mut todo = Vec::new();
+                            let leftover = std::mem::take(&mut self.changes.leftover);
+                            leftover.into_iter().chain(inverses.into_iter().rev()).for_each(|inv| unbatch(inv, &mut todo));
                             let mut left = Vec::new();
                             for inv in todo {
                                 if self.apply_inner(inv.clone()).is_err() {
-                                    // (the same goes for an inverse that is a batch and failed part-way)
-                                    left.append(&mut self.changes.leftover);
                                     left.push(inv);
                                 }
                             }
