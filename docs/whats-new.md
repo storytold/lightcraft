@@ -38,10 +38,13 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
-### Screen readers name filmstrip thumbnails like the grid's
+### Screen readers name filmstrip thumbnails like the grid's and read thumbnails as selectable items
 - A thumbnail in the filmstrip is now named as the grid's cell for the same photo is: the file name, then its rating,
   flag and color label ("LC01207.JPG, 3 stars, picked"), and it says whether it is selected. It was named with the
   file name only, so VoiceOver told you less in Detail than in the grid.
+- A thumbnail, in the grid and in the filmstrip, is also a selectable item now, not a check box: on macOS VoiceOver
+  used to say "checked" or "unchecked" for it; it now reports the photos you have selected as selected and gives no
+  state for the others.
 
 ## 2026-11-02
 

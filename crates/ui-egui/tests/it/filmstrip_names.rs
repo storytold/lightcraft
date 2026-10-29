@@ -28,12 +28,12 @@ fn detail() -> Harness<'static, LightcraftApp> {
 #[test]
 fn a_filmstrip_thumbnail_is_named_with_its_rating_and_flag() {
     let h = detail();
-    let buttons: Vec<String> =
-        h.root().children_recursive().filter(|n| n.accesskit_node().role() == Role::Button).filter_map(|n| n.accesskit_node().label()).collect();
+    let cells: Vec<String> =
+        h.root().children_recursive().filter(|n| n.accesskit_node().role() == Role::ListItem).filter_map(|n| n.accesskit_node().label()).collect();
     let mut rated = 0;
     let mut flagged = 0;
     for photo in h.state().session.catalog.photos() {
-        let Some(name) = buttons.iter().find(|b| b.starts_with(photo.file_name.as_str())) else { continue };
+        let Some(name) = cells.iter().find(|b| b.starts_with(photo.file_name.as_str())) else { continue };
         if photo.rating > 0 {
             rated += 1;
             let stars = format!("{} star", photo.rating);
@@ -44,8 +44,8 @@ fn a_filmstrip_thumbnail_is_named_with_its_rating_and_flag() {
             assert!(name.contains("rejected"), "{name:?} says it is rejected");
         }
     }
-    assert!(rated >= 3, "the filmstrip shows several rated photos ({rated}): {buttons:?}");
-    assert!(flagged >= 1, "and a rejected one ({flagged}): {buttons:?}");
+    assert!(rated >= 3, "the filmstrip shows several rated photos ({rated}): {cells:?}");
+    assert!(flagged >= 1, "and a rejected one ({flagged}): {cells:?}");
 }
 
 #[test]
@@ -56,9 +56,8 @@ fn the_active_filmstrip_thumbnail_is_announced_as_selected() {
     let node = h
         .root()
         .children_recursive()
-        .find(|n| n.accesskit_node().role() == Role::Button && n.accesskit_node().label().is_some_and(|l| l.starts_with(active.as_str())))
+        .find(|n| n.accesskit_node().role() == Role::ListItem && n.accesskit_node().label().is_some_and(|l| l.starts_with(active.as_str())))
         .unwrap_or_else(|| panic!("a filmstrip thumbnail named {active:?}"));
-    // (egui announces a selected button as toggled on, as the grid's cells are)
-    let toggled = node.accesskit_node().toggled();
-    assert_eq!(toggled, Some(egui::accesskit::Toggled::True), "the active photo's thumbnail is selected: {:?}", node.accesskit_node().data());
+    // (a selectable cell with its selected state on, as the grid's cells are)
+    assert_eq!(node.accesskit_node().is_selected(), Some(true), "the active photo's thumbnail is selected: {:?}", node.accesskit_node().data());
 }

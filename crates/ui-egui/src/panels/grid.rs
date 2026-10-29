@@ -797,7 +797,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let state = app.session.selection.state_of(id);
     let selected = state != lightcraft_engine::SelectionState::NotSelected;
     let spoken = photo_spoken(&app.session.catalog, &photo);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &spoken));
+    crate::widgets::announce_cell(&resp, spoken.as_str(), selected);
     let p = ui.painter();
     let img_rect = if square {
         let base = if selected { t.cell_selected } else { t.cell };
