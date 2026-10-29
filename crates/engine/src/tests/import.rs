@@ -207,6 +207,24 @@ fn a_twin_of_a_replaced_browsed_file_stands_in_for_it_when_copying() {
     let _ = std::fs::remove_dir_all(src);
 }
 
+/// A browsed file replaced by a copy of another browsed file isn't a stand-in: the first file of its own is.
+#[test]
+fn a_replaced_browsed_file_does_not_take_the_stand_in_of_another_browsed_file() {
+    let src = temp_dir("browsed-replaced-standin");
+    let (a, b, d) = (src.join("a.png"), src.join("b.png"), src.join("d.png"));
+    write_png(&a, 75);
+    write_png_sized(&b, 9, 64, 40);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &d).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, d]})).unwrap();
+    let found = scan["candidates"].as_array().unwrap();
+    assert!(found[1]["browsedTwin"].is_null(), "a browsed file doesn't stand in: {scan}");
+    assert_eq!(found[2]["browsedTwin"], found[0]["path"], "the file of its own does: {scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
 /// "Import as new" replaces the trashed library photo with the same content when the browsed twin
 /// is promoted, as it does for a new file.
 #[test]

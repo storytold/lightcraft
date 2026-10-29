@@ -409,8 +409,8 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                             c.duplicate = Some("content".into());
                             c.existing = *existing;
                             // (the first copy of a browsed photo that is a file of its own stands in for it when
-                            // copying leaves the browsed one out: said once per content)
-                            if existing.is_none() {
+                            // copying leaves the browsed one out: said once per content; a browsed file doesn't)
+                            if existing.is_none() && !replaced.contains_key(Path::new(&f)) {
                                 c.browsed_twin = browsed_first.remove(h);
                             }
                         }
