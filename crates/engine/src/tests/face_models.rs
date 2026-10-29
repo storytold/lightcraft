@@ -662,5 +662,11 @@ fn the_faces_a_match_is_based_on_are_kept_and_bad_values_are_refused() {
     // a hand-edited file out of range is read within range, not trusted
     std::fs::write(d.join("models").join("settings.json"), br#"{"topFaces":1000}"#).unwrap();
     assert_eq!(session(&d).execute("faces.matching", &json!({})).unwrap()["topFaces"], 8);
+    // and a count that is no whole number is no choice, without losing the other face settings
+    for bad in [&br#"{"enabled":true,"embedder":"m","topFaces":-1}"#[..], br#"{"enabled":true,"embedder":"m","topFaces":"3"}"#] {
+        std::fs::write(d.join("models").join("settings.json"), bad).unwrap();
+        let l = session(&d).execute("faces.models.list", &json!({})).unwrap();
+        assert_eq!((l["enabled"].clone(), l["embedder"].clone(), l["topFaces"].clone()), (json!(true), json!("m"), json!(2)), "{l}");
+    }
     let _ = std::fs::remove_dir_all(d);
 }
