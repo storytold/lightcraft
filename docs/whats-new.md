@@ -353,12 +353,13 @@
   photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
   Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
 - Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
-  beside; placing an album by hand among its neighbors moves only that album).
+  beside; dropped beside a row, the one you dragged is placed there and the others come into that folder).
 - Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
   or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
   click on an album it always was.
 - For agents: `album.delete` and `album.move` take `ids`, `keyword.delete` and `keyword.move` take `keywords`,
-  `library.removeFolder` and `folder.label` take `paths`, as one undo step each.
+  `library.removeFolder` and `folder.label` take `paths`, as one undo step each; `album.reorder` takes `with`, the
+  albums chosen beside the one it places, which come to the same folder in the same step.
 
 ## 2026-10-24
 

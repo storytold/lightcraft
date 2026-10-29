@@ -283,6 +283,34 @@ fn a_group_dropped_beside_the_row_above_its_dragged_album_still_moves_the_others
     assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
 }
 
+/// A drop beside a row places the dragged album there, and brings the others chosen with it along, as one step.
+#[test]
+fn a_group_dropped_beside_a_row_places_the_dragged_album_there() {
+    let mut h = app("info");
+    let ([a, b, c, d], _) = four_albums(&mut h);
+    let folder = run(&mut h, "album.create", json!({"name": "Sel Folder", "folder": true}))["id"].as_u64().unwrap();
+    run(&mut h, "album.move", json!({"id": a, "parent": folder}));
+    let mine = [a, b, c, d, folder];
+    let top =
+        |h: &Headless| -> Vec<u64> { h.app.session.catalog.album_children(None).iter().map(|x| x.id.0).filter(|id| mine.contains(id)).collect() };
+    h.app.ui.reveal_album = Some(a);
+    run(&mut h, "library.source", json!({"kind": "album", "ids": [a, c]}));
+    h.step();
+    h.step();
+    assert_eq!(top(&h), vec![folder, b, c, d]);
+    let undo = h.app.session.undo.len();
+    // C is dropped below D (the bottom half of a row): after it, where listing by name would not have put it
+    drag(&mut h, &row(c), &row(d));
+    let after = top(&h);
+    let at = |id: u64| after.iter().position(|x| *x == id);
+    assert!(at(c) > at(d) && at(d).is_some(), "C was placed after D: {after:?}");
+    assert!(after.contains(&a), "A came out of its folder: {after:?}");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(top(&h), vec![folder, b, c, d], "one undo puts both back");
+    assert_eq!(h.app.session.catalog.album(AlbumId(a)).unwrap().parent, Some(AlbumId(folder)));
+}
+
 #[test]
 fn cmd_click_filters_by_any_of_several_keywords() {
     let mut h = app("info");

@@ -237,16 +237,14 @@ fn drop_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, target: 
 /// Places the dragged album in `parent` before the sibling `before` (`None`: last of its kind), by
 /// hand (`album.reorder`, one undo step).
 fn place_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, parent: Option<AlbumId>, before: Option<AlbumId>) {
-    // picked up as one of several albums chosen: they all go into that folder (one step); a
-    // place by hand is one album's
+    // picked up as one of several albums chosen: the others that are elsewhere come into that folder
+    // in the same step (`with`); the one dragged is placed
     let several = crate::panels::side_select::albums_dragged(app, dragged);
-    // (all of them there already: nothing to move, and the one dragged is placed)
-    let there = several.iter().all(|id| app.session.catalog.album(AlbumId(*id)).is_some_and(|a| a.parent == parent));
-    let r = if several.len() > 1 && !there {
-        app.run("album.move", json!({"ids": several, "parent": parent.map(|p| p.0)}))
-    } else {
-        app.run("album.reorder", json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)}))
-    };
+    let mut params = json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)});
+    if several.len() > 1 {
+        params["with"] = json!(several);
+    }
+    let r = app.run("album.reorder", params);
     finish_drop(app, ui, dragged, r);
 }
 

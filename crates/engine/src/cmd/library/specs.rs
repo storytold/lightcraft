@@ -29,22 +29,19 @@ fn next_seed(prev: u64, now: &str) -> u64 {
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
-/// `album.move` for several albums and folders (`ids`) at once: everything is checked first, then
-/// they move as one undo step.
-fn move_albums(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "album.move";
-    let ids = album_ids(p.get("ids").unwrap_or(&Value::Null), C)?;
+/// The albums and folders of `ids` that move into `parent`, checked as `album.move` checks them: all exist, `parent`
+/// is a folder (or the top level) and none goes inside itself. Of a folder and what is inside it, the folder moves.
+fn plan_moves(s: &Session, ids: &[AlbumId], parent: Option<AlbumId>, cmd: &str) -> Result<Vec<AlbumId>> {
     if ids.is_empty() {
-        return Err(bad(C, "`ids` names no album"));
+        return Err(bad(cmd, "`ids` names no album"));
     }
     if let Some(gone) = ids.iter().find(|a| s.catalog.album(**a).is_none()) {
-        return Err(bad(C, format!("no such album {}", gone.0)));
+        return Err(bad(cmd, format!("no such album {}", gone.0)));
     }
-    let parent = opt_album_param(p, "parent", C)?;
     if let Some(folder) = parent
         && !s.catalog.album(folder).is_some_and(|a| a.folder)
     {
-        return Err(bad(C, format!("album {} is not a folder of albums", folder.0)));
+        return Err(bad(cmd, format!("album {} is not a folder of albums", folder.0)));
     }
     // where `parent` sits: itself and the folders above it (a ring, in a damaged library, ends the walk)
     let mut above: Vec<AlbumId> = Vec::new();
@@ -70,9 +67,19 @@ fn move_albums(s: &mut Session, p: &Value) -> Result<Value> {
     for id in &moving {
         let name = s.catalog.album(*id).map(|a| a.name.clone()).unwrap_or_default();
         if above.contains(id) {
-            return Err(bad(C, format!("“{name}” can't go inside itself")));
+            return Err(bad(cmd, format!("“{name}” can't go inside itself")));
         }
     }
+    Ok(moving)
+}
+
+/// `album.move` for several albums and folders (`ids`) at once: everything is checked first, then
+/// they move as one undo step.
+fn move_albums(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "album.move";
+    let ids = album_ids(p.get("ids").unwrap_or(&Value::Null), "ids", C)?;
+    let parent = opt_album_param(p, "parent", C)?;
+    let moving = plan_moves(s, &ids, parent, C)?;
     let ops: Vec<Op> = moving.iter().map(|id| Op::MoveAlbum { id: *id, parent }).collect();
     let label = if moving.len() == 1 { "Move Album".to_string() } else { format!("Move {} Albums", moving.len()) };
     s.commit(&label, Op::Batch { ops })?;
@@ -83,15 +90,20 @@ fn move_albums(s: &mut Session, p: &Value) -> Result<Value> {
 /// chooses in a sidebar, and a bound on what one call can make the engine check.
 pub(crate) const MAX_SOURCES: usize = 1000;
 
-/// A command's `ids`: album ids, each once (named twice, the last naming counts).
-fn album_ids(v: &Value, c: &str) -> Result<Vec<AlbumId>> {
-    let list = v.as_array().ok_or_else(|| bad(c, "`ids` must be a list of album ids"))?;
+/// `library.source`'s `ids`: album ids, each once (named twice, the last naming counts).
+fn source_album_ids(v: &Value) -> Result<Vec<AlbumId>> {
+    album_ids(v, "ids", "library.source")
+}
+
+/// A command's list of album ids (`name`, `ids` or `with`): each once (named twice, the last naming counts).
+fn album_ids(v: &Value, name: &str, c: &str) -> Result<Vec<AlbumId>> {
+    let list = v.as_array().ok_or_else(|| bad(c, format!("`{name}` must be a list of album ids")))?;
     if list.len() > MAX_SOURCES {
-        return Err(bad(c, format!("`ids` names more than {MAX_SOURCES} albums")));
+        return Err(bad(c, format!("`{name}` names more than {MAX_SOURCES} albums")));
     }
     let mut out: Vec<AlbumId> = Vec::new();
     for x in list {
-        let id = AlbumId(x.as_u64().ok_or_else(|| bad(c, format!("`ids` must be a list of album ids, not {x}")))?);
+        let id = AlbumId(x.as_u64().ok_or_else(|| bad(c, format!("`{name}` must be a list of album ids, not {x}")))?);
         out.retain(|o| *o != id);
         out.push(id);
     }
@@ -112,11 +124,6 @@ fn folder_paths(v: &Value, c: &str) -> Result<Vec<String>> {
         out.push(path.to_string());
     }
     Ok(out)
-}
-
-/// `library.source`'s `ids`: album ids, each once (named twice, the last naming counts).
-fn source_album_ids(v: &Value) -> Result<Vec<AlbumId>> {
-    album_ids(v, "library.source")
 }
 
 /// `library.source`'s `paths`: folder paths, each folder once (named twice, the last counts).
@@ -1141,7 +1148,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 const C: &str = "album.delete";
                 let several = p.get("ids").is_some_and(|v| !v.is_null());
                 let ids = match p.get("ids") {
-                    Some(v) if several => album_ids(v, C)?,
+                    Some(v) if several => album_ids(v, "ids", C)?,
                     _ => vec![album_param(p, "id", C)?],
                 };
                 if ids.is_empty() {
@@ -1237,48 +1244,72 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reorder Album",
             [],
             None,
-            "{id, parent?: folderId|null, before?: albumId|null} — places the album (or folder) in `parent` (default: where it is; null: the top level) before the sibling `before` of the same kind, or last of its kind; the folder is then ordered by hand. One undo step. → {changed}: how many edits it took (0: already there)",
+            "{id, parent?: folderId|null, before?: albumId|null, with?: [albumId]} — places the album (or folder) in `parent` (default: where it is; null: the top level) before the sibling `before` of the same kind, or last of its kind; the folder is then ordered by hand. `with`: albums and folders chosen beside it that are elsewhere, which come to `parent` too, checked as `album.move` checks them (one that can't go there refuses the whole call; one inside a folder that moves too stays in it, and then `id` is not placed). One undo step. → {changed}: how many edits it took (0: already there)",
             always,
             |s, p| {
-                let id = album_param(p, "id", "album.reorder")?;
-                let me = s.catalog.album(id).ok_or_else(|| bad("album.reorder", "no such album"))?;
-                let parent = if p.get("parent").is_some() { opt_album_param(p, "parent", "album.reorder")? } else { me.parent };
-                let before = opt_album_param(p, "before", "album.reorder")?;
-                if before == Some(id) {
-                    // before itself: where it is
-                    return Ok(json!({"changed": 0}));
-                }
-                let mut order: Vec<AlbumId> = s.catalog.album_children(parent).into_iter().filter(|a| a.id != id).map(|a| a.id).collect();
-                let at = match before {
-                    Some(b) => {
-                        let at = order.iter().position(|x| *x == b).ok_or_else(|| bad("album.reorder", "`before` is not inside that folder"))?;
-                        if s.catalog.album(b).is_none_or(|x| x.folder != me.folder) {
-                            return Err(bad("album.reorder", "folders are placed among folders and albums among albums"));
-                        }
-                        at
-                    }
-                    None if me.folder => order.iter().take_while(|x| s.catalog.album(**x).is_some_and(|a| a.folder)).count(),
-                    None => order.len(),
+                const C: &str = "album.reorder";
+                let id = album_param(p, "id", C)?;
+                let me = s.catalog.album(id).ok_or_else(|| bad(C, "no such album"))?;
+                let parent = if p.get("parent").is_some() { opt_album_param(p, "parent", C)? } else { me.parent };
+                let before = opt_album_param(p, "before", C)?;
+                // the ones chosen with it come to `parent` in the same step (those there already stay)
+                let mut with = match p.get("with") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(v) => album_ids(v, "with", C)?,
                 };
-                order.insert(at.min(order.len()), id);
-                let moved = me.parent != parent;
-                let mut ops = Vec::new();
-                if moved {
-                    ops.push(Op::MoveAlbum { id, parent });
+                let mut placed = true;
+                let mut others: Vec<AlbumId> = Vec::new();
+                if !with.is_empty() {
+                    if !with.contains(&id) {
+                        with.push(id);
+                    }
+                    let moving = plan_moves(s, &with, parent, C)?;
+                    // (inside a folder that moves too, it is carried with it and not placed)
+                    placed = moving.contains(&id);
+                    others = moving.into_iter().filter(|a| *a != id && s.catalog.album(*a).is_some_and(|x| x.parent != parent)).collect();
                 }
-                for (i, aid) in order.iter().enumerate() {
-                    let want = u32::try_from(i).ok();
-                    // a moved album starts without a place in its new folder
-                    let have = if moved && *aid == id { None } else { s.catalog.album(*aid).and_then(|a| a.order) };
-                    if have != want {
-                        ops.push(Op::SetAlbumOrder { id: *aid, order: want });
+                let mut ops: Vec<Op> = others.iter().map(|a| Op::MoveAlbum { id: *a, parent }).collect();
+                // before itself: where it is
+                if placed && before != Some(id) {
+                    let mut order: Vec<AlbumId> = s.catalog.album_children(parent).into_iter().filter(|a| a.id != id).map(|a| a.id).collect();
+                    let at = match before {
+                        Some(b) => {
+                            let at = order.iter().position(|x| *x == b).ok_or_else(|| bad(C, "`before` is not inside that folder"))?;
+                            if s.catalog.album(b).is_none_or(|x| x.folder != me.folder) {
+                                return Err(bad(C, "folders are placed among folders and albums among albums"));
+                            }
+                            at
+                        }
+                        None if me.folder => order.iter().take_while(|x| s.catalog.album(**x).is_some_and(|a| a.folder)).count(),
+                        None => order.len(),
+                    };
+                    order.insert(at.min(order.len()), id);
+                    let moved = me.parent != parent;
+                    if moved {
+                        ops.push(Op::MoveAlbum { id, parent });
+                    }
+                    for (i, aid) in order.iter().enumerate() {
+                        let want = u32::try_from(i).ok();
+                        // a moved album starts without a place in its new folder
+                        let have = if moved && *aid == id { None } else { s.catalog.album(*aid).and_then(|a| a.order) };
+                        if have != want {
+                            ops.push(Op::SetAlbumOrder { id: *aid, order: want });
+                        }
                     }
                 }
                 if ops.is_empty() {
                     return Ok(json!({"changed": 0}));
                 }
                 let changed = ops.len();
-                s.commit("Reorder Album", Op::Batch { ops })?;
+                let n = others.len() + usize::from(placed);
+                let label = if others.is_empty() {
+                    "Reorder Album".to_string()
+                } else if n == 1 {
+                    "Move Album".to_string()
+                } else {
+                    format!("Move {n} Albums")
+                };
+                s.commit(&label, Op::Batch { ops })?;
                 Ok(json!({"changed": changed}))
             }
         ),
