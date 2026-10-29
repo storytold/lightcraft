@@ -27,8 +27,8 @@ pub fn needs_poll(tasks: &[TaskInfo]) -> bool {
     tasks.iter().any(|t| !only_waits(t) || t.age_ms < SHOW_AFTER_MS)
 }
 
-/// A row that only waits on something outside the app: it has no progress to draw, so no bar (an indeterminate one
-/// would sweep and repaint every frame).
+/// A row that only waits on something outside the app: it has a count but no progress to draw, so no bar (its `total`
+/// is how many wait and `done` stays 0, so a bar would sit at 0 %).
 fn only_waits(t: &TaskInfo) -> bool {
     t.kind == "xmpWaiting"
 }
@@ -57,6 +57,10 @@ fn megabytes(bytes: u64) -> String {
 pub(crate) fn detail_line(t: &TaskInfo) -> String {
     if t.cancelling {
         return tr("Stopping…").to_string();
+    }
+    if only_waits(t) {
+        // the count is the row's `total` (for `activity.list`), said as a line: "0 of 2" would read as a stalled job
+        return tr_format!("Photos waiting: {n}", n = t.total);
     }
     let count = count_text(t);
     match (count.is_empty(), t.detail.is_empty()) {

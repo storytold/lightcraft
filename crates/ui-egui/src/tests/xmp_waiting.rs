@@ -29,6 +29,8 @@ fn app_over_read_only_folder(tag: &str, n: u8) -> Option<(Headless, std::path::P
     session.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
     session.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
     let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
+    // the assertions read English, whatever LIGHTCRAFT_LANGUAGE says
+    h.app.ui.language = crate::i18n::Locale::En;
     h.settle(T);
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
     if std::fs::write(dir.join(".probe"), b"x").is_ok() {
@@ -58,7 +60,7 @@ fn writes_waiting_for_their_folder_have_a_row_until_they_are_made() {
     let rows = waiting_rows(&h);
     assert_eq!(rows.len(), 1, "{:?}", h.app.session.activity.list());
     // no "0 of 2": nothing here counts up, so the row says how many wait and carries no bar
-    assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Waiting to write XMP sidecars", false), "{rows:?}");
+    assert_eq!((rows[0].label.as_str(), rows[0].total, rows[0].cancellable), ("Waiting to write XMP sidecars", 2, false), "{rows:?}");
     assert_eq!(crate::panels::activity::detail_line(&rows[0]), "Photos waiting: 2", "{rows:?}");
     let id = rows[0].id;
 
