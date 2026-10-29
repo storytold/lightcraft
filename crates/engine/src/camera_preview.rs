@@ -4,7 +4,7 @@
 //! A global matrix can't follow the camera's hue-dependent rendering (the best matrix rendered a
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
 //! (applied like a DNG `ProfileHueSatMap`) corrects that when it also improves the held-out pixels.
-use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, Xy, bradford, luminance_2020};
+use lightcraft_color::{D50, D65, Mat3, REC2020, Xy, bradford, luminance_2020};
 use lightcraft_pipeline::tone::{CameraTone, ToneMap};
 use lightcraft_raster::{
     Rgb32f,
@@ -29,9 +29,10 @@ pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
 pub(crate) use colour::{file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
-pub(crate) use hue_sat::HueSat;
 #[cfg(test)]
-use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
+use hue_sat::{fit_hue_sat, hue_saturation};
+// the table is applied in the finishing stage too (camera looks), so it lives in the pipeline
+pub(crate) use lightcraft_pipeline::hue_sat::HueSat;
 #[cfg(test)]
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]

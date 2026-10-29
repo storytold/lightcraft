@@ -541,6 +541,7 @@ pub fn develop_reporting(
     (rendered, fallback)
 }
 
+/// Render `src` with `s`: on the GPU when it handles the render, else on the CPU (with the reason the GPU fell back).
 fn develop_image(
     src: &Arc<Rgb32f>,
     info: &SourceInfo,

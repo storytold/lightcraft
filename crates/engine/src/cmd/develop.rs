@@ -291,6 +291,7 @@ fn edit_version(s: &mut Session, p: &Value, c: &str, label: &str, f: impl FnOnce
     ok()
 }
 
+/// The develop commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -783,16 +784,19 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id)
-                && !s.lut_profiles.iter().any(|x| x.id == id)
-                && !s.dcp_profiles.iter().any(|x| x.id == id)
-            {
+            if s.profile_info(&id).is_none() {
                 return Err(bad("develop.profile", format!("unknown profile `{id}`")));
             }
             // an imported camera profile whose file is missing or damaged: choosing it would develop with the
             // file's own colour without saying so
             if crate::cmd::dcp_profiles::is_dcp_id(&id) && !s.media.camera_profiles.contains_key(&id) {
                 return Err(bad("develop.profile", format!("camera profile `{id}` can't be used: its file is missing or damaged")));
+            }
+            if let Some(look) = crate::camera_looks::find(&id) {
+                let fits = s.active().and_then(|a| s.catalog.photo(a)).is_some_and(|p| crate::camera_looks::renders(p, &id));
+                if !fits {
+                    return Err(bad("develop.profile", format!("“{}” renders {} raws only", look.name, look.model)));
+                }
             }
             edit(s, "develop.profile", "Profile", |d| {
                 d.profile.id = id.clone();
@@ -804,7 +808,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
-            if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) && !s.dcp_profiles.iter().any(|x| x.id == id) {
+            if s.profile_info(&id).is_none() {
                 return Err(bad("profile.favorite", format!("unknown profile `{id}`")));
             }
             let on = s.profile_favorites.contains(&id);
