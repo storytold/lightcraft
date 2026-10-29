@@ -134,9 +134,11 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
         .show(ui);
     let filter_row = ui.cursor().top() - top;
     // Esc with something typed empties the filter and is used up by that, wherever the focus is
-    // (in the box, or on a section that was found); the focus goes back to the box.
-    let escape = had_text && !crate::widgets::escape_taken(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
-    if typed.cancelled() || escape {
+    // (in the box, or on a section that was found); the focus goes back to the box. Not while the
+    // dialog is disabled behind a prompt or the library window: that owns the keys (`dialogs::show`).
+    let owns_keys = ui.is_enabled();
+    let escape = owns_keys && had_text && !crate::widgets::escape_taken(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if owns_keys && (typed.cancelled() || escape) {
         filter.text.clear();
         if had_text {
             crate::widgets::take_escape(ui.ctx());
@@ -257,7 +259,8 @@ struct Section {
 }
 
 /// The filter's state between frames: what is typed, and the sections of every tab with their
-/// text, read once for the language and library they were read in.
+/// text, read once for the language, library and display profile they were read in. (What is
+/// typed is kept only from one pass to the next: a pass in which Settings is not drawn loses it.)
 #[derive(Clone, Default)]
 struct Filter {
     pass: u64,
@@ -268,7 +271,13 @@ struct Filter {
 impl Filter {
     /// The sections that have every word of `words` (lower case), in the order of the tabs.
     fn found(&mut self, app: &mut LightcraftApp, words: &str, now: f64) -> Vec<Section> {
-        let of = format!("{}|{}", app.ui.language.code(), app.session.library.as_ref().map(|l| l.dir.display().to_string()).unwrap_or_default());
+        let of = format!(
+            "{}|{}|{:?}",
+            app.ui.language.code(),
+            app.session.library.as_ref().map(|l| l.dir.display().to_string()).unwrap_or_default(),
+            // (the Display page says which profile is in use)
+            app.renderer.display_id()
+        );
         let sections = match &self.sections {
             Some((read_for, sections)) if *read_for == of => sections.clone(),
             _ => {
@@ -412,4 +421,55 @@ fn results(ui: &mut egui::Ui, found: &[Section], words: &str, open_first: bool, 
         }
     }
     chosen
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Services;
+
+    /// One pass of the Settings window with the filter holding `text` and Escape pressed, in a ui
+    /// that is disabled (`dialogs::show` does that while a prompt or the library window owns input)
+    /// or not; what the filter holds afterwards.
+    fn text_after_escape(enabled: bool) -> String {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut tab = "general".to_string();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0));
+        let mut pass = |app: &mut LightcraftApp, events: Vec<egui::Event>, enabled: bool| {
+            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| {
+                if !enabled {
+                    ui.disable();
+                }
+                window(app, ui, &mut tab, 800.0);
+            });
+            output.textures_delta.clear();
+        };
+        let filter_id = egui::Id::unique("settings-filter");
+        // (a pass draws the window, which keeps its filter for the pass after it)
+        pass(&mut app, Vec::new(), true);
+        ctx.data_mut(|d| {
+            let mut kept: Filter = d.get_temp(filter_id).expect("the window keeps its filter");
+            kept.text = "sidecar".into();
+            d.insert_temp(filter_id, kept);
+        });
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        pass(&mut app, vec![escape], enabled);
+        let kept: Filter = ctx.data(|d| d.get_temp(filter_id)).expect("the filter is kept");
+        kept.text
+    }
+
+    #[test]
+    fn escape_empties_the_filter_only_while_the_dialog_owns_the_keys() {
+        assert_eq!(text_after_escape(true), "", "Escape empties what was typed");
+        assert_eq!(text_after_escape(false), "sidecar", "behind a prompt or the library window it is not the dialog's");
+    }
 }

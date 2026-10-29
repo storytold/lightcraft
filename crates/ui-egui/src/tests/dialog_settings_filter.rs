@@ -344,3 +344,22 @@ fn the_general_heading_of_view_options_is_translated_once_and_registered_by_its_
     assert!(!headings.contains(&shown), "not by the translated one: {headings:?}");
     assert!(h.painted_text().iter().any(|text| text == shown), "and drawn translated: {shown}");
 }
+
+/// The Display page reads the profile in use, so the sections read for the filter are read again
+/// when it changes (the window moved to another screen), with the filter still set.
+#[test]
+fn a_changed_display_profile_is_read_again_while_the_filter_has_text() {
+    let mut h = demo([1200.0, 1000.0]);
+    show(&mut h, "general");
+    // Given the page's sentence about no profile, found
+    filter(&mut h, "treated as sRGB");
+    assert!(!found(&h).is_empty(), "no display profile: the page says so");
+    // When a profile is in use from now on, the filter still holding its text
+    let p3 =
+        lightcraft_engine::display::Display::from_bytes("p3.icc", &lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3))
+            .unwrap();
+    h.app.renderer.set_display(Some(std::sync::Arc::new(p3)));
+    steps(&mut h);
+    // Then the old sentence is not found any more
+    assert!(found(&h).is_empty(), "the sections were read for the old profile: {:?}", found(&h));
+}
