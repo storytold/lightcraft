@@ -843,8 +843,9 @@ pub fn command(id: String, params: String) -> js_sys::Promise {
 /// same calls, so one agent or host app can drive them all.
 #[wasm_bindgen]
 pub fn request(method: String, params: JsValue) -> js_sys::Promise {
-    // Params that are not an object, or have no JSON (a cyclic object, a throwing `toJSON`), reject:
-    // as `{}` they would run the method with its defaults. `NaN` and the like stringify to `null`.
+    // Params that are not an object, or whose JSON is not an object (a cyclic object, a throwing
+    // `toJSON`, an invalid `Date`), reject: as `{}` they would run the method with its defaults.
+    // `NaN` and an invalid `Date` both stringify to `null`.
     let text = if params.is_undefined() || params.is_null() {
         Ok(String::new())
     } else if let Some(s) = params.as_string() {
@@ -856,6 +857,7 @@ pub fn request(method: String, params: JsValue) -> js_sys::Promise {
             .ok()
             .and_then(|s| s.as_string())
             .ok_or_else(|| "params are not JSON (a cyclic object or a function?)".to_string())
+            .and_then(|s| if s.trim_start().starts_with('{') { Ok(s) } else { Err(format!("params must be a JSON object, not {s}")) })
     };
     js_sys::Promise::new(&mut |resolve, reject| {
         let sent = text.clone().and_then(|text| crate::automation::params(&text)).map_err(|e| format!("{method}: {e}")).and_then(|params| {
