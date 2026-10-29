@@ -19,6 +19,12 @@
   (tiny, blurred, from behind), which look a little like everybody, filled the pages of people with many photos.
   A face is now offered only when it looks clearly more like this person than like anyone else already named, by the
   same margin as name suggestions.
+- Settings ▸ Faces ▸ Matching ▸ Ignore a person's odd faces (from behind, misnamed), off by default: a person's faces
+  far from their average face (a head from behind, a dark profile, someone else named by mistake) no longer count
+  when their page looks for faces like theirs, nor when it checks a face is clearly more like them than like anyone
+  else. In a library where one person's 776 faces included 37 such, nearly every face offered on their page was a
+  back of a head; with it on, the page offers their face. Fewer suggestions, though, for photos of someone that look
+  very different (as a child, thirty years later). Agents: `faces.matching {skipOdd}`.
 
 ### A person's page opens in seconds in a large library
 - Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
