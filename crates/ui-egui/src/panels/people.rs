@@ -100,7 +100,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let ppp = ui.ctx().pixels_per_point();
     let active = app.session.filter.person.clone();
     let (edge, tile) = (card_edge(thumb), tile_edge(thumb));
-    egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
+    // its own scroll position: a person's page scrolled down to its suggestions must not leave everyone scrolled too
+    egui::ScrollArea::vertical().id_salt("people-index").auto_shrink(false).show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();
         let cols = columns(width, edge);
         let row_h = edge + NAME_H + GAP;
