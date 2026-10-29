@@ -751,6 +751,23 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     assert_eq!(picture(&s, "Ann"), Some(a), "and after an undo of the rename");
     s.execute("faces.setCover", &json!({"name": "Ann", "photo": null})).unwrap();
     assert_eq!(picture(&s, "Ann"), Some(b));
+    // a name left over from an earlier rename does not hold on to its old picture: Ann → Ada, a new picture for Ada,
+    // back to Ann shows the new one; and with no picture of their own, the old one under the new name goes
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    s.execute("faces.setCover", &json!({"name": "Ada", "photo": a.0, "index": 1})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+    assert_eq!(picture(&s, "Ann"), Some(a), "the picture chosen under the last name, not the one left under this one");
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": null})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(picture(&s, "Ada"), Some(b), "no stale picture under the new name");
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+    // a choice that cannot be saved is not made either
+    std::fs::remove_file(lib.join("people.json")).ok();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
+    assert_eq!(picture(&s, "Ann"), Some(b), "unchanged in the session too");
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
     // a face that loses the name no longer stands for the person
     s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).unwrap();
     s.execute("faces.setName", &json!({"id": a.0, "index": 1, "name": null})).unwrap();
