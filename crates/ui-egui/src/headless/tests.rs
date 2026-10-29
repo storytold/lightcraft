@@ -1139,6 +1139,55 @@ fn a_right_click_on_a_face_tile_opens_its_photo() {
     assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "opened, not confirmed");
 }
 
+/// A person's page is made again only when a face changes: not after a rating, an edit or a photo opened (it takes
+/// seconds in a large library). Go to Suggestions scrolls past their own faces to the ones that look like them.
+#[test]
+fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).collect();
+    // enough faces of hers to fill more than a screen
+    for id in &ids {
+        let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = (0..16)
+            .map(|i| lightcraft_meta::Region {
+                rect: lightcraft_geom::Rect {
+                    x0: 0.05 * f64::from(i % 4),
+                    y0: 0.2 * f64::from(i / 4),
+                    x1: 0.05 * f64::from(i % 4) + 0.04,
+                    y1: 0.2 * f64::from(i / 4) + 0.1,
+                },
+                kind: lightcraft_meta::RegionKind::Face,
+                name: Some("Jane Doe".into()),
+                description: None,
+            })
+            .collect();
+        h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    let asked = |h: &Headless| h.app.caches.person_page.as_ref().map(|p| p.3);
+    let first = asked(&h);
+    assert!(first.is_some());
+    // a rating is not a face: the page stays as it was
+    h.request("engine.execute", json!({"command": "photo.rate", "params": {"ids": [ids[0].0], "rating": 3}}), t);
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.catalog.photo(ids[0]).unwrap().rating, 3, "the catalog did change");
+    assert_eq!(asked(&h), first, "not made again after a rating");
+    // a face named otherwise is
+    h.request("engine.execute", json!({"command": "faces.setName", "params": {"id": ids[0].0, "index": 0, "name": "Ann"}}), t);
+    h.settle(SETTLE);
+    assert_ne!(asked(&h), first, "made again after a face changed");
+    // Go to Suggestions: the first row of her faces scrolls out of sight
+    let top_face = format!("person-face:{}:1", ids[0].0);
+    assert!(h.app.widgets.iter().any(|(w, _)| *w == top_face), "her first faces are on screen");
+    let r = h.request("ui.clickWidget", json!({"id": "person:jumpMore"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!h.app.widgets.iter().any(|(w, _)| *w == top_face), "scrolled down to More");
+}
+
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
 /// routes use one undo step and leave hidden, lower-score and already named faces alone.
 #[test]
