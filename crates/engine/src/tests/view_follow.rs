@@ -7,12 +7,20 @@ use serde_json::{Value, json};
 use crate::Session;
 
 /// A small generator of numbers that is the same on every run.
-struct Dice(u64);
+struct Dice {
+    state: u64,
+    /// How many photos the edits moved to Local.
+    to_local: usize,
+}
 
 impl Dice {
+    fn new(seed: u64) -> Self {
+        Dice { state: seed, to_local: 0 }
+    }
+
     fn roll(&mut self, sides: usize) -> usize {
-        self.0 = lightcraft_catalog::mix64(self.0);
-        (self.0 % sides.max(1) as u64) as usize
+        self.state = lightcraft_catalog::mix64(self.state);
+        (self.state % sides.max(1) as u64) as usize
     }
 }
 
@@ -115,7 +123,11 @@ fn edit(s: &mut Session, dice: &mut Dice, ids: &mut Vec<PhotoId>, album: u64) {
             return;
         }
         2 => {
-            let _ = s.commit("Local", Op::SetLocal { id: one, local: n.is_multiple_of(2) });
+            // (n % 4 is 3 here: its quotient decides, or no photo would ever move to Local)
+            let local = (n / 4).is_multiple_of(2);
+            if s.commit("Local", Op::SetLocal { id: one, local }).is_ok() && local {
+                dice.to_local += 1;
+            }
             return;
         }
         _ => {}
@@ -158,7 +170,7 @@ fn relative_clock_session(captures: &[&str]) -> (Session, std::sync::Arc<std::sy
 #[test]
 fn following_an_edit_gives_the_list_worked_out_from_every_photo() {
     let (mut s, mut ids, album, smart) = library(240);
-    let mut dice = Dice(7);
+    let mut dice = Dice::new(7);
     let sources = [
         json!({"kind": "all"}),
         json!({"kind": "picks"}),
@@ -207,6 +219,8 @@ fn following_an_edit_gives_the_list_worked_out_from_every_photo() {
     // and it was following that was checked: most edits touch a photo or two, and the view kept up with those
     // without asking every photo again
     assert!(s.view_followed > 400, "followed {} times, worked out {} times", s.view_followed, s.view_worked_out);
+    // (and the edits did move photos to Local, a case of its own for what the view keeps)
+    assert!(dice.to_local > 0, "no photo moved to Local");
 }
 
 #[test]
@@ -425,7 +439,7 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
     };
     let mut tally = AlbumTally::of(&s.catalog);
     assert_eq!(shown(&tally), fresh(&s));
-    let mut dice = Dice(23);
+    let mut dice = Dice::new(23);
     let (mut followed, mut whole) = (0, 0);
     for step in 0..900 {
         edit(&mut s, &mut dice, &mut ids, album);
@@ -443,6 +457,7 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         assert_eq!(shown(&tally), fresh(&s), "after edit {step}");
     }
     assert!(followed > 300 && whole > 20, "followed {followed} times, counted whole {whole} times");
+    assert!(dice.to_local > 0, "no photo moved to Local");
     // a photo deleted: the album of chosen photos it is in counts one less, without every photo being asked
     let in_album = s
         .catalog
