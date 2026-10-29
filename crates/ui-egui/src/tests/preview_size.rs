@@ -241,6 +241,50 @@ fn preview_size_texture_aspects_allow_quantization_without_hiding_crops() {
     assert!(texture_aspect([0, 0], 1.5).is_finite());
 }
 
+/// The actual painted meshes must fill the frame, including Before/After and wipe views.
+#[test]
+fn preview_size_tiny_detail_textures_fill_the_painted_frame() {
+    use crate::render::Slot;
+    use crate::state::BeforeAfter;
+    use std::time::Duration;
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.ui.filmstrip = false;
+    app.run("app.previewSize", json!({"percent": 0, "pixelLimit": -1})).unwrap();
+    app.run("view.detail", json!({})).unwrap();
+    app.run("view.zoomFit", json!({})).unwrap();
+    let mut h = crate::headless::Headless::new(app, [1000.0, 760.0], 1.0);
+    for mode in
+        [BeforeAfter::Off, BeforeAfter::Original, BeforeAfter::SideBySide, BeforeAfter::TopBottom, BeforeAfter::Split, BeforeAfter::SplitTopBottom]
+    {
+        h.app.ui.before_after = mode;
+        h.settle(Duration::from_secs(120));
+        h.step();
+        let image = h.app.image_rect.unwrap();
+        for slot in [Slot::Main, Slot::Before] {
+            if (slot == Slot::Main && mode == BeforeAfter::Original) || (slot == Slot::Before && mode == BeforeAfter::Off) {
+                continue;
+            }
+            let tex = h.app.renderer.textures.get(&slot).unwrap();
+            let painted = h
+                .view
+                .painted_shapes()
+                .into_iter()
+                .find_map(|shape| match shape {
+                    egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == tex.tex.id() => Some(mesh.calc_bounds()),
+                    _ => None,
+                })
+                .unwrap();
+            let mut expected = image.size();
+            if slot == Slot::Before && mode == BeforeAfter::Split {
+                expected.x *= 0.5;
+            } else if slot == Slot::Before && mode == BeforeAfter::SplitTopBottom {
+                expected.y *= 0.5;
+            }
+            assert!((painted.size() - expected).abs().max_elem() < 0.6, "{mode:?}/{slot:?}: painted {:?}, frame {expected:?}", painted.size());
+        }
+    }
+}
+
 /// Changing both controls resizes the real loupe texture and leaves the photo's edits untouched.
 #[test]
 fn preview_size_changes_actual_loupe_renders_without_changing_edits() {
