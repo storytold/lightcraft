@@ -33,12 +33,21 @@ pub(super) struct FaceSettings {
     /// How many of a person's best matching faces a match is based on (`None`: [`lightcraft_faces::matching::TOP_FACES`]).
     #[serde(deserialize_with = "lenient_count", skip_serializing_if = "Option::is_none")]
     pub(super) top_faces: Option<usize>,
+    /// Leave out a person's odd faces (far from their average face: from behind, misnamed) when looking for faces like
+    /// theirs ([`lightcraft_faces::matching::typical`]). Off unless the user turns it on.
+    #[serde(deserialize_with = "lenient_bool", skip_serializing_if = "std::ops::Not::not")]
+    pub(super) skip_odd: bool,
 }
 
 /// A saved count that is not a whole number (a hand-edited `-1`, `"3"`) is read as no choice: the file is not taken for a
 /// damaged one, which would drop every other face setting with it (recognition switched off, the model forgotten).
 fn lenient_count<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<usize>, D::Error> {
     Ok(Value::deserialize(d)?.as_u64().and_then(|n| usize::try_from(n).ok()))
+}
+
+/// A saved switch that is not true or false is off, for the same reason as [`lenient_count`].
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(Value::deserialize(d)?.as_bool().unwrap_or(false))
 }
 
 impl FaceSettings {
@@ -90,6 +99,11 @@ fn matching(s: &mut Session, p: &Value) -> Result<Value> {
     let mut st = read_settings(&dir);
     if let Some(v) = p.get("topFaces") {
         st.top_faces = top_faces_value(C, v, "the default")?;
+    }
+    if let Some(v) = p.get("skipOdd") {
+        st.skip_odd = v.as_bool().ok_or_else(|| bad(C, "`skipOdd` is true or false"))?;
+    }
+    if p.get("topFaces").is_some() || p.get("skipOdd").is_some() {
         write_settings(&dir, &st)?;
         // suggestions and a person's "More" faces follow at once, not within the second the last look is trusted
         #[cfg(not(target_arch = "wasm32"))]
@@ -101,6 +115,7 @@ fn matching(s: &mut Session, p: &Value) -> Result<Value> {
         "topFaces": st.top_faces(),
         "topFacesDefault": lightcraft_faces::matching::TOP_FACES,
         "topFacesMax": lightcraft_faces::matching::MAX_TOP_FACES,
+        "skipOdd": st.skip_odd,
     }))
 }
 
@@ -261,6 +276,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         "topFaces": settings.top_faces(),
         "topFacesDefault": lightcraft_faces::matching::TOP_FACES,
         "topFacesMax": lightcraft_faces::matching::MAX_TOP_FACES,
+        // a person's odd faces are left out when looking for faces like theirs (`faces.matching`)
+        "skipOdd": settings.skip_odd,
         // where the models run: {cpuOnly, detection, recognition} as `faces.gpu` gives it
         "gpu": super::face_detect::gpu_json(s),
         // Native builds always have the pure-Rust runner; model files/background scanning remain native-only.
@@ -581,7 +598,7 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, topFaces, topFacesDefault, topFacesMax, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, selected}]}", always, list),
+        cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, topFaces, topFacesDefault, topFacesMax, skipOdd, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, selected}]}", always, list),
         cmd!(query "faces.models.inspect", "Inspect Face Model File", [], None, "{path} → what a .onnx file is: {kind: known | draft | unsupported, model, assumptions, reason, alreadyInstalled}; installs nothing", always, inspect),
         cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true, activate?: true} → {installed, active: {embedder, enabled}} — copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it. Unless `activate` is false the model becomes the one in use and recognition is switched on; an earlier model stays installed", always, install),
         cmd!(query "faces.models.download", "Download Face Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a recognition model LightCraft has a pinned address for (see `downloadHost` in the list), in the background over pure-Rust https (lightcraft-fetch). `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, then installed, chosen and switched on by itself; `faces.models.downloads` shows how far it is", always, download),
@@ -591,6 +608,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),
-        cmd!(query "faces.matching", "Face Matching", [], None, "{topFaces?: 1..8 | null} → {topFaces, topFacesDefault, topFacesMax} — how many of a person's best matching faces a suggestion's score is the mean of (Settings ▸ Faces; null goes back to the default). More faces make two odd photos of someone (blurred, in profile) less able to carry a stranger. Only the scores of people with more faces than the count before can fall: a person with fewer faces is scored on the ones they have", always, matching),
+        cmd!(query "faces.matching", "Face Matching", [], None, "{topFaces?: 1..8 | null, skipOdd?: bool} → {topFaces, topFacesDefault, topFacesMax, skipOdd} — how many of a person's best matching faces a suggestion's score is the mean of (Settings ▸ Faces; null goes back to the default). More faces make two odd photos of someone (blurred, in profile) less able to carry a stranger. Only the scores of people with more faces than the count before can fall: a person with fewer faces is scored on the ones they have. `skipOdd` leaves a person's odd faces (far from their average face: from behind, misnamed) out when their page looks for faces like theirs (off by default)", always, matching),
     ]
 }

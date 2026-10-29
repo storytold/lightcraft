@@ -659,11 +659,22 @@ fn the_faces_a_match_is_based_on_are_kept_and_bad_values_are_refused() {
     }
     assert_eq!(again.execute("faces.matching", &json!({})).unwrap()["topFaces"], 4, "a refused value changes nothing");
     assert_eq!(again.execute("faces.matching", &json!({"topFaces": null})).unwrap()["topFaces"], 2, "null is the default again");
+    // a person's odd faces: off by default, kept, beside the count it leaves alone
+    assert_eq!(again.execute("faces.matching", &json!({})).unwrap()["skipOdd"], false);
+    assert_eq!(again.execute("faces.matching", &json!({"skipOdd": true})).unwrap()["skipOdd"], true);
+    assert!(again.execute("faces.matching", &json!({"skipOdd": "yes"})).is_err());
+    assert!(again.execute("faces.matching", &json!({"topFaces": 3, "skipOdd": 1})).is_err());
+    let l = session(&d).execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!((l["skipOdd"].clone(), l["topFaces"].clone()), (json!(true), json!(2)), "a refused call changes nothing: {l}");
     // a hand-edited file out of range is read within range, not trusted
     std::fs::write(d.join("models").join("settings.json"), br#"{"topFaces":1000}"#).unwrap();
     assert_eq!(session(&d).execute("faces.matching", &json!({})).unwrap()["topFaces"], 8);
     // and a count that is no whole number is no choice, without losing the other face settings
-    for bad in [&br#"{"enabled":true,"embedder":"m","topFaces":-1}"#[..], br#"{"enabled":true,"embedder":"m","topFaces":"3"}"#] {
+    for bad in [
+        &br#"{"enabled":true,"embedder":"m","topFaces":-1}"#[..],
+        br#"{"enabled":true,"embedder":"m","topFaces":"3"}"#,
+        br#"{"enabled":true,"embedder":"m","skipOdd":"yes"}"#,
+    ] {
         std::fs::write(d.join("models").join("settings.json"), bad).unwrap();
         let l = session(&d).execute("faces.models.list", &json!({})).unwrap();
         assert_eq!((l["enabled"].clone(), l["embedder"].clone(), l["topFaces"].clone()), (json!(true), json!("m"), json!(2)), "{l}");
