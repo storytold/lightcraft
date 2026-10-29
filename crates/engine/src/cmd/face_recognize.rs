@@ -1319,7 +1319,7 @@ pub fn specs() -> Vec<CommandSpec> {
             set_name
         ),
         cmd!(
-            query "faces.dismiss",
+            "faces.dismiss",
             "Not This Person",
             [],
             None,
