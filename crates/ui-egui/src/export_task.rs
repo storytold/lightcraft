@@ -1,21 +1,47 @@
 //! Background export: the Export dialog, File → Export with Preset and Export with Previous hand
-//! their batch to a worker thread so the window stays responsive. Photos are prepared on the UI
-//! thread ([`lightcraft_engine::export::prepare_export`]: cheap, needs the session) and rendered,
-//! encoded and written on the worker (several side by side: [`run_batch`]); its row in the
-//! activity stack shows the count, the file in progress and ✕ (issue #345).
+//! their batch to a worker thread so the window stays responsive. Starting one only registers its
+//! row in the activity stack: the photos are prepared over the next frames
+//! ([`lightcraft_engine::export::BatchPrep`]: cheap per photo but it needs the session, so it stays on
+//! this thread, a few milliseconds a frame), then rendered, encoded and written on the worker
+//! (several side by side: [`run_batch`]). The row shows the count, the file in progress and ✕
+//! (issue #345), which also stops the preparing.
 //!
 //! Needs [`crate::Services::write_shared`] (a thread-safe writer); without it (web) the batch runs
 //! synchronously as before.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
+use lightcraft_catalog::PhotoId;
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
+use lightcraft_engine::export::{AfterExport, BatchPrep, Destination, ExportOptions, run_batch};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+
+/// What one frame spends preparing the photos of an export that has started: a photo takes a few
+/// milliseconds on this thread, so a big batch is set up over many frames, not in one.
+const PREP_BUDGET: std::time::Duration = std::time::Duration::from_millis(6);
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own budget (zero: one step per frame, so a test sees every stage of a batch).
+    static TEST_PREP_BUDGET: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(PREP_BUDGET) };
+}
+
+/// Spend `budget` on each frame's preparing in this test's thread.
+#[cfg(test)]
+pub(crate) fn set_prep_budget(budget: std::time::Duration) {
+    TEST_PREP_BUDGET.with(|b| b.set(budget));
+}
+
+fn prep_budget() -> std::time::Duration {
+    #[cfg(test)]
+    return TEST_PREP_BUDGET.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    PREP_BUDGET
+}
 
 pub struct ExportTask {
     pub total: usize,
@@ -27,31 +53,65 @@ pub struct ExportTask {
     rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
+    /// The photos still being set up, a few each frame ([`prepare`]); the worker starts when it is done.
+    preparing: Option<Preparing>,
+}
+
+/// An image export whose photos are being prepared, and what its worker needs once they are.
+struct Preparing {
+    /// The session's library when the export started: photo ids mean nothing in another one.
+    library: u64,
+    batch: BatchPrep,
+    opts: ExportOptions,
+    to: Destination,
+    after: AfterExport,
+    write: crate::SharedWrite,
+    tx: Sender<Result<(Vec<Value>, Option<Value>, bool), String>>,
 }
 
 impl ExportTask {
-    /// `{total, done, current}` for `ui.inspect`.
+    /// The photos are still being set up: nothing is rendered or written yet.
+    pub fn is_preparing(&self) -> bool {
+        self.preparing.is_some()
+    }
+
+    /// `{total, done, current, preparing}` for `ui.inspect` (`preparing`: the photos are still being
+    /// set up, nothing is rendered yet).
     pub fn status(&self) -> Value {
         let (done, current) = self.progress.lock().map(|g| g.clone()).unwrap_or_default();
-        json!({"total": self.total, "done": done, "current": current})
+        json!({"total": self.total, "done": done, "current": current, "preparing": self.preparing.is_some()})
     }
 }
 
-/// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
-/// Photos). Errors per photo are collected, not fatal.
-pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
+/// Start exporting `ids` in the background, then do `after` with the files written (Add to Apple
+/// Photos). The row in the activity stack is there at once; the photos are set up over the frames
+/// that follow (see [`prepare`]) and then rendered, encoded and written on a worker. Errors per photo
+/// are collected, not fatal; one that can't be set up at all (a photo gone, a demo photo's
+/// original…) ends the export with that error, in a toast.
+pub fn start(app: &mut LightcraftApp, ids: Vec<PhotoId>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
-    let total = items.len();
+    let total = ids.len();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
-    let (p, c) = (progress.clone(), cancel.clone());
     let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
     guard.progress(0, total as u64);
-    let row = guard.handle();
+    guard.detail(crate::i18n::tr("Preparing photos…"));
+    let library = app.session.library_generation();
+    let preparing = Some(Preparing { library, batch: BatchPrep::new(ids), opts, to, after, write, tx });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard, preparing });
+    Ok(json!({"background": true, "total": total}))
+}
+
+/// Run the prepared photos (none when `stopped`) on a worker; its result reaches `task.rx`.
+fn launch(task: &ExportTask, prep: Preparing, stopped: bool) -> Result<(), String> {
+    let Preparing { batch, opts, to, after, write, tx, .. } = prep;
+    let items = if stopped { Vec::new() } else { batch.into_items() };
+    let (p, c) = (task.progress.clone(), task.cancel.clone());
+    let row = task.guard.handle();
     // translated here: the language is the UI thread's, and the worker would show English
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
     let work = move || {
@@ -81,8 +141,44 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
-    Ok(json!({"background": true, "total": total}))
+    Ok(())
+}
+
+/// One frame's share of preparing an export's photos (the logic pass, so it goes on in a full-screen
+/// preview, a slideshow and a hidden window): as many as fit [`prep_budget`] (at least one), then the
+/// worker starts when all are ready. A stop (✕), or a library switched meanwhile (the photo ids are the
+/// old library's), sends the worker off with no photos, so the export ends as a cancelled one does, and
+/// `after` is told. An error ends the export.
+pub fn prepare(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(task) = app.export.as_mut() else { return };
+    let Some(mut prep) = task.preparing.take() else { return };
+    if prep.library != app.session.library_generation() {
+        task.cancel.store(true, Ordering::Relaxed);
+    }
+    let stopped = task.cancel.load(Ordering::Relaxed);
+    let ready = if stopped {
+        Ok(true)
+    } else {
+        let (began, budget) = (std::time::Instant::now(), prep_budget());
+        prep.batch.advance(&mut app.session, &prep.opts, &mut || began.elapsed() < budget)
+    };
+    match ready {
+        Ok(false) => {
+            task.preparing = Some(prep);
+            ctx.request_repaint();
+        }
+        Ok(true) => {
+            if let Err(e) = launch(task, prep, stopped) {
+                app.export = None;
+                app.toast(ctx, e);
+            }
+        }
+        // (the row goes with the task, and `after` is dropped unrun: Photos is free again)
+        Err(e) => {
+            app.export = None;
+            app.toast(ctx, e);
+        }
+    }
 }
 
 /// Export a single paginated PDF with the same activity row and cancellation as image exports.
@@ -128,7 +224,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, preparing: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -181,7 +277,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, preparing: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -264,6 +360,9 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
+    if task.preparing.is_some() {
+        return;
+    }
     match task.rx.try_recv() {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
