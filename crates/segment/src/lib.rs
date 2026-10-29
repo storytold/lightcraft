@@ -88,6 +88,11 @@ pub fn is_model_dir(dir: &Path) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Whether [`best_device`] can be a GPU in this build (Metal on macOS). Where it can, a caller that
+/// sees the model fail there can load it again with [`Sam3::load_cpu`].
+pub const GPU_BUILD: bool = cfg!(target_os = "macos");
+
+#[cfg(not(target_arch = "wasm32"))]
 /// The best device here: Metal on macOS (when a GPU is available), else the CPU.
 pub fn best_device() -> Device {
     #[cfg(target_os = "macos")]
@@ -132,6 +137,11 @@ impl Sam3 {
     /// Hugging Face format), `vocab.json` and `merges.txt`.
     pub fn load(dir: &Path) -> Result<Self> {
         Self::load_on(dir, best_device())
+    }
+
+    /// [`Sam3::load`] on the CPU, whatever GPU there is.
+    pub fn load_cpu(dir: &Path) -> Result<Self> {
+        Self::load_on(dir, Device::Cpu)
     }
 
     pub fn load_on(dir: &Path, device: Device) -> Result<Self> {

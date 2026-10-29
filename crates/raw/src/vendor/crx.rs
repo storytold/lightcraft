@@ -366,6 +366,39 @@ fn split_dimension(length: usize, before: bool, after: bool) -> (usize, usize) {
     (length.div_ceil(2) + usize::from(after && length.is_multiple_of(2)), length / 2 + usize::from(before) + usize::from(after))
 }
 
+/// The width at which high-frequency band `index` (1–9, coarsest level first) is entropy coded,
+/// given its synthesis width `width`.
+///
+/// A tile with a neighbour on its right codes the vertical high-pass band of the level-1 and level-2
+/// low-pass columns (bands 8 and 5, whose low-pass columns the next level transforms again) at an odd
+/// width: an even synthesis width gains one column, which synthesis does not use. Every other band,
+/// including band 2 of the last level, is coded at its synthesis width. Measured on every C-RAW plane
+/// that `tests/it/cr3_corpus.rs` decodes (CC0 raw.pixls.us files): two-tile files with tile widths 2816,
+/// 3144, 3192, 3444 and 3564 (G5 X Mark II, M50, R100, 250D, RP, R, 90D, M6 Mark II), where bands 5
+/// and 8 gain a column in left tiles exactly when the rule says so, and single-tile `0x100` and
+/// `0x200` files, which never extend a band. In every one of those planes, each band's entropy stream
+/// ends exactly at that width and at no other width from `width` to `width + 2`. The width used to be
+/// probed by trying `width`, `width + 1` and `width + 2` in turn, but two widths can both consume a
+/// stream exactly and give different coefficients (#899), so it is now taken from the geometry.
+/// No public file has a middle tile (three or more C-RAW tiles); it is assumed to follow the left tile.
+fn coded_band_width(index: usize, width: usize, edges: TileEdges) -> usize {
+    if edges.right && matches!(index, 5 | 8) { width | 1 } else { width }
+}
+
+/// A high-frequency band entropy coded `coded_width` columns wide, cropped to its `width` synthesis columns.
+fn coded_high_frequency_band(src: &[u8], width: usize, coded_width: usize, height: usize) -> Result<Vec<i32>> {
+    let values = high_frequency_band(src, coded_width, height)?;
+    if coded_width == width {
+        return Ok(values);
+    }
+    let mut cropped = Vec::new();
+    cropped.try_reserve_exact(width.saturating_mul(height)).map_err(|_| RawError::Limit("CRX cropped band allocation"))?;
+    for row in values.chunks_exact(coded_width) {
+        cropped.extend_from_slice(row.get(..width).ok_or_else(|| corrupt("band crop outside row"))?);
+    }
+    Ok(cropped)
+}
+
 fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edges: TileEdges, qp: Option<&QpMap>) -> Result<Vec<i32>> {
     let mut dimensions = vec![(width, height)];
     let mut high_dimensions = Vec::new();
@@ -383,32 +416,7 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
     let mut bands = Vec::with_capacity(10);
     for (i, (&(w, h), band)) in shapes.iter().zip(&plane.bands).enumerate() {
         let bytes = band_bytes(sample, band)?;
-        let mut data = if i == 0 {
-            lossless_plane(bytes, w, h)?
-        } else {
-            // Some CRX high-frequency bands retain a redundant right column
-            // beyond synthesis support (LH2 in the M50/R100 fixtures). Infer
-            // that small extension only from a complete, correctly aligned
-            // entropy stream, then crop each row to the synthesis support.
-            let mut decoded = None;
-            for extra in 0..=2 {
-                let coded_width = w.checked_add(extra).ok_or(RawError::Limit("CRX band width"))?;
-                if let Ok(values) = high_frequency_band(bytes, coded_width, h) {
-                    if extra == 0 {
-                        decoded = Some(values);
-                    } else {
-                        let mut cropped = Vec::new();
-                        cropped.try_reserve_exact(w * h).map_err(|_| RawError::Limit("CRX cropped band allocation"))?;
-                        for row in values.chunks_exact(coded_width) {
-                            cropped.extend_from_slice(row.get(..w).ok_or_else(|| corrupt("band crop outside row"))?);
-                        }
-                        decoded = Some(cropped);
-                    }
-                    break;
-                }
-            }
-            decoded.ok_or_else(|| RawError::Corrupt(format!("Canon CRX band {i}: unsupported geometry or corrupt entropy")))?
-        };
+        let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
         for (position, value) in data.iter_mut().enumerate() {
             let step = match band.quant {
                 Quantization::Uniform(value) => quant_step(value, MAX_UNIFORM_QUANT)?,
@@ -949,6 +957,56 @@ mod tests {
         for end in 0..sample.len() {
             assert!(decode(&sample[..end], &config).is_err());
         }
+    }
+
+    #[test]
+    fn coded_band_width_follows_the_measured_tile_geometry() {
+        let left_tile = TileEdges { right: true, ..TileEdges::default() };
+        let right_tile = TileEdges { left: true, ..TileEdges::default() };
+        let single = TileEdges::default();
+        // Bands 5 and 8 of a left tile: an even width gains a column (RP 400 -> 401, R 862 -> 863,
+        // 90D / M6 Mark II 892 -> 893), an odd one does not (90D / M6 Mark II band 5 at 447).
+        for (band, width, coded) in [(5, 394, 395), (5, 400, 401), (5, 432, 433), (5, 447, 447), (8, 862, 863), (8, 892, 893), (8, 705, 705)] {
+            assert_eq!(coded_band_width(band, width, left_tile), coded, "band {band} at {width}");
+        }
+        // The last level's low-pass columns are not transformed again: band 2 keeps an even width.
+        assert_eq!(coded_band_width(2, 198, left_tile), 198);
+        for band in [1, 3, 4, 6, 7, 9] {
+            assert_eq!(coded_band_width(band, 394, left_tile), 394, "band {band}");
+        }
+        for band in 1..=9 {
+            assert_eq!(coded_band_width(band, 446, right_tile), 446, "band {band}");
+            assert_eq!(coded_band_width(band, 446, single), 446, "band {band}");
+        }
+    }
+
+    #[test]
+    fn a_band_that_decodes_at_two_widths_uses_the_coded_width() {
+        // #899: entropy alignment alone does not identify the coded width. This 2-row stream is
+        // consumed exactly both 2 and 3 columns wide, with different retained coefficients.
+        let src = [0xc0, 0x0f];
+        assert_eq!(high_frequency_band(&src, 2, 2).unwrap(), [0, 0, 5, -2]);
+        assert_eq!(high_frequency_band(&src, 3, 2).unwrap(), [0, 0, 5, 0, 0, 0]);
+        // The width probe took the first width that decoded (2). Band 8 of a left tile at an even
+        // width is coded one column wider, so the geometry selects 3 and crops it.
+        let coded = coded_band_width(8, 2, TileEdges { right: true, ..TileEdges::default() });
+        assert_eq!(coded, 3);
+        assert_eq!(coded_high_frequency_band(&src, 2, coded, 2).unwrap(), [0, 0, 0, 0]);
+        // Elsewhere the same stream is read at its synthesis width.
+        assert_eq!(coded_high_frequency_band(&src, 2, coded_band_width(7, 2, TileEdges::default()), 2).unwrap(), [0, 0, 5, -2]);
+        // The #899 reproducer: an odd width is never extended, so the narrow reading is kept.
+        let src = [0x00, 0x33];
+        assert_eq!(coded_band_width(5, 3, TileEdges { right: true, ..TileEdges::default() }), 3);
+        assert_eq!(coded_high_frequency_band(&src, 3, 3, 1).unwrap(), [5, 0, -1]);
+        assert_eq!(high_frequency_band(&src, 4, 1).unwrap(), [5, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_band_that_fails_at_its_coded_width_is_an_error() {
+        // No fallback to another width: a stream that only fits 2 columns is corrupt where 3 are coded.
+        let src = [0xc0, 0x0f];
+        assert!(high_frequency_band(&src, 4, 2).is_err());
+        assert!(coded_high_frequency_band(&src, 3, 4, 2).is_err());
     }
 
     #[test]

@@ -49,66 +49,11 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the LightCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- Lightcraft's own format. -->
-  <key>UTExportedTypeDeclarations</key>
-  <array>
-    <dict>
-      <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.lightcraft.document</string>
-      <key>UTTypeDescription</key>
-      <string>LightCraft Document</string>
-      <key>UTTypeConformsTo</key>
-      <array>
-        <string>public.data</string>
-        <string>public.image</string>
-      </array>
-      <key>UTTypeIconFile</key>
-      <string>LightCraft</string>
-      <key>UTTypeTagSpecification</key>
-      <dict>
-        <key>public.filename-extension</key>
-        <array><string>pcraft</string></array>
-        <key>public.mime-type</key>
-        <array><string>application/x-lightcraft</string></array>
-      </dict>
-    </dict>
-  </array>
-  <!-- Types macOS may not know; the system's own declaration wins when it has one. -->
-  <key>UTImportedTypeDeclarations</key>
-  <array>
-    <dict>
-      <key>UTTypeIdentifier</key>
-      <string>com.adobe.photoshop-large-image</string>
-      <key>UTTypeDescription</key>
-      <string>Photoshop Large Document</string>
-      <key>UTTypeConformsTo</key>
-      <array>
-        <string>public.data</string>
-        <string>public.image</string>
-      </array>
-      <key>UTTypeTagSpecification</key>
-      <dict>
-        <key>public.filename-extension</key>
-        <array><string>psb</string></array>
-      </dict>
-    </dict>
-    <dict>
-      <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.lightcraft.qoi</string>
-      <key>UTTypeDescription</key>
-      <string>QOI Image</string>
-      <key>UTTypeConformsTo</key>
-      <array>
-        <string>public.data</string>
-        <string>public.image</string>
-      </array>
-      <key>UTTypeTagSpecification</key>
-      <dict>
-        <key>public.filename-extension</key>
-        <array><string>qoi</string></array>
-      </dict>
-    </dict>
-  </array>
+  <!-- No UTI declarations: LightCraft has no document type of its own, and the formats it opens
+       (JPEG, PNG, TIFF, HEIC, the raw formats) are declared by the system or by another app.
+       Declaring PhotoCraft's `.pcraft` type here (and importing PSB and QOI) made Launch Services
+       type PhotoCraft documents as LightCraft's; `.pcraft` ended up with three claimant apps
+       (issue #1951). -->
 
 </dict>
 </plist>

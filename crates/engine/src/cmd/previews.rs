@@ -31,6 +31,10 @@ pub struct PreviewBuild {
     pub what: &'static str,
     /// Why the whole build failed (e.g. the smart previews folder isn't there).
     pub error: std::sync::Mutex<Option<String>>,
+    /// Test-only: the gate this build's lanes wait at before a photo's first render (see
+    /// [`test_gate`]). Captured by `build` on the calling thread; production builds never have one.
+    #[cfg(test)]
+    pub(crate) gate: Option<Arc<test_gate::PreviewGate>>,
 }
 
 impl PreviewBuild {
@@ -79,10 +83,15 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
-pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
+/// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
+        // between a photo's own previews too (a cancelled 1:1 view skips its grid thumbnail)
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return None;
+        }
         if let Some(src) = &decoded
             && !matches!(j.source, crate::media::SourceRef::Loaded(_))
         {
@@ -94,7 +103,13 @@ pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
             decoded = r.loaded;
         }
     }
-    ok
+    Some(ok)
+}
+
+/// [`run_photo_cancellable`] for callers that render a photo without a cancel flag.
+#[cfg(test)]
+pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
+    run_photo_cancellable(jobs, None) == Some(true)
 }
 
 /// How many photos render side by side: as many as an export batch for standard previews (each
@@ -103,6 +118,112 @@ pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
 fn lanes(n: usize, full: bool) -> usize {
     let l = crate::export::export_parallelism(n);
     if full { l.min(2) } else { l }
+}
+
+/// A test-only rendezvous at the start of a photo's jobs, so a cancel can be delivered at a known
+/// point instead of racing a render. One gate belongs to the build `build` starts on the test
+/// thread that installed it ([`install`]); it is never global and production builds have none.
+#[cfg(test)]
+pub(crate) mod test_gate {
+    use std::sync::{Arc, Condvar, Mutex, PoisonError};
+    use std::time::{Duration, Instant};
+
+    /// The longest a lane waits for a test to open the gate: if a test ends without its
+    /// [`ReleaseOnDrop`] running, the build still finishes instead of stranding its worker.
+    const MAX_HOLD: Duration = Duration::from_secs(30);
+    /// The longest a test waits for a lane to reach the gate.
+    const MAX_ENTER_WAIT: Duration = Duration::from_secs(10);
+
+    #[derive(Default)]
+    struct State {
+        entered: usize,
+        released: bool,
+    }
+
+    /// The gate a test's preview build waits at before rendering a photo (see `install`).
+    #[derive(Default)]
+    pub(crate) struct PreviewGate {
+        state: Mutex<State>,
+        opened: Condvar,
+    }
+
+    impl std::fmt::Debug for PreviewGate {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PreviewGate").finish_non_exhaustive()
+        }
+    }
+
+    impl PreviewGate {
+        pub(crate) fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        /// Called by a lane about to render a photo's first job; returns once the test opens the
+        /// gate, or after `MAX_HOLD` so a lost test cannot strand the worker.
+        pub(crate) fn enter(&self) {
+            let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            st.entered = st.entered.saturating_add(1);
+            self.opened.notify_all();
+            let deadline = Instant::now() + MAX_HOLD;
+            while !st.released {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let (next, _) = self.opened.wait_timeout(st, remaining).unwrap_or_else(|e| e.into_inner());
+                st = next;
+            }
+        }
+
+        /// Wait (at most `MAX_ENTER_WAIT`) until at least `n` lanes have reached the gate.
+        pub(crate) fn wait_entered(&self, n: usize) -> bool {
+            let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let deadline = Instant::now() + MAX_ENTER_WAIT;
+            loop {
+                if st.entered >= n {
+                    return true;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next, _) = self.opened.wait_timeout(st, remaining).unwrap_or_else(|e| e.into_inner());
+                st = next;
+            }
+        }
+
+        /// Open the gate: every lane waiting, or arriving later, passes without waiting.
+        pub(crate) fn release(&self) {
+            let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            st.released = true;
+            self.opened.notify_all();
+        }
+    }
+
+    /// Opens the gate when dropped, wherever a test ends (assertion failure, panic, early return).
+    pub(crate) struct ReleaseOnDrop(pub(crate) Arc<PreviewGate>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    thread_local! {
+        /// The gate for the next preview build started on this thread, taken by `build` so it is
+        /// per invocation (never shared by two builds or two tests).
+        static NEXT_GATE: std::cell::RefCell<Option<Arc<PreviewGate>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Have the next preview build started on this thread wait at `gate` before its first photo.
+    pub(crate) fn install(gate: Arc<PreviewGate>) {
+        NEXT_GATE.with(|g| *g.borrow_mut() = Some(gate));
+    }
+
+    /// Take the gate installed for this build, leaving none for later builds.
+    pub(crate) fn take() -> Option<Arc<PreviewGate>> {
+        NEXT_GATE.with(|g| g.borrow_mut().take())
+    }
 }
 
 fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, lanes: usize) {
@@ -115,7 +236,17 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
             }
             let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
             let Some(photo_jobs) = next else { break };
-            let ok = crate::guard::catch("building previews", || run_photo(photo_jobs)).unwrap_or(false);
+            // A cancel accepted while this lane waited for the queue (or for another lane's
+            // photo) stops before this photo's first render; a cancelled photo is not counted.
+            if state.cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            #[cfg(test)]
+            if let Some(gate) = &state.gate {
+                gate.enter();
+            }
+            let outcome = crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel))).unwrap_or(Some(false));
+            let Some(ok) = outcome else { break };
             if !ok {
                 state.failed.fetch_add(1, Ordering::Relaxed);
             }
@@ -143,6 +274,9 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
 
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
+    // tests: this invocation's gate, consumed here so an early error cannot attach it to a later build
+    #[cfg(test)]
+    let gate = test_gate::take();
     let edge = match str_param(p, "size").unwrap_or("standard") {
         "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
         "full" | "1:1" => None,
@@ -154,6 +288,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
     let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
+    #[cfg(test)]
+    let state = Arc::new(PreviewBuild { total: jobs.len(), gate, ..Default::default() });
+    #[cfg(not(test))]
     let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
     s.preview_build = Some(state.clone());
     let task = task_for(s, &state);
@@ -176,11 +313,17 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
-/// how to load the original at preview size, whether the photo takes the per-file camera look —
-/// `camera_preview::file_local_look`, [`lightcraft_catalog::Photo::fitted_look`]: only those
-/// proxies go stale when the fit changes).
+/// how to load the original at preview size, whether the photo can take a preview-fitted look:
+/// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
+/// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
 type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+
+/// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
+#[cfg(not(target_arch = "wasm32"))]
+fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
+    photo.fitted_look() || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+}
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
 /// refresh ([`refresh_stale_smart_previews`]), on their own threads, never write the same file at once.
@@ -205,15 +348,18 @@ struct SmartCounts {
     failed: Vec<Value>,
 }
 
-/// `source` if it reads the photo's original, else `None`: a cached source decoded from a smart
-/// preview (it has no decoder facts), a proxy standing in for an offline original, and the proxy
-/// fallback of a file source are not the original.
+/// `source` if it reads the photo's original, else `None`. A source decoded from a smart preview
+/// (it now carries the proxy's stored facts), a proxy standing in for an offline original, and the
+/// proxy fallback of a file source are not the original: refreshing a stale proxy from one of them
+/// would stamp its older look as current.
 #[cfg(not(target_arch = "wasm32"))]
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
-        SourceRef::File { path, max_edge, loader, denoise, .. } => Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise }),
-        SourceRef::Loaded(d) if d.info.is_some() => Some(SourceRef::Loaded(d)),
+        SourceRef::File { path, max_edge, loader, denoise, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
+        }
+        SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
     }
 }
@@ -252,10 +398,11 @@ fn smart_run(
             }
         } else {
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
-            // full drive) is (re)built, and so is one written by an older camera-look fit (see
-            // `camera_preview::LOOK_VERSION`) when its original can be read
+            // full drive) is (re)built, and so is one written by an older encoding or camera-look
+            // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
+            // original can be read
             let damaged = path.exists();
-            let stale = look && damaged && crate::smart::is_stale(&path);
+            let stale = damaged && crate::smart::is_stale_for(&path, look);
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
@@ -268,7 +415,10 @@ fn smart_run(
                 let r = source
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
-                    .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
+                    .and_then(|src| {
+                        let info = src.info_or(Default::default());
+                        crate::smart::encode(&src.image, Some(&info))
+                    })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
                         // Only create the leaf shard: do not recreate a missing external drive.
@@ -333,7 +483,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
         let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, ph.fitted_look()));
+        jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -360,14 +510,14 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-/// Bring smart previews written by an older camera-look fit up to date, once per fit version: when
-/// the smart previews folder has not been checked at this `LOOK_VERSION` (its marker,
-/// [`crate::smart::look_checked`]), a worker thread (the UI never waits on the drives) looks at the
-/// proxies of the raws that take the per-file camera look, the only ones the fit reaches (JPEG,
-/// PNG… proxies are never rebuilt), and rebuilds the stale ones from their originals. One whose
-/// original can't be read (offline) is kept as it is, still marked stale in its header: Build
-/// Smart Previews rebuilds it once the original is back. Only existing proxies are touched: none
-/// is built, and a missing folder is never created. Returns the thread, if started.
+/// Bring smart previews up to date, once per fit-and-encoding version: when the smart previews
+/// folder has not been checked at this build's versions (its marker, [`crate::smart::look_checked`]),
+/// a worker thread (the UI never waits on the drives) looks at the proxies of the photos on disk
+/// and rebuilds the stale ones from their originals — one whose stored pixels are an older encoding
+/// (every photo), or, for a raw that takes the per-file camera look or a DNG, one written by an older fit.
+/// One whose original can't be read (offline) is kept as it is, still marked stale in its header:
+/// Build Smart Previews rebuilds it once the original is back. Only existing proxies are touched:
+/// none is built, and a missing folder is never created. Returns the thread, if started.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::thread::JoinHandle<()>> {
     let dir = s.media.smart_dir.clone()?;
@@ -375,9 +525,11 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
-    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. }) && p.fitted_look()).collect();
-    let jobs: Vec<SmartJob> =
-        photos.iter().map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), true)).collect();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
+    let jobs: Vec<SmartJob> = photos
+        .iter()
+        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
         .spawn(move || refresh_stale(&dir, jobs))
@@ -391,7 +543,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
         .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, _)| crate::smart::is_stale(path))
+        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
@@ -548,7 +700,8 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source = SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None };
+        jobs[1].source =
+            SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None, reduced: None };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 

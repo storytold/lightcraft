@@ -407,3 +407,42 @@ fn auto_mask_strokes_match_the_whole_render() {
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
 }
+
+/// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:
+/// 4.5 % of the long edge).
+const OVERLAY_INSET: usize = W * 45 / 1000;
+
+/// [`check`] for a diagnostic overlay, with the photo as a raw (Visualize HDR needs one), keeping the
+/// loupe's margin in from the window's edges.
+fn check_overlay(name: &str, s: &DevelopSettings, overlay: crate::Overlay, win: PixelWindow, max_ok: u8, mean_ok: f64) {
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let full_req = RenderRequest { overlay, ..RenderRequest::fit(W, H) };
+    let f = render(&scene(), &info, s, &full_req).image;
+    let w = render(&scene(), &info, s, &RenderRequest { window: Some(win), ..full_req }).image;
+    assert_eq!((w.width, w.height), (win.w, win.h), "{name}: the window's own size");
+    assert_ne!(f.data, render(&scene(), &info, s, &RenderRequest::fit(W, H)).image.data, "{name}: the overlay draws something");
+    let (max, mean) = compare_inset(&f, &w, win, OVERLAY_INSET);
+    assert!(max <= max_ok && mean <= mean_ok, "{name}: max {max} (≤ {max_ok}), mean {mean:.3} (≤ {mean_ok})");
+}
+
+// Given a diagnostic overlay (Visualize Spots, a Point Color range, Visualize HDR), a window shows
+// the same pixels as the whole-frame render, so the loupe can draw them as a zoom window
+#[test]
+fn diagnostic_overlays_in_a_window_match_the_full_render() {
+    use crate::Overlay;
+    let mut spots = DevelopSettings::default();
+    spots.detail.sharpen_amount = 60.0;
+    // a binary threshold: a pixel at the threshold may flip on a one-level difference underneath
+    check_overlay("spots", &spots, Overlay::Spots(70), MID, 255, 0.05);
+    for (x, y) in [(0, 0), (W - 400, H - 300)] {
+        check_overlay("spots at a corner", &spots, Overlay::Spots(70), PixelWindow { x, y, w: 400, h: 300 }, 255, 0.05);
+    }
+    let mut pc = DevelopSettings::default();
+    pc.point_colors.push(lightcraft_develop::PointColor { lum: 0.6, chroma: 0.08, hue: 60.0, hue_shift: 40.0, ..Default::default() });
+    check_overlay("point colour range", &pc, Overlay::PointColorRange(0), MID, 1, 0.1);
+    let mut hdr = DevelopSettings::default();
+    hdr.hdr.enabled = true;
+    hdr.hdr.max_ev = 3.0;
+    hdr.light.exposure = 1.5;
+    check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
+}

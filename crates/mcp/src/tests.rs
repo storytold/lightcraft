@@ -147,6 +147,43 @@ fn export_refuses_unknown_params_and_bad_values() {
     assert!(e.contains("did you mean `quality`"), "{e}");
 }
 
+/// Review of #1966: a `path` whose extension names no format exports PNG through the headless
+/// backend, so its `bitDepth` is checked against PNG's, not let through to an 8-bit file.
+#[test]
+fn export_checks_the_depth_of_the_format_a_bare_path_gets() {
+    let mut b = Headless::demo();
+    let base = std::env::temp_dir().join(format!("lc-mcp-bare-path-depth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    for name in ["output", "output.xyz"] {
+        let e = b.call("app.export", json!({"path": base.join(name).to_string_lossy(), "longEdge": 32, "bitDepth": 10})).unwrap_err();
+        assert!(e.contains("`bitDepth` must be 8 or 16 for png"), "{name}: {e}");
+    }
+    assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0, "nothing written");
+    // the format such a path gets is still PNG, and 16 bits is one of its depths
+    b.call("app.export", json!({"path": base.join("output").to_string_lossy(), "longEdge": 32, "bitDepth": 16})).unwrap();
+    let written = std::fs::read_dir(&base).unwrap().next().unwrap().unwrap().path();
+    let bytes = std::fs::read(&written).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG"), "{written:?} is a PNG");
+    assert_eq!(bytes[24], 16, "{written:?} is 16-bit");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Review of #1966: a preset's `bitDepth` is judged against the format this backend writes, PNG
+/// for a `path` that names none, so a 16-bit preset without `format` writes a 16-bit PNG.
+#[test]
+fn a_preset_depth_is_judged_against_the_format_written() {
+    let mut b = Headless::demo();
+    let base = std::env::temp_dir().join(format!("lc-mcp-preset-depth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    b.session.export_presets.push(lightcraft_engine::export::ExportPreset { name: "Deep".into(), params: json!({"bitDepth": 16}) });
+    b.call("app.export", json!({"preset": "Deep", "path": base.join("output").to_string_lossy(), "longEdge": 32})).unwrap();
+    let bytes = std::fs::read(base.join("output")).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG") && bytes[24] == 16, "a 16-bit PNG: {:?}", bytes.get(..25));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Every option the `export` tool advertises reaches `app.export` (they were accepted, then dropped).
 #[test]
 fn export_tool_forwards_its_advertised_options() {
@@ -225,6 +262,7 @@ fn a_one_shot_process_never_ends_during_a_photos_import() {
         drop(h); // what lightcraft-cli does before it exits
         return;
     }
+    let _serial = crate::serial_sockets_and_children();
     for mode in ["default", "nowait"] {
         let dir = std::env::temp_dir().join(format!("lc-mcp-photos-child-{mode}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

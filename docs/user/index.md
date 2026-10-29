@@ -14,6 +14,7 @@ You import photos, sort them with ratings, flags and albums, and edit them witho
 - [Import photos](guides/import-photos.md)
 - [Rate, flag and label photos](guides/cull-photos.md)
 - [Edit a photo](guides/edit-a-photo.md)
+- [Remove distractions from a photo](guides/remove-distractions.md)
 - [Export photos](guides/export-photos.md)
 - [Move over from Lightroom](guides/import-lightroom-catalog.md)
 - [A raw photo opens as "Preview only"](troubleshooting/preview-only-raw.md)

@@ -376,3 +376,18 @@ fn a_damaged_process_value_loads_as_v1_with_the_edits() {
     let d = &loaded.photo(id).unwrap().develop;
     assert_eq!((d.process, d.light.exposure), (ProcessVersion::V1, 0.8));
 }
+
+/// A snapshot whose `seq` is near `u64::MAX` is refused as corrupt: the next record's seq would
+/// wrap (and every later edit would be skipped as stale on reopen) or overflow-panic in debug.
+#[test]
+fn snapshot_with_seq_near_u64_max_is_corrupt() {
+    for seq in [u64::MAX, u64::MAX - 1, u64::MAX / 2 + 1] {
+        let m = MemStore::new();
+        m.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":1,\"seq\":{seq},\"catalog\":{}}}\n", Catalog::new().to_snapshot()).into_bytes(),
+        );
+        let e = Journal::open(Box::new(m)).err();
+        assert!(matches!(e, Some(CatalogError::Corrupt(_))), "seq {seq}: {e:?}");
+    }
+}

@@ -35,6 +35,12 @@ const MAX_ENTRIES: u64 = 8192;
 const MAX_BOXES: usize = 4096;
 /// Child IFDs listed by one `SubIFDs` entry.
 const MAX_CHILDREN: u64 = 4096;
+/// Pending child-IFD offsets the walker may queue at once: no more than it can ever visit
+/// (the same [`MAX_IFDS`] the seen set is held to, deduplicated as they are popped), so an alley
+/// of hostile `SubIFDs` entries can't grow the queue into the tens of millions of pointers.
+/// The plan never guesses: the walk refuses and the plan reports the whole file when it would go
+/// past the cap.
+const MAX_PENDING: usize = MAX_IFDS;
 /// The RAF raw container's pointer to its raw IFD.
 const RAF_RAW_IFD: u16 = 0xf000;
 
@@ -71,6 +77,21 @@ impl Ranges {
         }
         if !placed {
             out.push((start, end));
+        }
+        self.0 = out;
+    }
+
+    /// Add every `[start, end)` of `spans` in one sort and merge (empty ones add nothing).
+    pub fn extend(&mut self, spans: impl IntoIterator<Item = (u64, u64)>) {
+        let mut all: Vec<(u64, u64)> = std::mem::take(&mut self.0);
+        all.extend(spans.into_iter().filter(|&(a, b)| a < b));
+        all.sort_unstable();
+        let mut out: Vec<(u64, u64)> = Vec::with_capacity(all.len());
+        for (a, b) in all {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
         }
         self.0 = out;
     }
@@ -232,6 +253,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
     }
     let Ok(tiff) = Tiff::parse(bytes) else { return HeaderPlan::Whole("TIFF structure") };
     let mut holes = Ranges::new();
+    let mut spans = Vec::new();
     for ifd in tiff.all_ifds() {
         let chunks: Vec<(u64, u64)> = match ifd.image() {
             // a preview's strips are read when the preview is wanted: only the raw image is skipped
@@ -249,11 +271,12 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         if total < BULK {
             continue;
         }
-        for (i, &(offset, size)) in chunks.iter().enumerate() {
+        spans.extend(chunks.iter().enumerate().map(|(i, &(offset, size))| {
             let start = if i == 0 { offset.saturating_add(HEAD) } else { offset };
-            holes.insert(start, offset.saturating_add(size).min(len));
-        }
+            (start, offset.saturating_add(size).min(len))
+        }));
     }
+    holes.extend(spans);
     // A Panasonic RW2 keeps its raw data from `RawDataOffset` to the end, outside any TIFF image.
     if holes.is_empty()
         && bytes.starts_with(b"IIU\0")
@@ -291,6 +314,13 @@ fn walk_tiff(w: &mut Want, origin: u64, data: &[u8], extra: &[u16]) -> Result<Ra
     };
     let mut stack = vec![first];
     let mut seen = HashSet::new();
+    // Every offset ever queued: the pending cap counts distinct IFDs, so a thousand references to
+    // one child cost one visit, not a thousand.
+    let mut queued = HashSet::from([first]);
+    // Every IFD table and out-of-line value, collected and merged once at the end: an insert
+    // per entry would scan the ranges of every entry before it — quadratic in the metadata
+    // this walker collects.
+    let mut spans: Vec<(u64, u64)> = Vec::new();
     while let Some(off) = stack.pop() {
         if off == 0 || off >= len || seen.len() >= MAX_IFDS || !seen.insert(off) {
             continue;
@@ -312,7 +342,7 @@ fn walk_tiff(w: &mut Want, origin: u64, data: &[u8], extra: &[u16]) -> Result<Ra
         if !w.want(at(off), at(end)) {
             continue;
         }
-        meta.insert(at(off), at(end));
+        spans.push((at(off), at(end)));
         for i in 0..n_read {
             let p = table + i * entry;
             let Ok(pu) = usize::try_from(p) else { continue };
@@ -331,7 +361,7 @@ fn walk_tiff(w: &mut Want, origin: u64, data: &[u8], extra: &[u16]) -> Result<Ra
             };
             let Some(value_end) = start.checked_add(total).filter(|&e| e <= len) else { continue };
             if total > inline {
-                meta.insert(at(start), at(value_end));
+                spans.push((at(start), at(value_end)));
             }
             let child = matches!(tag, t::SUB_IFDS | t::EXIF_IFD | t::GPS_IFD | t::INTEROP_IFD) || extra.contains(&tag);
             let locates = child || matches!(tag, t::STRIP_OFFSETS | t::STRIP_BYTE_COUNTS | t::TILE_OFFSETS | t::TILE_BYTE_COUNTS);
@@ -342,14 +372,24 @@ fn walk_tiff(w: &mut Want, origin: u64, data: &[u8], extra: &[u16]) -> Result<Ra
             let take = if tag == t::SUB_IFDS { count.min(MAX_CHILDREN) } else { count.min(1) };
             for k in 0..take {
                 if let Some(v) = unsigned(data, order, typ, start + k * typ.size() as u64) {
+                    if v == 0 || v >= len || !queued.insert(v) {
+                        continue;
+                    }
+                    if stack.len() >= MAX_PENDING {
+                        return Err("too many child IFDs queued to visit");
+                    }
                     stack.push(v);
                 }
             }
         }
-        if complete && let Some(next) = offset_at(table_end) {
+        if complete && let Some(next) = offset_at(table_end).filter(|&next| next != 0 && next < len && queued.insert(next)) {
+            if stack.len() >= MAX_PENDING {
+                return Err("too many child IFDs queued to visit");
+            }
             stack.push(next);
         }
     }
+    meta.extend(spans);
     Ok(meta)
 }
 
@@ -566,5 +606,107 @@ mod tests {
         let file = arw6_file(&[(0, 0, 64, 48, first), (64, 0, 64, 48, tile)], 128, 48);
         assert!(crate::probe_info(&file).is_ok());
         assert_eq!(run(&file, 16, 0).0, HeaderPlan::Whole("an ARW6 header probe reads its tiles"));
+    }
+
+    /// An IFD whose `SubIFDs` entries would queue 33 million child pointers (8192 entries of
+    /// 4096 values apiece, all pointing at the same array) is refused at the walker's pending
+    /// cap instead of growing the queue — and the plan reports the whole file, never guessing.
+    #[test]
+    fn a_subifds_alley_is_refused_at_the_pending_cap() {
+        // First read everything, so the walk reaches the directory table itself.
+        let n = 8192u32;
+        let len = 8 + 2 + (n * 12 + 4 + 4 * 4096) as usize;
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&(n as u16).to_le_bytes());
+        let mut entry = |tag: u16, typ: u16, count: u32, value: u32| {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&typ.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        };
+        // header (8) + count field (2) + the {n} numbers and pointer (4), then the value array
+        let values_at = (8 + 2u64 + u64::from(n) * 12 + 4) as u32;
+        for _ in 0..n {
+            entry(t::SUB_IFDS, 4, MAX_CHILDREN as u32, values_at);
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend((1..=4096u32).flat_map(u32::to_le_bytes));
+        let mut loaded = Ranges::new();
+        loaded.insert(0, len as u64);
+        let mut w = Want::new(&tiff, &loaded);
+        assert_eq!(walk_tiff(&mut w, 0, &tiff, &[]), Err("too many child IFDs queued to visit"));
+    }
+
+    /// A TIFF with many out-of-line values across 512 directories is planned in one sort and
+    /// merge, not one pass over all accumulated ranges per value (CodeRabbit #52: before, each
+    /// `Ranges::insert` copied every range found before it — the ~million disjoint values of the
+    /// fixture below ask for more copying than the timeout allows).
+    #[test]
+    fn many_out_of_line_values_plan_fast() {
+        let (ifds, values) = (512usize, 2048usize);
+        let ifd_len = 2 + values * 12 + 4;
+        let values_at = 8 + ifds * ifd_len;
+        let len = values_at + values * 8;
+        let mut tiff = vec![0u8; len];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        for i in 0..ifds {
+            let at = 8 + i * ifd_len;
+            // {values} out-of-line strings (count 8 > the 4 inline bytes), then the next-IFD
+            // pointer; every value is a disjoint 8-byte range for the merge to handle.
+            tiff[at..at + 2].copy_from_slice(&(values as u16).to_le_bytes());
+            for k in 0..values {
+                let e = at + 2 + k * 12;
+                tiff[e..e + 2].copy_from_slice(&t::MAKE.to_le_bytes());
+                tiff[e + 2..e + 4].copy_from_slice(&2u16.to_le_bytes()); // ASCII: 8 bytes > inline — a span per entry
+                tiff[e + 4..e + 8].copy_from_slice(&8u32.to_le_bytes());
+                tiff[e + 8..e + 12].copy_from_slice(&(values_at as u32 + (k * 8) as u32).to_le_bytes());
+            }
+            let next = if i == ifds - 1 { 0u32 } else { (at + ifd_len) as u32 };
+            tiff[at + ifd_len - 4..at + ifd_len].copy_from_slice(&next.to_le_bytes());
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut loaded = Ranges::new();
+            loaded.insert(0, len as u64);
+            let _ = tx.send(header_plan(&tiff, &loaded));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(20)).expect("header_plan took longer than 20 s");
+    }
+
+    /// A TIFF with a million one-byte strips listed in descending order and all byte counts 0:
+    /// the plan is built in one sort and merge, not one pass over all strips (or all holes) per
+    /// strip.
+    #[test]
+    fn many_strips_without_byte_counts_plan_fast() {
+        let n = 1_000_000u32;
+        let (offsets_at, counts_at) = (8 + 2 + 5 * 12 + 4, 8 + 2 + 5 * 12 + 4 + 4 * n);
+        let data = counts_at + 4 * n;
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&5u16.to_le_bytes());
+        let entry = |tiff: &mut Vec<u8>, tag: u16, typ: u16, count: u32, value: u32| {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&typ.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(&mut tiff, 256, 4, 1, 1);
+        entry(&mut tiff, 257, 4, 1, n);
+        entry(&mut tiff, 273, 4, n, offsets_at);
+        entry(&mut tiff, 278, 4, 1, 1);
+        entry(&mut tiff, 279, 4, n, counts_at);
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        for i in (0..n).rev() {
+            tiff.extend_from_slice(&(data + i).to_le_bytes());
+        }
+        tiff.resize(data as usize + n as usize, 0);
+        let len = tiff.len() as u64;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut loaded = Ranges::new();
+            loaded.insert(0, len);
+            let _ = tx.send(header_plan(&tiff, &loaded));
+        });
+        let plan = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("header_plan took longer than 20 s");
+        assert!(!matches!(plan, HeaderPlan::Need(_)), "{plan:?}");
     }
 }

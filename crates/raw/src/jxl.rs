@@ -11,11 +11,18 @@
 //!
 //! Lossless (non-XYB) tiles are rendered in the codestream's own colour encoding, which is the identity,
 //! keeping the values in the raw IFD's sample space. Lossy (XYB) tiles are decoded by jxl-oxide to linear
-//! sRGB primaries; the codestream's declared primaries are then restored with a plain 3×3 matrix. We
-//! never let jxl-oxide convert to the declared encoding itself: that step gamut-maps and clips to
-//! [0, 1], which destroys raw values above 1.0 (a `WhiteLevel` of 32768 puts them far above) and
-//! desaturates. The result is the linear sample space the DNG's `WhiteLevel` refers to, up to the
-//! codec's loss, and can exceed 1.0 or dip below 0.
+//! sRGB primaries; the codestream's declared encoding is then restored by hand: its primaries with a
+//! plain 3×3 matrix, then its transfer curve. The samples of a lossy tile mean what they would in a
+//! lossless one with the same header, so a declared transfer curve is part of the stored values, not a
+//! display hint. Lightroom Classic's lossy LinearRaw DNGs (Convert to DNG with lossy compression) store
+//! perceptually shaped samples, label them with the sRGB curve and linearise them with a cubic
+//! `MapPolynomial` per plane in `OpcodeList2`. Measured against Lightroom's own preview of two such
+//! files, the polynomial applied to the samples in the declared encoding tracks Lightroom's rendering
+//! (midtone log-log slope 0.98 and 1.38, about 1 EV apart); applied to the decoder's linear output it is
+//! 3.6 EV too dark. We never let jxl-oxide convert to the declared encoding itself:
+//! that step gamut-maps and clips to [0, 1], which destroys raw values above 1.0 (a `WhiteLevel` of
+//! 32768 puts them far above) and desaturates. The result is the sample space the DNG's `WhiteLevel`
+//! refers to, up to the codec's loss, and can exceed 1.0 or dip below 0.
 //!
 //! Every tile is decoded with wide (32-bit) modular buffers. A lossy tile whose header sets
 //! `modular_16bit_buffers` can still carry values that need more than 16 bits; the narrow buffers then
@@ -79,20 +86,49 @@ fn rgb_to_xyz(p: [[f64; 2]; 3]) -> Matrix {
     std::array::from_fn(|i| std::array::from_fn(|j| prim[i][j] * s[j]))
 }
 
+/// A declared transfer curve, applied to linear values (linear → coded). Mirrored for negative values
+/// and not clipped above 1.0, so lossy undershoot and raw values above white survive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Curve {
+    Linear,
+    /// IEC 61966-2-1 (sRGB).
+    Srgb,
+    /// ITU-R BT.709.
+    Bt709,
+    /// A pure power: coded = linear^exponent.
+    Power(f32),
+}
+
+impl Curve {
+    fn encode(self, v: f32) -> f32 {
+        let a = v.abs();
+        let e = match self {
+            Curve::Linear => return v,
+            Curve::Srgb if a <= 0.003_130_8 => 12.92 * a,
+            Curve::Srgb => 1.055 * a.powf(1.0 / 2.4) - 0.055,
+            Curve::Bt709 if a < 0.018 => 4.5 * a,
+            Curve::Bt709 => 1.099 * a.powf(0.45) - 0.099,
+            Curve::Power(p) => a.powf(p),
+        };
+        e.copysign(v)
+    }
+}
+
 /// How a chunk is rendered by jxl-oxide.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Output {
     /// In the codestream's own colour encoding (non-XYB: the identity).
     AsCoded,
-    /// XYB (lossy) data: linear sRGB primaries from the decoder, then `Some(matrix)` to the declared
-    /// primaries (`None` when those are sRGB's).
-    FromXyb(Option<[[f32; 3]; 3]>),
+    /// XYB (lossy) data: linear sRGB primaries from the decoder, then `matrix` to the declared
+    /// primaries (`None` when those are sRGB's), then the declared transfer `curve`.
+    FromXyb { matrix: Option<[[f32; 3]; 3]>, curve: Curve },
 }
 
 /// Decide how to render a chunk from its header: whether it is XYB-coded, the declared colour
-/// encoding and the intensity target. Lossy data is only accepted when the declared encoding is a
-/// linear RGB one with a D65 white point (what a raw DNG writer signals) and no HDR tone mapping would
-/// apply, otherwise the samples cannot be restored faithfully.
+/// encoding and the intensity target. Lossy data is only accepted when the declared encoding is an RGB
+/// one with a D65 white point and an SDR transfer curve (linear, sRGB, BT.709 or a power: what raw DNG
+/// writers signal) and no HDR tone mapping would apply, otherwise the samples cannot be restored
+/// faithfully.
 fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, planes: usize) -> Result<Output> {
     if !xyb {
         return Ok(Output::AsCoded);
@@ -104,8 +140,26 @@ fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, plane
     let ColourEncoding::Enum(e) = encoding else {
         return Err(unsupported("an ICC profile instead of a colour encoding"));
     };
-    if e.colour_space != ColourSpace::Rgb || e.tf != TransferFunction::Linear {
-        return Err(unsupported("a declared encoding that is not linear RGB"));
+    if e.colour_space != ColourSpace::Rgb {
+        return Err(unsupported("a declared encoding that is not RGB"));
+    }
+    let curve = match e.tf {
+        TransferFunction::Linear => Curve::Linear,
+        TransferFunction::Srgb => Curve::Srgb,
+        TransferFunction::Bt709 => Curve::Bt709,
+        TransferFunction::Dci => Curve::Power(1.0 / 2.6),
+        // as jxl-oxide reads it: a codestream's gamma is the encoding exponent (×1e7) with `inverted`
+        TransferFunction::Gamma { g, inverted } => {
+            let g = g as f32 / 1e7;
+            Curve::Power(if inverted { g } else { 1.0 / g })
+        }
+        TransferFunction::Pq | TransferFunction::Hlg => return Err(unsupported("an HDR transfer curve (PQ or HLG)")),
+        TransferFunction::Unknown => return Err(unsupported("an unknown transfer curve")),
+    };
+    if let Curve::Power(p) = curve
+        && !(p.is_finite() && p > 0.0)
+    {
+        return Err(unsupported("an invalid gamma"));
     }
     if e.white_point != WhitePoint::D65 {
         return Err(unsupported("a white point other than D65"));
@@ -114,7 +168,7 @@ fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, plane
         return Err(unsupported("an intensity target above 255 nits"));
     }
     let primaries = match e.primaries {
-        Primaries::Srgb => return Ok(Output::FromXyb(None)),
+        Primaries::Srgb => return Ok(Output::FromXyb { matrix: None, curve }),
         Primaries::Bt2100 => BT2100,
         Primaries::P3 => P3,
         Primaries::Custom { red, green, blue } => [red, green, blue].map(|c| c.as_float().map(f64::from)),
@@ -126,7 +180,7 @@ fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, plane
     if m.iter().flatten().any(|v| !v.is_finite()) {
         return Err(unsupported("degenerate primaries"));
     }
-    Ok(Output::FromXyb(Some(m.map(|r| r.map(|v| v as f32)))))
+    Ok(Output::FromXyb { matrix: Some(m.map(|r| r.map(|v| v as f32))), curve })
 }
 
 fn corrupt(e: impl std::fmt::Display) -> RawError {
@@ -177,7 +231,7 @@ fn open(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits
         d => return Err(RawError::Corrupt(format!("JPEG XL tile sample type {d:?} does not match the IFD"))),
     };
     let output = output_for(header.metadata.xyb_encoded, &header.metadata.colour_encoding, header.metadata.tone_mapping.intensity_target, planes)?;
-    if matches!(output, Output::FromXyb(_)) {
+    if matches!(output, Output::FromXyb { .. }) {
         img.request_color_encoding(EnumColourEncoding::srgb_linear(RenderingIntent::Relative));
     }
     Ok((img, max, output))
@@ -205,18 +259,23 @@ pub(crate) fn decode(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp
     }
     let n = cw.saturating_mul(ch).saturating_mul(cpp);
     let rows = fb.buf().chunks_exact(jw * fc);
-    // lossy data: restore the declared primaries (see the module documentation)
-    let matrix = match output {
-        Output::FromXyb(m) => m,
-        Output::AsCoded => None,
+    // lossy data: restore the declared primaries and transfer curve (see the module documentation)
+    let (matrix, curve) = match output {
+        Output::FromXyb { matrix, curve } => (matrix, curve),
+        Output::AsCoded => (None, Curve::Linear),
     };
-    let restore = |s: &[f32], d: &mut [f32]| match matrix {
-        Some(m) => {
-            for (d, row) in d.iter_mut().zip(&m) {
-                *d = row[0] * s[0] + row[1] * s[1] + row[2] * s[2];
+    let restore = |s: &[f32], d: &mut [f32]| {
+        match matrix {
+            Some(m) => {
+                for (d, row) in d.iter_mut().zip(&m) {
+                    *d = row[0] * s[0] + row[1] * s[1] + row[2] * s[2];
+                }
             }
+            None => d.copy_from_slice(&s[..cpp]),
         }
-        None => d.copy_from_slice(&s[..cpp]),
+        if curve != Curve::Linear {
+            d.iter_mut().for_each(|v| *v = curve.encode(*v));
+        }
     };
     Ok(if float {
         let mut out = vec![0f32; n];
@@ -257,7 +316,7 @@ mod tests {
 
     fn matrix(o: Output) -> [[f32; 3]; 3] {
         match o {
-            Output::FromXyb(Some(m)) => m,
+            Output::FromXyb { matrix: Some(m), .. } => m,
             other => panic!("expected a matrix, got {other:?}"),
         }
     }
@@ -275,7 +334,47 @@ mod tests {
 
     #[test]
     fn lossy_data_with_srgb_primaries_needs_no_matrix() {
-        assert_eq!(output_for(true, &linear(Primaries::Srgb), 255.0, 3).unwrap(), Output::FromXyb(None));
+        assert_eq!(output_for(true, &linear(Primaries::Srgb), 255.0, 3).unwrap(), Output::FromXyb { matrix: None, curve: Curve::Linear });
+    }
+
+    #[test]
+    fn lossy_data_keeps_the_declared_transfer_curve() {
+        // Lightroom Classic's lossy LinearRaw DNGs: Rec.2100 primaries, sRGB transfer curve
+        let mut e = EnumColourEncoding::srgb_linear(RenderingIntent::Perceptual);
+        e.primaries = Primaries::Bt2100;
+        e.tf = TransferFunction::Srgb;
+        let curve = |tf| {
+            let mut e = e.clone();
+            e.tf = tf;
+            match output_for(true, &ColourEncoding::Enum(e), 255.0, 3).unwrap() {
+                Output::FromXyb { matrix: Some(_), curve } => curve,
+                other => panic!("expected a matrix and a curve, got {other:?}"),
+            }
+        };
+        assert_eq!(curve(TransferFunction::Srgb), Curve::Srgb);
+        assert_eq!(curve(TransferFunction::Bt709), Curve::Bt709);
+        assert_eq!(curve(TransferFunction::Dci), Curve::Power(1.0 / 2.6));
+        // a codestream's gamma (as read: inverted) is the encoding exponent; jxl-oxide's own γ 2.2 is not
+        assert_eq!(curve(TransferFunction::Gamma { g: 4_545_455, inverted: true }), Curve::Power(0.454_545_5));
+        assert_eq!(curve(TransferFunction::Gamma { g: 22_000_000, inverted: false }), Curve::Power(1.0 / 2.2));
+    }
+
+    #[test]
+    fn transfer_curves_encode_unclipped_and_mirrored() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        // sRGB: linear toe, 18 % grey, white, and the toe/power junction is continuous
+        assert!(close(Curve::Srgb.encode(0.002), 0.002 * 12.92));
+        assert!(close(Curve::Srgb.encode(0.18), 0.461_356));
+        assert!(close(Curve::Srgb.encode(1.0), 1.0));
+        assert!(close(Curve::Srgb.encode(0.003_130_8), Curve::Srgb.encode(0.003_130_9)));
+        assert!(close(Curve::Bt709.encode(1.0), 1.0));
+        assert!((Curve::Bt709.encode(0.017_999) - Curve::Bt709.encode(0.018)).abs() < 1e-3);
+        assert!(close(Curve::Power(0.5).encode(0.25), 0.5));
+        // raw values above white keep growing, lossy undershoot keeps its sign, linear is the identity
+        assert!(Curve::Srgb.encode(2.0) > 1.3);
+        assert!(close(Curve::Srgb.encode(-0.18), -0.461_356));
+        assert_eq!(Curve::Linear.encode(-3.5), -3.5);
+        assert_eq!(Curve::Power(0.5).encode(0.0), 0.0);
     }
 
     #[test]
@@ -301,13 +400,80 @@ mod tests {
         assert!(srgb_green_in_p3.iter().all(|v| (0.0..=1.0).contains(v)), "sRGB green lies inside P3");
     }
 
+    // 16 × 16 RGB tiles of 16-bit samples coded lossily (XYB) by libjxl at distance 0.5, each declaring BT.2020
+    // primaries, a D65 white point and the named transfer curve. The samples are [`gradient`]; generated for these
+    // tests (original work).
+    const SRGB_TILE: &[u8] = &[
+        0xff, 0x0a, 0x43, 0xf0, 0x93, 0x90, 0xc7, 0x8d, 0x00, 0x13, 0x08, 0x00, 0xf0, 0x01, 0x77, 0x3f, 0xc8, 0x01, 0x00, 0x50, 0xa1, 0x32, 0xca,
+        0xb8, 0xc1, 0xcb, 0xb9, 0x9e, 0x2f, 0x3f, 0x74, 0x58, 0x4c, 0xdb, 0xb8, 0xce, 0xd0, 0x56, 0xdb, 0x16, 0x96, 0x30, 0x36, 0xdb, 0x0b, 0x83,
+        0x84, 0x84, 0x33, 0x70, 0xde, 0x90, 0x97, 0xbd, 0x79, 0x64, 0xe4, 0x3b, 0x62, 0xaf, 0x1b, 0xb2, 0x74, 0xf6, 0x36, 0x43, 0x17, 0x72, 0xe7,
+        0x31, 0x86, 0xb6, 0x41, 0x1c, 0x00, 0x15, 0x52, 0x20, 0x11, 0x70, 0xcb, 0x46, 0x32, 0x92, 0x65, 0xcd, 0xc8, 0x18, 0xc9, 0x48, 0xe6, 0x49,
+        0xe6, 0x4f, 0x94, 0x35, 0xc7, 0x5c, 0x91, 0xb0, 0x5d, 0xdf, 0x2b, 0x9b, 0x93, 0x3b, 0xb6, 0x70, 0x7d, 0x24, 0xf0, 0xdd, 0x26, 0xb2, 0x26,
+        0xdf, 0x49, 0x5f, 0xd4, 0xaa, 0x1c, 0x8f, 0x7d, 0xc4, 0xf2, 0x6a, 0xd2, 0x27, 0x86, 0x93, 0xe7, 0x15, 0x9a, 0x01, 0x60, 0x84, 0xc0, 0x09,
+    ];
+    const BT709_TILE: &[u8] = &[
+        0xff, 0x0a, 0x43, 0xf0, 0x93, 0x90, 0xa7, 0x08, 0x00, 0x13, 0x08, 0x00, 0xe8, 0x01, 0x77, 0x3f, 0xc8, 0x01, 0x00, 0x50, 0xa1, 0x32, 0xca,
+        0xb8, 0xc1, 0xcb, 0xb9, 0x9e, 0x2f, 0x3f, 0x74, 0x58, 0x4c, 0xdb, 0xb8, 0xce, 0xd0, 0x56, 0xdb, 0x16, 0x96, 0x30, 0x36, 0xdb, 0x0b, 0x83,
+        0x84, 0x84, 0x33, 0xd8, 0x9c, 0x32, 0xe2, 0x85, 0x6f, 0x3e, 0x6c, 0xa2, 0x1c, 0xaa, 0xdf, 0x1b, 0x32, 0xf4, 0xef, 0x36, 0xe3, 0x96, 0xf2,
+        0xe0, 0x65, 0xe8, 0x15, 0xc4, 0x01, 0x50, 0x21, 0x05, 0xd2, 0x00, 0xd8, 0x8c, 0x8c, 0x14, 0x59, 0xc9, 0x31, 0x32, 0x46, 0x52, 0x60, 0x82,
+        0x71, 0x03, 0xd9, 0xff, 0x8a, 0x3e, 0x7c, 0xb4, 0xc1, 0xa8, 0x49, 0xfa, 0x83, 0xa8, 0x74, 0xd7, 0x1d, 0xa8, 0xb4, 0x25, 0x67, 0xc1, 0x83,
+        0x93, 0x3a, 0xf3, 0x81, 0xb5, 0x2f, 0x44, 0x50, 0x35, 0x36, 0x68, 0x1c, 0xf9, 0x20, 0x17, 0x98, 0x87, 0x1d, 0x83, 0xb0, 0x02,
+    ];
+    const GAMMA22_TILE: &[u8] = &[
+        0xff, 0x0a, 0x43, 0xf0, 0x93, 0x90, 0xf7, 0x75, 0xab, 0x28, 0x02, 0x00, 0x13, 0x08, 0x00, 0xf8, 0x01, 0x77, 0x3f, 0xc8, 0x01, 0x00, 0x50,
+        0xa1, 0x32, 0xca, 0xb8, 0xc1, 0xcb, 0xb9, 0x9e, 0x2f, 0x3f, 0x74, 0x58, 0x4c, 0xdb, 0xb8, 0xce, 0xd0, 0x56, 0xdb, 0x16, 0x96, 0x30, 0x36,
+        0xdb, 0x0b, 0x83, 0x84, 0x84, 0x33, 0xd8, 0x9c, 0x02, 0xed, 0x85, 0x6f, 0x3e, 0x2c, 0x72, 0x1e, 0xb8, 0xe3, 0x3b, 0x12, 0x75, 0xf8, 0x4e,
+        0xa3, 0x97, 0x71, 0xea, 0x31, 0x43, 0xa7, 0x20, 0x0e, 0x80, 0x0a, 0x29, 0x90, 0x08, 0xc0, 0x8a, 0x8c, 0x8a, 0x64, 0x74, 0x59, 0x45, 0xc6,
+        0x48, 0x46, 0x32, 0x4c, 0x32, 0x4c, 0xa0, 0xa5, 0x39, 0x23, 0xff, 0xdf, 0xcd, 0xf9, 0x33, 0x93, 0x5c, 0xb4, 0xec, 0xc1, 0x06, 0xf5, 0xcc,
+        0x92, 0x12, 0xf4, 0xbb, 0xef, 0x15, 0x84, 0xc7, 0xf2, 0xf1, 0x48, 0xfc, 0x80, 0xb9, 0x7a, 0xab, 0x58, 0x3e, 0x79, 0x3a, 0xcf, 0x67, 0xc7,
+        0xd3, 0xfc, 0x80, 0x60, 0x00,
+    ];
+    const LINEAR_TILE: &[u8] = &[
+        0xff, 0x0a, 0x43, 0xf0, 0x93, 0x90, 0x47, 0x8b, 0x00, 0x13, 0x08, 0x00, 0x14, 0x02, 0x77, 0x3f, 0xc8, 0x01, 0x00, 0x50, 0xa1, 0x32, 0xca,
+        0xb8, 0xc1, 0xcb, 0xb9, 0x9e, 0x2f, 0x3f, 0x74, 0x58, 0x4c, 0xdb, 0xb8, 0xce, 0xd0, 0x56, 0xdb, 0x16, 0x96, 0x30, 0x36, 0xdb, 0x0b, 0x83,
+        0x84, 0x84, 0x43, 0xd8, 0x36, 0xe1, 0xbe, 0x88, 0x9b, 0x27, 0x48, 0x71, 0x04, 0xe2, 0xeb, 0x4e, 0xf9, 0x74, 0x9d, 0xe7, 0x00, 0x8d, 0x74,
+        0xcb, 0xc0, 0xe0, 0x5d, 0x58, 0x10, 0x80, 0x0a, 0x29, 0x90, 0x06, 0xd8, 0xac, 0x18, 0x19, 0x45, 0xc5, 0x28, 0x89, 0x8a, 0x24, 0xd3, 0xff,
+        0xff, 0x1c, 0xc4, 0x2f, 0xd8, 0x26, 0x80, 0x6c, 0xe1, 0xc3, 0xbe, 0xef, 0xab, 0xe1, 0x79, 0x1e, 0xff, 0x1b, 0x2e, 0x57, 0xf7, 0x2c, 0x1f,
+        0x1f, 0xf8, 0xec, 0xd3, 0x33, 0x21, 0x9e, 0x12, 0x22, 0x43, 0xc2, 0xfd, 0xb3, 0xf2, 0xe0, 0x40, 0xdf, 0x25, 0x0f, 0x67, 0xe7, 0xca, 0x7e,
+        0xa5, 0x7f, 0x1f, 0x21, 0xa4, 0x6a, 0x1e, 0xa0, 0x0e,
+    ];
+
+    /// The samples the fixture tiles were coded from: `(x, y)` → RGB.
+    fn gradient(x: usize, y: usize) -> [f32; 3] {
+        let (x, y) = (x as f32, y as f32);
+        [4000.0 + x * 3500.0, 6000.0 + y * 3200.0, 30000.0 + (x - y) * 1500.0]
+    }
+
+    #[test]
+    fn lossy_tiles_decode_to_their_samples_whatever_sdr_curve_they_declare() {
+        for (name, tile) in [("sRGB", SRGB_TILE), ("BT.709", BT709_TILE), ("gamma 2.2", GAMMA22_TILE), ("linear", LINEAR_TILE)] {
+            let ChunkPx::U16(px) = decode(tile, 16, 16, 16, 16, 3, 16, false).unwrap() else { panic!("{name}: integer samples") };
+            let (mut sum, mut worst) = (0.0f32, 0.0f32);
+            for (i, p) in px.as_chunks::<3>().0.iter().enumerate() {
+                for (got, want) in p.iter().zip(gradient(i % 16, i / 16)) {
+                    let err = (f32::from(*got) - want).abs();
+                    sum += err;
+                    worst = worst.max(err);
+                }
+            }
+            // the reference decoder (libjxl) lands within 0.5 % on average and 6 % at worst on these tiles
+            let mean = sum / px.len() as f32;
+            assert!(mean < 0.01 * 65535.0, "{name}: mean error {mean}");
+            assert!(worst < 0.1 * 65535.0, "{name}: worst error {worst}");
+        }
+    }
+
     #[test]
     fn lossy_data_that_cannot_be_restored_is_unsupported() {
         let bad = |xyb_planes: usize, e: ColourEncoding, it: f32| matches!(output_for(true, &e, it, xyb_planes), Err(RawError::Unsupported(_)));
         assert!(bad(1, linear(Primaries::Srgb), 255.0), "grey");
         assert!(bad(3, linear(Primaries::Srgb), 10_000.0), "HDR intensity target would tone-map");
-        assert!(bad(3, ColourEncoding::Enum(EnumColourEncoding::srgb_gamma22(RenderingIntent::Relative)), 255.0), "non-linear");
         let mut e = EnumColourEncoding::srgb_linear(RenderingIntent::Relative);
+        for tf in [TransferFunction::Pq, TransferFunction::Hlg, TransferFunction::Unknown, TransferFunction::Gamma { g: 0, inverted: true }] {
+            e.tf = tf;
+            assert!(bad(3, ColourEncoding::Enum(e.clone()), 255.0), "{tf:?}");
+        }
+        e.tf = TransferFunction::Linear;
         e.white_point = WhitePoint::Dci;
         assert!(bad(3, ColourEncoding::Enum(e.clone()), 255.0), "white point");
         e.white_point = WhitePoint::D65;

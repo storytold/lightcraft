@@ -1,7 +1,7 @@
 //! The wgpu device, the compiled kernels, buffers, dispatch and readback.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use wgpu::util::DeviceExt;
 
@@ -118,7 +118,9 @@ impl Drop for Buf {
         let mut b = Some(b);
         let _ = RETIRED.try_with(|r| r.0.borrow_mut().extend(b.take()));
         match b {
-            Some(b) => std::mem::forget(b),
+            // Leaking is deliberate during thread teardown — dropping a wgpu buffer whose device
+            // thread-locals have already gone can abort the process. The device owns it.
+            Some(b) => std::mem::forget(b), // NOSONAR
             None => {
                 RETIRED_BYTES.fetch_add(size, Ordering::Relaxed);
             }
@@ -191,6 +193,12 @@ impl Drop for Tracked {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Polls on this thread panic as wgpu's do once a Vulkan or DX12 device is lost (#1858).
+    static SIMULATED_LOST_POLL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 thread_local! {
     static RETIRED: Retired = const { Retired(std::cell::RefCell::new(Vec::new())) };
 }
@@ -199,6 +207,9 @@ thread_local! {
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
 /// Bytes waiting in per-thread retired lists.
 static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
+/// The render device is lost: wgpu's `poll` panics from then on, so [`Gpu::poll`] stops calling it.
+/// Other failures that retire the GPU leave the device usable for releasing its buffers.
+static DEVICE_LOST: AtomicBool = AtomicBool::new(false);
 /// Bytes in the free pool.
 static POOLED: AtomicU64 = AtomicU64::new(0);
 /// Most bytes kept in the free pool (see [`crate::set_pool_limit`]).
@@ -324,6 +335,7 @@ impl Gpu {
         // wgpu reports a lost device (driver reset, GPU hang, watchdog) only here — never as an
         // error — so without this callback a lost device went unnoticed.
         device.set_device_lost_callback(|reason, msg| {
+            DEVICE_LOST.store(true, Ordering::Relaxed);
             log::error!("gpu: device lost ({reason:?}): {msg}");
             crate::mark_broken(&format!("device lost ({reason:?}): {msg}"));
         });
@@ -446,7 +458,33 @@ impl Gpu {
         if !dropped.is_empty() {
             drop(dropped);
             // let wgpu release the memory now rather than at its next maintenance
-            let _ = self.device.poll(wgpu::PollType::Poll);
+            let _ = self.poll(wgpu::PollType::Poll);
+        }
+    }
+
+    /// Process finished GPU work: `device.poll`, with its error as text. Never panics (#1858): once a
+    /// device is lost, wgpu 30 panics in `poll` rather than returning an error (a device error is
+    /// not a `PollError`), and the buffer pool polls from destructors ([`Gpu::trim`]), where a
+    /// second panic while a failed render unwinds aborts the process. A lost device is not polled
+    /// again; a poll that panics counts as one and stops the GPU.
+    pub(crate) fn poll(&self, t: wgpu::PollType) -> Result<wgpu::PollStatus, String> {
+        if DEVICE_LOST.load(Ordering::Relaxed) {
+            return Err("the device is lost".into());
+        }
+        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[cfg(test)]
+            if SIMULATED_LOST_POLL.with(std::cell::Cell::get) {
+                panic!("Error in Device::poll: Validation Error\n\nCaused by:\n  Parent device is lost (simulated)");
+            }
+            self.device.poll(t)
+        }));
+        match polled {
+            Ok(r) => r.map_err(|e| e.to_string()),
+            Err(_) => {
+                DEVICE_LOST.store(true, Ordering::Relaxed);
+                crate::mark_broken("device lost: Device::poll failed");
+                Err("the device is lost (Device::poll failed)".into())
+            }
         }
     }
 
@@ -461,11 +499,31 @@ impl Gpu {
             self.over_limit(bytes.len() as u64);
             return Buf { buf: Some(Tracked::new(self.placeholder())), len };
         }
-        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        });
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+        if let Some(size) = wgpu::BufferSize::new(bytes.len() as u64).filter(|s| s.get() % wgpu::COPY_BUFFER_ALIGNMENT == 0) {
+            // through the queue: the bytes are copied once, into a staging buffer the next submission copies from, in
+            // parallel parts (`create_buffer_init` zeroes a staging buffer first and copies over that, two passes on
+            // one thread over a full-size photo's ~290 MB)
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: size.get(), usage, mapped_at_creation: false });
+            if let Some(mut view) = self.queue.write_buffer_with(&buf, 0, size) {
+                const PART: usize = 1 << 20;
+                {
+                    let (whole, mut tail) = view.slice(..).into_chunks::<PART>();
+                    let (src, src_tail) = bytes.as_chunks::<PART>();
+                    let mut parts: Vec<_> = whole.into_iter().zip(src).map(Some).collect();
+                    lightcraft_raster::par_rows(&mut parts, 1, |_, part| {
+                        for (d, s) in part.iter_mut().filter_map(Option::take) {
+                            wgpu::WriteOnly::<[u8]>::from(d).copy_from_slice(s);
+                        }
+                    });
+                    tail.copy_from_slice(src_tail);
+                }
+                // (dropping the view schedules the copy)
+                drop(view);
+                return Buf { buf: Some(Tracked::new(buf)), len };
+            }
+        }
+        let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytes, usage });
         Buf { buf: Some(Tracked::new(buf)), len }
     }
 
@@ -558,10 +616,11 @@ impl Gpu {
             fail(FailKind::Fatal, format!("readback failed: {why}"));
             zeros()
         };
-        // A lost device makes the wait fail and the map callback never run: checking both keeps
-        // this from blocking forever (or handing back an unwritten buffer as the image).
-        if let Err(e) = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) }) {
-            return failed(format!("{e}"));
+        // A lost device makes the wait fail ([`Gpu::poll`] turns wgpu's panic into the error) and
+        // the map callback never run: checking both keeps this from blocking forever (or handing
+        // back an unwritten buffer as the image).
+        if let Err(e) = self.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) }) {
+            return failed(e);
         }
         // another thread's poll may be the one that runs the callback: allow it a moment
         match rx.recv_timeout(std::time::Duration::from_secs(10)) {
@@ -573,7 +632,17 @@ impl Gpu {
             Ok(d) => d,
             Err(e) => return failed(format!("{e:?}")),
         };
-        let out: Vec<T> = bytemuck::cast_slice(&data).to_vec();
+        // copied out in parallel parts: one thread reads mapped memory slowly (~2 GB/s, so ~45 ms for a 24 MP
+        // export's pixels), and the new vector's pages are first touched there too
+        let src: &[u8] = &data;
+        // (`len` counts 32-bit words: as many `T` as they fill)
+        let mut out = vec![<T as bytemuck::Zeroable>::zeroed(); src.len() / std::mem::size_of::<T>().max(1)];
+        const PART: usize = 1 << 20;
+        lightcraft_raster::par_rows(bytemuck::cast_slice_mut::<T, u8>(&mut out), PART, |k, part| {
+            if let Some(s) = src.get(k * PART..k * PART + part.len()) {
+                part.copy_from_slice(s);
+            }
+        });
         drop(data);
         staging.unmap();
         out
@@ -732,6 +801,167 @@ mod tests {
         assert_eq!(super::parse_limits("512MiB"), Some((512 << 20, 1024 << 20)));
         assert_eq!(super::parse_limits(""), None);
         assert_eq!(super::parse_limits("lots"), None);
+    }
+
+    /// Run `child` (an ignored test in this module) in its own process: it loses the device, which
+    /// no other test running beside it may see. Returns its stdout, or `None` without a GPU.
+    fn run_child(child: &str) -> Option<String> {
+        let exe = std::env::current_exe().unwrap();
+        // output goes to files: a pipe nobody reads while we wait could fill and stall the child
+        let log = |stream: &str| std::env::temp_dir().join(format!("lc-gpu-{child}-{}.{stream}", std::process::id()));
+        let (out_path, err_path) = (log("out"), log("err"));
+        let mut proc = std::process::Command::new(exe)
+            .args(["--exact", &format!("ctx::tests::{child}"), "--ignored", "--nocapture", "--test-threads=1"])
+            .stdout(std::fs::File::create(&out_path).unwrap())
+            .stderr(std::fs::File::create(&err_path).unwrap())
+            .spawn()
+            .unwrap();
+        // a driver that stalls must fail the test, not hang CI
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let status = loop {
+            if let Some(status) = proc.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = proc.kill();
+                let _ = proc.wait();
+                panic!("{child}: still running after 120 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
+        let stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+        let _ = (std::fs::remove_file(&out_path), std::fs::remove_file(&err_path));
+        if stdout.contains("CHILD: no GPU") {
+            return None;
+        }
+        // an abort (SIGABRT, "panic in a destructor during cleanup") has no exit code
+        assert!(status.success(), "{child}: {status:?}\n{stdout}\n{stderr}");
+        assert!(stdout.contains("CHILD: survived"), "{child}: {stdout}");
+        Some(stdout)
+    }
+
+    /// An upload reaches the device whole: it is copied into staging memory in parallel parts, the last one
+    /// shorter than the others (and a small upload is that last part alone).
+    #[test]
+    fn uploads_read_back_exactly() {
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        for len in [1usize, 1000, (3 << 20) / 4 + 777] {
+            let data: Vec<u32> = (0..len as u32).map(|i| i.wrapping_mul(2_654_435_761)).collect();
+            let b = g.upload(&data);
+            let back: Vec<u32> = g.finish_and_read(g.encoder(), &b, len);
+            assert!(back == data, "{len} values");
+        }
+        // read back as wider values (`len` counts 32-bit words), as `read_rgb` does
+        let data: Vec<u32> = (0..3 << 20).collect();
+        let b = g.upload(&data);
+        let back: Vec<[u32; 3]> = g.finish_and_read(g.encoder(), &b, data.len());
+        assert!(back.len() == 1 << 20 && back.as_flattened() == data.as_slice());
+    }
+    /// Issue #1858: once a Vulkan or DX12 device is lost, wgpu 30 panics in `Device::poll` instead of
+    /// returning an error. A render's readback panicked; while it unwound, a buffer's way back to
+    /// the pool polls again from a destructor, and that second panic aborted the app.
+    #[test]
+    fn a_poll_on_a_lost_device_neither_panics_nor_aborts() {
+        if run_child("lost_poll_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    /// A Metal device really lost (its command buffers exhausted) is never polled again.
+    #[test]
+    fn a_really_lost_device_is_not_polled_again() {
+        if run_child("really_lost_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device, or one that can't be lost on purpose here");
+        }
+    }
+
+    /// A GPU retired by another failure (a validation error) keeps a live device: its buffers are
+    /// still released, which takes a poll.
+    #[test]
+    fn a_retired_but_live_device_is_still_polled() {
+        if run_child("retired_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_retired_but_live_device_is_still_polled"]
+    fn retired_child() {
+        let Some(g) = crate::device() else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        crate::mark_broken("device error: simulated validation error");
+        assert!(!crate::available());
+        drop(g.upload(&[1u32; 1024]));
+        g.poll(wgpu::PollType::Poll).unwrap();
+        println!("CHILD: survived");
+    }
+
+    /// Empties the buffer pool when dropped, as the UI does (`trim_pool(0)`) and as returning a
+    /// buffer to a full pool does.
+    struct TrimOnDrop(&'static super::Gpu);
+
+    impl Drop for TrimOnDrop {
+        fn drop(&mut self) {
+            self.0.trim(0);
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_poll_on_a_lost_device_neither_panics_nor_aborts"]
+    fn lost_poll_child() {
+        let Some(g) = crate::device() else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        let src = g.upload(&[1u32; 1024]);
+        drop(g.upload(&[2u32; 1024])); // pooled: trimming it polls
+        super::SIMULATED_LOST_POLL.with(|c| c.set(true));
+        // a render (caught as `try_render` catches it) whose readback finds the device lost
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _trim = TrimOnDrop(g);
+            let v: Vec<u32> = g.finish_and_read(g.encoder(), &src, 1024);
+            assert!(v.iter().all(|x| *x == 0), "a failed readback hands back zeros");
+        }));
+        assert!(r.is_ok(), "the lost device fails the render without a panic");
+        assert!(super::failed(), "the render failed, so it is redone on the CPU");
+        assert!(!crate::available(), "the GPU is not used again");
+        // a render that panics for another reason still unwinds through a destructor that polls
+        drop(g.upload(&[3u32; 1024]));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _trim = TrimOnDrop(g);
+            panic!("a render panics (expected in this test)");
+        }));
+        assert!(r.is_err());
+        println!("CHILD: survived");
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_really_lost_device_is_not_polled_again"]
+    fn really_lost_child() {
+        let Some(g) = crate::device().filter(|g| g.info.backend == wgpu::Backend::Metal) else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        // wgpu-hal's Metal backend treats a command buffer past its 4096 unsubmitted as a lost device
+        let b = g.upload(&[1u32; 16]);
+        let held: Vec<wgpu::CommandBuffer> = (0..4200)
+            .map(|_| {
+                let mut e = g.encoder();
+                e.clear_buffer(b.raw(), 0, None);
+                e.finish()
+            })
+            .collect();
+        assert!(crate::unavailable_reason().is_some_and(|r| r.contains("device lost")), "{:?}", crate::unavailable_reason());
+        let e = g.poll(wgpu::PollType::Poll).unwrap_err();
+        assert!(e.contains("lost"), "{e}");
+        drop(held);
+        println!("CHILD: survived");
     }
 
     #[test]

@@ -118,15 +118,42 @@ impl ImageInfo {
         }
     }
 
-    /// All chunks that have an offset. Missing byte counts are inferred as "to the next offset / end of data"
-    /// using `data_len`.
-    pub fn chunks(&self, data_len: u64) -> Vec<Chunk> {
+    /// The chunk count the image declares (offsets present, cut to the layout's plane capacity) with the
+    /// geometry `chunks` needs to place each one. No descriptors are built, so a pathological strip array
+    /// costs it a length check.
+    fn chunk_grid(&self) -> (usize, u32, usize) {
         let (across, down) = self.grid();
         let per_plane = across as usize * down as usize;
         let planes = if self.planar == 2 { self.samples_per_pixel as usize } else { 1 };
+        (self.offsets.len().min(per_plane.saturating_mul(planes)), across, per_plane)
+    }
+
+    fn declared_chunk_count(&self) -> usize {
+        self.chunk_grid().0
+    }
+
+    /// The one chunk when the image has exactly one, else `None` — and no descriptor vector beyond it. Preview
+    /// extraction only serves single-chunk images, so it asks here before serving a hostile multi-strip layout.
+    pub fn single_chunk(&self, data_len: u64) -> Option<Chunk> {
+        if self.declared_chunk_count() != 1 {
+            return None;
+        }
+        self.chunks(data_len).into_iter().next()
+    }
+
+    /// All chunks that have an offset. Missing byte counts are inferred as "to the next offset / end of data"
+    /// using `data_len`.
+    pub fn chunks(&self, data_len: u64) -> Vec<Chunk> {
+        let (n, across, per_plane) = self.chunk_grid();
         let (cw, ch) = self.chunk_size();
-        let n = self.offsets.len().min(per_plane.saturating_mul(planes));
         let mut out = Vec::with_capacity(n);
+        // the distinct offsets in order, for chunks without a byte count (sorted once, not scanned per chunk)
+        let mut sorted: Vec<u64> = Vec::new();
+        if (0..n).any(|i| self.byte_counts.get(i).is_none_or(|&l| l == 0)) {
+            sorted = self.offsets.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+        }
         for i in 0..n {
             let plane = i / per_plane.max(1);
             let j = i % per_plane.max(1);
@@ -142,7 +169,7 @@ impl ImageInfo {
                 Some(&l) if l > 0 => l,
                 _ => {
                     // infer: up to the next larger offset, else end of data
-                    let next = self.offsets.iter().copied().filter(|&o| o > offset).min().unwrap_or(data_len);
+                    let next = sorted.get(sorted.partition_point(|&o| o <= offset)).copied().unwrap_or(data_len);
                     next.saturating_sub(offset)
                 }
             };
@@ -161,4 +188,61 @@ pub fn chunk_bytes<'a>(data: &'a [u8], c: &Chunk) -> Option<&'a [u8]> {
     }
     let end = (c.offset.saturating_add(c.len)).min(data.len() as u64) as usize;
     Some(&data[start..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strips(offsets: Vec<u64>, byte_counts: Vec<u64>) -> ImageInfo {
+        ImageInfo {
+            width: 1,
+            height: offsets.len() as u32,
+            bits_per_sample: vec![8],
+            samples_per_pixel: 1,
+            compression: 1,
+            photometric: 1,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Strips { rows_per_strip: 1 },
+            offsets,
+            byte_counts,
+        }
+    }
+
+    /// One offset is one chunk, and `single_chunk` refuses to build descriptors when the image declares more.
+    #[test]
+    fn single_chunk_is_the_only_chunk() {
+        let one = strips(vec![50], vec![10]);
+        assert_eq!(one.single_chunk(100).map(|c| (c.index, c.offset, c.len)), one.chunks(100).first().map(|c| (c.index, c.offset, c.len)));
+        // the inferred length matches too, and never falls back past the data
+        let inferred = strips(vec![70], vec![]);
+        assert_eq!(inferred.single_chunk(100).map(|c| c.len), Some(30));
+        assert!(strips(vec![50, 10], vec![10, 5]).single_chunk(100).is_none(), "a multi-chunk image has no single chunk");
+        assert!(strips(Vec::new(), Vec::new()).single_chunk(100).is_none());
+    }
+
+    #[test]
+    fn missing_byte_counts_run_to_the_next_larger_offset() {
+        let info = strips(vec![50, 10, 30, 10, 70], vec![0, 0, 5]);
+        let lens: Vec<u64> = info.chunks(100).iter().map(|c| c.len).collect();
+        assert_eq!(lens, vec![20, 20, 5, 20, 30]);
+    }
+
+    /// A million strips without byte counts (offsets in descending order) are measured in one sort, not one
+    /// scan of all offsets per strip.
+    #[test]
+    fn many_strips_without_byte_counts_are_fast() {
+        let n = 1_000_000u64;
+        let info = strips((0..n).rev().map(|i| 1000 + i * 2).collect(), Vec::new());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let chunks = info.chunks(1000 + n * 2);
+            let _ = tx.send(chunks.iter().map(|c| c.len).collect::<Vec<u64>>());
+        });
+        let lens = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("chunks() took longer than 20 s");
+        assert!(lens.iter().all(|&l| l == 2));
+    }
 }

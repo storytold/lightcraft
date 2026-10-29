@@ -10,7 +10,7 @@ other tools), and let LightCraft pick up edits made elsewhere.
 |---|---|
 | Name | `<stem>.xmp` by default (`IMG_0001.CR3` → `IMG_0001.xmp`); `<file>.xmp` (`IMG_0001.CR3.xmp`) with `naming: "full"`. Reading accepts either (preferred first) and `.XMP`. With stem naming, files sharing a stem don't share a sidecar: see *Shared names* below. |
 | Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
-| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). For raw/DNG files without a sidecar, the XMP embedded in the file is used. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). |
+| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). Manual rereading uses embedded XMP in raw/DNG and JPEG files when no sidecar exists. A discovered sidecar that cannot be read or parsed is reported in `failed`, without applying embedded values. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). A file arriving in an import is ranked as if it were catalogued already: it reads its own `<file>.xmp` when another file of its stem (a raw first) owns the shared stem sidecar (issue #1905). |
 | Preferences | `library.xmpPreferences {autoWrite?, naming?: stem\|full}`, stored in the library's `prefs.json`. |
 
 What we write (standard namespaces, so other tools can read the metadata):
@@ -41,6 +41,29 @@ When foreign `crs:` settings are only partly transferable, `library.import` incl
 report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
 unmapped adjustments; they do not change the source packet or become catalog edits.
 
+Manual rereading and undo leave the JPEG original unchanged. Manual rereading also leaves sidecar files unchanged,
+even with automatic XMP writing on. With automatic XMP writing off (the default), undo/redo leave sidecars unchanged;
+with it enabled, subsequent edits and undo/redo can trigger the existing sidecar writer. `photo.allMetadata` uses
+its already loaded file bytes for embedded XMP, with an existing sidecar taking precedence.
+
+Manual JPEG rereading uses the first standard XMP APP1 before the first SOS (scan) or EOI (end) marker.
+Scanning is limited to a 16 MiB header span, including SOI, segment headers and skipped payloads, and 4096
+marker/fill steps after SOI. Non-APP1 payloads are skipped without loading them. Each APP1 payload must be
+complete and is at most 65,533 bytes. Header extraction succeeds for the first complete
+standard XMP packet within both limits, including a packet ending exactly at either limit; otherwise it
+fails without a whole-file fallback, including on I/O errors or an incomplete APP1 whose available bytes
+form parseable XMP. A valid JPEG with
+XMP beyond those limits therefore cannot be manually reread through this path. Extended XMP assembly and
+packets between scans are not supported by manual JPEG rereading.
+
+Packet completeness is stricter than the shared best-effort JPEG extractor; it is not strict whole-JPEG
+validation. A complete early XMP packet can be returned without examining the remaining file. Import and
+`photo.allMetadata` retain their existing extraction paths. Command regressions in
+`crates/engine/src/tests/xmp.rs` cover metadata/undo and sidecar precedence, an over-nested XMP packet and a
+truncated APP1 without an XMP signature. Separate reader cases in `sidecar::jpeg_header_tests` use small
+counted readers and injected limits for span/step boundaries, complete versus truncated APP1, early stopping,
+short reads and I/O errors.
+
 ## Saving into an existing sidecar
 
 A sidecar may already hold another application's data — e.g. its `crs:` develop settings and `xmpMM:History` — often
@@ -58,6 +81,9 @@ the only copy of those edits outside that application's catalog. Saving never dr
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.
+- Ownership follows the namespace URI, not the prefix spelling. A foreign namespace bound to `lc:` or `xmp:`
+  stays foreign: its properties are preserved and do not become LightCraft settings or ratings. Genuine namespace
+  aliases remain interchangeable, including namespace declarations containing XML character references.
 - A sidecar that can't be read as XMP (not well-formed, not UTF-8, no `rdf:RDF`) is first copied to
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.
@@ -73,6 +99,10 @@ With stem naming, `IMG_0001.CR3` and `IMG_0001.JPG` map to the same `IMG_0001.xm
 library share a stem, the stem sidecar belongs to one of them — a raw first, otherwise the first by file name — and
 the others write and read `<file>.xmp` (`IMG_0001.JPG.xmp`), falling back to the stem sidecar for reading when they
 have none. So saving one photo never overwrites the other's metadata (`Session::sidecar_naming`).
+
+An import ranks the files it is adding the same way, before they are catalogued: a TIFF or JPEG arriving beside a
+raw of its stem reads its own `<file>.xmp` and takes nothing from the raw's `IMG_0001.xmp`, whether it arrives
+with the raw or after it (issue #1905).
 
 ## Face regions (MWG)
 
@@ -192,11 +222,12 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | `LocalExposure2012` | `adjust.exposure` | stored as a fraction, ×4 EV |
 | `LocalContrast2012`, `LocalHighlights2012`, `LocalShadows2012`, `LocalWhites2012`, `LocalBlacks2012`, `LocalClarity2012`, `LocalTexture`, `LocalDehaze`, `LocalTemperature`, `LocalTint`, `LocalSaturation`, `LocalHue`, `LocalSharpness`, `LocalLuminanceNoise`, `LocalMoire`, `LocalDefringe`, `LocalToningSaturation` | the matching `adjust.*` | stored −1..1, ×100 |
 | `LocalToningHue` | `adjust.color_hue` | degrees |
+| other `Local*` sliders (`LocalGrain`…) | — | no counterpart in our masks: reported as `Mask: LocalGrain` when set (`LocalCurveRefineSaturation` 100 is neutral) |
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape). `Flipped="true"` means effect inside: in `MaskGroupBasedCorrections` with `Version` 2 (what Lightroom writes for an ordinary radial) and in the legacy `CircularGradientBasedCorrections` Radial Filter, whose default (no `Flipped`) is outside. A `MaskGroupBasedCorrections` radial without `Version` is inside whatever `Flipped` says, and its `Feather` is halved (Lightroom rescales it that way when it upgrades one). Inverting is `MaskInverted` |
 | `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |
 | `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed |
-| `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; colour ranges are reported |
+| `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; a range at full strength at white (third `LumRange` value 1) stays open above our scene white; colour ranges are reported |
 | `MaskBlendMode` 0 / 1 / 2, `MaskInverted` | add / subtract / intersect, invert | |
 
 Applying a preset adds its masks to the photo's own (masks the photo already has are not added twice), and the Amount

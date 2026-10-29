@@ -167,6 +167,9 @@ impl Index {
                 self.entries.insert((photo, key), (emb.into(), view));
             }
         }
+        // a half-written last record (a crash while appending): written fresh at the next save, so later records are
+        // not appended after it and shifted
+        self.rewrite = !rest.is_empty();
     }
 
     fn header(&self) -> Vec<u8> {
@@ -201,12 +204,11 @@ impl Index {
             return Ok(());
         }
         if self.file_matches && !self.rewrite {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&path)?;
             let mut buf = Vec::new();
             for (k, e) in &self.unsaved {
                 buf.extend(self.record(k, e));
             }
-            f.write_all(&buf)?;
+            append(&path, &buf)?;
         } else {
             let mut buf = self.header();
             for (k, e) in &self.entries {
@@ -227,6 +229,22 @@ impl Drop for Index {
     fn drop(&mut self) {
         let _ = self.save();
     }
+}
+
+/// Append `buf` to the file at `path`. When the write fails (a full disk), the file is cut back to its old length so
+/// the part that got in does not shift what is appended later.
+fn append(path: &Path, buf: &[u8]) -> std::io::Result<()> {
+    let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
+    let old_len = f.metadata()?.len();
+    let written = f.write_all(buf);
+    if written.is_err() {
+        drop(f);
+        // an append-only handle may not truncate (Windows): cut through a writable one
+        if let Ok(w) = std::fs::OpenOptions::new().write(true).open(path) {
+            let _ = w.set_len(old_len);
+        }
+    }
+    written
 }
 
 const SCAN_MAGIC: &[u8; 4] = b"LCFS";
@@ -325,8 +343,11 @@ impl Scanned {
         let head = self.header();
         let Some(rest) = bytes.strip_prefix(head.as_slice()) else { return };
         self.file_matches = true;
-        // a half-written last id (a crash while appending) is ignored
-        self.set.extend(rest.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)));
+        // a half-written last id (a crash while appending) is ignored, and the record is written fresh at the next save
+        // so later ids are not appended after it and shifted
+        let (ids, torn) = rest.as_chunks::<8>();
+        self.set.extend(ids.iter().map(|c| u64::from_le_bytes(*c)));
+        self.rewrite = !torn.is_empty();
     }
 
     /// Write what was added since the last save: appended when the file is this detector's, else the whole record
@@ -341,9 +362,8 @@ impl Scanned {
             return Ok(());
         }
         if self.file_matches && !self.rewrite {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&path)?;
             let buf: Vec<u8> = self.unsaved.iter().flat_map(|id| id.to_le_bytes()).collect();
-            f.write_all(&buf)?;
+            append(&path, &buf)?;
         } else {
             let mut buf = self.header();
             buf.extend(self.set.iter().flat_map(|id| id.to_le_bytes()));
@@ -485,6 +505,51 @@ mod tests {
         let mut t = Scanned::default();
         t.reset(Some(scan));
         assert!(!t.contains(1) && t.contains(2) && t.contains(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A torn last record (a crash or a full disk while appending) does not shift the records appended after it
+    /// (issue #2129).
+    #[test]
+    fn records_appended_after_a_torn_tail_stay_aligned() {
+        let dir = std::env::temp_dir().join(format!("lc-faces-torn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (emb, scan) = (dir.join("face-embeddings.bin"), dir.join("face-scanned.bin"));
+        let junk = |p: &Path| {
+            let mut f = std::fs::OpenOptions::new().append(true).open(p).unwrap();
+            f.write_all(&[0x3f; 5]).unwrap();
+        };
+        let mut a = Index::default();
+        a.reset("m@abc", 3, Some(emb.clone()));
+        a.insert(7, &rect(0.1), vec![1.0, 0.0, 0.5]);
+        a.save().unwrap();
+        drop(a);
+        junk(&emb);
+        let mut b = Index::default();
+        b.reset("m@abc", 3, Some(emb.clone()));
+        b.insert(9, &rect(0.5), vec![0.5, 0.25, 0.125]);
+        b.save().unwrap();
+        drop(b);
+        let mut c = Index::default();
+        c.reset("m@abc", 3, Some(emb));
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.get(7, &rect(0.1)).map(|e| e.to_vec()), Some(vec![1.0, 0.0, 0.5]));
+        assert_eq!(c.get(9, &rect(0.5)).map(|e| e.to_vec()), Some(vec![0.5, 0.25, 0.125]));
+        let mut s = Scanned::default();
+        s.reset(Some(scan.clone()));
+        s.insert(42);
+        s.save().unwrap();
+        drop(s);
+        junk(&scan);
+        let mut t = Scanned::default();
+        t.reset(Some(scan.clone()));
+        t.insert(43);
+        t.save().unwrap();
+        drop(t);
+        let mut u = Scanned::default();
+        u.reset(Some(scan));
+        assert!(u.contains(42) && u.contains(43) && u.len() == 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

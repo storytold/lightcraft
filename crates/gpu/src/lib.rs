@@ -75,12 +75,8 @@ fn record_fallback(reason: String) {
 /// E.g. "disabled by LIGHTCRAFT_GPU=0", "software adapter (llvmpipe …) skipped", "device lost …".
 /// Never blocks.
 pub fn unavailable_reason() -> Option<String> {
-    if env_disabled() {
-        #[cfg(not(target_arch = "wasm32"))]
-        if backend::env_off() {
-            return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off".into());
-        }
-        return Some("disabled by LIGHTCRAFT_GPU=0".into());
+    if let Some(why) = env_off_reason() {
+        return Some(why.into());
     }
     if !ENABLED.load(Ordering::Relaxed) {
         return Some("disabled by the GPU rendering preference (app.gpu)".into());
@@ -245,10 +241,24 @@ pub fn wait_idle(timeout: std::time::Duration) -> bool {
 /// environment switches and the rendering preference, but not a render-device failure (the devices are separate).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn switched_off() -> Option<String> {
-    if env_disabled() {
-        return Some(if backend::env_off() { "disabled by LIGHTCRAFT_GPU_BACKEND=off" } else { "disabled by LIGHTCRAFT_GPU=0" }.into());
+    if let Some(why) = env_off_reason() {
+        return Some(why.into());
     }
     (!ENABLED.load(Ordering::Relaxed)).then(|| "disabled by the GPU rendering preference (app.gpu)".into())
+}
+
+/// Why the environment switches the GPU off for the whole process (`LIGHTCRAFT_GPU=0` or
+/// `LIGHTCRAFT_GPU_BACKEND=off`), or `None`. Code with a GPU path of its own (the SAM 3 model on
+/// Metal) follows it too.
+pub fn env_off_reason() -> Option<&'static str> {
+    if !env_disabled() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if backend::env_off() {
+        return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off");
+    }
+    Some("disabled by LIGHTCRAFT_GPU=0")
 }
 
 /// `LIGHTCRAFT_GPU=0` (or `LIGHTCRAFT_GPU_BACKEND=off`): no GPU for the whole process.
@@ -440,11 +450,12 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
 }
 
 /// Whether the GPU renders requests of this kind at all (a given render can still fall back to
-/// the CPU): the kernel writes 8-bit output, so high-bit-depth exports and soft proofs render on
-/// the CPU, and so does Visualize HDR, which needs the float HDR render. [`try_render`] follows it,
-/// and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift apart.
-pub fn handles(depth: lightcraft_pipeline::OutputDepth, proofed: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
-    depth == lightcraft_pipeline::OutputDepth::U8 && !proofed && overlay != lightcraft_pipeline::Overlay::HdrRange
+/// the CPU): the kernel writes 8-bit output, so high-bit-depth exports render on the CPU, and so do
+/// soft proofs against an output-device profile (`device_proof`: its 3D table is CPU-side) and
+/// Visualize HDR, which needs the float HDR render. [`try_render`] follows it, and the loupe sizes
+/// its slider-drag drafts by it (issue #330), so the two can't drift apart.
+pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
+    depth == lightcraft_pipeline::OutputDepth::U8 && !device_proof && overlay != lightcraft_pipeline::Overlay::HdrRange
 }
 
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
@@ -463,7 +474,8 @@ pub fn try_render(
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
+        let device_proof = req.proof.is_some_and(|p| lightcraft_pipeline::proof_profile(p.profile).is_some());
+        if !enabled() || !handles(req.depth, device_proof, req.overlay) {
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);

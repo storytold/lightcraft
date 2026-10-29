@@ -35,8 +35,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v: Vec<String> = std::fs::read_dir(&dir)
             .map_err(|e| bad(C, format!("{path}: {e}")))?
             .flatten()
+            .filter(|e| !crate::walk::is_hidden_entry(e))
             .map(|e| e.path())
-            .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|f| f.is_file() && is_supported(f))
             .map(|f| f.to_string_lossy().to_string())
             .collect();
         v.sort();
@@ -114,6 +115,16 @@ fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -
     forgotten
 }
 
+impl Session {
+    /// Record that the folder `root` was browsed now, with the folders of `files` (the photos it showed): what
+    /// `library.browse` does after reading a folder, for a UI that reads it on a worker thread instead. Untouched
+    /// Local photos are forgotten only from folders not browsed for the set number of days, so a browse that
+    /// isn't recorded lets a folder in daily use be forgotten.
+    pub fn note_browsed(&mut self, root: &str, files: &[String]) {
+        stamp_browsed(self, root, files);
+    }
+}
+
 /// Folders whose browse time is refreshed at most this often (keeps repeated browsing from
 /// growing the log; far finer than the days the eviction counts in).
 const RESTAMP_SECS: i64 = 3600;
@@ -148,7 +159,11 @@ fn stamp_browsed(s: &mut Session, root: &str, files: &[String]) {
 /// referred to by an undo / redo step.
 fn in_use(s: &mut Session) -> std::collections::HashSet<PhotoId> {
     let mut keep = held(s);
-    keep.extend(s.visible().iter().copied());
+    // Missing Photos lists library photos only, never Local records, so it keeps nothing here; and
+    // working it out checks every original (minutes on a sleeping NAS when the library opens on it)
+    if s.source != crate::LibrarySource::Missing {
+        keep.extend(s.visible().iter().copied());
+    }
     keep
 }
 
@@ -468,6 +483,9 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
     // a library folder chosen at or below it follows too, as a source or as a filter
     follow_library_folder(&mut s.library_folder, from, to);
     follow_library_folder(&mut s.filter.library_folder, from, to);
+    if let Some(f) = s.shelved_filter.as_mut() {
+        follow_library_folder(&mut f.library_folder, from, to);
+    }
     if let Some(b) = &mut s.browse
         && let Ok(rel) = Path::new(&b.path).strip_prefix(from)
     {

@@ -29,6 +29,31 @@ fn chip_width(ui: &egui::Ui, label: &str, font: egui::FontId) -> f32 {
     ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE).size().x + 12.0 + 22.0
 }
 
+/// The colour labels a label chip names, in words ("Red or Blue").
+fn label_names(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
+    use crate::i18n::tr;
+    let shown = filter.labels_shown().unwrap_or_default();
+    let name = |label: &lightcraft_catalog::ColorLabel| crate::i18n::color_label(catalog, *label);
+    let or = |labels: &[lightcraft_catalog::ColorLabel]| labels.iter().map(name).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
+    if !shown.is_empty() {
+        return or(&shown);
+    }
+    let plural = if filter.labels.len() > 1 { format!("({})", or(&filter.labels)) } else { or(&filter.labels) };
+    format!("{} {} {plural}", filter.label.as_ref().map(name).unwrap_or_default(), tr("and"))
+}
+
+/// The value of a `prefix: value` chip, localised.
+fn prefixed_value(prefix: &str, value: &str, filter: &lightcraft_catalog::Filter) -> String {
+    use crate::i18n::{date_group_label, tr};
+    let date = match prefix {
+        "Flag" | "Type" => return tr(value).to_string(),
+        "Date" => &filter.date,
+        "Imported" => &filter.imported,
+        _ => return value.to_string(),
+    };
+    date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+}
+
 /// Localise generated chip labels without rewriting search text or metadata values.
 pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
     use crate::i18n::{date_group_label, rules_label, tr};
@@ -41,10 +66,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{}: {}", tr("Rules"), rules_label(rules, catalog));
     }
     if chip.clear.get("label").is_some() {
-        let mut labels = filter.labels.clone();
-        labels.extend(filter.label.filter(|label| !labels.contains(label)));
-        let names = labels.iter().map(|label| crate::i18n::color_label(catalog, *label)).collect::<Vec<_>>();
-        return format!("{}: {}", tr("Label"), names.join(&format!(" {} ", tr("or"))));
+        return format!("{}: {}", tr("Label"), label_names(filter, catalog));
     }
     if chip.clear.get("dateFrom").is_some() || chip.clear.get("dateTo").is_some() {
         return match (&filter.date_from, &filter.date_to) {
@@ -55,19 +77,10 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         };
     }
     if chip.clear.get("only").is_some() {
-        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = filter.only.len()));
+        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = if filter.only_none { 0 } else { filter.only.len() }));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
-        let value = if matches!(prefix, "Flag" | "Type") {
-            tr(value).to_string()
-        } else if prefix == "Date" {
-            filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
-        } else if prefix == "Imported" {
-            filter.imported.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
-        } else {
-            value.to_string()
-        };
-        return format!("{}: {value}", tr(prefix));
+        return format!("{}: {}", tr(prefix), prefixed_value(prefix, value, filter));
     }
     if let Some(value) = chip.label.strip_prefix("Rating ") {
         return format!("{} {value}", tr("Rating"));
@@ -83,7 +96,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     let t = Tokens::get(ui.ctx());
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.canvas);
-    register(ui.ctx(), "filterchips", bar);
+    register(ui, "filterchips", bar);
     let font = t.font(12.0);
     let right = bar.right() - 16.0;
     let mut x = bar.left() + 20.0;
@@ -101,9 +114,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         let text_r = Rect::from_min_max(r.min, pos2(r.right() - 22.0, r.max.y));
         ui.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
         let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
-        let resp = ui.interact(xr, egui::Id::new(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
+        let resp = ui.interact(xr, egui::Id::unique(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
         crate::widgets::announce(&resp, format!("{}: {label}", crate::i18n::tr("Remove this filter")));
-        register(ui.ctx(), format!("chip:{i}"), xr);
+        register(ui, format!("chip:{i}"), xr);
         let col = if resp.hovered() { t.text } else { t.text_dim };
         let m = 3.5;
         let (a, b) = (xr.center() - vec2(m, m), xr.center() + vec2(m, m));

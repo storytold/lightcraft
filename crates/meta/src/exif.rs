@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use lightcraft_tiff::{Ifd, Tiff, TiffError, tags as t};
+use lightcraft_tiff::{Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -16,8 +16,16 @@ pub fn read_exif(bytes: &[u8]) -> Metadata {
 
 /// Like [`read_exif`] but reports a structurally invalid TIFF header / IFD0.
 pub fn try_read_exif(bytes: &[u8]) -> Result<Metadata, TiffError> {
+    try_read_exif_with(bytes, &ParseOptions::default())
+}
+
+/// [`try_read_exif`] with the caller's parser options (its value allocation budget in particular).
+/// A decoder working from a sparse buffer — only selected ranges of the logical file are actually
+/// loaded, the rest is zeros — must not size its allocations by the logical file length, which
+/// unrelated bytes of the file can inflate at no cost to the attacker.
+pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata, TiffError> {
     let data = strip_exif_header(bytes);
-    let tiff = Tiff::parse(data)?;
+    let tiff = Tiff::parse_with(data, opts)?;
     let mut m = from_tiff(&tiff);
     // Panasonic writes no LensModel, only the name in its maker note (and in a RW2 that note is not in the raw's own Exif)
     if m.lens_model.is_none() {
@@ -127,20 +135,32 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     m
 }
 
+/// Degrees/minutes/seconds triplet as decimal degrees. A component that is present but not a number (a rational
+/// with a zero denominator, as in the placeholder GPS block phones write without a fix) makes the whole value unusable.
 fn dms(ifd: &Ifd, tag: u16) -> Option<f64> {
-    let v = ifd.f64s(tag)?;
-    let d = *v.first()?;
-    let deg = d + v.get(1).copied().unwrap_or(0.0) / 60.0 + v.get(2).copied().unwrap_or(0.0) / 3600.0;
+    let v = ifd.value(tag)?;
+    let part = |i: usize| if i < v.count() { v.get_f64(i) } else { Some(0.0) };
+    let d = v.get_f64(0)?;
+    let deg = d + part(1)? / 60.0 + part(2)? / 3600.0;
     deg.is_finite().then_some(deg)
+}
+
+/// `Some(true)` for the negative hemisphere (`neg`), `Some(false)` for `pos`, `None` when the ref is missing or invalid.
+fn hemisphere(g: &Ifd, tag: u16, pos: char, neg: char) -> Option<bool> {
+    match g.string(tag)?.trim_start().chars().next()?.to_ascii_uppercase() {
+        c if c == neg => Some(true),
+        c if c == pos => Some(false),
+        _ => None,
+    }
 }
 
 fn read_gps(g: &Ifd) -> Option<Gps> {
     let mut lat = dms(g, t::GPS_LATITUDE)?;
     let mut lon = dms(g, t::GPS_LONGITUDE)?;
-    if g.string(t::GPS_LATITUDE_REF).is_some_and(|s| s.starts_with('S')) {
+    if hemisphere(g, t::GPS_LATITUDE_REF, 'N', 'S')? {
         lat = -lat;
     }
-    if g.string(t::GPS_LONGITUDE_REF).is_some_and(|s| s.starts_with('W')) {
+    if hemisphere(g, t::GPS_LONGITUDE_REF, 'E', 'W')? {
         lon = -lon;
     }
     if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
@@ -383,6 +403,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn placeholder_gps_block_is_no_location() {
+        // Android phones without a fix write NUL refs and 0/0 rationals (#1617).
+        let read = |lat_ref: &str, lat: Vec<(u32, u32)>| {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii(lat_ref.into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(lat));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(151, 1), (12, 1), (4032, 100)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            read_exif(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).gps
+        };
+        let valid = vec![(33, 1), (51, 1), (3564, 100)];
+        assert!(read("N", valid.clone()).is_some());
+        assert_eq!(read("N", vec![(0, 0), (0, 0), (0, 0)]), None, "0/0 rationals");
+        assert_eq!(read("N", vec![(33, 1), (0, 0), (0, 0)]), None, "0/0 minutes");
+        assert_eq!(read(" ", valid.clone()), None, "NUL ref");
+        assert_eq!(read("", valid.clone()), None, "empty ref");
+        assert_eq!(read("X", valid), None, "invalid ref");
+    }
+
+    #[test]
     fn exif_prefix_and_garbage() {
         let mut b = b"Exif\0\0".to_vec();
         b.extend(sample_exif(ByteOrder::Little));
@@ -422,6 +464,14 @@ pub(crate) mod tests {
     }
 }
 
+/// An exact `1/N` rational for a sub-second value whose reciprocal is a whole number (shutter speeds such as
+/// 1/12800 s, which [`lightcraft_tiff::writer::rational`]'s decimal denominators cannot represent).
+fn reciprocal(v: Option<f64>) -> Option<lightcraft_tiff::Value> {
+    let v = v.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0)?;
+    let inv = 1.0 / v;
+    ((inv - inv.round()).abs() < 1e-6 && inv.round() <= u32::MAX as f64).then(|| lightcraft_tiff::Value::Rational(vec![(1, inv.round() as u32)]))
+}
+
 /// Serialise the interchange subset of `meta` as a TIFF-structured Exif block (little-endian, no
 /// `Exif\0\0` prefix): IFD0 (make, model, software, artist, copyright, description, orientation,
 /// date), the Exif IFD (capture settings, lens) and, when present, the GPS IFD.
@@ -449,10 +499,11 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
     let r = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| Value::Rational(vec![rational(v)]));
     for (tag, v) in [
         (t::DATE_TIME_ORIGINAL, meta.capture_time.map(|d| Value::Ascii(d.to_exif()))),
-        (t::EXPOSURE_TIME, r(meta.exposure_time)),
+        (t::EXPOSURE_TIME, reciprocal(meta.exposure_time).or_else(|| r(meta.exposure_time))),
         (t::F_NUMBER, r(meta.f_number)),
         (t::FOCAL_LENGTH, r(meta.focal_length)),
         (t::ISO_SPEED, meta.iso.map(|i| Value::Short(vec![i.min(65_535) as u16]))),
+        (t::ISO_SPEED_RATINGS_EXT, meta.iso.filter(|&i| i > 65_534).map(|i| Value::Long(vec![i]))),
         (t::LENS_MAKE, ascii(&meta.lens_make)),
         (t::LENS_MODEL, ascii(&meta.lens_model)),
         (t::EXPOSURE_BIAS, meta.exposure_bias.map(|v| Value::SRational(vec![srational(v)]))),
@@ -517,5 +568,22 @@ mod write_tests {
         assert_eq!(back.lens_model, m.lens_model);
         let g = back.gps.unwrap();
         assert!((g.latitude - 43.7904).abs() < 1e-5 && (g.longitude + 110.6818).abs() < 1e-5, "{g:?}");
+    }
+
+    #[test]
+    fn iso_above_65534_round_trips() {
+        for iso in [65_534, 65_535, 102_400, 409_600] {
+            let back = read_exif(&write_exif(&Metadata { iso: Some(iso), ..Default::default() }));
+            assert_eq!(back.iso, Some(iso));
+        }
+    }
+
+    #[test]
+    fn fast_shutter_speeds_round_trip_exactly() {
+        for den in [8000.0, 12_800.0, 16_000.0, 32_000.0] {
+            let back = read_exif(&write_exif(&Metadata { exposure_time: Some(1.0 / den), ..Default::default() }));
+            let got = back.exposure_time.unwrap();
+            assert!((1.0 / got - den).abs() < 0.5, "1/{den} s came back as 1/{}", 1.0 / got);
+        }
     }
 }

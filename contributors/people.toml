@@ -38,6 +38,9 @@ sync_github_name = true
 [people.Losminek]
 sync_github_name = true
 
+[people.nicolasfalesy]
+sync_github_name = true
+
 [people.FooVoo]
 real_name = "Aleksandr Batyrev"
 sync_github_name = true
@@ -45,3 +48,29 @@ sync_github_name = true
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false
+
+[people.nledford]
+real_name = "Nathaniel Ledford"
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.egegl]
+real_name = "Ege Gursel"
+sync_github_name = true
+
+[people.valenfys]
+sync_github_name = true
+
+[people.mahmatias]
+display_name = "Márcio Matias de Andrade"
+sync_github_name = true
+
+[people.ronibalthazar]
+sync_github_name = true
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true

@@ -63,6 +63,13 @@ impl PlaceNames {
         self.lock().running
     }
 
+    /// Whether a place names download has been started in this session (running, or ended).
+    #[cfg(test)]
+    pub(crate) fn download_started(&self) -> bool {
+        let sh = self.lock();
+        sh.running || sh.last.is_some()
+    }
+
     /// The gazetteer in `dir`, parsed once and re-read only when the cities file's size or time changes.
     fn load(&mut self, dir: &Path) -> std::result::Result<Arc<GeoNames>, lightcraft_geocode::GeocodeError> {
         let file = dir.join(GEONAMES_FILES[0]);
@@ -115,6 +122,12 @@ fn fill(meta: &mut lightcraft_catalog::Meta, place: &lightcraft_geocode::Place, 
 fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "metadata.reverseGeocode";
     let overwrite = bool_or(p, "overwrite", false);
+    // the place list holds towns of 15 000 people or more: a photo in a smaller one finds the nearest
+    // larger town, which may be another municipality; past this many metres City is left empty (#2242)
+    let max_distance = match p.get("maxDistance") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().filter(|m| m.is_finite() && *m > 0.0).ok_or_else(|| bad(C, "`maxDistance` must be a positive number of metres"))?),
+    };
     let ids = s.targets(p)?;
     let todo: Vec<(PhotoId, LatLon)> = ids
         .iter()
@@ -140,14 +153,24 @@ fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
             }
             t.progress(n as u64, todo.len() as u64);
         }
-        let Some(place) = names.reverse(*at) else { continue };
+        let Some(mut place) = names.reverse(*at) else { continue };
+        // too far from the town found: State and Country still hold, City (and below) doesn't
+        let too_far = max_distance.is_some_and(|m| place.distance > m);
+        let nearest_city = too_far.then(|| std::mem::take(&mut place.city));
+        if too_far {
+            place.sublocation.clear();
+        }
         let Some(ph) = s.catalog.photo(*id) else { continue };
         let mut meta = ph.meta.clone();
         fill(&mut meta, &place, overwrite);
         if meta != ph.meta {
             ops.push(Op::SetMeta { id: *id, meta: Box::new(meta) });
         }
-        found.push(json!({"id": id.0, "place": place}));
+        let mut entry = json!({"id": id.0, "place": place});
+        if let Some(city) = nearest_city {
+            entry["nearestCity"] = json!(city);
+        }
+        found.push(entry);
     }
     drop(task);
     let changed = ops.len();
@@ -165,7 +188,10 @@ mod download {
 
     use lightcraft_geocode::{GEONAMES_BASE, GEONAMES_ZIP};
 
-    use super::*;
+    use super::{
+        Cancel, DownloadOutcome, GEONAMES_ATTRIBUTION, GEONAMES_FILES, GeoNames, PoisonError, Result, Session, Value, bad, dataset_dir, json,
+        str_param,
+    };
     use crate::activity::Unit;
 
     const MAX_ZIP: u64 = 64 * 1024 * 1024;
@@ -271,7 +297,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill Location from GPS",
             ["Photo"],
             None,
-            "{ids?, overwrite?: bool (also replace place fields that already have text; default false: only empty ones are filled), dryRun?, dataset?: folder} → {looked, found, changed, photos: [{id, place: {sublocation, city, state, country, iso, distance}}], attribution} — fills City / State / Country (and Sublocation when known) from GPS with the offline GeoNames place names (download them first); one undo step",
+            "{ids?, overwrite?: bool (also replace place fields that already have text; default false: only empty ones are filled), dryRun?, dataset?: folder, maxDistance?: metres (past this distance from the town found, City is left empty and the town is given as nearestCity)} → {looked, found, changed, photos: [{id, place: {sublocation, city, state, country, iso, distance}, nearestCity?}], attribution} — fills City / State / Country (and Sublocation when known) from GPS with the offline GeoNames place names (download them first); one undo step. The place names list towns of 15 000 people or more (GeoNames cities15000): a photo taken in a smaller town gets the nearest larger one, up to 50 km away (`distance` says how far); `maxDistance` keeps such a town out of City",
             has_selection,
             reverse
         ),
@@ -340,6 +366,36 @@ mod tests {
         // overwrite replaces typed text
         s.execute("metadata.reverseGeocode", &json!({"ids": [ids[1].0], "dataset": dir, "overwrite": true})).unwrap();
         assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "London");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #2242: the place names hold only towns of 15 000 people or more, so a photo in a
+    /// village finds the nearest larger town. `maxDistance` leaves City empty past that distance
+    /// (State and Country still fill) and says which town it was.
+    #[test]
+    fn max_distance_leaves_a_far_town_out_of_city() {
+        let mut s = Session::with_demo();
+        let ids = s.visible_cloned();
+        let dir = dataset("maxdist");
+        // about 5 km north of Paris (like Portofino and Rapallo in the issue), and right in Paris
+        set_gps(&mut s, ids[0], Some((48.90, 2.35)), "");
+        set_gps(&mut s, ids[1], Some((48.855, 2.35)), "");
+        let r = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0, ids[1].0], "dataset": dir, "maxDistance": 2000})).unwrap();
+        let m0 = s.catalog.photo(ids[0]).unwrap().meta.clone();
+        assert_eq!((m0.city.as_str(), m0.state.as_str(), m0.country.as_str()), ("", "Île-de-France", "France"));
+        assert_eq!(s.catalog.photo(ids[1]).unwrap().meta.city, "Paris", "close enough");
+        let far = r["photos"].as_array().unwrap().iter().find(|p| p["id"] == json!(ids[0].0)).unwrap();
+        assert_eq!((far["place"]["city"].as_str(), far["nearestCity"].as_str()), (Some(""), Some("Paris")), "{far}");
+        assert!(far["place"]["distance"].as_f64().unwrap() > 2000.0);
+        // without it, the nearest town fills City as before
+        s.undo_step().unwrap();
+        s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir})).unwrap();
+        assert_eq!(s.catalog.photo(ids[0]).unwrap().meta.city, "Paris");
+        // hostile values are refused, not taken as "no limit"
+        for bad in [json!(-1), json!(0), json!("far"), json!(true)] {
+            let e = s.execute("metadata.reverseGeocode", &json!({"ids": [ids[0].0], "dataset": dir, "maxDistance": bad})).unwrap_err();
+            assert!(e.to_string().contains("maxDistance"), "{e}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

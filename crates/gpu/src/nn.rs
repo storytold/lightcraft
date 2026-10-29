@@ -161,7 +161,8 @@ struct ConvParams {
     cout: u32,
     leaky: u32,
     alpha: f32,
-    pad: u32,
+    /// Always 0: the kernel steps its output stores by `1 + zero`, so FXC cannot merge them (`nn_conv.wgsl`).
+    zero: u32,
 }
 
 #[repr(C)]
@@ -234,32 +235,35 @@ fn round_up(v: usize, to: usize) -> usize {
     v.div_ceil(to) * to
 }
 
-/// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
-fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
+fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<(), String> {
     if !net.fits_tile(tile) {
         return unsupported("the tile does not fit the network");
     }
     if tile > MAX_TILE {
         return unsupported("the tile is larger than the kernels' dispatches reach");
     }
+    if !net.in_channels.is_multiple_of(4) {
+        return unsupported("the input channel count is not a multiple of 4");
+    }
+    let count = ops.len();
+    let ends_right = matches!(
+        (count.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
+        (Some(Op::Conv(conv)), Some(Op::DepthToSpace2 { src }))
+            if conv.k == 1 && conv.src2.is_none() && *src == count - 1 && conv.cout == 12 && conv.leaky.is_none()
+    );
+    if ends_right { Ok(()) } else { unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space") }
+}
+
+/// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
+fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
+    let ops = net.ops();
+    validate_plan(net, tile, ops)?;
     let side = |t: usize| -> usize {
         let level = net.shape(t).map_or(0, |s| s.level);
         if level >= 0 { tile >> level } else { tile << (-level) }
     };
     let chan = |t: usize| net.shape(t).map_or(0, |s| s.channels);
-    if !net.in_channels.is_multiple_of(4) {
-        return unsupported("the input channel count is not a multiple of 4");
-    }
-    let ops = net.ops();
-    // the network must end in a 1 × 1 convolution and a depth-to-space (they run as one kernel)
     let n_ops = ops.len();
-    let ends_right = matches!(
-        (n_ops.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
-        (Some(Op::Conv(c)), Some(Op::DepthToSpace2 { src })) if c.k == 1 && c.src2.is_none() && *src == n_ops - 1 && c.cout == 12 && c.leaky.is_none()
-    );
-    if !ends_right {
-        return unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space");
-    }
     // the last layer that reads each tensor
     let mut last_use = vec![0usize; n_ops + 1];
     for (i, op) in ops.iter().enumerate() {
@@ -349,7 +353,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     cout: c.cout as u32,
                     leaky: u32::from(c.leaky.is_some()),
                     alpha: c.leaky.unwrap_or(0.0),
-                    pad: 0,
+                    zero: 0,
                 };
                 let src = get(&place, c.src)?;
                 let src2 = c.src2.map(|t| get(&place, t)).transpose()?;
@@ -416,7 +420,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     cout: c.cout as u32,
                     leaky: u32::from(c.leaky.is_some()),
                     alpha: c.leaky.unwrap_or(0.0),
-                    pad: 0,
+                    zero: 0,
                 };
                 let src = get(&place, c.src)?;
                 let slot = alloc((4 * m * c.cout * 4) as u64, &mut slots, &mut free);
@@ -918,6 +922,44 @@ mod tests {
         assert!(a.iter().chain(b).all(|v| v.is_finite()), "non-finite denoise output");
         let scale = b.iter().fold(1e-3f32, |m, v| m.max(v.abs()));
         a.iter().zip(b).fold(0f32, |m, (x, y)| m.max((x - y).abs())) / scale
+    }
+
+    /// A 1 × 1 convolution from 4 channels to `cout` that copies input channel `co % 4` to each output channel `co`.
+    fn copy(src: usize, cout: usize) -> Op {
+        let mut weight = vec![0f32; cout * 4];
+        for co in 0..cout {
+            weight[co * 4 + co % 4] = 1.0;
+        }
+        Op::Conv(lightcraft_denoise::net::Conv { src, src2: None, cin: 4, cout, k: 1, weight, bias: vec![0.0; cout], leaky: None })
+    }
+
+    /// Two 1 × 1 layers that only copy channels, so the right answer is exact: the first layer's stores (mode 0) went
+    /// wrong on DX12 with FXC on an NVIDIA GTX 1070, where every second pixel came out with its channels shifted.
+    #[test]
+    fn a_layer_stores_every_pixels_channels_where_the_next_reads_them() {
+        let n = Net::new(4, vec![copy(0, 4), copy(1, 12), Op::DepthToSpace2 { src: 2 }]).unwrap();
+        let Some(g) = gpu(&n, 3) else { return };
+        let x: Vec<f32> = (1..=36).map(|i| i as f32).collect();
+        assert_eq!(g.run(&x).unwrap(), reference::run(&n, 3, &x).unwrap());
+    }
+
+    /// The same for a transposed convolution's stores (mode 1): a max-pool halves the tile, and the 2 × 2 transposed
+    /// convolution copies each pooled pixel's channels to the four pixels it becomes.
+    #[test]
+    fn a_transposed_convolution_stores_every_pixels_channels_where_the_next_reads_them() {
+        use lightcraft_denoise::net::ConvT2;
+        // [cin][cout][2][2]: channel c to channel c at all four places
+        let mut weight = vec![0f32; 4 * 4 * 4];
+        for c in 0..4 {
+            for q in 0..4 {
+                weight[(c * 4 + c) * 4 + q] = 1.0;
+            }
+        }
+        let up = Op::ConvT2(ConvT2 { src: 1, cin: 4, cout: 4, weight, bias: vec![0.0; 4], leaky: None });
+        let n = Net::new(4, vec![Op::MaxPool2 { src: 0 }, up, copy(2, 12), Op::DepthToSpace2 { src: 3 }]).unwrap();
+        let Some(g) = gpu(&n, 6) else { return };
+        let x: Vec<f32> = (1..=144).map(|i| i as f32).collect();
+        assert_eq!(g.run(&x).unwrap(), reference::run(&n, 6, &x).unwrap());
     }
 
     #[test]

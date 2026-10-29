@@ -23,7 +23,7 @@ this page is the local copy of the decision.
 
 ## In LightCraft
 
-- The About dialog (`crates/ui-egui/src/panels/dialogs.rs`, Help ▸ About LightCraft) has the tabs
+- The About dialog (`crates/ui-egui/src/dialogs.rs`, Help ▸ About LightCraft) has the tabs
   **About · Contributors · Models**; the control channel can switch them with
   `ui.clickWidget {"id": "button:aboutTab-contributors"}` (`-about`, `-models`), and the list view
   with `button:creditsGrabBag` / `button:creditsTable`.

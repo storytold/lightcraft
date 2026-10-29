@@ -8,8 +8,13 @@
 //! white. That is all a Kelvin slider needs; the look stays the file's JPEG fit, and the picture is adapted from the
 //! as-shot white with Bradford, as for a camera read through measured matrices (`crate::spectral`, issue #730).
 //!
+//! Canon CR2s list theirs by name in the maker note's `ColorData`, each with Canon's temperature for it (see
+//! `vendor::cr2`): five planckian ones (Daylight, Shade, Cloudy, Tungsten, Flash) make the curve the same way,
+//! taken in Kelvin order ([`KelvinPresets::from_unordered`]). On the PowerShot G1 X Mark III's nine settings the
+//! curve reads the as-shot levels within 5 % of the camera's own `ColorTempAsShot`.
+//!
 //! The model, in `(ln R/G, ln B/G)` of the multipliers ([`KelvinPresets::temp_tint`]):
-//! - The five presets are joined piecewise linearly, with mired linear along each segment and the end segments
+//! - The presets (three or more) are joined piecewise linearly, with mired linear along each segment and the end segments
 //!   extended. On every Sony body measured, mired is nearly linear in arc length along the whole curve (2500 K to
 //!   8500 K within ±3 %), so the segments add no visible kinks.
 //! - A white off the curve is placed by its perpendicular offset from the nearest segment. Tint is that offset scaled
@@ -35,32 +40,54 @@ const MIN_K: f64 = 2000.0;
 const MAX_K: f64 = 50000.0;
 const MAX_TINT: f64 = 150.0;
 
-/// Models whose white balance is edited in Kelvin through their presets, checked to carry them (on 80–150 own
-/// photos each, or the public corpus samples for the ILCE-3500 and ILCE-7S): the Exif model as Sony writes it. A
-/// camera with measured matrices (`crate::spectral`) is read through those instead.
-const MODELS: &[&str] = &["DSC-RX10", "ILCA-77M2", "ILCA-99M2", "ILCE-3500", "ILCE-7S", "SLT-A33"];
+/// Models whose white balance is edited in Kelvin through their presets, as (brand, Exif model without the brand),
+/// each checked to carry them: the Sony bodies on 80–150 own photos each, or the public corpus samples for the
+/// ILCE-3500 and ILCE-7S; the Canon PowerShot G1 X Mark III on a reporter's nine photos, one per white-balance
+/// setting (issue #157 of a downstream fork). A camera with measured matrices (`crate::spectral`) is read through
+/// those instead.
+const MODELS: &[(&str, &str)] = &[
+    ("SONY", "DSC-RX10"),
+    ("SONY", "ILCA-77M2"),
+    ("SONY", "ILCA-99M2"),
+    ("SONY", "ILCE-3500"),
+    ("SONY", "ILCE-7S"),
+    ("SONY", "SLT-A33"),
+    ("CANON", "PowerShot G1 X Mark III"),
+];
 
 /// Whether a raw of this Exif make and model is edited in Kelvin through its presets (when it has no colour
-/// matrices of its own or measured: see [`crate::spectral::find`], which comes first).
+/// matrices of its own or measured: see [`crate::spectral::find`], which comes first), from the file's presets or
+/// built-in ones ([`crate::kelvin_builtin`]).
 pub fn covers(make: Option<&str>, model: &str) -> bool {
+    if crate::kelvin_builtin::covers(make, model) {
+        return true;
+    }
     let model = model.trim();
-    let model = model.strip_prefix("SONY ").or_else(|| model.strip_prefix("Sony ")).unwrap_or(model);
-    make.is_none_or(|m| m.split_whitespace().next().is_some_and(|b| b.eq_ignore_ascii_case("SONY")))
-        && MODELS.iter().any(|m| m.eq_ignore_ascii_case(model))
+    let brand = make.and_then(|m| m.split_whitespace().next());
+    MODELS.iter().any(|(b, m)| {
+        let bare = model
+            .get(..b.len())
+            .zip(model.get(b.len()..))
+            .filter(|(p, rest)| p.eq_ignore_ascii_case(b) && rest.starts_with(' '))
+            .map_or(model, |(_, rest)| rest.trim_start());
+        brand.is_none_or(|x| x.eq_ignore_ascii_case(b)) && bare.eq_ignore_ascii_case(m)
+    })
 }
 
 /// [`covers`] for make and model joined by a space, as the catalog keeps them (`"SONY ILCA-99M2"`).
 pub fn covers_camera(camera: &str) -> bool {
-    match camera.split_once(char::is_whitespace) {
-        Some((make, model)) => covers(Some(make), model),
-        None => covers(None, camera),
-    }
+    let words: Vec<&str> = camera.split_whitespace().collect();
+    // the make can be several words ("NIKON CORPORATION"), so try every split, as `spectral::find_camera` does
+    (1..words.len()).any(|i| covers(Some(&words[..i].join(" ")), &words[i..].join(" "))) || covers(None, camera)
 }
 
-/// A camera's multipliers at five stated temperatures, ascending, green = 1.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// Most points a curve keeps (Canon writes about seven at a stated temperature, Sony five).
+const MAX_POINTS: usize = 32;
+
+/// A camera's multipliers at stated temperatures (at least three), ascending, green = 1.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KelvinPresets {
-    points: [(f32, [f32; 3]); 5],
+    points: Vec<(f32, [f32; 3])>,
 }
 
 fn usable(m: [f32; 3]) -> bool {
@@ -76,15 +103,36 @@ fn locus_uv(t: f64) -> (f64, f64) {
 }
 
 impl KelvinPresets {
-    /// `points` as (Kelvin, multipliers), ascending in Kelvin; `None` unless they make a curve: positive
-    /// multipliers, red rising and blue falling from one preset to the next.
-    pub fn new(points: [(f32, [f32; 3]); 5]) -> Option<KelvinPresets> {
-        let ok = points.iter().all(|(k, m)| *k > 0.0 && k.is_finite() && usable(*m))
+    /// `points` as (Kelvin, multipliers), ascending in Kelvin; `None` unless they make a curve: three to
+    /// [`MAX_POINTS`] of them, positive multipliers, red rising and blue falling from one preset to the next.
+    pub fn new(points: impl IntoIterator<Item = (f32, [f32; 3])>) -> Option<KelvinPresets> {
+        let points: Vec<_> = points.into_iter().take(MAX_POINTS + 1).collect();
+        let ok = (3..=MAX_POINTS).contains(&points.len())
+            && points.iter().all(|(k, m)| *k > 0.0 && k.is_finite() && usable(*m))
             && points.windows(2).all(|w| {
                 let (a, b) = (log_point(w[0].1), log_point(w[1].1));
                 w[0].0 < w[1].0 && b[0] > a[0] && b[1] < a[1]
             });
-        ok.then(|| KelvinPresets { points: points.map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])) })
+        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect() })
+    }
+
+    /// A curve from presets in any order, as a camera lists them by name (Canon's Daylight, Shade, Cloudy, …):
+    /// sorted by Kelvin, a repeated temperature kept once, unusable points and any that would turn the curve back
+    /// (red not rising or blue not falling from the warmer neighbour kept) dropped; then [`Self::new`].
+    pub fn from_unordered(points: impl IntoIterator<Item = (f32, [f32; 3])>) -> Option<KelvinPresets> {
+        let mut pts: Vec<_> = points.into_iter().take(MAX_POINTS).filter(|(k, m)| *k > 0.0 && k.is_finite() && usable(*m)).collect();
+        pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut kept: Vec<(f32, [f32; 3])> = Vec::with_capacity(pts.len());
+        for p in pts {
+            let fits = kept.last().is_none_or(|q| {
+                let (a, b) = (log_point(q.1), log_point(p.1));
+                q.0 < p.0 && b[0] > a[0] && b[1] < a[1]
+            });
+            if fits {
+                kept.push(p);
+            }
+        }
+        KelvinPresets::new(kept)
     }
 
     /// Temperature (K) and tint of the white these multipliers balance (see the module docs); `None` for unusable
@@ -94,13 +142,17 @@ impl KelvinPresets {
             return None;
         }
         let q = log_point(wb_multipliers);
-        let last = self.points.len() - 2;
+        let last = self.points.len().saturating_sub(2);
         let mut best: Option<(f64, f64, f64)> = None;
         for (i, w) in self.points.windows(2).enumerate() {
             let ((k0, m0), (k1, m1)) = (w[0], w[1]);
             let (p0, p1) = (log_point(m0), log_point(m1));
             let d = [p1[0] - p0[0], p1[1] - p0[1]];
             let len = d[0].hypot(d[1]);
+            // only a deserialized curve can repeat a point
+            if !(len > 0.0 && len.is_finite()) {
+                continue;
+            }
             let t = [d[0] / len, d[1] / len];
             // the normal towards higher red and blue: a green white
             let n = if t[0] - t[1] < 0.0 { [t[1], -t[0]] } else { [-t[1], t[0]] };
@@ -158,7 +210,7 @@ mod tests {
     #[test]
     fn a_preset_reads_as_its_own_temperature_with_no_tint() {
         let p = a99m2();
-        for (k, m) in p.points {
+        for &(k, m) in &p.points {
             let (t, tint) = p.temp_tint(m).unwrap();
             assert!((t - k as f64).abs() < 0.5 && tint.abs() < 1e-6, "{k}: {t} {tint}");
             // the scale of the multipliers doesn't matter, only their ratios to green
@@ -200,26 +252,67 @@ mod tests {
         assert_eq!(p.temp_tint([0.0, 1.0, 1.0]), None);
         assert_eq!(p.temp_tint([f32::NAN, 1.0, 1.0]), None);
         assert_eq!(p.as_shot_white(None), None);
-        let mut pts = p.points;
+        let mut pts = p.points.clone();
         pts.swap(1, 2);
         assert_eq!(KelvinPresets::new(pts), None, "out of order");
-        let mut pts = p.points;
+        let mut pts = p.points.clone();
         pts[4].1 = pts[3].1;
         assert_eq!(KelvinPresets::new(pts), None, "no step");
-        let mut pts = p.points;
+        let mut pts = p.points.clone();
         pts[0].1[0] = 0.0;
         assert_eq!(KelvinPresets::new(pts), None);
         assert_eq!(as_shot_white(&ColorData::default(), Some([2.0, 1.0, 1.5])), None);
+        assert_eq!(KelvinPresets::new(p.points[..2].to_vec()), None, "too few");
         let with = ColorData { kelvin_presets: Some(p), ..Default::default() };
         assert!(as_shot_white(&with, Some([2.0, 1.0, 1.5])).is_some());
     }
 
+    /// Canon lists its presets by name, not by temperature, with repeats and an off-curve one among them: the
+    /// curve takes them in Kelvin order, each temperature once, and leaves out a point that would turn it back.
+    #[test]
+    fn a_curve_from_presets_in_any_order() {
+        let g = |r: f32, b: f32| [r / 1024.0, 1.0, b / 1024.0];
+        let p = KelvinPresets::from_unordered([
+            (5651.0, g(1418.0, 1357.0)),
+            (7505.0, g(1653.0, 1171.0)),
+            (6594.0, g(1533.0, 1259.0)),
+            (3174.0, g(963.0, 2016.0)),
+            (5651.0, g(1418.0, 1357.0)),
+            (8000.0, g(1400.0, 1400.0)),
+            (8529.0, g(1807.0, 1080.0)),
+            (f32::NAN, g(1000.0, 1000.0)),
+        ])
+        .unwrap();
+        assert_eq!(p.points.len(), 5);
+        assert!(p.points.windows(2).all(|w| w[0].0 < w[1].0));
+        let (t, tint) = p.temp_tint(g(1653.0, 1171.0)).unwrap();
+        assert!((t - 7505.0).abs() < 1.0 && tint.abs() < 0.1, "{t} {tint}");
+        assert_eq!(KelvinPresets::from_unordered([(5000.0, g(1400.0, 1400.0)), (6000.0, g(1500.0, 1300.0))]), None);
+        assert_eq!(KelvinPresets::from_unordered(std::iter::empty()), None);
+        // a stored curve with a repeated point (only deserializing can make one) reads without dividing by zero
+        let bad = KelvinPresets { points: vec![(5000.0, g(1400.0, 1400.0)); 3] };
+        assert_eq!(bad.temp_tint(g(1400.0, 1400.0)), None);
+        assert_eq!(KelvinPresets { points: vec![] }.temp_tint(g(1400.0, 1400.0)), None);
+    }
+
     #[test]
     fn covered_models() {
-        for c in ["SONY ILCA-99M2", "SONY DSC-RX10", "SONY ILCA-77M2", "SONY SLT-A33", "ILCA-99M2", "Sony ilca-99m2"] {
+        assert!(covers_camera("NIKON CORPORATION NIKON Z5_2") && covers_camera("NIKON Z5_2") && !covers_camera("NIKON CORPORATION NIKON Z6"));
+        for c in [
+            "SONY ILCA-99M2",
+            "SONY DSC-RX10",
+            "SONY ILCA-77M2",
+            "SONY SLT-A33",
+            "ILCA-99M2",
+            "Sony ilca-99m2",
+            "Canon Canon PowerShot G1 X Mark III",
+            "Canon PowerShot G1 X Mark III",
+        ] {
             assert!(covers_camera(c), "{c}");
         }
-        for c in ["SONY ILCE-7M3", "SONY DSC-RX10M4", "Canon SLT-A33", "", "SONY"] {
+        for c in
+            ["SONY ILCE-7M3", "SONY DSC-RX10M4", "Canon SLT-A33", "", "SONY", "Canon Canon PowerShot G1 X Mark II", "SONY PowerShot G1 X Mark III"]
+        {
             assert!(!covers_camera(c), "{c}");
         }
         assert!(covers(Some("SONY"), "ILCA-99M2") && covers(None, "ILCA-99M2") && !covers(Some("NIKON CORPORATION"), "ILCA-99M2"));
