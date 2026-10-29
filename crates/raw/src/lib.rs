@@ -698,7 +698,9 @@ pub enum LevelSource {
     MaskedPixels,
     /// Inferred from the picture samples, e.g. a saturation plateau.
     Inferred,
-    /// Nothing could be measured: the full bit range for white, 0 for black.
+    /// Neither read from the file nor measured from it: a default (0 or a format constant for black, the full bit
+    /// range or a format constant for white). Not necessarily wrong: a frame with no clipped highlights has no
+    /// saturation plateau to find.
     Fallback,
 }
 
