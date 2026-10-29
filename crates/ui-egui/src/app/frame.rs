@@ -203,7 +203,8 @@ impl LightcraftApp {
                 let row = self.sidecars_row.get_or_insert_with(|| {
                     session.activity.start("xmpWaiting", "Waiting to write XMP sidecars", lightcraft_engine::activity::Cancel::No)
                 });
-                row.progress(0, waiting as u64);
+                // how many, as a line: a count ("0 of 2") would read as a stalled job, as nothing here counts up
+                row.detail(&crate::i18n::tr_format!("Photos waiting: {n}", n = waiting));
             }
         }
         // Settings → Import: open the import review when a camera or card is connected

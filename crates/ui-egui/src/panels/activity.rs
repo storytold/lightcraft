@@ -24,7 +24,13 @@ pub const WIDTH: f32 = 280.0;
 /// row is one that only waits on something outside the app (`xmpWaiting`) and is old enough to show: nothing on it
 /// changes until the cause is gone, and the app looks again by itself then (a redraw every 10 s re-checks it).
 pub fn needs_poll(tasks: &[TaskInfo]) -> bool {
-    tasks.iter().any(|t| t.kind != "xmpWaiting" || t.age_ms < SHOW_AFTER_MS)
+    tasks.iter().any(|t| !only_waits(t) || t.age_ms < SHOW_AFTER_MS)
+}
+
+/// A row that only waits on something outside the app: it has no progress to draw, so no bar (an indeterminate one
+/// would sweep and repaint every frame).
+fn only_waits(t: &TaskInfo) -> bool {
+    t.kind == "xmpWaiting"
 }
 
 const MARGIN: i8 = 8;
@@ -48,7 +54,7 @@ fn megabytes(bytes: u64) -> String {
 }
 
 /// The row's second line: "Stopping…" once cancelled, else the count and what is being worked on.
-fn detail_line(t: &TaskInfo) -> String {
+pub(crate) fn detail_line(t: &TaskInfo) -> String {
     if t.cancelling {
         return tr("Stopping…").to_string();
     }
@@ -145,7 +151,9 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
-        bar(ui, task, width);
+        if !only_waits(task) {
+            bar(ui, task, width);
+        }
         let line = detail_line(task);
         if !line.is_empty() {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());

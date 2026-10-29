@@ -57,7 +57,9 @@ fn writes_waiting_for_their_folder_have_a_row_until_they_are_made() {
     assert_eq!(h.app.session.unsaved_sidecars(), 2, "both writes wait");
     let rows = waiting_rows(&h);
     assert_eq!(rows.len(), 1, "{:?}", h.app.session.activity.list());
-    assert_eq!((rows[0].label.as_str(), rows[0].total, rows[0].cancellable), ("Waiting to write XMP sidecars", 2, false), "{rows:?}");
+    // no "0 of 2": nothing here counts up, so the row says how many wait and carries no bar
+    assert_eq!((rows[0].label.as_str(), rows[0].cancellable), ("Waiting to write XMP sidecars", false), "{rows:?}");
+    assert_eq!(crate::panels::activity::detail_line(&rows[0]), "Photos waiting: 2", "{rows:?}");
     let id = rows[0].id;
 
     // a re-check that finds the folder still shut leaves the same row, not a new one
