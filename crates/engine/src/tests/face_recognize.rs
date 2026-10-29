@@ -401,6 +401,20 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     let more = r["more"].as_array().unwrap();
     assert_eq!((more.len(), more[0]["photo"].clone(), more[0]["index"].clone()), (1, json!(b.0), json!(0)), "{r}");
     assert!(more[0]["score"].as_f64().unwrap() > 0.9);
+    // set aside as "not Ann" (#3249), it is no longer offered for her, still could be for Bob, and comes back on request;
+    // the catalog is not touched
+    let (revision, undo) = (s.catalog.revision, s.undo.len());
+    assert_eq!(s.execute("faces.dismiss", &json!({"name": "ann", "photo": b.0, "index": 0})).unwrap()["dismissed"], 1);
+    assert_eq!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap()["dismissed"], 1, "once");
+    let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    assert_eq!((r["more"].as_array().unwrap().len(), r["dismissed"].clone()), (0, json!(1)), "{r}");
+    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), None);
+    assert_eq!((s.catalog.revision, s.undo.len()), (revision, undo));
+    for bad in [json!({"name": "Ann", "photo": b.0, "index": 9}), json!({"name": "Ann", "photo": b.0}), json!({"photo": b.0, "index": 0})] {
+        assert!(s.execute("faces.dismiss", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).unwrap()["restored"], 1);
+    assert_eq!(s.execute("faces.person", &json!({"name": "Ann"})).unwrap()["more"].as_array().unwrap().len(), 1);
     // confirming it moves it from one list to the other (and is one undo step)
     s.execute("faces.setName", &json!({"id": b.0, "index": 0, "name": "Ann"})).unwrap();
     let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
@@ -745,9 +759,18 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     assert_eq!(picture(&s, "Ann"), Some(a), "{:?}", s.person_covers);
+    // the faces set aside for them are kept with the library too, and follow a rename
+    let c = add(&mut s, "c.jpg", vec![region(0.5, None)]);
+    s.execute("faces.dismiss", &json!({"name": "Ann", "photo": c.0, "index": 0})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.person_dismissed.get("ann").map(|v| v[0].photo), Some(c));
     // a renamed person keeps their picture; going back to the largest face is a choice too
     s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
     assert_eq!(picture(&s, "Ada"), Some(a));
+    assert_eq!(s.person_dismissed.get("ada").map(|v| v[0].photo), Some(c));
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(picture(&s, "Ann"), Some(a), "and after an undo of the rename");
     s.execute("faces.setCover", &json!({"name": "Ann", "photo": null})).unwrap();
@@ -762,12 +785,17 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     s.execute("faces.setCover", &json!({"name": "Ann", "photo": null})).unwrap();
     s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
     assert_eq!(picture(&s, "Ada"), Some(b), "no stale picture under the new name");
+    assert_eq!(s.person_dismissed.get("ada"), s.person_dismissed.get("ann"), "the faces set aside follow, nothing left over");
     s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
     // a choice that cannot be saved is not made either
     std::fs::remove_file(lib.join("people.json")).ok();
     std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
     assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
     assert_eq!(picture(&s, "Ann"), Some(b), "unchanged in the session too");
+    let set_aside = s.person_dismissed.get("ann").cloned();
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": a.0, "index": 0})).is_err());
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).is_err());
+    assert_eq!(s.person_dismissed.get("ann").cloned(), set_aside, "nor a face set aside, nor one brought back");
     assert_eq!(s.unsaved(), None, "and nothing is left unsaved");
     // a rename while people.json cannot be written stands; the picture follows it in memory, counts as unsaved, and is
     // written as soon as it can be
