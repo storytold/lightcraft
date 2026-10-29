@@ -177,9 +177,10 @@ pub struct UiState {
     /// Whether Assisted Culling stacked its bursts the last time it was confirmed (this session).
     #[serde(skip)]
     pub cull_stack: bool,
-    /// "More" faces the user hid with ×, for this session: (photo, region index).
+    /// "More" faces the user set aside with ×, hidden at once (the engine keeps them for good, `faces.dismiss`):
+    /// (the person's lower-cased name, photo, region index). A face set aside for one person may be someone else.
     #[serde(skip)]
-    pub dismissed_faces: std::collections::HashSet<(u64, usize)>,
+    pub dismissed_faces: std::collections::HashSet<(String, u64, usize)>,
     /// The unnamed faces selected in the People view (photo, region), the name being typed for them, the face last
     /// clicked (Shift-click selects a range from it) and whether the name box should take the keyboard.
     #[serde(skip)]
