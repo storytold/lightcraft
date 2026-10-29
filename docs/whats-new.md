@@ -2,6 +2,11 @@
 
 ## 2026-10-28
 
+### Open a face's photo from a right click
+- In People, a right click on an unnamed face, or on a face offered in More on a person's page, has Open Photo: the
+  whole photo, to tell who it is before naming, confirming or setting it aside. Escape comes back. (Unnamed faces
+  already opened on a double click; a click on a More face confirms it, so it had no way to open.)
+
 ### A face set aside on a person's page stays set aside
 - On a person's page, × on one of the faces offered in More used to hide it until LightCraft was quit: next time it was
   offered again. It is now kept: that face is no longer offered in that person's More (it can still be offered for
