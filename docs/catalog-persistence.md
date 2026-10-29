@@ -42,7 +42,10 @@ library was, byte for byte, beside it:
   a library (and `library.info` lists it under `settingsWarnings`). Delete them once the older version is no longer
   wanted. The browser build keeps none (it always runs the newest version).
 
-**To go back**, with LightCraft closed: move `catalog.snap` and `catalog.log` away, then rename the kept pair to
-`catalog.snap` and `catalog.log`. The older version opens the library as it was when it was upgraded (where the upgrade came
+**To go back**, with LightCraft closed: move `catalog.snap` and `catalog.log` away, then rename each kept file that exists
+to `catalog.snap` and `catalog.log` (a library that had no log, or only a log, kept only the one file: rename only that
+one, and leave the other name unused). Where the log was damaged, the kept log is `catalog.log.damaged-<seq>`: it takes
+the place of `catalog.log` like any kept log (the older version reads it up to the damage and handles it as it did
+before), beside the kept snapshot when there is one. The older version opens the library as it was when it was upgraded (where the upgrade came
 from a later snapshot: as it was when it was opened, so the changes made between that and the upgrade are not carried
 back either); changes made since, in the newer version, are in the files that were moved away.
