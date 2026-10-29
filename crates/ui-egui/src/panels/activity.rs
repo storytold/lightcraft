@@ -20,6 +20,13 @@ pub const MAX_ROWS: usize = 3;
 /// The stack's width (points).
 pub const WIDTH: f32 = 280.0;
 
+/// Whether the stack must look again within a tenth of a second: a young task becomes due, bars move. Not when every
+/// row is one that only waits on something outside the app (`xmpWaiting`) and is old enough to show: nothing on it
+/// changes until the cause is gone, and the app looks again by itself then (a redraw every 10 s re-checks it).
+pub fn needs_poll(tasks: &[TaskInfo]) -> bool {
+    tasks.iter().any(|t| t.kind != "xmpWaiting" || t.age_ms < SHOW_AFTER_MS)
+}
+
 const MARGIN: i8 = 8;
 const CROSS: f32 = 16.0;
 
@@ -61,7 +68,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     // look again soon: a young task becomes due, bars move
-    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    if needs_poll(&all) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
     let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
     if tasks.is_empty() {
         return;

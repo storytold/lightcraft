@@ -48,6 +48,9 @@ guard.detail(&file_name);
   - `set_cancellable(false)` for a phase that has to finish once started (a Lightroom import adding its photos).
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
+- **A wait on something outside the app** (XMP writes waiting for a folder that is offline) is one row, `xmpWaiting`,
+  held for as long as the wait lasts and with `Cancel::No`. The periodic re-checks (every 10 s) neither drop nor remake
+  it, so the row never flaps.
 
 ## Examples in the code
 
