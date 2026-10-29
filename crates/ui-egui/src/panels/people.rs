@@ -153,6 +153,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// A person's number of photos as the card shows it on their picture: in full (a library from Lightroom passes 1 000
+/// quickly), so no line under the name has to repeat it.
+fn badge(count: usize) -> String {
+    count.to_string()
+}
+
 fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, edge: f32, ppp: f32, selected: bool) {
     let t = Tokens::get(ui.ctx());
     let face = Rect::from_min_size(r.min, vec2(edge, edge));
@@ -168,8 +174,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
         p.image(tex.tex.id(), face, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     // how many photos they are in, on the picture
-    let count = if person.count > 999 { "999+".to_string() } else { person.count.to_string() };
-    let g = p.layout_no_wrap(count, t.font(11.5), Color32::WHITE);
+    let g = p.layout_no_wrap(badge(person.count), t.font(11.5), Color32::WHITE);
     let pill = Rect::from_min_size(pos2(face.right() - g.size().x - 14.0, face.bottom() - g.size().y - 11.0), g.size() + vec2(10.0, 6.0));
     p.rect_filled(pill, 4.0, Color32::from_black_alpha(175));
     p.galley(pill.min + vec2(5.0, 3.0), g, Color32::WHITE);
@@ -181,8 +186,6 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     // a long name must not run past the card
     let name = fit(p, &person.name, t.semibold(13.0), edge);
     p.text(pos2(r.left() + 2.0, face.bottom() + 14.0), Align2::LEFT_CENTER, name, t.semibold(13.0), t.text);
-    let photos = crate::i18n::tr_format!("{n} photo{}", if person.count == 1 { "" } else { "s" }, n = person.count);
-    p.text(pos2(r.left() + 2.0, face.bottom() + 32.0), Align2::LEFT_CENTER, photos, t.font(12.0), t.text_dim);
     let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
     let full = person.name.clone();
     crate::widgets::context_menu(&resp, |ui| {
@@ -217,5 +220,15 @@ mod tests {
         // there is always at least one column, whatever the width
         assert_eq!((columns(0.0, 260.0), columns(-50.0, 260.0), columns(f32::NAN, 100.0)), (1, 1, 1));
         assert!(columns(1400.0, 84.0) > columns(1400.0, 260.0));
+    }
+
+    /// #3251: the number on a card's picture is the person's full count, past 999 too ("999+" said less than the line
+    /// under the name, now gone).
+    #[test]
+    fn a_cards_badge_shows_the_full_count() {
+        assert_eq!(
+            (badge(1), badge(999), badge(1000), badge(6110), badge(123_456)),
+            ("1".into(), "999".into(), "1000".into(), "6110".into(), "123456".into())
+        );
     }
 }

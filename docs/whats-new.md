@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### The People cards show the full number of photos
+- A person's card showed their number of photos twice: on the picture, capped at "999+", and in full under their name.
+  The number on the picture is now the full one (6110, not 999+), and the line under the name, which repeated it, is
+  gone. (#3251)
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
