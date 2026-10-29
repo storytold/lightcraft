@@ -666,7 +666,7 @@ impl Session {
         }
         // a people.json that could not be written (during a rename, say) is tried again
         if self.library.as_ref().is_some_and(|l| l.people_error.is_some() && !l.blocked.contains(&"people.json")) {
-            let _ = self.save_people();
+            self.save_people_or_keep_unsaved();
         }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
@@ -750,6 +750,13 @@ impl Session {
             (Err(EngineError::NotSaved(e)), Err(s)) if lib.journal.seq() == before => Err(EngineError::NotSaved(format!("{e}; snapshot: {s}"))),
             (_, Err(s)) => Err(s.into()),
         };
+        // a people.json write that still fails keeps the library open (switching would drop the change); one that can
+        // never be written this session (unreadable at opening) does not hold the library hostage
+        let people = lib.people_error.clone().filter(|_| !lib.blocked.contains(&"people.json"));
+        let result = match (result, people) {
+            (Ok(()), Some(why)) => Err(EngineError::Other(why)),
+            (r, _) => r,
+        };
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
         }
@@ -785,7 +792,9 @@ impl Session {
         }
     }
 
-    /// Save the people's chosen pictures (no-op for in-memory sessions).
+    /// Save the people's chosen pictures (no-op for in-memory sessions). A failure changes nothing: a change that is
+    /// undone when it can't be saved leaves nothing unsaved behind; one that stands goes through
+    /// [`Session::save_people_or_keep_unsaved`].
     pub fn save_people(&mut self) -> Result<()> {
         let v = serde_json::to_vec_pretty(&PeopleFile { covers: self.person_covers.clone() }).unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -801,13 +810,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Err(e) => {
-                // retried by the next command and the frame loop, and counted as unsaved meanwhile
-                let why = format!("people: {e}");
-                lib.people_error = Some(why.clone());
-                lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
-                Err(EngineError::Other(why))
-            }
+            Err(e) => Err(EngineError::Other(format!("people: {e}"))),
         }
     }
 
@@ -817,13 +820,16 @@ impl Session {
     pub(crate) fn save_people_or_keep_unsaved(&mut self) {
         let Err(e) = self.save_people() else { return };
         log::warn!("faces: {e}");
-        if let Some(lib) = self.library.as_mut()
-            && lib.people_error.is_none()
-        {
-            lib.people_error = Some(
+        let Some(lib) = self.library.as_mut() else { return };
+        if lib.blocked.contains(&"people.json") {
+            lib.people_error.get_or_insert_with(|| {
                 "people: people.json couldn't be read when the library opened, so it isn't overwritten; the change is kept until the library closes"
-                    .into(),
-            );
+                    .into()
+            });
+        } else {
+            // retried by the next command and the frame loop (backing off), and counted as unsaved meanwhile
+            lib.people_error = Some(e.to_string());
+            lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
         }
     }
 
