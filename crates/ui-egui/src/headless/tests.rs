@@ -1032,6 +1032,55 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
     assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.cover), Some(Some((ids[0].0, 0))));
 }
 
+/// #3249: × on a face a person's page offers sets it aside as "not them" for good, and the button at the top brings
+/// the set-aside faces back.
+#[test]
+fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    let region = |name: Option<&str>| lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.25, y0: 0.2, x1: 0.55, y1: 0.6 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: name.map(str::to_string),
+        description: None,
+    };
+    for (id, name) in ids.iter().zip([Some("Jane Doe"), None]) {
+        let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = vec![region(name)];
+        h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    // the demo has no recognition: the page is given its one look-alike
+    let page = crate::panels::person::PersonPage {
+        name: "Jane Doe".into(),
+        total: 1,
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 }],
+        ready: true,
+        pending: 0,
+        cover: None,
+        dismissed: 0,
+    };
+    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
+    h.step();
+    let x = format!("more-face-x:{}:0", ids[1].0);
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.person_dismissed.get("jane doe").map(|v| v[0].photo), Some(ids[1]), "kept as not her");
+    assert!(h.app.ui.dismissed_faces.contains(&(ids[1].0, 0)), "and hidden at once");
+    assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "the face itself is not touched");
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "person:restoreDismissed"), "the button that brings it back");
+    let r = h.request("ui.clickWidget", json!({"id": "person:restoreDismissed"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.person_dismissed.is_empty());
+    assert!(h.app.ui.dismissed_faces.is_empty());
+}
+
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
 /// routes use one undo step and leave hidden, lower-score and already named faces alone.
 #[test]
@@ -1066,6 +1115,7 @@ fn person_more_confirms_all_above_with_one_undo_step() {
         ready: true,
         pending: 0,
         cover: None,
+        dismissed: 0,
     };
     let set_page = |h: &mut Headless| {
         h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));

@@ -260,6 +260,9 @@ impl Library {
 struct PeopleFile {
     /// The face that shows each person in the People view (lower-cased name → face).
     covers: std::collections::BTreeMap<String, lightcraft_catalog::PersonCover>,
+    /// The faces set aside as "not this person" for each person (lower-cased name → faces).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    dismissed: std::collections::BTreeMap<String, Vec<lightcraft_catalog::FaceRef>>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -584,7 +587,8 @@ impl Session {
             self.media.smart_dir = Some(d.clone());
         }
         // the people's chosen pictures
-        self.person_covers = settings.read::<PeopleFile>(files.as_mut(), "people.json").unwrap_or_default().covers;
+        let people = settings.read::<PeopleFile>(files.as_mut(), "people.json").unwrap_or_default();
+        (self.person_covers, self.person_dismissed) = (people.covers, people.dismissed);
         self.people_gen = self.people_gen.wrapping_add(1);
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
@@ -853,7 +857,8 @@ impl Session {
     /// undone when it can't be saved leaves nothing unsaved behind; one that stands goes through
     /// [`Session::save_people_or_keep_unsaved`].
     pub fn save_people(&mut self) -> Result<()> {
-        let v = serde_json::to_vec_pretty(&PeopleFile { covers: self.person_covers.clone() }).unwrap_or_default();
+        let people = PeopleFile { covers: self.person_covers.clone(), dismissed: self.person_dismissed.clone() };
+        let v = serde_json::to_vec_pretty(&people).unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if lib.blocked.contains(&"people.json") {
             return Err(EngineError::Other(
