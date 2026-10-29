@@ -707,6 +707,45 @@ fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
     assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
 }
 
+/// What people.json cannot take: a chosen picture is undone, so is a face set aside or brought back, and a rename
+/// stands, its picture written as soon as people.json can be.
+fn people_json_in_the_way(s: &mut Session, lib: &std::path::Path, a: PhotoId, b: PhotoId) {
+    let picture = |s: &Session, name: &str| {
+        s.catalog
+            .people_in_with(&lightcraft_catalog::Filter::default(), &s.person_covers)
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .map(|p| p.photo)
+    };
+    // a choice that cannot be saved is not made either
+    std::fs::remove_file(lib.join("people.json")).ok();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
+    assert_eq!(picture(s, "Ann"), Some(b), "unchanged in the session too");
+    let set_aside = s.person_dismissed.get("ann").cloned();
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": a.0, "index": 0})).is_err());
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).is_err());
+    assert_eq!(s.person_dismissed.get("ann").cloned(), set_aside, "nor a face set aside, nor one brought back");
+    assert_eq!(s.unsaved(), None, "and nothing is left unsaved");
+    // a rename while people.json cannot be written stands; the picture follows it in memory, counts as unsaved, and is
+    // written as soon as it can be
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
+    std::fs::remove_file(lib.join("people.json")).unwrap();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(picture(s, "Ada"), Some(b));
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("people")), "{:?}", s.unsaved());
+    assert!(s.close_library().is_err(), "the library stays open (and the picture kept) while it can still be written");
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.persist().unwrap();
+    assert_eq!(s.unsaved(), None);
+    let file: Value = serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap();
+    assert_eq!(file["covers"]["ada"]["photo"], b.0, "{file}");
+    s.execute("faces.setCover", &json!({"name": "Ada", "photo": null})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+}
+
 /// A person's picture in People can be one of their faces chosen by the user instead of their largest (#3246). It is
 /// kept in the library's people.json, not in the catalog (no op, no undo step, no new catalog format), survives
 /// reopening, follows a rename, and goes back to the largest face on request.
@@ -788,33 +827,7 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
     assert_eq!(picture(&s, "Ada"), Some(b), "no stale picture under the new name");
     assert_eq!(s.person_dismissed.get("ada"), s.person_dismissed.get("ann"), "the faces set aside follow, nothing left over");
     s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
-    // a choice that cannot be saved is not made either
-    std::fs::remove_file(lib.join("people.json")).ok();
-    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
-    assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
-    assert_eq!(picture(&s, "Ann"), Some(b), "unchanged in the session too");
-    let set_aside = s.person_dismissed.get("ann").cloned();
-    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": a.0, "index": 0})).is_err());
-    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).is_err());
-    assert_eq!(s.person_dismissed.get("ann").cloned(), set_aside, "nor a face set aside, nor one brought back");
-    assert_eq!(s.unsaved(), None, "and nothing is left unsaved");
-    // a rename while people.json cannot be written stands; the picture follows it in memory, counts as unsaved, and is
-    // written as soon as it can be
-    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
-    s.execute("faces.setCover", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
-    std::fs::remove_file(lib.join("people.json")).unwrap();
-    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
-    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
-    assert_eq!(picture(&s, "Ada"), Some(b));
-    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("people")), "{:?}", s.unsaved());
-    assert!(s.close_library().is_err(), "the library stays open (and the picture kept) while it can still be written");
-    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
-    s.persist().unwrap();
-    assert_eq!(s.unsaved(), None);
-    let file: Value = serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap();
-    assert_eq!(file["covers"]["ada"]["photo"], b.0, "{file}");
-    s.execute("faces.setCover", &json!({"name": "Ada", "photo": null})).unwrap();
-    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+    people_json_in_the_way(&mut s, &lib, a, b);
     // a face that loses the name no longer stands for the person
     s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).unwrap();
     s.execute("faces.setName", &json!({"id": a.0, "index": 1, "name": null})).unwrap();
