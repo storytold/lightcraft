@@ -13,6 +13,13 @@
 
 ## 2026-10-29
 
+### A person's page no longer offers someone else's faces, nor faces like everybody's
+- A person's More faces left out nobody: a face that looked a little like them was offered even when it looked much more
+  like someone already named, so when two people look alike, one's page offered the other's faces. And poor faces
+  (tiny, blurred, from behind), which look a little like everybody, filled the pages of people with many photos.
+  A face is now offered only when it looks clearly more like this person than like anyone else already named, by the
+  same margin as name suggestions.
+
 ### A person's page opens in seconds in a large library
 - Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
   runs on every processor core, and each comparison of two faces uses the processor's vector instructions. In a

@@ -708,7 +708,8 @@ mod imp {
 
     /// The unnamed faces that look most like the person whose lower-cased name is `key`, best first, at most `limit`: each
     /// is scored like a suggestion (the mean of its two closest faces of theirs) and kept above four fifths of the
-    /// model's suggestion bar, since a person looks at these before anything is named. Only faces already embedded can be
+    /// model's suggestion bar, since a person looks at these before anything is named; a face that does not look clearly
+    /// more like them than like anyone else already named (by [`DEFAULT_MARGIN`]) is left out. Only faces already embedded can be
     /// found; `ready` says whether recognition is running at all.
     pub fn similar(s: &mut Session, key: &str, limit: usize) -> Similar {
         let none = Similar { items: Vec::new(), ready: false, pending: 0 };
@@ -719,11 +720,14 @@ mod imp {
         let Ok(embedder) = current_with(s, "faces.person", false) else { return none };
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
         let (mut gallery, mut candidates): (Vec<Arc<[f32]>>, Vec<(u64, usize, Rect, Arc<[f32]>)>) = (Vec::new(), Vec::new());
+        // everyone else's named faces, by person
+        let mut others: std::collections::HashMap<String, Vec<Arc<[f32]>>> = std::collections::HashMap::new();
         for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
             for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
                 let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
-                match r.name.as_deref() {
-                    Some(n) if n.trim().to_lowercase() == key => gallery.push(e.clone()),
+                match r.name.as_deref().map(|n| n.trim().to_lowercase()) {
+                    Some(n) if n == key => gallery.push(e.clone()),
+                    Some(n) if !n.is_empty() => others.entry(n).or_default().push(e.clone()),
                     Some(_) => {}
                     None => candidates.push((ph.id.0, index, r.rect, e.clone())),
                 }
@@ -738,15 +742,34 @@ mod imp {
         // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
         // in a library of 90 000, so on every core (minutes on one)
         let top = top_faces(s);
-        let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
+        let mut scored: Vec<(f32, u64, usize, Rect, Arc<[f32]>)> = candidates
             .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
                 let score = matching::person_score(&e, &refs, top)?;
-                (score >= bar).then_some((score, photo, index, rect))
+                (score >= bar).then_some((score, photo, index, rect, e))
             })
             .collect();
         scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-        scored.truncate(limit);
+        // a face is offered only when it looks clearly more like this person than like anyone else already named, by the
+        // margin name suggestions ask for: one that looks more like someone else is theirs (two people who look alike),
+        // and one that looks about as much like everybody is a poor face (tiny, blurred, from behind) that would fill
+        // the page. Best first, a batch at a time until the page is full
+        let others: Vec<Vec<&[f32]>> = others.values().map(|faces| faces.iter().map(|e| &e[..]).collect()).collect();
+        let mut kept = Vec::with_capacity(limit);
+        for batch in scored.chunks(256) {
+            let theirs: Vec<bool> = batch
+                .par_iter()
+                .map(|(score, .., e)| {
+                    others.iter().any(|g| matching::person_score(e, g, top).is_some_and(|o| o > *score - DEFAULT_MARGIN))
+                })
+                .collect();
+            kept.extend(batch.iter().zip(theirs).filter(|(_, theirs)| !theirs).map(|(c, _)| (c.0, c.1, c.2, c.3)));
+            if kept.len() >= limit {
+                break;
+            }
+        }
+        kept.truncate(limit);
+        let scored = kept;
         let items = scored
             .into_iter()
             .map(|(score, photo, index, rect)| {
