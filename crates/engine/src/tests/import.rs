@@ -279,21 +279,26 @@ fn twins_of_a_browsed_photo_are_copies_in_the_source_not_library_duplicates() {
     let a = src.join("a.png");
     let b = src.join("b.png");
     let c = src.join("c.png");
+    let d = src.join("d.png");
     write_png(&a, 75);
     std::fs::copy(&a, &b).unwrap();
     std::fs::copy(&a, &c).unwrap();
+    std::fs::copy(&a, &d).unwrap();
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
-    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, c]})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, c, d]})).unwrap();
     let found = scan["candidates"].as_array().unwrap();
-    assert_eq!(found.len(), 3, "{scan}");
+    assert_eq!(found.len(), 4, "{scan}");
     assert_eq!(found[0]["local"], true, "{scan}");
     assert!(found[0]["duplicate"].is_null(), "the first browsed copy is offered: {scan}");
     for twin in &found[1..] {
         assert_eq!(twin["duplicate"], "content", "{scan}");
         assert!(twin["existing"].is_null(), "no library photo has these bytes, a browsed record isn't one: {scan}");
-        assert_eq!(twin["browsedTwin"], found[0]["path"], "a copy of what the first browsed photo is: {scan}");
     }
+    // (copying leaves the browsed photo out: the first file of its own stands in for it, once)
+    assert!(found[1]["browsedTwin"].is_null(), "a browsed twin doesn't: {scan}");
+    assert_eq!(found[2]["browsedTwin"], found[0]["path"], "{scan}");
+    assert!(found[3]["browsedTwin"].is_null(), "{scan}");
     let _ = std::fs::remove_dir_all(src);
 }
 

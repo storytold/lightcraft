@@ -166,27 +166,22 @@ impl ImportDialog {
             || self.is_copy_twin(i)
     }
     /// Copying leaves a browsed photo out, so a file with the same bytes that no library photo has
-    /// is what brings that content in: candidate `i` is the first such file of its browsed twin.
-    /// (The scan lists it as a copy in the source of the browsed photo, `browsed_twin`.)
+    /// is what brings that content in: candidate `i` is that file (the scan names the browsed photo
+    /// it stands in for, `browsed_twin`, on the first one only).
     pub fn is_copy_twin(&self, i: usize) -> bool {
-        if !self.copy {
-            return false;
-        }
-        let Some(c) = self.candidates.get(i) else { return false };
-        let Some(twin) = &c.browsed_twin else { return false };
-        c.error.is_none()
-            && !c.local
-            && c.duplicate.as_deref() == Some("content")
-            && c.existing.is_none()
-            && self.candidates.iter().any(|b| b.local && b.path == *twin)
-            && !self.candidates[..i].iter().any(|e| !e.local && e.error.is_none() && e.browsed_twin.as_ref() == Some(twin))
+        self.copy
+            && self.candidates.get(i).is_some_and(|c| {
+                c.browsed_twin.is_some() && !c.local && c.error.is_none() && c.duplicate.as_deref() == Some("content") && c.existing.is_none()
+            })
     }
-    /// Choose how the files are brought in. Copying offers the twins that stand in for browsed photos
-    /// ([`ImportDialog::is_copy_twin`]), checked; adding in place takes them away again.
+    /// Choose how the files are brought in. Switching to copying offers the file that stands in for
+    /// a browsed photo ([`ImportDialog::is_copy_twin`]), checked; switching to adding in place takes
+    /// it away again.
     pub fn set_transfer(&mut self, copy: bool, move_files: bool) {
+        let switched = copy != self.copy;
         self.copy = copy;
         self.move_files = copy && move_files;
-        for i in 0..self.candidates.len() {
+        for i in (0..self.candidates.len()).filter(|_| switched) {
             if self.candidates[i].browsed_twin.is_some() && !self.candidates[i].local {
                 self.checked[i] = self.is_copy_twin(i);
             }
@@ -357,18 +352,18 @@ mod tests {
         assert!(!d.importable(4), "copying would add it where it is");
     }
 
-    /// a.png and b.png are browsed copies of one content, c.png a new file with it (the scan reads
-    /// them as in `twins_of_a_browsed_photo_are_copies_in_the_source_not_library_duplicates`).
+    /// a.png and b.png are browsed copies of one content, c.png and d.png new files with it; the scan
+    /// names a.png on c.png only (as in `twins_of_a_browsed_photo_are_copies_in_the_source_not_library_duplicates`).
     fn browsed_twins() -> ImportDialog {
         let a = ImportCandidate { path: "a.png".into(), local: true, existing: Some(1), ..Default::default() };
-        let twin = |path: &str, local: bool| ImportCandidate {
+        let twin = |path: &str, local: bool, stands_in: bool| ImportCandidate {
             path: path.into(),
             local,
             duplicate: Some("content".into()),
-            browsed_twin: Some("a.png".into()),
+            browsed_twin: stands_in.then(|| "a.png".into()),
             ..Default::default()
         };
-        ImportDialog::new(vec![a, twin("b.png", true), twin("c.png", false), twin("d.png", false)])
+        ImportDialog::new(vec![a, twin("b.png", true, false), twin("c.png", false, true), twin("d.png", false, false)])
     }
 
     /// Adding in place the browsed photo is the one brought in and its twins are copies in the
@@ -407,6 +402,16 @@ mod tests {
         d.set_transfer(false, false);
         assert_eq!(d.selected_paths(), ["a.png"]);
         assert!(!d.checked[2]);
+    }
+
+    /// Choosing the transfer already chosen doesn't undo what was checked by hand.
+    #[test]
+    fn choosing_the_transfer_again_keeps_a_manual_uncheck() {
+        let mut d = browsed_twins();
+        d.set_transfer(true, false);
+        d.checked[2] = false;
+        d.set_transfer(true, true);
+        assert!(d.selected_paths().is_empty(), "Move after Copy keeps the choice");
     }
 
     /// A file type's toggle is on only for files that can be imported now.

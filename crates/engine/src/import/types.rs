@@ -143,10 +143,11 @@ pub struct ImportCandidate {
     /// the library, so it is not a duplicate and importing it promotes that record.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub local: bool,
-    /// On a `"content"` duplicate that no library photo accounts for: the path of the browsed
-    /// candidate (`local`) earlier in this list that has the same bytes. It is the one the import
-    /// brings in (adding in place), so this one is a copy in the source; when copying leaves that
-    /// browsed photo out, the first such copy is what comes in instead.
+    /// On the first `"content"` duplicate that is a file of its own, when no library photo has its
+    /// bytes but a browsed candidate (`local`) earlier in this list does: the path of that browsed
+    /// candidate. Adding in place the browsed photo is the one brought in, and this is a copy in the
+    /// source; copying and moving leave the browsed photo out (the engine would add it where it is),
+    /// and this file is what they bring in instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browsed_twin: Option<String>,
     /// Not readable.

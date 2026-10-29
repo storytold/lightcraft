@@ -350,7 +350,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
-    // (a content's first copy when it is a browsed file: its path, for the copies that follow it)
+    // (a content's browsed first copy: its path, until the first file of its own with that content stands in for it)
     let mut browsed_first: HashMap<String, String> = HashMap::new();
     for f in files {
         if let Some((_, c, hash)) = by_path.get(Path::new(&f)) {
@@ -364,9 +364,6 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                     Some(existing) => {
                         c.duplicate = Some("content".into());
                         c.existing = *existing;
-                        if existing.is_none() {
-                            c.browsed_twin = browsed_first.get(h).cloned();
-                        }
                     }
                     None => {
                         // (the library doesn't have it: a browsed record isn't a library photo, and
@@ -393,8 +390,10 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                         Some(existing) => {
                             c.duplicate = Some("content".into());
                             c.existing = *existing;
+                            // (the first copy of a browsed photo that is a file of its own stands in for it when
+                            // copying leaves the browsed one out: said once per content)
                             if existing.is_none() {
-                                c.browsed_twin = browsed_first.get(h).cloned();
+                                c.browsed_twin = browsed_first.remove(h);
                             }
                         }
                         None => {
