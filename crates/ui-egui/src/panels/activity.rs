@@ -3,7 +3,7 @@
 //! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
 //! `activity.cancel` like any other frontend would.
 
-use egui::{Align, Layout, Margin, Rect, RichText, Sense, Stroke, pos2, vec2};
+use egui::{Align, Layout, Margin, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::activity::{TaskInfo, Unit};
 use serde_json::json;
 
@@ -73,7 +73,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut cancel = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
-    egui::Area::new(egui::Id::new("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
         // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
         // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
         // (the scroll area keeps to `max_height`).
@@ -96,7 +96,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.add_space(4.0);
                 let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
                 let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
-                register(ui.ctx(), "activity:more", r.rect);
+                register(ui, "activity:more", r.rect);
                 toggle = r.clicked();
             }
         });
@@ -132,35 +132,25 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
-                register(ui.ctx(), format!("activity:cancel:{}", task.id), rect);
+                register(ui, format!("activity:cancel:{}", task.id), rect);
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
-        bar(ui, t, task, width);
+        bar(ui, task, width);
         let line = detail_line(task);
         if !line.is_empty() {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
         }
     });
-    register(ui.ctx(), format!("activity:row:{}", task.id), r.response.rect);
+    register(ui, format!("activity:row:{}", task.id), r.response.rect);
     clicked
 }
 
-/// The progress bar; while the amount of work isn't known, a segment sweeps across.
-fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 5.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 2.5, t.field);
-    let fill = if task.total > 0 {
-        let frac = (task.done as f64 / task.total as f64).clamp(0.0, 1.0) as f32;
-        Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height()))
-    } else {
-        let phase = (ui.input(|i| i.time) * 0.7).fract() as f32;
-        let w = rect.width() * 0.3;
-        let x = rect.left() + (rect.width() + w) * phase - w;
-        Rect::from_min_max(pos2(x.max(rect.left()), rect.top()), pos2((x + w).min(rect.right()), rect.bottom()))
-    };
-    if fill.width() > 0.0 {
-        p.rect_filled(fill, 2.5, if task.cancelling { t.text_dim } else { t.accent });
-    }
+/// The progress bar, named after its task for screen readers; while the amount of work isn't
+/// known, a segment sweeps across.
+pub(crate) fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) -> egui::Response {
+    let fraction = (task.total > 0).then(|| (task.done as f64 / task.total as f64) as f32);
+    let response = crate::progress::Progress::new(fraction).width(width).dimmed(task.cancelling).show(ui);
+    crate::widgets::screen_reader_name(ui.ctx(), response.id, tr(&task.label));
+    response
 }

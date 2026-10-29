@@ -161,5 +161,5 @@ before demosaicing would be needed.
   vignette gain on the X-T4's real arrays, and the X-T4 geometry against its measured free fit.
 - `crates/raw/src/vendor/raf.rs`: a synthetic RAF through header and full decode, only for validated models, and a DNG
   round trip.
-- `crates/raw/tests/corpus.rs` `fuji_embedded_lens_tables_follow_the_validated_models`: the corpus' `raf-fuji-*` files,
+- `crates/raw/tests/it/corpus.rs` `fuji_embedded_lens_tables_follow_the_validated_models`: the corpus' `raf-fuji-*` files,
   or any folder of RAFs in `LIGHTCRAFT_FUJI` (the pixls set: 129 decoded, 88 warps, 98 vignette gains).

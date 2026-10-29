@@ -91,6 +91,23 @@ def dng_tags(cmf, refl, ssf):
     return out
 
 
+def rust_lit(s):
+    """The body of a Rust string literal: text from a checkout becomes data, never code."""
+    out = []
+    for ch in s:
+        if ch == "\\": out.append("\\\\")
+        elif ch == '"': out.append('\\"')
+        elif ch == "\t": out.append("\\t")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F: out.append(f"\\u{{{ord(ch):x}}}")
+        else: out.append(ch)
+    return "".join(out)
+
+
+def rust_comment(s):
+    """One line of printable text: a raw newline in an external comment would introduce Rust code."""
+    return rust_lit(" ".join(str(s).split()))
+
+
 def mat(m):
     return "Mat3([" + ", ".join("[" + ", ".join(f"{v:.6}" for v in row) + "]" for row in m) + "])"
 
@@ -111,12 +128,12 @@ def main(root, out):
         (cm1, fm1, e1), (cm2, fm2, e2) = dng_tags(cmf, refl, spectral(path, 3))
         print(f"{f}: training dE76 A {e1:.3f}, D65 {e2:.3f}", file=sys.stderr)
         rows.append(
-            f'    Camera {{\n        make: "{header["manufacturer"]}",\n        model: "{header["model"]}",\n'
+            f'    Camera {{\n        make: "{rust_lit(header["manufacturer"])}",\n        model: "{rust_lit(header["model"])}",\n'
             f"        color_matrix: [{mat(cm1)}, {mat(cm2)}],\n        forward_matrix: [{mat(fm1)}, {mat(fm2)}],\n    }},"
         )
     aliases = json.load(open(os.path.join(root, "data/aliases.json")))["data"]["camera"]["model"]
     alias_rows = [
-        f'    ("{make}", "{alias}", "{target["model"]}"), // {target.get("comments", "")}'
+        f'    ("{rust_lit(make)}", "{rust_lit(alias)}", "{rust_lit(target["model"])}"), // {rust_comment(target.get("comments", ""))}'
         for make, models in aliases.items()
         for alias, target in models.items()
     ]

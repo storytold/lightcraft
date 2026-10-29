@@ -351,7 +351,7 @@ pub fn tag_rows(tiff: &Tiff) -> Vec<TagRow> {
 }
 
 /// [`tag_rows`] of a file's bytes: a TIFF-based file directly, else its embedded EXIF block
-/// (JPEG, PNG, WebP, HEIF…). Empty when there is none.
+/// (JPEG, PNG, WebP, HEIF, PSD/PSB…). Empty when there is none.
 pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
     if Tiff::sniff(bytes).is_some()
         && let Ok(t) = Tiff::parse(bytes)

@@ -223,6 +223,7 @@
   "Delete the keyword “{name}”?": "Видалити ключове слово «{name}»?",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Його буде знято з фото (кількість: {count}{:.0}) разом із вкладеними ключовими словами. Скасування поверне його.",
   "Create Keyword Tag Inside “{name}”…": "Створити ключове слово в «{name}»…",
+  "Inside: {names}": "Усередині: {names}",
   "“{parent}” has a “{name}” already. Merge the two?": "«{parent}» уже містить «{name}». Об’єднати їх?",
   "There is a “{name}” at the top level already. Merge the two?": "На верхньому рівні вже є «{name}». Об’єднати їх?",
   "Added “{keyword}” to {n} photo{}": "«{keyword}» додано до фото: {n}{:.0}",
@@ -297,5 +298,12 @@
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Перегляд тек — тек: {folders}, файлів: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "Drop to review {n} item{} for import": "Відпустіть для перегляду перед імпортом (елементів: {n}){:.0}",
+  "Drop to import {n} item{}": "Відпустіть для імпорту (елементів: {n}){:.0}",
+  "Drop to import {n} preset{}": "Відпустіть для імпорту наборів налаштувань: {n}{:.0}",
+  "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
+  "Added {n} photo{}": "Додано фото: {n}{:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
 }

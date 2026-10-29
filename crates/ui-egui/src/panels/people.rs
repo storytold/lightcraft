@@ -74,7 +74,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let r = Rect::from_min_size(pos2(title.right() + 14.0, head.center().y - 12.0), vec2(width, 24.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
         let b = crate::widgets::arrow_button(&mut child, RichText::new(label).font(t.font(13.0)), crate::icons::Icon::ChevronRight, false);
-        register(ui.ctx(), "people:last", b.rect);
+        register(ui, "people:last", b.rect);
         if b.on_hover_text(crate::i18n::tr("Back to this person")).clicked() {
             let _ = app.run("view.person", json!({"name": last}));
         }
@@ -156,9 +156,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, edge: f32, ppp: f32, selected: bool) {
     let t = Tokens::get(ui.ctx());
     let face = Rect::from_min_size(r.min, vec2(edge, edge));
-    let resp = ui.interact(r, egui::Id::new(("person-card", &person.name)), Sense::click());
+    let resp = ui.interact(r, egui::Id::unique(("person-card", &person.name)), Sense::click());
     crate::widgets::announce(&resp, person.name.clone());
-    register(ui.ctx(), format!("person:{}", person.name), r);
+    register(ui, format!("person:{}", person.name), r);
     let view = app.session.face_view(person.photo, person.face);
     let p = ui.painter();
     p.rect_filled(face, 3.0, t.canvas);
@@ -187,7 +187,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     let full = person.name.clone();
     crate::widgets::context_menu(&resp, |ui| {
         let r = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui.ctx(), "personMenu:rename", r.rect);
+        register(ui, "personMenu:rename", r.rect);
         if r.clicked() {
             open_rename(app, &full);
         }

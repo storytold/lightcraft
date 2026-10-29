@@ -845,13 +845,12 @@ impl SyncCommit {
                 }
             }
             SyncStep::Remove(gone) => {
-                let ops: Vec<Op> = gone
-                    .iter()
-                    .filter(|id| s.catalog.photo(**id).is_some_and(|p| p.in_library()))
-                    .map(|id| Op::SetDeleted { id: *id, deleted: true })
-                    .collect();
+                let ids: Vec<PhotoId> = gone.into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.in_library())).collect();
+                let mut ops: Vec<Op> = ids.iter().map(|id| Op::SetDeleted { id: *id, deleted: true }).collect();
                 let n = ops.len();
                 if n > 0 {
+                    // Like `photo.delete`, take them out of their stacks.
+                    ops.extend(s.catalog.remove_from_stacks_ops(&ids));
                     match s.commit("Remove Missing Photos", Op::Batch { ops }) {
                         Ok(()) => report.removed += n,
                         Err(e) => report.failed.push((String::new(), e.to_string())),

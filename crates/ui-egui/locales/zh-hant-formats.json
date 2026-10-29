@@ -227,6 +227,7 @@
   "Delete the keyword “{name}”?": "要刪除關鍵字「{name}」嗎？",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "將從 {count} 張照片移除，其下的關鍵字也一併移除。還原可復原。{:.0}",
   "Create Keyword Tag Inside “{name}”…": "在「{name}」中建立關鍵字標記…",
+  "Inside: {names}": "其中：{names}",
   "“{parent}” has a “{name}” already. Merge the two?": "「{parent}」中已有「{name}」。要合併兩者嗎？",
   "There is a “{name}” at the top level already. Merge the two?": "最上層已有「{name}」。要合併兩者嗎？",
   "Added “{keyword}” to {n} photo{}": "已將「{keyword}」加入 {n} 張照片{:.0}",
@@ -297,5 +298,12 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」已經是另一個人。合併後成為一個人；還原會再把他們分開。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已新增{what}合併照片（{mp}）：完整尺寸（{full}）所需的記憶體超過這台電腦的記憶體",
   "Listing folders — folders: {folders}, files: {files}": "正在列出資料夾 — 資料夾：{folders}，檔案：{files}",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）",
+  "Drop to review {n} item{} for import": "放開滑鼠以在匯入前檢查 {n} 個項目{:.0}",
+  "Drop to import {n} item{}": "放開滑鼠以匯入 {n} 個項目{:.0}",
+  "Drop to import {n} preset{}": "放開滑鼠以匯入 {n} 個預設集{:.0}",
+  "Could not read {name}: {e}": "無法讀取 {name}：{e}",
+  "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
 }

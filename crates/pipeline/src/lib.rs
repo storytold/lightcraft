@@ -27,6 +27,7 @@ pub mod auto;
 pub mod blemish;
 pub mod colorops;
 pub mod cull;
+pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
@@ -44,6 +45,7 @@ pub mod transform;
 pub mod upright;
 pub mod visualize;
 
+pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
@@ -139,7 +141,7 @@ pub struct RenderRequest {
     pub space: OutputSpace,
     /// Sample format: 8-bit only, or also a 16-bit / linear float [`Rendered::deep`] (exports).
     pub depth: OutputDepth,
-    /// Soft proofing (CPU only; see [`Proof`]).
+    /// Soft proofing (a proof against an output-device profile renders on the CPU; see [`Proof`]).
     pub proof: Option<Proof>,
     /// Render only this window of the output that `max_w × max_h` describes (a zoomed view):
     /// the result is that window's pixels, as in the whole render. See [`PixelWindow`].

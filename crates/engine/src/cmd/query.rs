@@ -1,6 +1,8 @@
 //! Read-only queries (not journaled): catalog, photos, develop state, controls, presets, albums.
 
-use lightcraft_catalog::{Album, Photo, PhotoId};
+use std::collections::HashMap;
+
+use lightcraft_catalog::{Album, AlbumId, Photo, PhotoId};
 use lightcraft_develop::{CONTROLS, controls};
 use serde_json::{Value, json};
 
@@ -36,9 +38,9 @@ pub fn photo_summary(p: &Photo) -> Value {
 /// instead of overflowing the stack.
 const MAX_ALBUM_DEPTH: usize = 64;
 
-fn album_json(a: &Album, all: &[Album], cat: &lightcraft_catalog::Catalog, depth: usize) -> Value {
+fn album_json(a: &Album, all: &[Album], counts: &HashMap<AlbumId, usize>, cat: &lightcraft_catalog::Catalog, depth: usize) -> Value {
     let children: Vec<Value> = if depth < MAX_ALBUM_DEPTH {
-        all.iter().filter(|c| c.parent == Some(a.id)).map(|c| album_json(c, all, cat, depth + 1)).collect()
+        all.iter().filter(|c| c.parent == Some(a.id)).map(|c| album_json(c, all, counts, cat, depth + 1)).collect()
     } else {
         Vec::new()
     };
@@ -46,7 +48,7 @@ fn album_json(a: &Album, all: &[Album], cat: &lightcraft_catalog::Catalog, depth
         "id": a.id.0,
         "name": a.name,
         "folder": a.folder,
-        "count": cat.album_count(a.id),
+        "count": counts.get(&a.id).copied().unwrap_or(0),
         "cover": a.cover.map(|c| c.0),
         "children": children,
     });
@@ -152,7 +154,9 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();
-            Ok(Value::Array(all.iter().filter(|a| a.parent.is_none()).map(|a| album_json(a, &all, &s.catalog, 0)).collect()))
+            // every album counted in one pass, so a smart album tested by others is worked out once
+            let counts = lightcraft_catalog::tally::AlbumTally::of(&s.catalog);
+            Ok(Value::Array(all.iter().filter(|a| a.parent.is_none()).map(|a| album_json(a, &all, counts.counts(), &s.catalog, 0)).collect()))
         }),
         cmd!(query "photo.inspect", "Inspect Photo", [], None, "{id?}", always, |s, p| {
             let id = photo_arg(s, p, "photo.inspect")?;

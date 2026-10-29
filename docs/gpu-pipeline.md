@@ -4,6 +4,10 @@ The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gp
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
 
+CPU fast guided-filter allocation measurements and reproduction commands are documented in
+[guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
+and does not change the GPU's coefficient buffers.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
@@ -101,7 +105,8 @@ or worked around with `LIGHTCRAFT_GPU_BACKEND`.
 **The window's renderer and its fallback (Windows).** Before the window opens, each renderer is probed in
 order: DX12, Vulkan, GL, then eframe's OpenGL renderer (glow). A probe creates a device and builds egui's
 pipeline inside wgpu error scopes, so a driver that cannot compile egui's shaders ("The parameter is
-incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app. The renderer
+incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app; no pop-up
+unless that renderer was forced (#1624). The renderer
 that worked is remembered in the settings folder (`window-renderer`); a start that dies before the window is up
 leaves `window-init.marker`, and the next start (relaunched automatically, at most 4 times) tries that
 renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
@@ -161,6 +166,8 @@ walks the drive.
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
+- Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
+  warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.
 - Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
   run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
@@ -229,7 +236,7 @@ passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gp
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
 with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
-Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
+Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
@@ -237,7 +244,7 @@ real failure still stops the whole process. Such a test asserts on its own rende
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
 
 ## Correctness: CPU oracle and equivalence tests
-`crates/gpu/tests/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
+`crates/gpu/tests/it/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
 bounds **mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB** per channel. Measured (Apple M4 Pro, Metal):
 **max 1 LSB, mean ≤ 0.0003 LSB** for every case — 26 settings cases (all tone/colour/effects tools,
 3 vignette styles, grain, curves, grading, B&W, WB, NR, crop/straighten/flip, lens + perspective,
@@ -254,12 +261,19 @@ cut back after the readback. The tests skip (pass with a note) when no adapter e
 non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max 1 LSB, 10 are
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
-(`cargo test -p lightcraft-gpu --release --test equivalence -- --nocapture`).
+(`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
 
 ## Measurements
+**In the app:** Help ▸ Debug ▸ Frame Rate (`view.frameRate`, `{show?}`; `LIGHTCRAFT_FPS=1`
+starts with it on, never saved) draws frames per second, each frame's UI CPU time against its
+time spent waiting (for vsync, or for the GPU), the latest whole-frame and zoom-window render
+times, the render queue, renders thrown away as superseded, the GPU adapter and its memory, and a
+graph of the last frames with a tick where a render arrived. Once a second it logs the same
+numbers (`fps-hud:`), so a scripted drag (`ui.dragWidget`) can be measured from the log.
+
 `render_bench` on `corpus/raw/arw-sony-a7m3-compressed.arw` (24 MP; loupe = 2560 px preview →
 1920×1280), min of 7 runs, wall clock, on a heavily shared machine (load average 60–110 on 14 cores,
 so CPU numbers are pessimistic; the GPU numbers are less affected):

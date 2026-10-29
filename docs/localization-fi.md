@@ -52,8 +52,9 @@ englanniksi. Käännös ei muuta kirjastotietoja eikä englanninkielisiä lähde
 ## Testaus
 
 `i18n::tests` tarkistaa komennon rekisteröinnin, vaihdon valikosta ja ohjauskanavasta,
-kielen tallennuksen, luetteloiden kattavuuden, paikkamerkit, määrämuodot, päivämäärän, ajan ja
-suomen kirjaimet. Rust tarkistaa muotoilumallit käännösvaiheessa.
+kielen tallennuksen, paikkamerkit, päivämäärän, ajan ja suomen kirjaimet. Rust tarkistaa
+muotoilumallit käännösvaiheessa. Puuttuvat käännökset näkyvät englanniksi, ja
+`i18n::tests::translation_gaps_report` luettelee ne; mikään testi ei epäonnistu niiden takia.
 
 Kielentarkistuksessa kannattaa katsoa erityisesti: ”Väriluokittelu” (Color Grading),
 ”Valoalueet / Valkoiset” (Highlights / Whites), ”Näyttövedos” (Soft Proofing),

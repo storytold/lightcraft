@@ -35,8 +35,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v: Vec<String> = std::fs::read_dir(&dir)
             .map_err(|e| bad(C, format!("{path}: {e}")))?
             .flatten()
+            .filter(|e| !crate::walk::is_hidden_entry(e))
             .map(|e| e.path())
-            .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|f| f.is_file() && is_supported(f))
             .map(|f| f.to_string_lossy().to_string())
             .collect();
         v.sort();
@@ -482,6 +483,9 @@ pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
     // a library folder chosen at or below it follows too, as a source or as a filter
     follow_library_folder(&mut s.library_folder, from, to);
     follow_library_folder(&mut s.filter.library_folder, from, to);
+    if let Some(f) = s.shelved_filter.as_mut() {
+        follow_library_folder(&mut f.library_folder, from, to);
+    }
     if let Some(b) = &mut s.browse
         && let Ok(rel) = Path::new(&b.path).strip_prefix(from)
     {

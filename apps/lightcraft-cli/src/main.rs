@@ -819,6 +819,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let services = lightcraft_ui_egui::Services {
         write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
         write: Some(Box::new(lightcraft_engine::export::write_file)),
+        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
             lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
         })),
@@ -935,7 +936,11 @@ fn snapshot(args: &[String]) -> Result<(), String> {
 
 fn commands(args: &[String]) -> Result<(), String> {
     let mut h = Headless::demo();
-    let cmds = h.call("engine.commands", json!({}))?;
+    let mut cmds = h.call("engine.commands", json!({}))?;
+    // Listed by id so each family (`photo.*`, `mask.*`, …) reads together; the registry keeps its own order.
+    if let Some(list) = cmds.as_array_mut() {
+        list.sort_by(|a, b| a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or("")));
+    }
     let mut out = std::io::stdout().lock();
     if args.iter().any(|a| a == "--json") {
         writeln!(out, "{}", serde_json::to_string_pretty(&cmds).unwrap_or_default()).map_err(|e| e.to_string())?;

@@ -33,7 +33,7 @@ fn toggle(ui: &mut egui::Ui, id: &str, on: bool, tip: &str, draw: impl FnOnce(&e
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     crate::widgets::announce_selected(&resp, crate::i18n::tr(tip), on);
-    register(ui.ctx(), format!("filter:{id}"), r);
+    register(ui, format!("filter:{id}"), r);
     let p = ui.painter();
     if on {
         p.rect_filled(r, 5.0, t.tool_active);
@@ -100,7 +100,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), if two_rows { 2.0 * HEIGHT - 8.0 } else { HEIGHT }), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.chrome);
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.divider));
-    register(ui.ctx(), "filterbar", bar);
+    register(ui, "filterbar", bar);
     let f = app.session.filter.clone();
     let row = |ui: &mut egui::Ui, i: f32| {
         let r = Rect::from_min_size(bar.min + vec2(16.0, 4.0 + i * (HEIGHT - 8.0)), vec2(bar.width() - 32.0, HEIGHT - 8.0));
@@ -130,22 +130,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .map(|(l, k, op)| (l.to_string(), json!({"ratingOp": k}), f.rating_op == op))
             .collect(),
     );
-    for i in 1..=5u8 {
-        let (r, resp) = ui.allocate_exact_size(vec2(17.0, 26.0), Sense::click());
-        crate::widgets::announce(&resp, format!("{i} ★"));
-        register(ui.ctx(), format!("filter:star{i}"), r);
-        let filled = i <= f.rating;
-        let c = if filled {
-            t.star
-        } else if resp.hovered() {
-            t.text_label
-        } else {
-            t.icon
-        };
-        paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if filled { Icon::StarFilled } else { Icon::Star }, c);
-        if resp.clicked() {
-            filter(app, json!({"rating": if f.rating == i { 0 } else { i }}));
-        }
+    if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
+        filter(app, json!({"rating": r}));
     }
     ui.add_space(14.0);
 
@@ -172,13 +158,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // colour labels
     caption(ui, "Label");
-    // several labels can be on at once (any of them matches)
-    let mut chosen: Vec<ColorLabel> = f.labels.clone();
-    if let Some(l) = f.label
-        && !chosen.contains(&l)
-    {
-        chosen.push(l);
-    }
+    // several labels can be on at once (any of them matches); lit are those `label` and `labels` both let through
+    let chosen: Vec<ColorLabel> = f.labels_shown().unwrap_or_default();
     for l in ColorLabel::ALL {
         let on = chosen.contains(&l);
         let name = format!("{l:?}").to_lowercase();
@@ -272,19 +253,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
     let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
-    register(ui.ctx(), "button:filterSave", save.rect);
+    register(ui, "button:filterSave", save.rect);
     if save.clicked() {
         let _ = app.run("dialog.newSmartAlbum", json!({}));
     }
     let clear = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Clear")).font(t.font(12.5))));
-    register(ui.ctx(), "button:filterClear", clear.rect);
+    register(ui, "button:filterClear", clear.rect);
     if clear.clicked() {
         app.ui.search.clear();
         let _ = app.run("library.clearFilter", json!({}));
     }
     // filter presets: apply one, save the current filter, delete
     let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
-    register(ui.ctx(), "button:filterPresets", presets.rect);
+    register(ui, "button:filterPresets", presets.rect);
     egui::Popup::menu(&presets).show(|ui| {
         let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
         for n in &names {

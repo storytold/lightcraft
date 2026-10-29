@@ -297,5 +297,13 @@
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}"
+  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  "Added {n} photo{}": "{n} foto tillagda{:.0}",
+  "Could not read {name}: {e}": "Kunde inte läsa {name}: {e}",
+  "Drop to import {n} item{}": "Släpp för att importera {n} objekt{:.0}",
+  "Drop to import {n} preset{}": "Släpp för att importera {n} förinställningar{:.0}",
+  "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
+  "Inside: {names}": "Inuti: {names}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
 }

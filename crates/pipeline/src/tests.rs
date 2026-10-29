@@ -75,6 +75,38 @@ fn directional_sliders() {
     assert!(at("effects.dehaze", -100.0) != base);
 }
 
+/// Dehaze crushed dark regions next to bright ones to black: the dark channel is a blur, not a
+/// patch minimum, so near the boundary it credited the dark pixels with the bright side's veil and
+/// the subtraction went past zero (#2504). The veil credited to a pixel is now bounded by its own
+/// minimum channel, so a uniform dark region renders uniformly under dehaze.
+#[test]
+fn dehaze_does_not_crush_dark_regions_next_to_bright_ones() {
+    // a dark field against a bright hazy sky; the blur bleeds the sky's dark channel ~10 px into
+    // the field, which is where the blotches formed
+    let src = Rgb32f::from_fn(240, 160, |x, _| if x < 120 { [0.02, 0.03, 0.012] } else { [0.45, 0.5, 0.55] });
+    let mut s = DevelopSettings::default();
+    s.effects.dehaze = 80.0;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 160)).image;
+    for ch in 0..3 {
+        let mut v: Vec<u8> = Vec::with_capacity(160 * 100);
+        for y in 0..160 {
+            for x in 0..100 {
+                v.push(r.get(x, y)[ch]);
+            }
+        }
+        v.sort_unstable();
+        let mid = v[v.len() / 2] as i32;
+        // a field rendered all black would pass the comparison below vacuously
+        assert!(mid > 2, "the dark field itself is crushed in ch {ch}: level {mid}");
+        for y in 0..160 {
+            for x in 0..120 {
+                let p = r.get(x, y)[ch] as i32;
+                assert!(p >= mid - 2, "crushed at {x},{y} ch {ch}: {p} vs field level {mid}");
+            }
+        }
+    }
+}
+
 #[test]
 fn resolution_independence_of_local_contrast() {
     // Clarity at two preview sizes should give similar results after downscaling.

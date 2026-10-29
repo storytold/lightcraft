@@ -70,7 +70,7 @@ pub fn percent_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// active preference intact and shows a localized correction.
 pub fn pixel_field(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     const WIDGET: &str = "field:settingsPreviewPixels";
-    let memo = egui::Id::new(WIDGET).with("value");
+    let memo = egui::Id::unique(WIDGET).with("value");
     let limit = pixel_limit(&app.ui.settings);
     let current = limit.to_string();
     let mut text = if crate::text_field::was_editing(ui.ctx(), WIDGET) {

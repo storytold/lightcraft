@@ -320,7 +320,7 @@ LightCraft 還很年輕，而且進展飛快：**Alpha 階段**。**老實說，
   在單機上處理 JPEG/DNG，以及大多數 Sony／Panasonic／
   Fujifilm／Nikon／較舊款 Canon 的 raw 都很出色；各機型詳情見 [docs/raw-parity.md](docs/raw-parity.md)。
 - **最大的缺口：**
-  - **相機色彩校正：** Sony、Nikon、Panasonic、Fujifilm 和 Canon CR3 的 raw 會從各自的相機 JPEG 得到受保護的估計值，內建 ILCA-99M2、ILCE-7CR、ILCE-7M4、X-H2S、X-T4、Nikon Z 6II、Z 8 和 D5300 描述檔；仍缺少實測校正，其他 raw 或被拒絕的擬合會保留中性矩陣；
+  - **相機色彩校正：** Sony、Nikon、Panasonic、Fujifilm 和 Canon CR3 的 raw 會從各自的相機 JPEG 得到受保護的估計值，內建 ILCA-99M2、ILCE-7CR、ILCE-7M4、ILCE-7RM5、X-H2S、X-T4、Nikon Z 6II、Z 8 和 D5300 描述檔；仍缺少實測校正，其他 raw 或被拒絕的擬合會保留中性矩陣；
   - **壓縮的 Olympus raw 與不受支援的 CR3 變體：** 這些在有內嵌 JPEG 預覽時會改用預覽畫面。Fujifilm 無損／有損壓縮 RAF 現在能解碼感光元件資料；[驗證與現有照片庫重新載入說明](docs/raf-compression.md)；
   - **AI 遮色片與降噪：** 主體與天空選取目前是傳統啟發式演算法；
   - **網路照片庫：** 預覽只讀取 raw 的標頭 — 或者，對於 CR3 或預覽標籤位於其後的 TIFF raw，只讀取稀疏規劃器指定的範圍 — 以及其內嵌的 JPEG（56.5 MB → 5.9 MB，10 秒 → 1 秒，測得於測試用的網路共用資料夾），但*顯影後*的畫面仍需要透過網路傳輸感光元件資料；詳見 [docs/raw-preview-reads.md](docs/raw-preview-reads.md)；
@@ -375,7 +375,7 @@ CI 預設使用行表除錯資訊，並依啟動時可用記憶體每 1.5 GB 開
 （每個 CPU 最多一個；讀不到記憶體時為 4 個），所以一台 8 GB、剩餘 6 GB 可用的機器會用 4 個任務建置，
 而一台忙碌、剩餘記憶體很少的機器會用更少。測試執行緒數隨之調整，上限為 4。若不限制，每個 CPU 各跑
 一個帶完整除錯資訊的連結器，測試還沒開始記憶體就會耗盡。GPU 測試的涵蓋範圍不受影響。明確設定
-`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS` 與 `RUST_TEST_THREADS` 會覆寫這些預設值。
+`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS`、`RUST_TEST_THREADS` 與 `NEXTEST_TEST_THREADS` 會覆寫這些預設值。
 日常開發指令保留各自的設定。
 
 **記憶體受限機器上的 release 建置：** [#1196](https://github.com/storytold/lightcraft/issues/1196)
@@ -514,9 +514,11 @@ egui 前端是一個可替換的 crate；它之下沒有任何東西知道 UI �
 | arm64（Snapdragon 及其他 ARM PC） | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
 | x86（32 位元） | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
-安裝程式與執行檔都有程式碼簽章。安裝程式會詢問安裝位置（預設為
-`C:\Program Files\LightCraft`；升級時會留在你選擇的資料夾），結束時會有一頁確認 LightCraft 已安裝，
+安裝程式與執行檔都有程式碼簽章。安裝程式會詢問為誰安裝以及安裝位置（預設僅為目前帳戶，安裝到
+`%LOCALAPPDATA%\Programs\ArtCraft\LightCraft`；選擇「這台電腦上的所有人」則安裝到
+`C:\Program Files\ArtCraft\LightCraft`（32 位元版本為 `Program Files (x86)`）；升級時會留在你選擇的資料夾），結束時會有一頁確認 LightCraft 已安裝，
 並可選擇立即啟動。無訊息安裝：`msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`。
+無訊息安裝預設僅為目前使用者安裝。`INSTALLFOLDER` 只決定安裝資料夾，不決定為誰安裝；若要為所有使用者安裝，請在提升權限的終端機或部署工具中加上 `ALLUSERS=1`。
 
 ### macOS
 

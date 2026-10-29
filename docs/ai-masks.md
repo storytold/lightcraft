@@ -115,7 +115,7 @@ The model is fetched from an ordered list of mirrors: base URLs where `<base>/mo
 2. the file `models/sam3-mirrors.txt` in LightCraft's settings folder (one URL per line, `#`
    comments) — `~/Library/Application Support/LightCraft/` (macOS), `%APPDATA%\LightCraft\`
    (Windows), `~/.config/lightcraft/` (Linux);
-3. the built-in list, `DEFAULT_MIRRORS` in `crates/segment/src/fetch/mod.rs`.
+3. the built-in list, `DEFAULT_MIRRORS` in `crates/segment/src/fetch.rs`.
 
 > **Maintainers:** the built-in list is **empty** until LightCraft's own CDN locations exist
 > (see the `TODO(maintainer)` there): add them in order of preference, host the three files
@@ -238,7 +238,7 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   the model on the CPU from the start.
 - Hostile documents: a selection keeps at most 4 detail patches (when read and when rendered),
   each at most 1024² logits; more than 64 clicks are never sent to the model.
-- Accuracy: `crates/segment/tests/reference.rs` compares every stage against the Python
+- Accuracy: `crates/segment/tests/it/reference.rs` compares every stage against the Python
   reference (`tools/sam3_reference.py`); on Metal the backbone matches to 7e-5 relative error
   and masks to ~5e-5. f16 was tried and rejected (overflow, ~7 % faster).
 - The engine feature `sam` (on in the desktop app, off for web and CLI) gates the model; without

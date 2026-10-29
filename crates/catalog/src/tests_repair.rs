@@ -108,6 +108,74 @@ fn folder_loops_and_missing_parents_move_to_the_top() {
     let _ = c.apply(Op::MoveAlbum { id: AlbumId(11), parent: Some(AlbumId(10)) });
 }
 
+/// Check the postcondition needed by every consumer that follows parent folders. This inspects
+/// the repaired catalog, not its cache or a second implementation of the repair algorithm.
+fn assert_all_album_chains_reach_roots(c: &Catalog) {
+    for album in c.albums.values() {
+        let mut seen = std::collections::HashSet::new();
+        let mut current = album;
+        while let Some(parent) = current.parent {
+            assert!(seen.insert(current.id), "album {} still reaches a cycle", album.id.0);
+            current = c.albums.get(&parent).expect("every retained parent exists");
+            assert!(current.folder, "every retained parent is a folder");
+        }
+    }
+}
+
+#[test]
+fn a_child_visited_before_a_folder_cycle_keeps_its_content_and_gets_a_rooted_chain() {
+    let (c, ids) = sound();
+    let (mut c, report) = load_edited(&c, |v| {
+        // BTreeMap order visits10 first: cached Bad11/12 used to be skipped without repair.
+        v["albums"]["10"] = serde_json::to_value(album(10, Some(11), false, vec![ids[2]])).unwrap();
+        v["albums"]["11"] = serde_json::to_value(album(11, Some(12), true, vec![])).unwrap();
+        v["albums"]["12"] = serde_json::to_value(album(12, Some(11), true, vec![])).unwrap();
+    });
+    assert_all_album_chains_reach_roots(&c);
+    assert_eq!(c.album(AlbumId(10)).unwrap().parent, Some(AlbumId(11)), "the child remains in its actual folder");
+    assert_eq!(c.album(AlbumId(10)).unwrap().photos, vec![ids[2]], "repair preserves the child's photos");
+    assert_eq!(c.album(AlbumId(11)).unwrap().parent, None, "one cycle edge is repaired");
+    assert_eq!(c.album(AlbumId(12)).unwrap().parent, Some(AlbumId(11)), "the other folder edge is retained");
+    assert!(report.repaired.iter().any(|message| message.starts_with("album 11:")), "{:?}", report.repaired);
+    assert!(c.repair().is_empty(), "a second repair is idempotent");
+}
+
+#[test]
+fn a_child_visited_before_a_folder_with_a_missing_parent_does_not_hide_the_bad_ancestor() {
+    let (c, ids) = sound();
+    let (mut c, report) = load_edited(&c, |v| {
+        v["albums"]["10"] = serde_json::to_value(album(10, Some(11), false, vec![ids[2]])).unwrap();
+        v["albums"]["11"] = serde_json::to_value(album(11, Some(999), true, vec![])).unwrap();
+    });
+    assert_all_album_chains_reach_roots(&c);
+    assert_eq!(c.album(AlbumId(10)).unwrap().parent, Some(AlbumId(11)));
+    assert_eq!(c.album(AlbumId(10)).unwrap().photos, vec![ids[2]]);
+    assert_eq!(c.album(AlbumId(11)).unwrap().parent, None, "repair the missing-parent edge itself");
+    assert!(report.repaired.iter().any(|message| message.starts_with("album 11:")), "{:?}", report.repaired);
+    assert!(c.repair().is_empty());
+}
+
+#[test]
+fn a_long_valid_folder_chain_is_retained_when_its_child_is_visited_first() {
+    let (c, ids) = sound();
+    let (mut c, report) = load_edited(&c, |v| {
+        v["albums"]["10"] = serde_json::to_value(album(10, Some(100), false, vec![ids[2]])).unwrap();
+        for id in 100..612 {
+            v["albums"][id.to_string()] = serde_json::to_value(album(id, Some(id + 1), true, vec![])).unwrap();
+        }
+        v["albums"]["612"] = serde_json::to_value(album(612, None, true, vec![])).unwrap();
+    });
+    assert_all_album_chains_reach_roots(&c);
+    assert_eq!(c.album(AlbumId(10)).unwrap().parent, Some(AlbumId(100)));
+    assert_eq!(c.album(AlbumId(10)).unwrap().photos, vec![ids[2]]);
+    for id in 100..612 {
+        assert_eq!(c.album(AlbumId(id)).unwrap().parent, Some(AlbumId(id + 1)), "valid edge{id} remains");
+    }
+    assert_eq!(c.album(AlbumId(612)).unwrap().parent, None);
+    assert!(!report.repaired.iter().any(|message| message.starts_with("album ")), "valid parents must not be repaired: {:?}", report.repaired);
+    assert!(c.repair().is_empty());
+}
+
 /// Id counters left at the top (or behind the ids in use) by a damaged file: allocating no longer
 /// overflows (a panic in debug builds) and never hands out an id already in use.
 #[test]

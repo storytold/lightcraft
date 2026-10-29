@@ -102,6 +102,7 @@
   "Imported {} photo{}": "Tuotuja kuvia: {}{:.0}",
   "In line for AI Denoise ({ahead} ahead)…": "Jonossa tekoälykohinanpoistoon ({ahead} edellä)…",
   "Insert at the cursor (also written {})": "Lisää kohdistimen kohtaan (kirjoitetaan myös {})",
+  "Inside: {names}": "Sisällä: {names}",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Se poistetaan {count} kuvalta{:.0}, alla olevat avainsanat mukaan lukien. Kumoa palauttaa sen.",
   "Keywords of {n} selected photos": "Valittujen kuvien ({n}) avainsanat",
   "Label Set: {name}": "Merkintäjoukko: {name}",
@@ -297,5 +298,12 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "”{to}” on jo henkilö. Yhdistäminen tekee kahdesta yhden henkilön; Kumoa erottaa ne uudelleen.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… ja {more} lisää",
-  "…and {more} more": "…ja {more} lisää"
+  "…and {more} more": "…ja {more} lisää",
+  "Added {n} photo{}": "Lisättyjä kuvia: {n}{:.0}",
+  "Could not read {name}: {e}": "Tiedostoa {name} ei voitu lukea: {e}",
+  "Drop to import {n} item{}": "Pudota tuodaksesi (kohteita: {n}){:.0}",
+  "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
+  "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
 }

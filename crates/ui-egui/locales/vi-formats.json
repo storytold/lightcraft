@@ -102,6 +102,7 @@
   "Imported {} photo{}": "Đã nhập {} ảnh{:.0}",
   "In line for AI Denoise ({ahead} ahead)…": "Đang xếp hàng Khử nhiễu AI (trước bạn: {ahead})…",
   "Insert at the cursor (also written {})": "Chèn tại con trỏ (cũng ghi là {})",
+  "Inside: {names}": "Bên trong: {names}",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Sẽ gỡ khỏi {count} ảnh{:.0}, kèm từ khóa con. Hoàn tác sẽ khôi phục.",
   "Keywords of {n} selected photos": "Keywords of {n} selected photos",
   "Label Set: {name}": "Bộ nhãn: {name}",
@@ -297,5 +298,12 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more"
+  "…and {more} more": "…and {more} more",
+  "Added {n} photo{}": "Đã thêm {n} ảnh{:.0}",
+  "Could not read {name}: {e}": "Không thể đọc {name}: {e}",
+  "Drop to import {n} item{}": "Thả để nhập {n} mục{:.0}",
+  "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
+  "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
+  "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
 }

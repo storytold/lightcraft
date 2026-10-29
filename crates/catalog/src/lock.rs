@@ -25,7 +25,7 @@
 //! - Browser storage (OPFS) has no file locks: see the web host for its own guard.
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// The lock file in the library directory.
@@ -116,9 +116,11 @@ impl LibraryLock {
             }
             Err(TryLockError::Error(e)) => return Ok(unlocked(e)),
         }
+        // A new file in place of whatever is at the name: a link planted there in a library folder
+        // someone else prepared is removed, never written through (as for the staging files, #1502).
         let owner = LockOwner::this_process(program);
         if let Ok(json) = serde_json::to_vec_pretty(&owner)
-            && let Err(e) = std::fs::write(dir.join(OWNER), json)
+            && let Err(e) = crate::store::create_staging(&dir.join(OWNER)).and_then(|mut f| f.write_all(&json))
         {
             log::warn!("library {}: can't write {OWNER}: {e}", dir.display());
         }

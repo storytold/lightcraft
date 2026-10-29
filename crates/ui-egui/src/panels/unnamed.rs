@@ -144,12 +144,12 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         let label = if n == 1 { "Name face".to_string() } else { format!("Name {n} faces") };
         let b = ui.add_enabled(!chosen.is_empty(), egui::Button::new(label));
-        register(ui.ctx(), "unnamed:name", b.rect);
+        register(ui, "unnamed:name", b.rect);
         if b.clicked() {
             submit = Some(chosen);
         }
         let c = ui.button(crate::i18n::tr("Clear"));
-        register(ui.ctx(), "unnamed:clear", c.rect);
+        register(ui, "unnamed:clear", c.rect);
         clear = c.clicked() || field.cancelled();
     });
     // the people already named, matching what is typed (a click names the faces)
@@ -162,7 +162,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.add_space(super::people::PAD - 4.0);
                 for p in matching {
                     let b = ui.add(egui::Button::new(RichText::new(p.as_str()).color(t.text_label)).frame(false));
-                    register(ui.ctx(), format!("unnamed:pick:{p}"), b.rect);
+                    register(ui, format!("unnamed:pick:{p}"), b.rect);
                     if b.clicked() {
                         submit = Some(p.clone());
                     }
@@ -204,7 +204,7 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
     if !list.ready && list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 22.0));
         let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
-        register(ui.ctx(), "unnamed:openSettings", b.rect);
+        register(ui, "unnamed:openSettings", b.rect);
         if b.clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
         }
@@ -212,7 +212,7 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
         let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
         let all = app.ui.unnamed_selected.len() == list.faces.len();
         let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
-        register(ui.ctx(), "unnamed:selectAll", b.rect);
+        register(ui, "unnamed:selectAll", b.rect);
         if b.clicked() {
             app.ui.unnamed_selected.clear();
             if !all {
@@ -228,14 +228,14 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
     let t = Tokens::get(ui.ctx());
     let key = (f.photo, f.index);
     let selected = app.ui.unnamed_selected.contains(&key);
-    let resp = ui.interact(r, egui::Id::new(("unnamed-face", f.photo, f.index)), Sense::click());
+    let resp = ui.interact(r, egui::Id::unique(("unnamed-face", f.photo, f.index)), Sense::click());
     crate::widgets::announce_selected(&resp, crate::i18n::tr("Unnamed face"), selected);
-    register(ui.ctx(), format!("unnamed-face:{}:{}", f.photo, f.index), r);
+    register(ui, format!("unnamed-face:{}:{}", f.photo, f.index), r);
     // a suggested name along the bottom: a click accepts it for this face (added after the tile, so it wins there)
     let strip = Rect::from_min_max(pos2(r.left(), r.bottom() - 20.0), r.right_bottom());
-    let accept = f.suggestion.as_ref().map(|_| ui.interact(strip, egui::Id::new(("unnamed-accept", f.photo, f.index)), Sense::click()));
+    let accept = f.suggestion.as_ref().map(|_| ui.interact(strip, egui::Id::unique(("unnamed-accept", f.photo, f.index)), Sense::click()));
     if let Some(a) = &accept {
-        register(ui.ctx(), format!("unnamed-accept:{}:{}", f.photo, f.index), a.rect);
+        register(ui, format!("unnamed-accept:{}:{}", f.photo, f.index), a.rect);
     }
     let hovered = resp.hovered() || accept.as_ref().is_some_and(|a| a.hovered());
     let p = ui.painter();
