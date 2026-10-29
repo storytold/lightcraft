@@ -669,6 +669,9 @@ pub struct Caches {
     /// A face was set aside since the open person page was made: its order, and which faces look like one set aside,
     /// may have changed, so All above has it made again before naming any.
     pub person_page_reorder: bool,
+    /// The named faces the open person page was made from ([`panels::person::faces_signature`]), and how long making it
+    /// took (seconds).
+    pub person_page_made: (u64, f64),
     /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
     pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The most photos the face scan has had left at once since it last finished (the progress bar's whole).
