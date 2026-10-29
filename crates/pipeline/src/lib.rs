@@ -31,8 +31,10 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod hue_sat;
 pub mod local;
 pub mod local_tone;
+pub mod looks;
 pub mod lut;
 pub mod masks;
 pub mod optics;
@@ -89,6 +91,9 @@ pub struct SourceInfo {
     /// the developed pixels (Bradford, linear Rec.2020).
     pub camera_color: Option<Arc<CameraColor>>,
     pub camera_tone: Option<tone::CameraTone>,
+    /// How the decoded pixels relate to the camera's own colour, for a camera with measured looks
+    /// ([`looks::CameraRgb`]); `None`: the photo can't render one.
+    pub camera_rgb: Option<Arc<looks::CameraRgb>>,
     /// Segmentation mattes stored in the file (DNG semantic masks): AI masks use them.
     pub mattes: Option<Arc<masks::Mattes>>,
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
@@ -112,6 +117,7 @@ impl Default for SourceInfo {
             legacy_relative_wb: false,
             camera_color: None,
             camera_tone: None,
+            camera_rgb: None,
             mattes: None,
             local_tone: None,
             native_long: None,

@@ -65,6 +65,9 @@ pub struct MediaCache {
     pub file_loader: Option<FileLoader>,
     /// What grid thumbnails load files with (see [`ReducedLoader`]); `None`: [`Self::file_loader`].
     pub reduced_loader: Option<ReducedLoader>,
+    /// Decodes a photo whose profile is a measured look ([`crate::files::load_vec_for_look`]); without one such a
+    /// photo is decoded by `file_loader` and its look rendered approximately.
+    pub look_loader: Option<FileLoader>,
     pub file_probe: Option<FileProbe>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.

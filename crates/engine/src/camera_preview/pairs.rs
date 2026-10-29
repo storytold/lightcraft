@@ -1,9 +1,10 @@
-use super::hue_sat::{HueSat, fit_chroma, fit_hue_sat};
+use super::hue_sat::{fit_chroma, fit_hue_sat};
 use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
 use super::tone::{HighlightCheck, ToneFit, highlights_hold};
 use super::{CameraLook, CameraTone, HsvTable, Mat3, Rgb32f, ToneMap, luminance_2020};
+use lightcraft_pipeline::hue_sat::HueSat;
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
 pub(super) const MIN_IMPROVEMENT: f64 = 0.7;

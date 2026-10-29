@@ -175,6 +175,105 @@ Fitted from 264 usable photos of 273 D5300 NEFs (one photographer, 2014 to 2017,
 
 The same was tried for the photographer's D700, D750 and D80 (about 300 photos each) and it didn't help: on held-back photos the D750 stayed at 3.2 and the D700 and D80 got slightly worse, even fitting only their Standard (or normal saturation) photos. Their per-photo fits are already close and those bodies were shot with a mix of picture controls, so they have no profile.
 
+## Measured camera looks (Fujifilm X-T4 film simulations)
+
+A camera's picture styles do more than a colour matrix can. Fujifilm's film simulations render saturated colours
+lighter or darker than their luminance alone predicts, and Classic Neg. tints its greys, cooler in the shadows and
+warmer in the highlights. The form the starting look and the pooled profiles use (matrix, luminance-restoring
+hue/saturation table, luminance tone curve, chroma curve) holds neither: fitted per film simulation to the charts below,
+it reached medians of 1.1 to 3.1 ΔE2000 on photos, and 0.8 to 2.0 with a value-scaling table and per-channel curves
+(95th percentiles up to 4.5). So each of the X-T4's nine colour film simulations is a **measured look**: a 3D lookup
+from white-balanced camera RGB to the colour the camera writes, and a profile of its own (`look:x-t4/provia` to
+`look:x-t4/eterna-bleach-bypass`) that the profile browser lists for X-T4 raws under "X-T4 looks, measured"
+(`develop.profile` refuses one for any other photo, Paste, Sync, Auto Sync and presets leave such a photo its own
+profile while carrying the other settings, and the profile menu (and `profiles.menu`) lists a look, in its favourites,
+recent and groups, only where it renders; `crates/pipeline/src/looks.rs`, `crates/engine/src/camera_looks.rs`,
+`assets/camera-looks/X-T4.json`). The names put a plain word first and the film simulation in brackets ("Vivid
+(Velvia)"), and each look's description says it was
+measured from the camera and is not made or endorsed by Fujifilm.
+
+**How they were measured.** The X-T4's USB raw conversion mode renders a raw in a chosen film simulation, so the camera
+is the measuring instrument. Copies of the CC0 raw.pixls.us X-T4 file 3913 had their sensor data replaced by patches of
+known colour, in the uncompressed layout `raf.rs` reads: six training charts with a regular grid of 3,906 colours over
+18 exposure levels, each placed twice. The camera converted every chart into all nine looks in Adobe RGB (it renders
+once and clips into its output space, and Adobe RGB clips half as many chart patches as sRGB or fewer). It corrects
+distortion and vignetting as it converts; both were measured on chart grids and compensated, so patches read correctly
+to the corners. Per look, a grid of 17 × 29 × 29 nodes over CIELAB (D50) of the camera colour, taken through the X-T4's
+D65 forward matrix from `spectral_table.rs`, holds the camera's Adobe RGB output (gamma 563/256): the least-squares fit
+to the patches with a second-difference smoothness penalty, a clipped output counting as a bound rather than a value.
+No Fujifilm data, profile or software is used. The asset stores each node as three 16-bit numbers (steps of 1/8192,
+under a thirtieth of an 8-bit level): 1.5 MB for the nine looks.
+
+**How they render.** A look is the whole rendering from scene to display, so it takes the place of the starting look's
+tone map and chroma curve. In the finishing stage, after exposure, white balance, Highlights, Shadows, Texture, Clarity,
+Dehaze, local adjustments and Calibration (which act on the scene colour, as they would on the camera's sensor), the
+pixel is taken back to camera RGB and looked up. Contrast, Whites and Blacks then adjust the look's display colour as
+they adjust a rendered photo (`ToneMap::display`, not applied at 0), and Saturation, Vibrance, the Colour Mixer, Colour
+Grading, the vignette, curves and grain follow as usual. Amount blends from the photo's starting look (0 %) to the
+measured look (100 %). Looks render on the CPU, as LUT profiles do.
+
+- **Camera colour.** A look needs the starting colour the decode applied undone exactly. An X-T4 raw starts from the
+  bundled profile's matrix and hue/saturation table, and the table can map two camera colours to one: on a grid of
+  object colours up to chroma 90, the worst 1 % come back from the decoded pixel more than 2.9 ΔE76 from the camera
+  colour that produced it, up to 24, mostly yellow greens near hue 120 to 150, because another camera colour decodes to
+  the same pixel. So a photo whose profile is a look is decoded with the matrix alone
+  (`files::load_vec_for_look`; the media cache keeps that decode apart from the plain one, so switching to or from a look
+  decodes the photo again), and the finishing stage applies the table itself to any render of it without a look (the
+  other profiles' thumbnails, before and after). A look previewed on a photo decoded plainly, as in the profile
+  browser's thumbnails while another profile is applied, undoes the table by a few fixed-point steps, which is close
+  except in those colours.
+- **Dynamic range.** At DR200 and DR400 the camera exposes the sensor one or two stops darker and brightens its rendering
+  back, whatever dynamic range a conversion asks for. Unscaled, DR200 photos came out a stop dark through a look (a
+  median of 9.3 ΔE2000 from the camera on 17 such photos). The decoder reads the dynamic range from the camera JPEG's maker note
+  (`0x140b` AutoDynamicRange, `0x1403` DevelopmentDynamicRange when it was set by hand; on all 570 raws checked they
+  agreed with the dynamic range the camera itself reported converting them at) and the look takes camera RGB scaled by
+  it over 100. The per-file fit absorbs this into its tone curve today, which is why it only shows once a fixed rendering
+  is applied; 62 % of the contributor's X-T4 raws are DR200. DR400 is not measured.
+- **Scale.** Camera RGB is taken relative to the sensor's full range (16,383 at 14 bits), as the looks were measured, not
+  to the white level estimated from a clipped frame (`white_from_data`), which sits a little below it.
+
+**Validation.** Each look's limit was set before the results, from the camera's own looks: half the median distance
+between the camera's renders of that look and of its nearest other look, at most 1.0 ΔE2000 (on held-out charts and on
+photos separately). Photos are compared over flat areas: the mean colour of 8 × 8-pixel blocks on a 780 × 520 frame
+whose lightness varies by less than 1 L* (standard deviation), with blocks touching a sensor channel above 95 % of white
+left out, against the camera's conversion of the same raw. By this measure the camera's conversion and its original JPEG
+differ by a median of 0.14.
+
+| Look | Held-out charts, mean | Validation photos (489), median / 95th percentile | Sealed test photos (292), median / 95th percentile | Public raws (3), median | Starting look, validation photos, median |
+|---|---:|---:|---:|---:|---:|
+| Standard (PROVIA) | 0.45 | 0.60 / 1.05 | 0.62 / 1.13 | 0.62 | 2.41 |
+| Vivid (Velvia) | 0.43 | 0.55 / 1.04 | 0.59 / 1.31 | 0.49 | 3.98 |
+| Soft (ASTIA) | 0.48 | 0.58 / 1.06 | 0.60 / 1.55 | 0.63 | 2.83 |
+| Portrait Hi (PRO Neg. Hi) | 0.42 | 0.56 / 1.09 | 0.59 / 1.10 | 0.59 | 3.36 |
+| Portrait (PRO Neg. Std) | 0.43 | 0.60 / 1.20 | 0.60 / 1.71 | 0.60 | 3.07 |
+| Muted (Classic Chrome) | 0.40 | 0.52 / 0.93 | 0.56 / 1.14 | 0.60 | 3.23 |
+| Cinema (ETERNA) | 0.44 | 0.62 / 1.29 | 0.64 / 1.46 | 0.68 | 3.49 |
+| Negative (Classic Neg.) | 0.43 | 0.52 / 0.92 | 0.52 / 1.04 | 0.60 | 5.56 |
+| Bleach Bypass (ETERNA Bleach Bypass) | 0.44 | 0.54 / 0.94 | 0.56 / 0.96 | 0.54 | 6.50 |
+
+The held-out charts are six charts the fit never saw, with other colours and layouts, including charts of only dark
+and only bright colours. The photos are the contributor's own X-T4 raws with enough flat area, chosen by script from
+about 14,000 for colour, lighting, lens and ISO coverage. The looks are fitted from the charts alone; the photos were
+split into a validation set and a test set before any look was measured on them, and the test set stayed sealed until
+this form was final. Only these aggregate figures are shared. Photo and public-raw figures
+are this implementation: `lightcraft-cli` exporting each raw through each look in Adobe RGB at a 1,200-pixel long edge,
+with the embedded lens corrections on, clipped into sRGB as the camera clips (the camera's own sRGB JPEG is the
+reference). They sit a median of 0.14 from the lookup applied straight to camera RGB read from the sensor and
+framed through the camera's own lens correction, on every lens (XF16-55, XF70-300 and a 13 mm lens, 0.13 to 0.16). On 96 to 100 % of the photos where the camera's
+two looks differ by at least 0.4, each look is nearer the camera's render of it than of its nearest other look.
+Exported into sRGB directly, LightCraft maps colours outside sRGB in by desaturating them, where the camera clips them;
+on the public raws that costs Velvia most (median 0.49 → 1.97) and the muted looks least (Classic Neg.
+0.60 → 0.61).
+
+Against the limits (PROVIA and PRO Neg. Std 0.61, ASTIA 0.64, PRO Neg. Hi and Classic Chrome 0.72, ETERNA 0.85, the rest 1.0): every look passes on the validation photos, and every 95th percentile in both sets is within 2.0. On the sealed test photos PROVIA is 0.01 over (0.62), and on the public raws the worst photo is over for PROVIA (0.64) and PRO Neg. Std (0.63). The lookup alone, without LightCraft's pipeline, passes on both photo sets (medians 0.45 to 0.54).
+
+**Limits.** The X-T4 only: other bodies sharing its sensor may render alike but are not measured. The monochrome film
+simulations, Grain, Color Chrome Effect, Color Chrome FX Blue and the camera's highlight, shadow, colour and sharpness
+settings are not part of the looks (each is the camera's default). A photo shown from its smart preview while its
+original is offline renders its starting look instead of a look. One with an AI-denoised picture is decoded plainly,
+and so is every photo in the web build, which has no separate decode for looks: their looks undo the table
+approximately. HDR renders show a look in SDR range.
+
 ## Sony Dynamic Range Optimizer (DRO)
 
 Sony bodies apply DRO, a local tone operator that brightens darker regions, to their JPEG (and the preview embedded in the ARW) only; the raw data are unchanged, and the factory default is DRO Auto. The tone curve fitted to that JPEG carried the brightening into the raw's starting look, so DRO photos opened lighter than in Lightroom, darktable, Photomator or Affinity, which develop the raw without it (issue #244). On 24 ILCE-7CR photos (Standard creative style) with Lightroom 9.5.1 default exports, mean L* at 200 px: with DRO off, Lightroom matches the camera JPEG (+0.15 L*, all within ±1.4) and LightCraft matches Lightroom (−0.19 L*, median ΔE76 3.6); with DRO Lv3 or Auto (8 photos), Lightroom is 2.4–10.7 L* darker than the camera JPEG and LightCraft followed the JPEG, +6.4 L* from Lightroom (median ΔE76 7.5). The tone curves fitted to 131 ILCE-7CR photos show where: at scene luminance 0.01, 0.02, 0.05 and 0.1 the median DRO Lv3/Auto curve is 8, 10, 9 and 6 L* above the DRO-off one, and from 0.3 up they agree.
@@ -208,6 +307,9 @@ A raw starts from the first of these that is available (`camera_preview::startin
 3. the file-local fit to its own JPEG described above;
 4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
 5. the neutral fallback.
+
+A photo whose profile is a measured look takes the same starting colour, decoded without a camera profile's
+hue/saturation table, which the look's finishing stage undoes (see "Measured camera looks").
 
 When the file's JPEG is black and white, step 2 fits the tone curve alone with the profile's colour; without a profile, or when that fit fails, 4 and 5 take the tone curve fitted to it (see the black-and-white JPEG paragraph above). If every existing JPEG fit fails, a near-black frame may take the guarded tone-only fallback described above, after its spectral or neutral colour has been chosen.
 

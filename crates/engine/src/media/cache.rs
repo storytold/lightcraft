@@ -62,6 +62,7 @@ impl Default for MediaCache {
             budget,
             file_loader: None,
             reduced_loader: None,
+            look_loader: None,
             file_probe: None,
             preview_loader: None,
             file_bytes: None,
@@ -304,8 +305,35 @@ impl MediaCache {
         r
     }
 
+    /// Whether photo `p` is decoded for a measured look: its profile is one, and there is a loader for it. A photo with a
+    /// denoised picture is not: its pair loader decodes plainly, and asking for the other decode would miss the cache on
+    /// every render (its look undoes the profile's table approximately instead).
+    pub(super) fn for_look(&self, p: &Photo) -> bool {
+        self.look_loader.is_some() && lightcraft_pipeline::looks::is_look_profile(&p.develop.profile.id) && self.denoise.get(p.id).is_none()
+    }
+
+    /// How to load photo `p` at `level` ([`Self::source_ref`] without the denoised picture), decoded for its measured
+    /// look when its profile is one ([`Self::for_look`]).
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+        let r = self.source_ref_decoded(p, level, cached);
+        // a photo whose profile is a measured look is decoded with its starting colour's matrix alone
+        match r {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } if self.for_look(p) => {
+                SourceRef::File { path, max_edge, loader: self.look_loader.clone().or(loader), fallback, denoise, reduced }
+            }
+            r => r,
+        }
+    }
+
+    /// [`Self::source_ref_plain`] before the look decode is chosen: a decoded source from memory when it was decoded the
+    /// way the photo's profile needs, else the original, its smart preview or the demo scene.
+    fn source_ref_decoded(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
+        // a decoded source serves when it was decoded the way the photo's profile needs (for a measured look or not)
+        let fits = |s: &DecodedSource, for_look: bool| {
+            s.info.as_ref().and_then(|i| i.camera_rgb.as_ref()).is_none_or(|c| c.hue_sat.is_none() || c.deferred == for_look)
+        };
+        let for_look = self.for_look(p);
+        if cached && let Some(a) = self.get_source(p.id, level).filter(|a| fits(a, for_look)) {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
@@ -313,7 +341,7 @@ impl MediaCache {
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|a| fits(a, for_look))
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }

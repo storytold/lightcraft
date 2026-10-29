@@ -535,7 +535,9 @@ impl Session {
                     self.presets.push(u);
                 }
             }
-            let known = |id: &String| crate::presets::profile(id).is_some() || self.lut_profiles.iter().any(|p| &p.id == id);
+            let known = |id: &String| {
+                crate::presets::profile(id).is_some() || crate::camera_looks::find(id).is_some() || self.lut_profiles.iter().any(|p| &p.id == id)
+            };
             self.profile_favorites = f.profile_favorites.into_iter().filter(known).collect();
             self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
         }

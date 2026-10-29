@@ -349,6 +349,7 @@ pub fn develop_reporting(
     (rendered, fallback)
 }
 
+/// Render `src` with `s`: on the GPU when it handles the render, else on the CPU (with the reason the GPU fell back).
 fn develop_image(
     src: &Arc<Rgb32f>,
     info: &SourceInfo,
@@ -357,9 +358,11 @@ fn develop_image(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    // LUT profiles have no GPU stage: they render on the CPU
+    // LUT profiles and measured looks have no GPU stage: they render on the CPU, and so does a source decoded for a
+    // look (its starting colour's table is left to the CPU's finishing stage)
     let fallback = if gpu
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
+        && !lightcraft_pipeline::looks::needs_cpu(s, info)
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()
     {
