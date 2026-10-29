@@ -227,7 +227,7 @@ fn show_in_folders_is_offered_while_the_sidebar_is_hidden_and_the_tally_trails()
 
 /// The tree kept while the counts lag (the sidebar drew it from the old tally) is not the tree of the counts that
 /// come after: when another reader of the counts (the Keywords section, By Date) takes the finished count while the
-/// Folders section is hidden, a folder the batch made must still have its row.
+/// Folders section is hidden, the old tree is not offered as the new counts' tree, so Show in Folders is not refused.
 #[test]
 fn the_tree_kept_while_the_counts_lagged_is_not_taken_for_the_one_of_the_new_counts() {
     let mut h = app(400);
@@ -256,7 +256,7 @@ fn the_tree_kept_while_the_counts_lagged_is_not_taken_for_the_one_of_the_new_cou
     let library = h.app.session.library_generation();
     h.app.caches.keyword_tree(&h.app.session.catalog, library);
     assert!(h.app.caches.library.is_current(&h.app.session.catalog, library), "the counts are the library's now");
-    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(new)), "the folder the batch made has its row");
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(new)), "the old tree is not taken for the new counts' tree");
 }
 
 /// A count that finished while the sidebar was hidden is taken by the command's own look at the folders: the entry
