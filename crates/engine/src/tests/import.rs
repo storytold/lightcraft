@@ -22,7 +22,11 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 
 /// A small procedural PNG (distinct per seed).
 fn write_png(path: &Path, seed: u8) {
-    let (w, h) = (48usize, 32usize);
+    write_png_sized(path, seed, 48, 32);
+}
+
+/// [`write_png`] of another size: a replaced file is noticed by its size, as probes kept from a scan are.
+fn write_png_sized(path: &Path, seed: u8, w: usize, h: usize) {
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
     let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
     let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
@@ -125,6 +129,81 @@ fn a_deleted_browse_record_still_counts_as_the_files_own() {
     let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
     assert_eq!(scan["candidates"][0]["duplicate"], "path", "{scan}");
     assert_eq!(scan["candidates"][0].get("local"), None, "{scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browsed file that another application replaced since (it has another size) is not what its record says: the scan
+/// reads it again, so the content stored at the browse (the old file's, which the library also has) doesn't make it a
+/// duplicate, and importing it brings the record up to date as it joins the library.
+#[test]
+fn a_browsed_file_replaced_since_is_read_again_before_it_joins_the_library() {
+    let src = temp_dir("browsed-replaced");
+    let (a, b) = (src.join("a.png"), src.join("b.png"));
+    write_png(&a, 75);
+    std::fs::copy(&a, &b).unwrap();
+    let mut s = Session::new().with_fs();
+    // b is in the library; a was only browsed, with the same bytes
+    s.execute("library.import", &json!({"paths": [b]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    let old = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().content_hash.clone();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a]})).unwrap();
+    assert_eq!(scan["candidates"][0]["duplicate"], "content", "the file is what was browsed, and the library has its bytes: {scan}");
+    write_png_sized(&a, 9, 64, 40);
+    let scan = s.execute("library.importPreview", &json!({"paths": [a]})).unwrap();
+    assert!(scan["candidates"][0]["duplicate"].is_null(), "the file that is there now is new to the library: {scan}");
+    assert_eq!(scan["candidates"][0]["width"], 64, "{scan}");
+    assert_eq!(scan["candidates"][0]["local"], true, "it still says it was only browsed (Copy and Move leave it out): {scan}");
+    assert_eq!(scan["candidates"][0]["existing"], id, "and names the record: {scan}");
+    let r = s.execute("library.import", &json!({"paths": [a]})).unwrap();
+    assert_eq!(r["imported"], json!([id]), "the same record joins the library: {r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.local, "it is in the library now");
+    assert_eq!((p.width, p.height, p.file_size), (64, 40, std::fs::metadata(&a).unwrap().len()), "the record describes the file it has now");
+    assert_ne!(p.content_hash, old, "and holds its content, not the old file's");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browsed file replaced by a copy of a photo the library has is a duplicate of that photo, and its record stays
+/// browsed.
+#[test]
+fn a_browsed_file_replaced_by_a_copy_of_a_library_photo_is_a_duplicate() {
+    let src = temp_dir("browsed-replaced-dup");
+    let (a, c) = (src.join("a.png"), src.join("c.png"));
+    write_png(&a, 75);
+    write_png_sized(&c, 9, 64, 40);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [c]})).unwrap();
+    let library_id = r["imported"][0].as_u64().unwrap();
+    let r = s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    std::fs::copy(&c, &a).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a]})).unwrap();
+    assert_eq!(scan["candidates"][0]["duplicate"], "content", "{scan}");
+    assert_eq!(scan["candidates"][0]["existing"], library_id, "of the library's photo: {scan}");
+    assert_eq!(scan["candidates"][0]["local"], true, "it is still the browsed record's file (Copy and Move leave it out): {scan}");
+    let r = s.execute("library.import", &json!({"paths": [a]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0, "{r}");
+    assert_eq!(r["duplicates"][0]["existing"], library_id, "{r}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().local, "the record was not brought in");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A file of its own with the new content of a replaced browsed file stands in for it when copying leaves it out.
+#[test]
+fn a_twin_of_a_replaced_browsed_file_stands_in_for_it_when_copying() {
+    let src = temp_dir("browsed-replaced-twin");
+    let (a, d) = (src.join("a.png"), src.join("d.png"));
+    write_png(&a, 75);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    write_png_sized(&a, 9, 64, 40);
+    std::fs::copy(&a, &d).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, d]})).unwrap();
+    let found = scan["candidates"].as_array().unwrap();
+    assert_eq!(found[0]["local"], true, "{scan}");
+    assert_eq!(found[1]["duplicate"], "content", "{scan}");
+    assert_eq!(found[1]["browsedTwin"], found[0]["path"], "{scan}");
     let _ = std::fs::remove_dir_all(src);
 }
 

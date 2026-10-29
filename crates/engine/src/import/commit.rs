@@ -208,12 +208,18 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
         match it {
-            PreparedItem::Promote(id) => {
+            PreparedItem::Promote(id, fresh) => {
+                // the file was replaced since it was browsed: the record takes what it is now before it joins the library
+                if let Some(info) = &fresh {
+                    crate::cmd::convert::reload_ops(&s.catalog, id, info, &mut ops, &mut Vec::new());
+                }
                 if s.catalog.photo(id).is_some_and(|p| p.local) {
                     ops.push(Op::SetLocal { id, local: false });
                 }
                 // "Import as new": a trashed photo with the same content is replaced, as for a new file
-                if let Some(old) = s.catalog.photo(id).and_then(|p| p.content_hash.as_ref()).and_then(|h| trash_hash.get(h))
+                let content =
+                    fresh.as_ref().and_then(|i| i.content_hash.clone()).or_else(|| s.catalog.photo(id).and_then(|p| p.content_hash.clone()));
+                if let Some(old) = content.as_ref().and_then(|h| trash_hash.get(h))
                     && purged.insert(*old)
                 {
                     purge.push(*old);

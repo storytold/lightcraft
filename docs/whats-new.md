@@ -298,6 +298,9 @@
 - Files with the same content as a browsed photo are listed as identical copies in the folder, not as already in the
   library, which doesn't have them. With Copy or Move, which leave the browsed photo out, the first of those files
   that isn't browsed itself is offered and checked instead, so that content can still be copied in from the folder.
+- A browsed file that another application replaced since (its size on disk is no longer the one that was browsed) is
+  read again: it is compared with the library by what it is now, and importing it brings its record up to date (size,
+  dimensions, content) as it joins the library.
 
 ### A one-field white balance edit no longer shifts the other one
 - Settings that name only a white balance temperature, or only a tint — `develop.merge`,
