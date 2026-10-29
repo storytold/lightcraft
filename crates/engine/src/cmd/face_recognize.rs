@@ -173,16 +173,19 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     let photos = ops.len();
     s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
     s.skip_auto_write = true;
-    // their chosen picture follows them (and stays under the old name too, for an undo); merged into someone who has
-    // one of their own, theirs is kept
-    if from_key != to_key
-        && let Some(c) = s.person_covers.get(&from_key).copied()
-        && !s.person_covers.contains_key(&to_key)
-    {
-        s.person_covers.insert(to_key.clone(), c);
-        s.people_gen = s.people_gen.wrapping_add(1);
-        if let Err(e) = s.save_people() {
-            log::warn!("faces: {e}");
+    // their chosen picture follows them (and stays under the old name too, for an undo). The new name's own entry
+    // counts only when someone bears that name (a merge, where theirs is kept); otherwise it is left over from an
+    // earlier rename and is replaced, or dropped when they have no chosen picture
+    if from_key != to_key && !(other && s.person_covers.contains_key(&to_key)) {
+        let changed = match s.person_covers.get(&from_key).copied() {
+            Some(c) => s.person_covers.insert(to_key.clone(), c) != Some(c),
+            None => s.person_covers.remove(&to_key).is_some(),
+        };
+        if changed {
+            s.people_gen = s.people_gen.wrapping_add(1);
+            if let Err(e) = s.save_people() {
+                log::warn!("faces: {e}");
+            }
         }
     }
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
@@ -219,12 +222,19 @@ fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
             Some(lightcraft_catalog::PersonCover { photo: id, face: region.rect })
         }
     };
-    match cover {
-        Some(c) => s.person_covers.insert(key, c),
+    let before = match cover {
+        Some(c) => s.person_covers.insert(key.clone(), c),
         None => s.person_covers.remove(&key),
     };
     s.people_gen = s.people_gen.wrapping_add(1);
-    s.save_people()?;
+    if let Err(e) = s.save_people() {
+        // not saved: not done either, so the session says what the file will say at the next opening
+        match before {
+            Some(b) => s.person_covers.insert(key, b),
+            None => s.person_covers.remove(&key),
+        };
+        return Err(e);
+    }
     Ok(json!({"name": name, "cover": cover.map(|c| json!({"photo": c.photo.0, "rect": rect_json(&c.face)}))}))
 }
 

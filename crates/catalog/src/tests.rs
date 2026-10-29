@@ -520,7 +520,9 @@ fn people_from_named_face_regions() {
     covers.insert("john roe".to_string(), PersonCover { photo: b, face: Rect { x0: 0.4 + 1e-12, ..small } });
     assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((b, small)));
     // a chosen photo the filter hides, or a face that no longer bears the name, falls back to the largest face
-    assert_eq!(picture(&covers, Filter { rating: 5, ..Default::default() }, "John Roe"), None);
+    let hides_b = Filter { rating: 1, rating_op: crate::RatingOp::AtMost, ..Default::default() };
+    assert_eq!(picture(&covers, hides_b, "John Roe"), Some((d, big)), "the chosen photo is filtered out: the largest face stands in");
+    assert_eq!(picture(&covers, Filter { rating: 5, ..Default::default() }, "John Roe"), None, "nobody left at all");
     covers.insert("john roe".to_string(), PersonCover { photo: e, face: small });
     assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "Sam's face is not John Roe's");
     covers.insert("john roe".to_string(), PersonCover { photo: b, face: big });
