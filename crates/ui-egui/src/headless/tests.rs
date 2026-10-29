@@ -1014,6 +1014,10 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
     menu(&mut h, "person-face-menu:autoCover");
     assert!(h.app.session.person_covers.is_empty());
     assert_eq!(picture(&mut h), Some(ids[1]));
+    // chosen elsewhere (a script, an agent) while the page is open: the page shows it too
+    h.request("engine.execute", json!({"command": "faces.setCover", "params": {"name": "Jane Doe", "photo": ids[0].0, "index": 0}}), t);
+    h.settle(SETTLE);
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.cover), Some(Some((ids[0].0, 0))));
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both

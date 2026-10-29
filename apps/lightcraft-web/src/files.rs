@@ -196,7 +196,7 @@ impl Store for FilesStore {
 }
 
 /// Names of the library files read at start-up.
-pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.json", "view.json", "prefs.json", "ui.json"];
+pub const LIBRARY_FILES: [&str; 7] = ["catalog.snap", "catalog.log", "presets.json", "view.json", "prefs.json", "people.json", "ui.json"];
 
 /// Is a browser storage error, by its `DOMException` name, "the entry doesn't exist"? Only
 /// `NotFoundError` is; anything else (security, type mismatch, an unreadable store) is a failure.
