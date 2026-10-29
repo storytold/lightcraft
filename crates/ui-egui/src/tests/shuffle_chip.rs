@@ -79,6 +79,28 @@ fn the_header_says_shuffled_only_under_random_in_a_source_that_follows_the_sort(
     }
 }
 
+/// "Shuffled" is the state (quiet text) and Reshuffle the action: the button shows its border at
+/// rest, in every theme, and keeps a gap from the label, so the two don't read as one phrase.
+#[test]
+fn reshuffle_reads_as_a_button_beside_the_label() {
+    for theme in ["charcoal", "midnight", "paper", "silver"] {
+        let mut h = demo([1200.0, 800.0], "photoGrid");
+        exec(&mut h, "view.theme", json!({"theme": theme}));
+        exec(&mut h, "library.sort", json!({"key": "random"}));
+        let (word, button) = (widget(&h, SHUFFLED).expect("the label"), widget(&h, RESHUFFLE).expect("the button"));
+        let outlines = |of: egui::Rect| {
+            h.view
+                .painted_shapes()
+                .iter()
+                .filter(|s| matches!(s, egui::epaint::Shape::Rect(r) if r.stroke.width > 0.0 && r.rect.expand(0.5).contains_rect(of) && of.expand(0.5).contains_rect(r.rect)))
+                .count()
+        };
+        assert_eq!(outlines(button), 1, "{theme}: Reshuffle shows its border at rest");
+        assert_eq!(outlines(word), 0, "{theme}: the label stays plain text");
+        assert!(button.left() - word.right() >= 8.0, "{theme}: a gap between the state and the action: {word:?} {button:?}");
+    }
+}
+
 /// One click on the chip's Reshuffle is a new shuffle, and the chip stays.
 #[test]
 fn reshuffle_in_the_header_gives_a_new_order() {

@@ -1028,6 +1028,9 @@ struct BadgeFlags {
 /// The gap between a shuffled view's chip and the count.
 const CHIP_GAP: f32 = 12.0;
 
+/// The gap between "Shuffled" and the button: the state and the action read as two things.
+const LABEL_GAP: f32 = 8.0;
+
 /// The least width the title keeps (a few letters and the ellipsis) before the chip gives way.
 const MIN_TITLE_W: f32 = 48.0;
 
@@ -1055,26 +1058,27 @@ fn chip_plan(ui: &egui::Ui, free: f32, min_title: f32, gap: f32) -> Option<(bool
 
 fn chip_width(ui: &egui::Ui, compact: bool) -> f32 {
     let t = Tokens::get(ui.ctx());
-    let button = crate::button::Button::new("Reshuffle").ghost().small().desired_size(ui).x;
+    let button = crate::button::Button::new("Reshuffle").secondary().small().desired_size(ui).x;
     if compact {
         return button;
     }
     let word = ui.painter().layout_no_wrap(crate::i18n::tr("Shuffled").to_string(), t.font(12.5), t.text_dim).size().x;
-    word.ceil() + 4.0 + button
+    word.ceil() + LABEL_GAP + button
 }
 
 /// The chip in `rect` (as wide as [`chip_width`]): "Shuffled" in the count's quiet voice and the
-/// Reshuffle button, one click for a new shuffle.
+/// Reshuffle button (bordered at rest, so it reads as an action beside the state), one click for a
+/// new shuffle.
 fn shuffle_chip(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, compact: bool) {
     let t = Tokens::get(ui.ctx());
-    let button_w = crate::button::Button::new("Reshuffle").ghost().small().desired_size(ui).x;
+    let button_w = crate::button::Button::new("Reshuffle").secondary().small().desired_size(ui).x;
     if !compact {
         let word = ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Shuffled"), t.font(12.5), t.text_dim);
         register(ui, "grid:shuffled", word);
     }
     let at = Rect::from_min_size(pos2(rect.right() - button_w, rect.center().y - 12.0), vec2(button_w, 24.0));
     if crate::button::Button::new("Reshuffle")
-        .ghost()
+        .secondary()
         .small()
         .widget("button:reshuffle")
         .tooltip("Shown in a random order. Reshuffle for a new one.")
