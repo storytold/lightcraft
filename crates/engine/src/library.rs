@@ -745,7 +745,9 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || l.people_error.is_some());
+        // a people.json that couldn't be read at opening is never written this session: nothing to retry
+        let presets_unsaved =
+            self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || (l.people_error.is_some() && !l.blocked.contains(&"people.json")));
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
@@ -863,6 +865,22 @@ impl Session {
                 lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
                 Err(EngineError::Other(why))
             }
+        }
+    }
+
+    /// Save people.json for a change that stands even when the file can't take it (a rename carrying a person's
+    /// picture): a failed write is tried again by [`Session::persist`]; a file that couldn't be read when the library
+    /// opened is never overwritten, so the change counts as unsaved (see [`Session::unsaved`]) until the library closes.
+    pub(crate) fn save_people_or_keep_unsaved(&mut self) {
+        let Err(e) = self.save_people() else { return };
+        log::warn!("faces: {e}");
+        if let Some(lib) = self.library.as_mut()
+            && lib.people_error.is_none()
+        {
+            lib.people_error = Some(
+                "people: people.json couldn't be read when the library opened, so it isn't overwritten; the change is kept until the library closes"
+                    .into(),
+            );
         }
     }
 
