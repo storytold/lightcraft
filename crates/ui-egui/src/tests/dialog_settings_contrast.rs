@@ -162,7 +162,10 @@ fn explanations_placeholders_and_the_accent_as_text_can_be_read_in_every_theme()
         // (an installed model is the one in use, and has a size)
         let file = models.join("m.onnx");
         std::fs::write(&file, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
-        h.app.session.execute("faces.models.install", &json!({"path": file.to_string_lossy(), "acknowledged": true})).unwrap();
+        let installed =
+            h.app.session.execute("faces.models.install", &json!({"path": file.to_string_lossy(), "acknowledged": true, "activate": false})).unwrap();
+        // (selected, not switched on: an active recognition model would start a GPU check and a scan in the background)
+        h.app.session.execute("faces.models.select", &json!({"id": installed["installed"]["id"]})).unwrap();
         h.app.caches.faces_epoch += 1;
         show(&mut h, "faces");
         let drop = text_colour(&h, "or drop a .onnx file");
