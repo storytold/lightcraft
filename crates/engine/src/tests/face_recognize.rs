@@ -410,6 +410,7 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     assert_eq!((r["more"].as_array().unwrap().len(), r["dismissed"].clone()), (0, json!(1)), "{r}");
     assert_eq!(s.person_dismissed.get("bob").map(Vec::len), None);
     assert_eq!((s.catalog.revision, s.undo.len()), (revision, undo));
+    assert!(s.journal.iter().any(|(id, _)| id == "faces.dismiss"), "recorded in the command journal");
     for bad in [json!({"name": "Ann", "photo": b.0, "index": 9}), json!({"name": "Ann", "photo": b.0}), json!({"photo": b.0, "index": 0})] {
         assert!(s.execute("faces.dismiss", &bad).is_err(), "{bad}");
     }
