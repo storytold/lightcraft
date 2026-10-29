@@ -634,7 +634,8 @@
   of one after another, so a tree with many folders on a network share waits for the share's answers together instead
   of in a chain. The photos found, their order, the limits on depth and number of entries, how links to folders are
   followed, and the folders left out are as before. Once the entry limit is reached, the readers take no more folders:
-  the up to eight folders already being read are finished, each listing no more entries than the limit allows. A tree
+  the up to eight folders already being read are finished, each listing no more entries than the limit allows, unless
+  the walk stops first (at the limit, or when canceled): then each stops at its next entry. A tree
   whose folders hold fewer than two subfolders or links is read without starting anything extra. A share that answers
   one listing at a time gains less than the number of folders read together suggests.
 

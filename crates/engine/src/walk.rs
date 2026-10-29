@@ -474,8 +474,8 @@ fn next_listing(shared: &Shared, cancel: &std::sync::atomic::AtomicBool, max_ent
 /// `keep` and `found` run on the calling thread. The same limits, hidden entries and links as
 /// [`files_in`] (no folder is skipped; which of several links to one folder is entered, and which
 /// entries a [`Limits::max_entries`] stop leaves out, follow the completion order). Nothing more
-/// is handed over once `cancel` is set, though a listing already being read ends first. Returns
-/// whether the walk stopped at a [`Limits`] bound.
+/// is handed over once `cancel` is set, though a listing the calling thread is reading ends first (the readers
+/// stop at their next entry). Returns whether the walk stopped at a [`Limits`] bound.
 pub fn files_in_parallel(
     root: &Path,
     limits: Limits,
@@ -1257,8 +1257,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Given a folder of many files, when the walk stops and tells the readers, then a reader in the middle of a
-    /// folder stops there (its listing is `cut`) instead of finishing the folder first.
+    /// Given a folder of many files, when the walk stops and tells the readers, then a listing in progress stops
+    /// there (it is `cut`) instead of finishing the folder first.
     #[test]
     fn a_listing_in_progress_stops_when_the_readers_are_told_to() {
         let d = tmp("stop-mid-listing");
