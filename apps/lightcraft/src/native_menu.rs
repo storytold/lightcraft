@@ -371,6 +371,7 @@ impl NativeMenu {
         }
         let _ = self.menu.append(&app_menu);
 
+        let mut windows_menu = None;
         for (title, nodes) in &bar {
             let sub = Submenu::new(label_text(title), true);
             if title == "Window" {
@@ -402,7 +403,7 @@ impl NativeMenu {
                     &PredefinedMenuItem::separator(),
                     &PredefinedMenuItem::bring_all_to_front(Some(lightcraft_ui_egui::i18n::tr("Bring All to Front"))),
                 ]);
-                sub.set_as_windows_menu_for_nsapp();
+                windows_menu = Some(sub.clone());
             }
             if title == "Help" {
                 sub.set_as_help_menu_for_nsapp();
@@ -410,6 +411,11 @@ impl NativeMenu {
             let _ = self.menu.append(&sub);
         }
         self.menu.init_for_nsapp();
+        // muda finds the submenu through the main menu installed just above; asked earlier it does
+        // nothing, and AppKit then never lists the open windows in the Window menu
+        if let Some(windows) = windows_menu {
+            windows.set_as_windows_menu_for_nsapp();
+        }
         self.text_focus = false;
         self.capturing = false;
         self.accelerators_pending = false;

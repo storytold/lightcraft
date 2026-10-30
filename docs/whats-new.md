@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### macOS: the Window menu lists the open windows
+- The Window menu now shows a row for each open window (the main window, and the second one from Window ▸ Second Window while it is open), below Bring All to Front. Before, the menu ended at Bring All to Front and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
