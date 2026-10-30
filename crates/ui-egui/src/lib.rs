@@ -42,11 +42,16 @@ pub mod window_place;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_midi;
+#[cfg(test)]
 use tests::panels as tests_panels;
 #[cfg(test)]
 use tests::{fixtures as tests_fixtures, render_fixtures as tests_render_fixtures};
 
 use std::sync::mpsc::{Receiver, Sender};
+
+/// Seconds without a MIDI event after which a knob turn ends (and becomes one undo step).
+const MIDI_IDLE: f64 = 0.4;
 
 use lightcraft_engine::{AiModel, ErrorKind, Session};
 use serde_json::Value;
@@ -81,6 +86,7 @@ pub(crate) use caches::key_of;
 pub use caches::{FilterValues, LibraryCounts, RulesView};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
+pub use services::MidiReload;
 #[cfg(target_os = "linux")]
 pub use services::OpenModelFolderFn;
 pub use services::{
@@ -165,6 +171,11 @@ pub struct LightcraftApp {
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
     control_rx: Option<Receiver<ControlRequest>>,
+    midi_rx: Option<Receiver<lightcraft_engine::midi::Action>>,
+    /// Re-reads the MIDI map file (`midi.reload`); the host app provides it with the MIDI input.
+    pub(crate) midi_reload: Option<MidiReload>,
+    /// The control a MIDI knob is turning (one undo step) and the UI time of its last event.
+    midi_active: Option<(String, f64)>,
     pending_screenshots: Vec<PendingShot>,
     /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).
     pending_gestures: Vec<PendingGesture>,

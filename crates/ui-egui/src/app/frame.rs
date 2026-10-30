@@ -51,6 +51,7 @@ impl LightcraftApp {
         }
         let now = self.tick_now();
         self.drain_control(ctx);
+        self.drain_midi(ctx);
         self.apply_settings(ctx);
         if self.queued_input_needs_repaint() {
             ctx.request_repaint();

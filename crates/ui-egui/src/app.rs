@@ -1,5 +1,5 @@
 use super::clock::{AppClock, monotonic_ms};
-use super::services::Services;
+use super::services::{MidiReload, Services};
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
 use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
@@ -12,6 +12,7 @@ use super::{
 mod control;
 mod frame;
 mod input;
+mod midi;
 mod prefs;
 mod screenshot;
 
@@ -46,6 +47,9 @@ impl LightcraftApp {
             notice_input: Default::default(),
             quit_confirmed: false,
             control_rx: None,
+            midi_rx: None,
+            midi_reload: None,
+            midi_active: None,
             pending_screenshots: vec![],
             pending_gestures: vec![],
             layout_epoch: 0,
@@ -140,6 +144,13 @@ impl LightcraftApp {
         self
     }
 
+    /// Drive develop controls from a MIDI controller; see `docs/midi.md`.
+    pub fn with_midi(mut self, rx: Receiver<lightcraft_engine::midi::Action>, reload: MidiReload) -> Self {
+        self.midi_rx = Some(rx);
+        self.midi_reload = Some(reload);
+        self
+    }
+
     /// Attach the control-channel receiver and keep CPU copies of photo textures, which headless
     /// screenshots need; returns the app for chaining.
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -189,6 +200,11 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        // any other caller opening an interaction takes the slot over from a MIDI turn: close that
+        // turn (its own undo step) so the idle timer can never end the newcomer's interaction
+        if id == "develop.beginInteraction" && self.midi_active.is_some() {
+            self.end_midi_interaction();
+        }
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }

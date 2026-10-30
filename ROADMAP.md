@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** minor (MIDI control surfaces; Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -119,6 +119,8 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
   六切 (203 × 254), 四切 (254 × 305) and 名刺 (55 × 91) — at their exact metric sizes. The Print dialog
   and `print.set` take their customary names, and names are matched case-, space- and
   punctuation-insensitively (`L判`, `l`, `L-size` are one paper).
+- 2026-10-28: MIDI control surfaces (Windows, macOS): a TOML map binds faders, knobs and buttons to Develop
+  sliders and commands, one undo step per turn (`docs/midi.md`, gap 31). Headline numbers unchanged.
 - 2026-10-14: Camera-coverage sweep verifies 30 more models on 40 CC0 files, with file and sensor
   hashes pinned (`docs/raw/coverage.py`: 515 → 545 verified). Eleven candidates excluded after rechecking
   identity, provenance and camera-image agreement. Phone and drone DNG tone differences remain tracked in #1277.

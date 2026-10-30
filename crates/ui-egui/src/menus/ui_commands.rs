@@ -60,6 +60,8 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
+    // re-reads midi.toml, so a controller map can be edited without restarting
+    ("midi.reload", "Reload MIDI Map", None, ""),
     ("modelSetup.cancel", "Cancel Pending Photo Action", None, ""),
     ("view.photoGrid", "Photo Grid", None, "View"),
     ("view.squareGrid", "Square Grid", None, "View"),
