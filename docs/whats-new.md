@@ -168,6 +168,17 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Listing a folder tree on a network share reads folders side by side
+- Folder walks (the import and Add Photos review, Synchronize Folder, Local's Include Subfolders, Find Missing Photos,
+  preset and LUT folders, and the MCP tools) now read up to eight folders ahead of the walk at the same time, instead
+  of one after another, so a tree with many folders on a network share waits for the share's answers together instead
+  of in a chain. The photos found, their order, the limits on depth and number of entries, how links to folders are
+  followed, and the folders left out are as before. Once the entry limit is reached, the readers take no more folders:
+  the up to eight folders already being read are finished, each listing no more entries than the limit allows, unless
+  the walk stops first (at the limit, or when canceled): then each stops at its next entry. A tree
+  whose folders hold fewer than two subfolders or links is read without starting anything extra. A share that answers
+  one listing at a time gains less than the number of folders read together suggests.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
