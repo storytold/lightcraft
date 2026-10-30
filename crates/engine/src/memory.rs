@@ -81,6 +81,13 @@ pub fn budget() -> usize {
     }
 }
 
+/// Back to the automatic budget ([`default_budget`], which may be under the 64 MiB an explicit
+/// budget needs: a quarter of a small cgroup limit). Returns it.
+pub fn reset_budget() -> usize {
+    BUDGET.store(0, Ordering::Relaxed);
+    budget()
+}
+
 /// Change the budget (bytes, at least 64 MiB) for the process: the decode gate and the GPU pool
 /// follow at once; sessions apply their cache share with [`crate::Session::set_memory_budget`].
 pub fn set_budget(bytes: usize) -> usize {
@@ -330,6 +337,13 @@ impl crate::Session {
         self.media.set_budget(cache_share(b));
         b
     }
+
+    /// [`reset_budget`] for the process, and this session's cache share with it.
+    pub fn reset_memory_budget(&mut self) -> usize {
+        let b = reset_budget();
+        self.media.set_budget(cache_share(b));
+        b
+    }
 }
 
 #[cfg(test)]
@@ -362,6 +376,17 @@ mod tests {
         assert_eq!(budget_for(Some(64 * 1024 * MIB)), 1536 * MIB, "capped");
         assert_eq!(budget_for(None), 1536 * MIB, "unknown");
         assert_eq!(budget_for(Some(0)), 1, "never the 0 that means not computed");
+    }
+
+    /// Automatic (`app.memoryBudget {mb: 0}`) goes back to the default budget, which under a cgroup
+    /// limit below 256 MiB is less than the 64 MB an explicit budget needs (#3072).
+    #[test]
+    fn mb_0_goes_back_to_the_automatic_budget() {
+        let mut s = crate::Session::new();
+        let r = s.execute("app.memoryBudget", &serde_json::json!({"mb": 0}));
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(budget(), default_budget());
+        assert!(s.execute("app.memoryBudget", &serde_json::json!({"mb": 32})).is_err(), "an explicit budget is still at least 64 MB");
     }
 
     /// Prints what the budget is sized from; run by hand inside and outside a limited scope.
