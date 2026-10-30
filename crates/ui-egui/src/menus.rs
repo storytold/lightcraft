@@ -64,6 +64,10 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         }
         "app.showInFolders" => show_in_folders_enabled(app, None),
         "app.openSamModelFolder" => app.session.segmenter.dir.is_some() && app.services.open_with.is_some(),
+        "surface.maskPrevious" | "surface.maskNext" => {
+            app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| !d.masks.is_empty())
+        }
+        "surface.dialogConfirm" | "surface.dialogCancel" => app.ui.dialog.is_some(),
         "file.exportPresets" => app.session.presets.iter().any(|p| !p.builtin),
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
         "dialog.saveMaskEffect" => app.session.active().is_some() && app.session.active_mask.is_some(),

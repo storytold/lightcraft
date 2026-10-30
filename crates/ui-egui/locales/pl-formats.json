@@ -305,5 +305,16 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Imported into the profile “{name}”": "Zaimportowano do profilu „{name}”",
+  "Last import: {mapped} brought over, {dropped} left out": "Ostatni import: przeniesiono {mapped}, pominięto {dropped}",
+  "Listening on 127.0.0.1:{port}": "Nasłuchuje na 127.0.0.1:{port}",
+  "Now: {context}": "Teraz: {context}",
+  "Paired: {name}": "Sparowano: {name}",
+  "Plugin {version} installed": "Zainstalowano wtyczkę {version}",
+  "Saved {path}": "Zapisano: {path}",
+  "Show page {name}": "Pokaż stronę {name}",
+  "Switch to profile {name}": "Przełącz na profil {name}",
+  "{name} asks to control LightCraft: see Settings, Controls": "{name} prosi o sterowanie LightCraft: zobacz Ustawienia, Sterowanie",
+  "{name} asks to pair. Code: {code}": "{name} prosi o sparowanie. Kod: {code}"
 }

@@ -24,6 +24,13 @@ Foundation project licensed under the Apache License 2.0, and from the CIE 1931 
 functions it ships (CIE, CC-BY-4.0). The matrices were fitted by the LightCraft contributors
 (2026) with tools/spectral_camera_table.py. See assets/ATTRIBUTION.md.
 
+crates/surface (lightcraft-surface), the control-surface support in crates/ui-egui and
+apps/lightcraft, and the icons in assets/surface-icons port TactileBridge, Portions Copyright (c)
+2026 RAD Films - Roman Alurkoff, contributed under the MIT License: its control-surface engine
+(dial acceleration and tuning, coalescing, echo suppression, tool-following layouts, Auto Sync),
+its settings design and defaults, its curated layouts and profiles, and its hand-drawn icon pack
+(assets/surface-icons/LICENSE.txt). Each ported file says so. No Capture One material is included.
+
 crates/inpaint (lightcraft-inpaint) ports the inpainting (PatchMatch completion) and Poisson membrane
 fill code of PhotoCraft (https://github.com/storytold/photocraft, crates/algo/src/inpaint.rs and
 poisson.rs), Copyright the PhotoCraft contributors, licensed under the MIT License or the Apache

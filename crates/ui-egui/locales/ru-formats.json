@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "{name} asks to control LightCraft: see Settings, Controls": "{name} просит доступ к управлению LightCraft: см. Настройки, Управление",
+  "Now: {context}": "Сейчас: {context}",
+  "Imported into the profile “{name}”": "Импортировано в профиль «{name}»",
+  "Last import: {mapped} brought over, {dropped} left out": "Последний импорт: перенесено {mapped}, пропущено {dropped}",
+  "Saved {path}": "Сохранено: {path}",
+  "Paired: {name}": "Сопряжено: {name}",
+  "{name} asks to pair. Code: {code}": "{name} просит сопряжение. Код: {code}",
+  "Listening on 127.0.0.1:{port}": "Ожидает на 127.0.0.1:{port}",
+  "Plugin {version} installed": "Плагин {version} установлен",
+  "Show page {name}": "Показать страницу {name}",
+  "Switch to profile {name}": "Переключить на профиль {name}"
 }

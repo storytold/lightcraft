@@ -1,0 +1,16 @@
+[package]
+name = "lightcraft-surface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft control surfaces: devices, layouts, profiles, dial motion, contexts, feedback and the surface protocol (L2)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-develop = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+miniz_oxide = { workspace = true }

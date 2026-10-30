@@ -255,6 +255,12 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         pick_folder: None,
         // the browser reports prefers-color-scheme to egui
         system_theme: None,
+        // no control surfaces in the browser
+        surface_store: None,
+        pick_surface_file: None,
+        save_surface_file: None,
+        surface_listener: None,
+        surface_plugin: None,
     }
 }
 

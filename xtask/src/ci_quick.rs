@@ -37,6 +37,7 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("assets/camera-profiles/", &["lightcraft-engine"]),
     ("assets/camera-tone/", &["lightcraft-engine"]),
     ("assets/fonts/", &["lightcraft-engine", "lightcraft-ui-egui"]),
+    ("assets/surface-icons/", &["lightcraft-surface"]),
     ("contributors/", &["lightcraft-ui-egui"]),
     ("docs/whats-new.md", &["lightcraft-ui-egui"]),
     ("docs/raw/coverage-sweep.tsv", &["lightcraft-raw"]),

@@ -170,6 +170,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
     ("brush.smaller", "Decrease Brush Size", Some("["), "Window>Tools"),
+    // the brush's Erase mode; {on} sets it (a console key holds it like Alt), none toggles
+    ("brush.erase", "Erase", None, ""),
     ("brush.larger", "Increase Brush Size", Some("]"), "Window>Tools"),
     ("brush.featherLess", "Decrease Brush Feather", Some("Shift+["), "Window>Tools"),
     ("brush.featherMore", "Increase Brush Feather", Some("Shift+]"), "Window>Tools"),
@@ -277,4 +279,24 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
+    // control surfaces (`surface`): what their keys run, and their settings for agents
+    ("surface.maskPrevious", "Select Previous Mask", None, ""),
+    ("surface.maskNext", "Select Next Mask", None, ""),
+    ("surface.dialogConfirm", "Confirm Dialog", None, ""),
+    ("surface.dialogCancel", "Cancel Dialog", None, ""),
+    ("surface.pageNext", "Next Surface Page", None, ""),
+    ("surface.pagePrevious", "Previous Surface Page", None, ""),
+    ("surface.page", "Show Surface Page", None, ""),
+    ("surface.profile", "Control Surface Profile", None, ""),
+    ("surface.applyToSelected", "Dials Change All Selected Photos", None, ""),
+    ("surface.followContext", "Surface Pages Follow the App", None, ""),
+    ("surface.input", "Control Surface Input", None, ""),
+    ("surface.state", "Control Surface State", None, ""),
+    ("surface.settings", "Control Surface Settings", None, ""),
+    ("surface.forget", "Forget a Paired Surface", None, ""),
+    ("surface.import", "Import Control Surface Setup", None, ""),
+    ("surface.export", "Export Control Surface Layout", None, ""),
+    ("surface.plugin", "Surface Plugin Status", None, ""),
+    ("surface.installPlugin", "Install the Surface Plugin", None, ""),
+    ("surface.uninstallPlugin", "Remove the Surface Plugin", None, ""),
 ];

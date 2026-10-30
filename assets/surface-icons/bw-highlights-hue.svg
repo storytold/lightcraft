@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="Spectrum_" data-name="Spectrum " x1="3.92" y1="14.2" x2="28.08" y2="14.2" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00a8de"/>
+      <stop offset=".2" stop-color="#333391"/>
+      <stop offset=".4" stop-color="#e91388"/>
+      <stop offset=".6" stop-color="#eb2d2e"/>
+      <stop offset=".8" stop-color="#938819"/>
+      <stop offset="1" stop-color="#009e54"/>
+    </linearGradient>
+  </defs>
+  <circle fill="url(#Spectrum_)" cx="16" cy="14.2" r="12.08"/>
+  <path fill="none" stroke="#828282" stroke-miterlimit="5.4" stroke-linecap="round" stroke-width="2.43" d="M7.22,7.43h17.55"/>
+  <path fill="none" stroke="#828282" stroke-miterlimit="5.4" stroke-linecap="round" stroke-width="2.43" d="M7.22,14.2h17.55"/>
+  <path fill="none" stroke="#828282" stroke-miterlimit="5.4" stroke-linecap="round" stroke-width="2.43" d="M6.84,20.97h17.55"/>
+  <circle stroke-width="1.89" fill="none" stroke="#828282" stroke-miterlimit="5.4" cx="16" cy="14" r="11.88"/>
+</svg>

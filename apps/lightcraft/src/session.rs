@@ -1,12 +1,13 @@
 #[cfg(any(target_os = "freebsd", target_os = "linux"))]
 use super::platform::DIALOG_PARENT;
 use super::platform::{explorer_select_command, file_dialog, windows_open_url_command};
-use super::prefs::display_profile_dir;
+use super::prefs::{config_dir, display_profile_dir};
 use super::*;
 
 /// The platform services; `cc` is the window the file dialogs belong to (its `egui_ctx` repaints
-/// when a dialog closes), and `log_file` is for Help ▸ Open Log Folder.
-pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>) -> Services {
+/// when a dialog closes), `log_file` is for Help ▸ Open Log Folder, and a `--memory` session (`in_memory`) keeps its
+/// control-surface settings to itself.
+pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>, in_memory: bool) -> Services {
     let ctx = cc.egui_ctx.clone();
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let _ = DIALOG_PARENT.set(rfd::FileDialog::new().set_parent(cc));
@@ -244,7 +245,59 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         backup_library: None,
         restore_library: None,
         system_theme: appearance::service(),
+        surface_store: surface_store(in_memory),
+        pick_surface_file: Some(Box::new(|| {
+            file_dialog()
+                .set_title(lightcraft_ui_egui::i18n::tr("Import Control Surface Setup"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Control surface setups"), &["json", "lp5", "lcsurface"])
+                .pick_file()
+                .map(|p| vec![p.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        })),
+        save_surface_file: Some(Box::new(|name: &str| {
+            file_dialog()
+                .set_title(lightcraft_ui_egui::i18n::tr("Export Control Surface Layout"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("LightCraft surface layout"), &["lcsurface"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
+        surface_listener: None,
+        surface_plugin: logi_plugin::installer(),
     }
+}
+
+/// `<config>/control-surfaces.json` (Settings, Controls; `docs/control-surfaces.md`).
+struct SurfaceFile(std::path::PathBuf);
+
+/// The largest control-surface settings file read.
+const MAX_SURFACE_FILE: u64 = 16 * 1024 * 1024;
+
+impl lightcraft_ui_egui::surface::SurfaceStore for SurfaceFile {
+    fn load(&self) -> Result<Option<String>, String> {
+        match std::fs::metadata(&self.0) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: {e}", self.0.display())),
+            Ok(m) if m.len() > MAX_SURFACE_FILE => Err(format!("{} is too large", self.0.display())),
+            Ok(_) => std::fs::read_to_string(&self.0).map(Some).map_err(|e| format!("{}: {e}", self.0.display())),
+        }
+    }
+
+    fn save(&self, text: &str) -> Result<(), String> {
+        if let Some(dir) = self.0.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        lightcraft_engine::export::write_file(&self.0.to_string_lossy(), text.as_bytes())
+    }
+}
+
+/// Where control-surface settings live (none in a `--memory` session, which writes nothing (issue #164), with
+/// `LIGHTCRAFT_NO_PREFS` or without a settings folder).
+pub(crate) fn surface_store(in_memory: bool) -> Option<Box<dyn lightcraft_ui_egui::surface::SurfaceStore>> {
+    if in_memory || std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
+        return None;
+    }
+    config_dir().map(|d| Box::new(SurfaceFile(d.join("control-surfaces.json"))) as Box<dyn lightcraft_ui_egui::surface::SurfaceStore>)
 }
 
 /// The library session with the folders face models (`<config>/models`) and slideshow templates

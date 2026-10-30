@@ -182,6 +182,12 @@ fn prefs_writer_writes_nothing_in_a_memory_or_temporary_session() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// A `--memory` session neither reads nor writes the control-surface settings file (CodeRabbit on #2947).
+#[test]
+fn a_memory_session_has_no_control_surface_store() {
+    assert!(surface_store(true).is_none());
+}
+
 /// Issue #169: a `--memory` session neither arms the GPU crash sentinel (which would create
 /// the settings folder) nor removes a marker a crashed launch left; it still reports it, and
 /// the next ordinary launch finds it, reports it and clears it.

@@ -336,6 +336,12 @@ impl Headless {
         self.view.painted_text()
     }
 
+    /// The channel requests reach the app on (a transport in a test feeds it, like the desktop
+    /// app's control server).
+    pub fn control_sender(&self) -> Sender<ControlRequest> {
+        self.control.clone()
+    }
+
     /// `app.quit` was requested.
     pub fn quit_requested(&self) -> bool {
         self.quit

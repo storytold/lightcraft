@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### Control surfaces
+- **Edit from a console.** LightCraft has its own control-surface engine (ported from TactileBridge): the Logitech
+  MX Creative Console's keys, dials and Actions Ring, and the Loupedeck+, drive LightCraft through the LightCraft Logi
+  plugin, which Settings ▸ Controls installs on Windows (on macOS, open `LightCraft.lplug4`). Dials move a slider with acceleration and fine control; a whole turn
+  is one undo step, on the active photo or every selected one; keys run any command.
+- **Pages that follow what you do:** separate pages for editing, masks, the brush, crop and more, chosen by the tool
+  in use; a short readout on the photo shows what a dial or key just did.
+- **Settings ▸ Controls** sets it up: the device's status, profiles, pages, dial feel and the readout. **Edit Keys
+  and Dials…** opens the device as it is laid out, in a window of its own: click a key, button or dial, or touch it
+  on the device (Touch to find), and choose what it does, or drag an action onto it.
+- See [control-surfaces.md](control-surfaces.md) for the protocol other surfaces can use.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

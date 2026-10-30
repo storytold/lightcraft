@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "{name} asks to control LightCraft: see Settings, Controls": "{name} chiede di controllare LightCraft: vedi Impostazioni, Controlli",
+  "Now: {context}": "Ora: {context}",
+  "Imported into the profile “{name}”": "Importato nel profilo «{name}»",
+  "Last import: {mapped} brought over, {dropped} left out": "Ultima importazione: {mapped} trasferiti, {dropped} esclusi",
+  "Saved {path}": "Salvato: {path}",
+  "Paired: {name}": "Associato: {name}",
+  "{name} asks to pair. Code: {code}": "{name} chiede di associarsi. Codice: {code}",
+  "Listening on 127.0.0.1:{port}": "In ascolto su 127.0.0.1:{port}",
+  "Plugin {version} installed": "Plugin {version} installato",
+  "Show page {name}": "Mostra la pagina {name}",
+  "Switch to profile {name}": "Passa al profilo {name}"
 }

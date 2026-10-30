@@ -23,6 +23,8 @@ lightcraft-sysmem = { workspace = true }
 lightcraft-ui-egui = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }
+# reading the Logi plugin package's version (`logi_plugin`) and the control-surface e2e test
+lightcraft-surface = { workspace = true }
 # `clipboard` is a separate eframe feature in 0.37: without it egui-winit simulates an in-process
 # clipboard and cut/copy/paste, RequestPaste and the Wayland PRIMARY path are unavailable.
 eframe = { workspace = true, features = ["default_fonts", "clipboard", "wgpu", "glow", "accesskit", "wayland", "x11"] }

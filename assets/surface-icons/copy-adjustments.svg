@@ -1,0 +1,10 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g data-normalized="1" transform="translate(16.000 13.375) scale(1.3125) translate(-16.000 -13.000)">
+  <g transform="translate(16 13) scale(1.12) translate(-16 -16)">
+  <path d="M9 10H18V18H9V10Z" fill="#AF7B49" fill-opacity="0.55"/>
+  <path d="M13 14H23V22H13V14Z" fill="#FF7801"/>
+  <path d="M15 16H21V17.8H15V16ZM15 19H19.5V20.8H15V19Z" fill="#2C221B"/>
+  <path d="M11 12H15.2V13.6H11V12ZM11 15H14V16.6H11V15Z" fill="#2C221B" fill-opacity="0.75"/>
+  </g>
+</g>
+</svg>
