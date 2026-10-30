@@ -523,32 +523,51 @@ impl Catalog {
 
     /// Year → month → day counts for the "By Date" section (newest first).
     pub fn date_groups(&self) -> Vec<DateGroup> {
-        use std::collections::BTreeMap;
-        let mut years: BTreeMap<&str, (BTreeMap<&str, usize>, BTreeMap<&str, usize>)> = BTreeMap::new();
+        let mut days: std::collections::BTreeMap<&str, usize> = Default::default();
         for p in self.photos().filter(|p| p.in_library()) {
-            let Some(d) = p.captured.as_deref() else { continue };
-            // `get`, not `[..]`: a corrupt or foreign `captured` (a Lightroom catalog's
-            // captureTime is copied verbatim) may not be ASCII, and slicing it on a byte index
-            // would panic — the same rule as `dates::group_label`.
-            if let (Some(year), Some(month), Some(day)) = (d.get(..4), d.get(..7), d.get(..10)) {
-                let (months, days) = years.entry(year).or_default();
-                *months.entry(month).or_default() += 1;
+            if let Some(day) = capture_day(p) {
                 *days.entry(day).or_default() += 1;
             }
         }
-        let newest_first = |m: BTreeMap<&str, usize>| m.into_iter().rev().map(|(k, n)| (k.to_string(), n)).collect::<Vec<_>>();
-        years
-            .into_iter()
-            .rev()
-            .map(|(year, (months, days))| DateGroup {
-                year: year.to_string(),
-                count: months.values().sum(),
-                months: newest_first(months),
-                days: newest_first(days),
-            })
-            .collect()
+        date_groups_of(days)
     }
+}
 
+/// The day a photo was captured on (`YYYY-MM-DD`), when its capture time starts with one.
+/// `get`, not `[..]`: a corrupt or foreign `captured` (a Lightroom catalog's captureTime is copied
+/// verbatim) may not be ASCII, and slicing it on a byte index would panic — the same rule as
+/// `dates::group_label`.
+pub(crate) fn capture_day(p: &Photo) -> Option<&str> {
+    let d = p.captured.as_deref()?;
+    d.get(..4)?;
+    d.get(..7)?;
+    d.get(..10)
+}
+
+/// [`Catalog::date_groups`] from the photos counted per day ([`capture_day`]).
+pub(crate) fn date_groups_of<'a>(days: impl IntoIterator<Item = (&'a str, usize)>) -> Vec<DateGroup> {
+    use std::collections::BTreeMap;
+    let mut years: BTreeMap<&str, (BTreeMap<&str, usize>, BTreeMap<&str, usize>)> = BTreeMap::new();
+    for (day, n) in days {
+        let (Some(year), Some(month)) = (day.get(..4), day.get(..7)) else { continue };
+        let (months, in_month) = years.entry(year).or_default();
+        *months.entry(month).or_default() += n;
+        *in_month.entry(day).or_default() += n;
+    }
+    let newest_first = |m: BTreeMap<&str, usize>| m.into_iter().rev().map(|(k, n)| (k.to_string(), n)).collect::<Vec<_>>();
+    years
+        .into_iter()
+        .rev()
+        .map(|(year, (months, days))| DateGroup {
+            year: year.to_string(),
+            count: months.values().sum(),
+            months: newest_first(months),
+            days: newest_first(days),
+        })
+        .collect()
+}
+
+impl Catalog {
     /// All keywords with usage counts, sorted by name.
     pub fn keywords(&self) -> Vec<(String, usize)> {
         let mut m: std::collections::BTreeMap<String, usize> = Default::default();

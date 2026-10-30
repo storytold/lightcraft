@@ -32,7 +32,7 @@
 //! This is the library's own view of its photos; browsing any folder on disk without importing
 //! is Local's job (see [`crate::local`]).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -182,6 +182,15 @@ pub fn folder_label(path: &str) -> String {
     if names.is_empty() { path.to_string() } else { names.iter().skip(names.len().saturating_sub(2)).copied().collect::<Vec<_>>().join("/") }
 }
 
+/// The folder a photo's file is in, as its path spells it (`None` for a photo that is no file).
+/// A photo straight in the root has an empty folder part: the root itself.
+pub(crate) fn photo_folder(p: &crate::Photo) -> Option<&str> {
+    match &p.source {
+        Source::File { path } => path.rfind(['/', '\\']).and_then(|i| path.get(..i.max(1))),
+        _ => None,
+    }
+}
+
 impl Catalog {
     /// What the library keeps about folder `path`, however it is spelled.
     pub fn folder_record(&self, path: &str) -> Option<&FolderRecord> {
@@ -254,51 +263,189 @@ impl Catalog {
         // never depends on hash order)
         let mut dirs: BTreeMap<&str, usize> = BTreeMap::new();
         for p in self.photos().filter(|p| p.in_library()) {
-            if let Source::File { path } = &p.source
-                && let Some(i) = path.rfind(['/', '\\'])
-                // a photo straight in the root has an empty folder part: the root itself
-                && let Some(dir) = path.get(..i.max(1))
-            {
+            if let Some(dir) = photo_folder(p) {
                 *dirs.entry(dir).or_default() += 1;
             }
         }
+        self.folder_tree_of(dirs)
+    }
+
+    /// [`Catalog::folder_tree`] from the photos counted per containing folder, as spelled, in
+    /// order of spelling ([`photo_folder`]).
+    pub(crate) fn folder_tree_of<'a>(&self, dirs: impl IntoIterator<Item = (&'a str, usize)>) -> Vec<FolderNode> {
+        self.folder_tree_and_mixed_of(dirs).0
+    }
+
+    /// [`Catalog::folder_tree_of`], and the keys of the folders some of whose folders'
+    /// spellings differ (`C:` and `c:`; see [`Catalog::patch_folder_tree_of`]).
+    pub(crate) fn folder_tree_and_mixed_of<'a>(&self, dirs: impl IntoIterator<Item = (&'a str, usize)>) -> (Vec<FolderNode>, HashSet<String>) {
         let mut levels: HashMap<String, Level> = HashMap::new();
         let mut roots: Vec<String> = Vec::new();
+        let mut mixed: HashSet<String> = HashSet::new();
         for (dir, n) in dirs {
             let Some(placed) = place(dir) else { continue };
-            let vkey = folder_key(&placed.mount);
-            if !levels.contains_key(&vkey) {
-                levels.insert(
-                    vkey.clone(),
-                    Level { name: placed.volume.clone(), path: placed.mount.clone(), own: 0, volume: true, children: Vec::new() },
-                );
-                roots.push(vkey.clone());
-            }
-            let mut prefix = if placed.mount == "/" { String::new() } else { placed.mount.clone() };
-            let mut parent = vkey;
-            for name in &placed.names {
-                prefix.push('/');
-                prefix.push_str(name);
-                let key = folder_key(&prefix);
-                if !levels.contains_key(&key) {
-                    levels.insert(key.clone(), Level { name: name.clone(), path: prefix.clone(), own: 0, volume: false, children: Vec::new() });
-                    if let Some(l) = levels.get_mut(&parent) {
-                        l.children.push(key.clone());
+            let mut parent: Option<String> = None;
+            for_levels(&placed, |key, name, path, volume| {
+                match levels.get(&key) {
+                    Some(l) => {
+                        // (the first spelling names the folder: another one is worth knowing)
+                        if l.name != name || l.path != path {
+                            mixed.insert(key.clone());
+                        }
+                    }
+                    None => {
+                        levels.insert(key.clone(), Level { name: name.to_string(), path: path.to_string(), own: 0, volume, children: Vec::new() });
+                        match parent.as_ref().and_then(|p| levels.get_mut(p)) {
+                            Some(l) => l.children.push(key.clone()),
+                            None => roots.push(key.clone()),
+                        }
                     }
                 }
-                parent = key;
-            }
-            if let Some(l) = levels.get_mut(&parent) {
+                parent = Some(key);
+            });
+            if let Some(l) = parent.and_then(|p| levels.get_mut(&p)) {
                 l.own += n;
             }
         }
         let mut tree: Vec<FolderNode> = roots.iter().filter_map(|k| build(k, &levels, &self.folder_records)).collect();
         sort(&mut tree);
         // a folder that holds another disk's mount covers that disk's photos too
-        let mounts: Vec<String> = tree.iter().filter(|v| v.path != "/").map(|v| v.path.clone()).collect();
+        let mounts = mounts_of(&tree);
         mark_selectable(&mut tree, &mounts);
-        tree
+        (tree, mixed)
     }
+
+    /// `tree` (what [`Catalog::folder_tree_and_mixed_of`] gave, with `mixed`) brought up to date
+    /// from how many photos each folder gained (`changes`: folder as spelled, photos gained or,
+    /// negative, lost) instead of building it again: only the rows on the way to a folder that
+    /// changed are touched. The tree is exactly the one building it again gives, or `None` when
+    /// that is not so cheap to promise: a disk came or went, a folder's spelling is not the one
+    /// its row has, a folder left whose row's spelling might come from it, two rows would be
+    /// named alike, or a count would go below nothing. Folder labels are as the records were
+    /// when `tree` was built: the caller builds again when they changed.
+    pub(crate) fn patch_folder_tree_of(
+        &self,
+        mut tree: Vec<FolderNode>,
+        mixed: &mut HashSet<String>,
+        changes: &[(&str, isize)],
+    ) -> Option<Vec<FolderNode>> {
+        let mounts = mounts_of(&tree);
+        // (what comes in first, so that a row emptied by one folder and refilled by another stays)
+        let mut order: Vec<&(&str, isize)> = changes.iter().filter(|(_, d)| *d != 0).collect();
+        order.sort_by_key(|(_, d)| std::cmp::Reverse(*d));
+        for (dir, delta) in order {
+            let Some(placed) = place(dir) else { continue };
+            let mut chain: Vec<Lvl> = Vec::new();
+            for_levels(&placed, |key, name, path, _| chain.push(Lvl { key, name: name.to_string(), path: path.to_string() }));
+            let at = Ctx { records: &self.folder_records, mounts: &mounts };
+            patch_level(&mut tree, &chain, *delta, true, &at, mixed)?;
+        }
+        Some(tree)
+    }
+}
+
+/// One level of a folder's path while it is being walked (see [`for_levels`]).
+struct Lvl {
+    key: String,
+    name: String,
+    path: String,
+}
+
+/// What a patch of the tree reads besides the rows.
+struct Ctx<'a> {
+    records: &'a BTreeMap<String, FolderRecord>,
+    mounts: &'a [String],
+}
+
+/// The levels of a folder, its volume first: (identity key, name, path as the row says it,
+/// whether it is the volume). One walk for building the tree and for patching it, so a row is
+/// the same whichever way it came.
+fn for_levels(placed: &Placed, mut f: impl FnMut(String, &str, &str, bool)) {
+    f(folder_key(&placed.mount), &placed.volume, &placed.mount, true);
+    let mut prefix = if placed.mount == "/" { String::new() } else { placed.mount.clone() };
+    for name in &placed.names {
+        prefix.push('/');
+        prefix.push_str(name);
+        f(folder_key(&prefix), name, &prefix, false);
+    }
+}
+
+/// The paths of the disks other than the startup disk.
+fn mounts_of(tree: &[FolderNode]) -> Vec<String> {
+    tree.iter().filter(|v| v.path != "/").map(|v| v.path.clone()).collect()
+}
+
+fn lower_name(n: &FolderNode) -> String {
+    n.name.to_lowercase()
+}
+
+/// `delta` photos more (fewer, when negative) in the folder `chain` leads to, below `nodes`.
+/// `None` when the tree can't be patched (see [`Catalog::patch_folder_tree_of`]).
+fn patch_level(nodes: &mut Vec<FolderNode>, chain: &[Lvl], delta: isize, top: bool, at: &Ctx, mixed: &mut HashSet<String>) -> Option<()> {
+    let (lvl, rest) = chain.split_first()?;
+    let want = lvl.name.to_lowercase();
+    let start = nodes.partition_point(|n| lower_name(n) < want);
+    let mut found = None;
+    let mut i = start;
+    while let Some(n) = nodes.get(i).filter(|n| lower_name(n) == want) {
+        if folder_key(&n.path) == lvl.key {
+            found = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let idx = match found {
+        Some(i) => i,
+        None => {
+            // a disk coming in changes which rows are choosable; a row that would sort as equal
+            // to another one is put where the first spelling met first, which isn't known here
+            if top || delta < 0 || nodes.iter().skip(start).take_while(|n| lower_name(n) == want).any(|n| n.name == lvl.name) {
+                return None;
+            }
+            let at_sorted = start + nodes.iter().skip(start).take_while(|n| lower_name(n) == want && n.name < lvl.name).count();
+            let selectable = !at.mounts.iter().any(|m| folder_within(m, &lvl.path));
+            let label = at.records.get(&lvl.key).and_then(|r| r.label);
+            let node = FolderNode {
+                name: lvl.name.clone(),
+                path: lvl.path.clone(),
+                count: 0,
+                own: 0,
+                volume: false,
+                selectable,
+                label,
+                children: Vec::new(),
+            };
+            nodes.insert(at_sorted, node);
+            at_sorted
+        }
+    };
+    // two disks of one name (`/media/me/usb`, `/run/media/me/usb`) are ordered by the spelling met first
+    if top && nodes.iter().skip(start).take_while(|n| lower_name(n) == want).filter(|n| n.name == lvl.name).count() > 1 {
+        return None;
+    }
+    let node = nodes.get_mut(idx)?;
+    if node.name != lvl.name || node.path != lvl.path {
+        return None;
+    }
+    let count = node.count.checked_add_signed(delta)?;
+    if delta < 0 && count > 0 && mixed.contains(&lvl.key) {
+        // the folder that left may be the one whose spelling the row has
+        return None;
+    }
+    if rest.is_empty() {
+        node.own = node.own.checked_add_signed(delta)?;
+    } else {
+        patch_level(&mut node.children, rest, delta, false, at, mixed)?;
+    }
+    node.count = count;
+    if count == 0 {
+        if top {
+            return None;
+        }
+        mixed.remove(&lvl.key);
+        nodes.remove(idx);
+    }
+    Some(())
 }
 
 /// The node for `key` with everything below it (at most [`MAX_DEPTH`] deep).
