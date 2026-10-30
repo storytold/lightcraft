@@ -667,7 +667,8 @@ fn folder_item_available(app: &LightcraftApp, row: FolderRow, item: FolderItem, 
         // (`folder_drop_target`), so the menu doesn't offer it either
         FolderItem::MovePhotosHere if node.is_some_and(|n| !n.selectable) => false,
         FolderItem::Move => app.services.pick_folder.is_some() || app.services.picker.is_some(),
-        FolderItem::ImportHere => app.services.pick_folder.is_some(),
+        // file.addFolder asks through the host's background dialog when it has one (`pick::ask`)
+        FolderItem::ImportHere => app.services.picker.is_some() || app.services.pick_folder.is_some(),
         FolderItem::Reveal => app.services.reveal.is_some(),
         FolderItem::LocateMissing | FolderItem::ColorLabel | FolderItem::RemoveFromLibrary | FolderItem::RemoveDisk => node.is_some(),
         _ => true,

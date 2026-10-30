@@ -672,3 +672,22 @@ fn import_to_this_folder_says_why_while_a_folder_picker_is_open() {
     assert!(h.step_until(t, |h| h.painted_text().iter().any(|s| s == reason)), "the grayed-out row says why: {:?}", h.painted_text());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `file.addFolder` asks through the host's background dialog when it has one, so a host with that
+/// and no synchronous folder picker still gets Import to This Folder…; Move Folder To… reads the
+/// synchronous picker itself and stays out.
+#[test]
+fn import_to_this_folder_needs_either_kind_of_folder_picker() {
+    let (root, trip, home) = folders("menu-import-picker-only");
+    let services = Services { png: None, picker: Some(Box::new(|_| Ok(std::sync::mpsc::channel().1))), ..Default::default() };
+    let mut h = app_with(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)], services);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let at = widget(&h, &format!("source:libfolder:{}", folder_key(&trip))).unwrap().center();
+    h.request("ui.click", json!({"x": at.x, "y": at.y, "button": "right"}), std::time::Duration::from_secs(10));
+    h.step();
+    h.step();
+    assert!(widget(&h, "folderRename").is_some(), "the menu is open");
+    assert!(widget(&h, "folderImportHere").is_some(), "a background dialog is enough for the row");
+    assert!(widget(&h, &format!("folderMove:{}", folder_key(&trip))).is_none(), "Move reads the synchronous picker, which this host lacks");
+    let _ = std::fs::remove_dir_all(&root);
+}
