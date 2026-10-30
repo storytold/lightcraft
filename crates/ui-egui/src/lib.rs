@@ -353,8 +353,10 @@ pub struct LightcraftApp {
     /// Whether each recent library can be opened, answered by a worker (issue #1290): the launch
     /// list and File ▸ Open Recent Library never look at a folder on the UI thread.
     pub recent_checks: panels::library_problem::RecentChecks,
-    /// The activity stack shows every task, not just the first few ("+N more" was clicked).
-    pub activity_expanded: bool,
+    /// The list of running tasks under the top bar's bell is open (as of the last frame).
+    pub activity_open: bool,
+    /// `view.tasks` asked for the list to be opened or closed; the top bar does it on its next frame.
+    pub(crate) activity_set: Option<bool>,
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the

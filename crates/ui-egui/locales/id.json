@@ -39,7 +39,6 @@
   "About LightCraft": "Tentang LightCraft",
   "Accept & Download": "Setujui & unduh",
   "Active": "Aktif",
-  "Activity": "Aktivitas",
   "Actual size": "Ukuran sebenarnya",
   "Add": "Tambahkan",
   "Add Catchlight": "Tambahkan catchlight",
@@ -1843,7 +1842,6 @@
   "Show in File Manager": "Tampilkan di pengelola file",
   "Show in Finder": "Tampilkan di Finder",
   "Show in Library": "Tampilkan di pustaka",
-  "Show less": "Tampilkan lebih sedikit",
   "Show on Map": "Tampilkan di peta",
   "Show overlay (O)": "Tampilkan overlay (O)",
   "Show photos": "Tampilkan foto",
@@ -2339,5 +2337,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Imports, exports and other long jobs show here while they run.": "Impor, ekspor, dan tugas panjang lainnya ditampilkan di sini selama berjalan.",
+  "No tasks are running": "Tidak ada tugas yang berjalan",
+  "Tasks": "Tugas"
 }

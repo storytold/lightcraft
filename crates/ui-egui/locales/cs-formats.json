@@ -208,6 +208,7 @@
   "{n} photo{} now · updates automatically as photos change": "Aktuální fotografie: {n}{:.0} · aktualizuje se automaticky při změnách fotografií",
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Podobné fotografie: {n}{:.0} · Zobrazení → Zrušit filtry zobrazí všechny",
   "{n} tasks are still running: {names}. Quitting stops them.": "Stále běží úlohy: {n}: {names}. Ukončení aplikace je zastaví.",
+  "{n} tasks": "Úlohy: {n}",
   "{n} {noun}": "{noun}: {n}",
   "{pct} %": "{pct} %",
   "{pid} (missing)": "{pid} (chybí)",

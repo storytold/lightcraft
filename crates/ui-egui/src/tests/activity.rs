@@ -1,4 +1,5 @@
-//! Issue #345: the activity stack — one place, top-left, for every long-running task, with ✕ to cancel.
+//! Issue #345: the activity stack — one place for every long-running task, with ✕ to cancel. It lives under the
+//! bell in the top bar: a ring and a line beside the bell while something runs, the rows in a list a click opens.
 
 use std::time::Duration;
 
@@ -6,15 +7,19 @@ use lightcraft_engine::activity::{Cancel, TaskInfo, Unit};
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::panels::activity::{WIDTH, count_text};
+use crate::panels::activity::{WIDTH, count_text, overall, readout_text};
 use crate::{LightcraftApp, Services};
 
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
 const T: Duration = Duration::from_secs(60);
 
 fn demo() -> Headless {
+    demo_sized([1200.0, 800.0])
+}
+
+fn demo_sized(size: [f32; 2]) -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let mut h = Headless::new(app, size, 1.0);
     // let the first renders finish: a render still running when the test binary exits can crash in the
     // GPU driver's teardown (the preview pool doesn't join its workers)
     h.settle(T);
@@ -33,7 +38,7 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-/// Rows show once their task is half a second old.
+/// The bell shows a task once it is half a second old.
 fn wait_visible(h: &mut Headless) {
     std::thread::sleep(Duration::from_millis(600));
     h.step();
@@ -50,42 +55,97 @@ fn click(h: &mut Headless, id: &str) {
     }
 }
 
+/// Open the list under the bell (`view.tasks`) and let it lay itself out.
+fn open_list(h: &mut Headless) {
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), T);
+    assert_eq!(r["result"]["tasks"], true, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(has(h, "activity:list"), "the list is open");
+}
+
+/// A task as the registry reports it, for the functions that only word or weigh one.
+fn info(label: &str, done: u64, total: u64) -> TaskInfo {
+    TaskInfo {
+        id: 1,
+        kind: "export",
+        label: label.into(),
+        done,
+        total,
+        unit: Unit::Count,
+        detail: String::new(),
+        cancellable: true,
+        cancelling: false,
+        age_ms: 600,
+    }
+}
+
 #[test]
-fn rows_appear_after_half_a_second_and_cancel_by_click() {
+fn a_task_rings_the_bell_after_half_a_second_and_its_row_is_in_the_list_under_it() {
+    // Given a task that has just started
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     g.progress(2, 5);
     h.step();
-    // a frame on a loaded machine can outlast the half second: only judge a task still young after it
+    // (a frame on a loaded machine can outlast the half second: only judge a task still young after it)
     if h.app.session.activity.list()[0].age_ms < crate::panels::activity::SHOW_AFTER_MS {
-        assert!(!has(&h, &format!("activity:row:{}", g.id())), "not before 0.5 s");
+        assert!(!has(&h, "activity:ring"), "not before 0.5 s");
     }
+    // When it is half a second old
     wait_visible(&mut h);
-    assert!(has(&h, &format!("activity:row:{}", g.id())));
+    // Then the bell wears a ring, and nothing is drawn over the panels
+    assert!(has(&h, "activity:ring"));
+    assert_eq!(rows(&h), 0, "the list is closed until the bell is clicked");
+    assert_eq!(h.request("ui.inspect", json!({}), T)["result"]["activityOpen"], false);
+    // When the bell is clicked
+    click(&mut h, "icon:bell");
+    // Then the list is under the top bar, inside the window, with the task's row
+    let (list, bell) = (rect(&h, "activity:list"), rect(&h, "icon:bell"));
+    assert!(list.top() >= bell.bottom() && list.right() <= 1200.0 && list.left() >= 0.0, "{list:?} under {bell:?}");
+    assert!(list.contains_rect(rect(&h, &format!("activity:row:{}", g.id()))));
+    assert_eq!(h.request("ui.inspect", json!({}), T)["result"]["activityOpen"], true);
+    // And its ✕ asks the task to stop, with the list still open
     click(&mut h, &format!("activity:cancel:{}", g.id()));
     assert!(g.is_cancelled());
     let inspect = h.request("ui.inspect", json!({}), T);
     assert_eq!(inspect["result"]["activity"][0]["cancelling"], true, "{}", inspect["result"]["activity"]);
+    assert!(has(&h, "activity:list"), "a click inside the list keeps it open");
 }
 
 #[test]
-fn more_than_three_rows_overflow_and_expand() {
+fn the_bell_opens_the_tasks_not_history_and_says_when_nothing_runs() {
     let mut h = demo();
-    let guards: Vec<_> = (0..5).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
+    let right = h.app.ui.right;
+    assert!(!has(&h, "activity:ring"), "no ring while nothing runs");
+    click(&mut h, "icon:bell");
+    assert!(has(&h, "activity:empty"), "the list says that nothing runs");
+    assert_eq!(h.app.ui.right, right, "the History panel is not opened by the bell");
+    // a second click closes it
+    click(&mut h, "icon:bell");
+    assert!(!has(&h, "activity:list"));
+}
+
+#[test]
+fn many_tasks_scroll_inside_the_window_newest_first() {
+    let mut h = demo();
+    let guards: Vec<_> = (0..30).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
     wait_visible(&mut h);
-    assert_eq!(rows(&h), 3);
-    assert!(has(&h, "activity:more"));
-    click(&mut h, "activity:more");
-    assert_eq!(rows(&h), 5);
-    // expanded, the stack grows to show them all
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
-    for g in &guards {
-        let r = rect(&h, &format!("activity:row:{}", g.id()));
-        assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
-    }
+    open_list(&mut h);
+    let list = h.view.ctx.memory(|m| m.area_rect(crate::panels::activity::popup_id())).expect("the list is drawn");
+    assert!(list.bottom() <= 800.0 && list.top() >= 0.0, "the list keeps to the window and scrolls: {list:?}");
+    // the task started last is at the top, the one after it below; the oldest is scrolled out of view, and a row
+    // out of view offers nothing to click
+    let id = |i: usize| guards[i].id();
+    let (first, second) = (rect(&h, &format!("activity:row:{}", id(29))), rect(&h, &format!("activity:row:{}", id(28))));
+    assert!(list.contains_rect(first) && first.bottom() <= second.top(), "{first:?} above {second:?} in {list:?}");
+    assert!(rows(&h) > 3, "more rows than the three the old stack showed: {}", rows(&h));
+    assert!(rows(&h) < 30 && !has(&h, &format!("activity:cancel:{}", id(0))), "rows out of view are not offered: {}", rows(&h));
     drop(guards);
     h.step();
+    h.step();
     assert_eq!(rows(&h), 0);
+    assert!(!has(&h, "activity:ring"), "the ring goes with the last task");
 }
 
 #[test]
@@ -93,24 +153,14 @@ fn not_cancellable_rows_have_no_cross() {
     let mut h = demo();
     let g = h.app.session.activity.start("faces", "Finding faces", Cancel::No);
     wait_visible(&mut h);
+    open_list(&mut h);
     assert!(has(&h, &format!("activity:row:{}", g.id())));
     assert!(!has(&h, &format!("activity:cancel:{}", g.id())));
 }
 
 #[test]
 fn count_text_by_unit() {
-    let mut t = TaskInfo {
-        id: 1,
-        kind: "export",
-        label: "Exporting".into(),
-        done: 3,
-        total: 25,
-        unit: Unit::Count,
-        detail: String::new(),
-        cancellable: true,
-        cancelling: false,
-        age_ms: 600,
-    };
+    let mut t = info("Exporting", 3, 25);
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
     assert_eq!(count_text(&t), "12 of 340 MB");
@@ -118,6 +168,252 @@ fn count_text_by_unit() {
     assert_eq!(count_text(&t), "40 %");
     t.total = 0;
     assert_eq!(count_text(&t), "");
+}
+
+#[test]
+fn the_line_beside_the_bell_names_one_task_or_counts_several() {
+    assert_eq!(readout_text(&[]), "");
+    assert_eq!(readout_text(&[info("Exporting", 10, 25)]), "Exporting · 40 %");
+    assert_eq!(readout_text(&[info("Finding faces", 0, 0)]), "Finding faces", "nothing to say about how far while that isn't known");
+    let stopping = TaskInfo { cancelling: true, ..info("Exporting", 10, 25) };
+    assert_eq!(readout_text(&[stopping]), "Exporting · Stopping…");
+    assert_eq!(readout_text(&[info("Exporting", 1, 2), info("Importing", 0, 0), info("Merging", 3, 4)]), "3 tasks");
+}
+
+#[test]
+fn a_long_name_is_cut_short_before_the_percentage_is() {
+    // Given a wide window and a task whose name alone is longer than the line beside the bell may be
+    let mut h = demo_sized([1600.0, 900.0]);
+    let long = h.app.session.activity.start("lightroom", "Reading the Lightroom catalog of the whole archive", Cancel::Yes);
+    long.progress(2, 5);
+    wait_visible(&mut h);
+    let wide = rect(&h, "activity:readout");
+    drop(long);
+    h.step();
+    // When a task with a short name is as far along
+    let short = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    short.progress(2, 5);
+    wait_visible(&mut h);
+    let narrow = rect(&h, "activity:readout");
+    // Then the long one took more room but kept to the line's limit: its name gave way, the line is still there
+    assert!(wide.width() > narrow.width() && wide.width() <= 221.0, "{wide:?} / {narrow:?}");
+    // And as the window narrows, the line never grows; before it goes there is a width at which only the
+    // percentage is left (narrower than any name is allowed to be), and once gone it stays gone
+    let long = h.app.session.activity.start("lightroom", "Reading the Lightroom catalog of the whole archive", Cancel::Yes);
+    drop(short);
+    long.progress(2, 5);
+    wait_visible(&mut h);
+    let widths: Vec<Option<f32>> = (640..=1600).rev().step_by(20).map(|w| readout_width_at(&mut h, w as f32)).collect();
+    for pair in widths.windows(2) {
+        let (wider, narrower) = (pair[0].unwrap_or(0.0), pair[1].unwrap_or(0.0));
+        assert!(narrower <= wider + 0.5, "the line grew as the window narrowed: {widths:?}");
+    }
+    assert!(widths.iter().flatten().any(|w| *w < 56.0), "at some width only the percentage is left: {widths:?}");
+    assert_eq!(widths.last(), Some(&None), "a narrow window has the ring alone: {widths:?}");
+}
+
+/// The width of the line beside the bell in a window `width` wide (`None` when it is left out).
+fn readout_width_at(h: &mut Headless, width: f32) -> Option<f32> {
+    assert_eq!(h.request("ui.resize", json!({"width": width, "height": 800.0}), T)["ok"], true);
+    for _ in 0..3 {
+        h.step();
+    }
+    h.app.widgets.iter().find(|(w, _)| w == "activity:readout").map(|(_, r)| r.width())
+}
+
+#[test]
+fn the_ring_shows_the_mean_of_the_tasks_whose_work_is_known() {
+    assert_eq!(overall(&[]), None);
+    assert_eq!(overall(&[info("Finding faces", 0, 0)]), None, "the ring sweeps while no amount is known");
+    assert_eq!(overall(&[info("Exporting", 1, 4)]), Some(0.25));
+    assert_eq!(overall(&[info("Exporting", 1, 4), info("Importing", 3, 4), info("Finding faces", 0, 0)]), Some(0.5));
+    assert_eq!(overall(&[info("Exporting", 9, 4)]), Some(1.0), "never past the whole ring");
+}
+
+#[test]
+fn the_bar_names_the_task_where_it_has_room_and_counts_on_the_bell_where_it_has_not() {
+    // Given a wide window and one task
+    let mut h = demo_sized([1600.0, 900.0]);
+    let a = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    a.progress(2, 5);
+    wait_visible(&mut h);
+    // Then a line beside the bell names it, between the filter icon and the bell
+    let (line, bell, filter) = (rect(&h, "activity:readout"), rect(&h, "icon:bell"), rect(&h, "icon:filter"));
+    assert!(line.right() <= bell.left() && line.left() >= filter.right(), "{line:?} between {filter:?} and {bell:?}");
+    assert!(!has(&h, "activity:count"), "one task needs no count");
+    // And a click on the line opens the list, as one on the bell does
+    click(&mut h, "activity:readout");
+    assert!(has(&h, "activity:list"));
+    // Given a window with no room beside the bell, and two tasks
+    let mut h = demo();
+    let _a = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    let _b = h.app.session.activity.start("import", "Importing", Cancel::Yes);
+    wait_visible(&mut h);
+    assert_eq!(readout_width_at(&mut h, 640.0), None);
+    // Then the line is left out, the ring stays, and the bell says how many
+    assert!(!has(&h, "activity:readout"));
+    assert!(has(&h, "activity:ring") && has(&h, "activity:count"));
+    // And with one task left, the ring alone: there is nothing to count
+    drop(_b);
+    h.step();
+    h.step();
+    assert!(has(&h, "activity:ring") && !has(&h, "activity:count") && !has(&h, "activity:readout"));
+}
+
+#[test]
+fn escape_closes_the_list_and_nothing_else() {
+    let mut h = demo();
+    h.request("engine.execute", json!({"command": "view.detail", "params": {}}), T);
+    h.step();
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+    open_list(&mut h);
+    // Esc closes the list; the command Esc has otherwise (Back to Grid) waits for the next press
+    assert_eq!(h.request("ui.key", json!({"key": "Escape"}), T)["ok"], true);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!has(&h, "activity:list") && !h.app.activity_open, "Esc closes the list");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail, "and does nothing else");
+}
+
+#[test]
+fn a_click_elsewhere_or_on_the_bell_again_closes_the_list() {
+    let mut h = demo_sized([1600.0, 900.0]);
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    g.progress(2, 5);
+    wait_visible(&mut h);
+    // open by the line beside the bell, closed by a second click on it
+    click(&mut h, "activity:readout");
+    assert!(has(&h, "activity:list"));
+    click(&mut h, "activity:readout");
+    assert!(!has(&h, "activity:list"), "the line toggles the list, as the bell does");
+    // open again, closed by a click on something else
+    click(&mut h, "icon:bell");
+    assert!(has(&h, "activity:list"));
+    click(&mut h, "icon:filter");
+    assert!(!has(&h, "activity:list") && !h.app.activity_open, "a click elsewhere closes it");
+    assert!(!g.is_cancelled(), "closing the list stops nothing");
+}
+
+#[test]
+fn the_list_gives_way_to_a_dialog_and_view_tasks_says_why_it_cannot_open() {
+    let mut h = demo();
+    open_list(&mut h);
+    h.request("engine.execute", json!({"command": "app.shortcuts", "params": {}}), T);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.app.ui.dialog.is_some(), "a dialog is open");
+    assert!(!has(&h, "activity:list") && !h.app.activity_open, "the list gave way to the dialog");
+    // asked for over the dialog, it is refused with the reason, and nothing opens behind the dialog or after it
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("a dialog is open")), "{r}");
+    h.app.ui.dialog = None;
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!has(&h, "activity:list"), "the refused request is not kept for later");
+}
+
+#[test]
+fn view_tasks_is_refused_while_the_blocking_library_window_is_up() {
+    let mut h = demo();
+    open_list(&mut h);
+    h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/gone", "not found"));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(crate::panels::library_problem::blocks_dialog_input(&h.app), "the library window is on screen");
+    assert!(!has(&h, "activity:list") && !h.app.activity_open, "the list gave way to it");
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("library window")), "{r}");
+}
+
+#[test]
+fn the_list_gives_way_to_the_question_before_quitting() {
+    let mut h = demo();
+    let _g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    wait_visible(&mut h);
+    open_list(&mut h);
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(has(&h, "button:quitCancel"), "the question is asked");
+    assert!(!has(&h, "activity:list") && !h.app.activity_open, "and the list is not left open over it");
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+}
+
+#[test]
+fn full_screen_preview_closes_the_list_and_keeps_no_request_for_later() {
+    let mut h = demo();
+    h.request("engine.execute", json!({"command": "view.detail", "params": {}}), T);
+    open_list(&mut h);
+    // Given the list open, When the photo goes full screen (no top bar)
+    h.app.ui.fullscreen = true;
+    for _ in 0..3 {
+        h.step();
+    }
+    // Then the list is closed, and said to be
+    assert!(!has(&h, "activity:list") && !h.app.activity_open);
+    assert_eq!(h.request("ui.inspect", json!({}), T)["result"]["activityOpen"], false);
+    // And asking for it there is refused with the reason, not kept until full screen ends
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("Full Screen Preview")), "{r}");
+    h.app.ui.fullscreen = false;
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!has(&h, "activity:list"), "nothing pops open on the way back");
+}
+
+#[test]
+fn a_task_just_started_has_its_row_in_an_open_list_at_once() {
+    let mut h = demo();
+    open_list(&mut h);
+    assert!(has(&h, "activity:empty"));
+    // the bell waits half a second so quick tasks don't flash; a list that is open never says "none" over a task
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.step();
+    assert!(has(&h, &format!("activity:row:{}", g.id())) && !has(&h, "activity:empty"));
+}
+
+#[test]
+fn view_tasks_opens_and_closes_the_list() {
+    let mut h = demo();
+    open_list(&mut h);
+    // without `show` it toggles
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {}}), T);
+    assert_eq!(r["result"]["tasks"], false, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(!has(&h, "activity:list"));
+    let r = h.request("engine.execute", json!({"command": "view.tasks", "params": {}}), T);
+    assert_eq!(r["result"]["tasks"], true, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(has(&h, "activity:list"));
+}
+
+#[test]
+fn two_view_tasks_toggles_in_one_frame_end_where_they_began() {
+    let mut h = demo();
+    open_list(&mut h);
+    let first = crate::menus::run_ui_command(&mut h.app, "view.tasks", &json!({})).unwrap().unwrap();
+    let second = crate::menus::run_ui_command(&mut h.app, "view.tasks", &json!({})).unwrap().unwrap();
+    assert_eq!(first["tasks"], false);
+    assert_eq!(second["tasks"], true);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(has(&h, "activity:list"));
 }
 
 #[test]
@@ -140,11 +436,12 @@ fn stale_cancel_is_harmless() {
 }
 
 #[test]
-fn long_detail_stays_inside_the_stack() {
+fn long_detail_stays_inside_the_list() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exportieren", Cancel::Yes);
     g.detail(&"IMG_".repeat(75));
     wait_visible(&mut h);
+    open_list(&mut h);
     let row = rect(&h, &format!("activity:row:{}", g.id()));
     assert!(row.width() <= WIDTH + 1.0, "{row:?}");
 }
@@ -154,6 +451,7 @@ fn cross_sits_at_the_right_edge_of_its_row() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     wait_visible(&mut h);
+    open_list(&mut h);
     let row = rect(&h, &format!("activity:row:{}", g.id()));
     let cross = rect(&h, &format!("activity:cancel:{}", g.id()));
     assert!(cross.right() >= row.right() - 2.0, "the cross is at the right, not after the label: {cross:?} in {row:?}");
@@ -496,23 +794,24 @@ fn auto_import_listing_has_no_row() {
 }
 
 #[test]
-fn rows_added_later_grow_the_stack() {
+fn rows_added_later_grow_the_open_list() {
     let mut h = demo();
     let a = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     a.progress(1, 24);
     a.detail("LC01347.jpg");
     wait_visible(&mut h);
-    // two more tasks while the stack already shows one row: it grows to show them, nothing is cut off
+    open_list(&mut h);
+    // two more tasks while the list already shows one row: it grows to show them, nothing is cut off
     let b = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
     let c = h.app.session.activity.start("lightroom", "Reading Lightroom catalog", Cancel::Yes);
     wait_visible(&mut h);
     for _ in 0..5 {
         h.step();
     }
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
+    let list = h.view.ctx.memory(|m| m.area_rect(crate::panels::activity::popup_id())).expect("the list is drawn");
     for g in [&a, &b, &c] {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
-        assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
+        assert!(list.contains_rect(r), "row {} at {r:?} is cut off by the list at {list:?}", g.id());
     }
 }
 

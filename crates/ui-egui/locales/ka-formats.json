@@ -207,6 +207,7 @@
   "{n} photo{} now · updates automatically as photos change": "ახლა ფოტო: {n}{:.0} · ავტომატურად განახლდება ფოტოების ცვლილებისას",
   "{n} similar photo{} · View ▸ Clear Filters to see all": "მსგავსი ფოტო: {n}{:.0} · ყველას სანახავად: ხედი → ფილტრების გასუფთავება",
   "{n} tasks are still running: {names}. Quitting stops them.": "ჯერ კიდევ მიმდინარეობს ამოცანები ({n}): {names}. გასვლა მათ შეწყვეტს.",
+  "{n} tasks": "ამოცანები: {n}",
   "{n} {noun}": "{noun}: {n}",
   "{pct} %": "{pct} %",
   "{pid} (missing)": "{pid} (აკლია)",

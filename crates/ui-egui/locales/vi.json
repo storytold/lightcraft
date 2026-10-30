@@ -44,7 +44,6 @@
   "About LightCraft": "Giới thiệu LightCraft",
   "Accept & Download": "Chấp nhận và tải",
   "Active": "Đang dùng",
-  "Activity": "Hoạt động",
   "Actual size": "Kích thước thực",
   "Add": "Thêm",
   "Add Catchlight": "Thêm điểm sáng mắt",
@@ -1697,7 +1696,6 @@
   "Show in Explorer": "Hiện trong Explorer",
   "Show in File Manager": "Hiện trong trình quản lý tệp",
   "Show in Finder": "Hiện trong trình quản lý tệp",
-  "Show less": "Hiện ít hơn",
   "Show on Map": "Hiện trên bản đồ",
   "Show overlay (O)": "Hiện lớp phủ (O)",
   "Show ratings, flags and edit badges": "Hiện xếp hạng, cờ và huy hiệu chỉnh sửa",
@@ -2235,5 +2233,8 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Imports, exports and other long jobs show here while they run.": "Nhập, xuất và các tác vụ dài khác hiển thị tại đây khi đang chạy.",
+  "No tasks are running": "Không có tác vụ nào đang chạy",
+  "Tasks": "Tác vụ"
 }

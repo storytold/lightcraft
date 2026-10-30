@@ -242,13 +242,13 @@
   "{done} of {total}": "{done}／{total}",
   "{done} of {total} MB": "{done}／{total} MB",
   "{pct} %": "{pct}%",
-  "+{n} more": "还有 {n} 项",
   "Create the keyword “{name}”": "创建关键字“{name}”",
   "new, inside {parent}": "新关键字，位于 {parent} 内",
   "Keywords of {n} selected photos": "所选 {n} 张照片的关键字",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "已从 {n} 张照片中移除“{name}”。编辑 → 撤销可恢复。",
   "1 task is still running: {names}. Quitting stops it.": "仍有 1 个任务在运行：{names}。退出将停止它。",
   "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 个任务在运行：{names}。退出将停止它们。",
+  "{n} tasks": "{n} 个任务",
   "{what} merge cancelled": "已取消 {what} 合并",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已跳过 {n} 张本地照片{0:.0}：相册只能收录图库中的照片（请先添加到我的照片）",
   "New Folder in “{name}”": "在“{name}”中新建文件夹",
@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "+{n} more": "还有 {n} 项"
 }

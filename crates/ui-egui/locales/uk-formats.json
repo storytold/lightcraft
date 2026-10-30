@@ -238,13 +238,13 @@
   "{done} of {total}": "{done} з {total}",
   "{done} of {total} MB": "{done} з {total} МБ",
   "{pct} %": "{pct} %",
-  "+{n} more": "+{n} ще",
   "Create the keyword “{name}”": "Створити ключове слово «{name}»",
   "new, inside {parent}": "нове, всередині {parent}",
   "Keywords of {n} selected photos": "Ключові слова вибраних фото: {n}",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "«{name}» вилучено з фото: {n}. Редагування → Скасувати поверне його.",
   "1 task is still running: {names}. Quitting stops it.": "1 завдання ще виконується: {names}. Вихід зупинить його.",
   "{n} tasks are still running: {names}. Quitting stops them.": "Ще виконуються завдання ({n}): {names}. Вихід зупинить їх.",
+  "{n} tasks": "Завдань: {n}",
   "{what} merge cancelled": "Об’єднання {what} скасовано",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальних фото: {n}{0:.0} — в альбомах лише фото з бібліотеки (спершу додайте їх до моїх фото)",
   "New Folder in “{name}”": "Нова тека в «{name}»",
@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "+{n} more": "+{n} ще"
 }

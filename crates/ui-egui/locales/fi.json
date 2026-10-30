@@ -39,7 +39,6 @@
   "About LightCraft": "Tietoja LightCraftista",
   "Accept & Download": "Hyväksy ja lataa",
   "Active": "Aktiivinen",
-  "Activity": "Toiminta",
   "Actual size": "Todellinen koko",
   "Add": "Lisää",
   "Add Catchlight": "Lisää silmänvalo",
@@ -1848,7 +1847,6 @@
   "Show in File Manager": "Näytä tiedostonhallinnassa",
   "Show in Finder": "Näytä Finderissa",
   "Show in Library": "Näytä Kirjastossa",
-  "Show less": "Näytä vähemmän",
   "Show mask": "Näytä maski",
   "Show on Map": "Näytä kartalla",
   "Show overlay (O)": "Näytä peittokuva (O)",
@@ -2327,5 +2325,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Imports, exports and other long jobs show here while they run.": "Tuonnit, viennit ja muut pitkät työt näkyvät tässä, kun ne ovat käynnissä.",
+  "No tasks are running": "Ei käynnissä olevia tehtäviä",
+  "Tasks": "Tehtävät"
 }

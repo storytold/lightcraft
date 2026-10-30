@@ -49,7 +49,6 @@
   "About LightCraft": "Om LightCraft",
   "Accept & Download": "Acceptera och hämta",
   "Active": "Aktiv",
-  "Activity": "Aktivitet",
   "Actual size": "Verklig storlek",
   "Add": "Addera",
   "Add a model file…": "Lägg till en modellfil…",
@@ -1991,7 +1990,6 @@
   "Show in File Manager": "Visa i filhanteraren",
   "Show in Finder": "Visa i Finder",
   "Show in Library": "Visa i Bibliotek",
-  "Show less": "Visa färre",
   "Show Luminance Map": "Visa luminanskarta",
   "Show Mask": "Visa mask",
   "Show mask": "Visa mask",
@@ -2429,5 +2427,8 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Imports, exports and other long jobs show here while they run.": "Importer, exporter och andra långa jobb visas här medan de pågår.",
+  "No tasks are running": "Inga uppgifter körs",
+  "Tasks": "Uppgifter"
 }
