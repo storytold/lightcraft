@@ -2151,7 +2151,6 @@
   "We": "Rb",
   "Wednesday": "Rabu",
   "What's New": "Yang baru",
-  "When rated or hovered": "Saat diberi rating atau saat kursor di atasnya",
   "White Balance": "Keseimbangan putih",
   "White Balance Selector": "Pemilih keseimbangan putih",
   "White Balance Selector (W)": "Pemilih keseimbangan putih (W)",
@@ -2339,5 +2338,12 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Right-click ▸ Locate Missing File… to find it again.": "Klik kanan → Temukan file hilang… untuk menemukannya lagi.",
+  "Right-click ▸ Reload from Disk to try again.": "Klik kanan → Muat ulang dari disk untuk mencoba lagi.",
+  "Stack — click to collapse (S)": "Tumpukan — klik untuk menciutkan (S)",
+  "Stack — click to expand (S)": "Tumpukan — klik untuk meluaskan (S)",
+  "Stars on hover": "Bintang saat kursor di atas",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Bintang saat kursor di atas: bendera dan label warna selalu tampil; bintang dan tanda telah diedit muncul saat kursor berada di atas foto atau foto dipilih.",
+  "Virtual copy": "Salinan virtual"
 }

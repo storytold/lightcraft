@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} 張相似照片{:.0} · 選擇「檢視 → 清除篩選條件」可查看全部",
   "Moved; {} photo(s) relinked": "已移動；已重新連結 {} 張照片",
   "{} label (click more labels to show any of them)": "{}標籤（點擊更多標籤可顯示符合其中任一標籤的照片）",
-  ", {} star{}": "，{} 顆星{:.0}",
   ", {} label": "，{}標籤",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  ", rating {} of 5": "，評分：{}/5"
 }

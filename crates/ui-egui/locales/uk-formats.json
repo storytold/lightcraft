@@ -198,7 +198,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Подібних фото: {n}{:.0} · Вигляд → Скинути фільтри, щоб побачити всі",
   "Moved; {} photo(s) relinked": "Переміщено; повторно пов’язано фото: {}",
   "{} label (click more labels to show any of them)": "Мітка «{}» (клацніть інші мітки, щоб показати фото з будь-якою з них)",
-  ", {} star{}": ", зірок: {}{:.0}",
   ", {} label": ", мітка: {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Завантажується з {host}. Після отримання й перевірки LightCraft установлює модель, {after}.",
   "{:.1} MB": "{:.1} МБ",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  ", rating {} of 5": ", оцінка: {} з 5"
 }

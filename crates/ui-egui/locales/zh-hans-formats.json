@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} 张相似照片{0:.0} · 选择“视图 → 清除过滤器”可查看全部",
   "Moved; {} photo(s) relinked": "已移动；已重新链接 {0} 张照片",
   "{} label (click more labels to show any of them)": "{0}标签（单击更多标签可显示符合其中任一标签的照片）",
-  ", {} star{}": "，{0} 星{1:.0}",
   ", {} label": "，{0}标签",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "从 {host} 下载。下载完成并通过校验后，LightCraft 会进行安装，{after}。",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  ", rating {} of 5": "，评分：{}/5"
 }

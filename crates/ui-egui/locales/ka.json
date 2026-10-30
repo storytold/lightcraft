@@ -2252,7 +2252,8 @@
   "What's New": "რა არის ახალი",
   "When GPU rendering is on but no graphics processor can be found, LightCraft now says so once at start-up instead": "როცა GPU რენდერი ჩართულია, მაგრამ გრაფიკული პროცესორი ვერ მოიძებნა, LightCraft ახლა ამას გაშვებისას ერთხელ გეუბნებათ, ნაცვლად იმისა,",
   "When a folder holds several file types, the Import Photos review has a toggle per type (`ARW · 120`, `JPG · 120`):": "როცა საქაღალდეში რამდენიმე ტიპის ფაილია, ფოტოების იმპორტის მიმოხილვას თითო ტიპზე გადამრთველი აქვს (`ARW · 120`, `JPG · 120`):",
-  "When rated or hovered": "შეფასებისას ან კურსორის მიტანისას",
+  "Stars on hover": "ვარსკვლავები კურსორის მიტანისას",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "ვარსკვლავები კურსორის მიტანისას: დროშები და ფერადი ჭდეები ყოველთვის ჩანს; ვარსკვლავები და რედაქტირების ნიშანი ჩნდება, როცა ფოტო კურსორის ქვეშაა ან მონიშნულია.",
   "White Balance": "თეთრის ბალანსი",
   "White Balance Selector": "თეთრის ბალანსის ამრჩევი",
   "White Balance Selector (W)": "თეთრის ბალანსის ამრჩევი (W)",
@@ -2734,5 +2735,10 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Stack — click to expand (S)": "დასტა — დააწკაპუნეთ გასაშლელად (S)",
+  "Stack — click to collapse (S)": "დასტა — დააწკაპუნეთ ჩასაკეცად (S)",
+  "Virtual copy": "ვირტუალური ასლი",
+  "Right-click ▸ Locate Missing File… to find it again.": "მარჯვენა დაწკაპუნება → დაკარგული ფაილის მოძებნა… ფაილის ხელახლა საპოვნელად.",
+  "Right-click ▸ Reload from Disk to try again.": "მარჯვენა დაწკაპუნება → დისკიდან ხელახლა ჩატვირთვა, ხელახლა საცდელად."
 }

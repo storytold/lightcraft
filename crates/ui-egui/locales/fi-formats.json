@@ -22,7 +22,6 @@
   "+{} more": "+{} lisää",
   ", {failed} file{} not readable": ", ei luettavissa olevia tiedostoja: {failed}{:.0}",
   ", {} label": ", {} merkintä",
-  ", {} star{}": ", tähtiä {}{:.0}",
   "1 task is still running: {names}. Quitting stops it.": "1 tehtävä on yhä käynnissä: {names}. Lopettaminen pysäyttää sen.",
   "; {kept} already had a location": "; jo sijaintitiedolliset: {kept}",
   "; {n} gained synonyms": "; {n} sai synonyymejä",
@@ -305,5 +304,6 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  ", rating {} of 5": ", luokitus: {} / 5"
 }

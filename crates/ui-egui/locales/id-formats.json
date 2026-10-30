@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} foto serupa{:.0} · Tampilan → Hapus filter untuk melihat semua",
   "Moved; {} photo(s) relinked": "Dipindahkan; {} foto ditautkan ulang",
   "{} label (click more labels to show any of them)": "Label {} (klik label lain untuk ikut menampilkan foto berlabel tersebut)",
-  ", {} star{}": ", {} bintang{:.0}",
   ", {} label": ", label {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Diunduh dari {host}. Setelah selesai diunduh dan lolos pemeriksaan, LightCraft akan menginstalnya, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  ", rating {} of 5": ", rating: {} dari 5"
 }

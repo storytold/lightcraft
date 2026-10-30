@@ -1598,7 +1598,8 @@
   "Watermark": "Filigrana",
   "Wednesday": "Mercoledì",
   "What's New": "Novità",
-  "When rated or hovered": "Quando ha una valutazione o è sotto il puntatore",
+  "Stars on hover": "Stelle al passaggio",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Stelle al passaggio: i contrassegni e le etichette colore sono sempre visibili; le stelle e il segno di modifica compaiono quando la foto è sotto il puntatore o selezionata.",
   "White Balance": "Bilanciamento del bianco",
   "White Balance Selector": "Selettore del bilanciamento del bianco",
   "White Balance Selector (W)": "Selettore del bilanciamento del bianco (W)",
@@ -2361,5 +2362,10 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Stack — click to expand (S)": "Pila — clic per espandere (S)",
+  "Stack — click to collapse (S)": "Pila — clic per comprimere (S)",
+  "Virtual copy": "Copia virtuale",
+  "Right-click ▸ Locate Missing File… to find it again.": "Clic destro → Trova file mancante… per ritrovarlo.",
+  "Right-click ▸ Reload from Disk to try again.": "Clic destro → Ricarica dal disco per riprovare."
 }

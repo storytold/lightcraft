@@ -2035,7 +2035,8 @@
   "We": "St",
   "Wednesday": "Středa",
   "What's New": "Co je nového",
-  "When rated or hovered": "Při hodnocení nebo najetí myší",
+  "Stars on hover": "Hvězdy při najetí",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Hvězdy při najetí: vlajky a barevné štítky jsou vidět vždy; hvězdy a značka úprav se zobrazí, když je fotka pod myší nebo vybraná.",
   "White Balance": "Vyvážení bílé",
   "White Balance Selector": "Kapátko vyvážení bílé",
   "White Balance Selector (W)": "Kapátko vyvážení bílé (W)",
@@ -2408,5 +2409,10 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Stack — click to expand (S)": "Sada — kliknutím rozbalíte (S)",
+  "Stack — click to collapse (S)": "Sada — kliknutím sbalíte (S)",
+  "Virtual copy": "Virtuální kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Klikněte pravým tlačítkem → Najít chybějící soubor… a najděte jej znovu.",
+  "Right-click ▸ Reload from Disk to try again.": "Klikněte pravým tlačítkem → Znovu načíst z disku a zkuste to znovu."
 }

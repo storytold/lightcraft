@@ -1532,7 +1532,8 @@
   "Watermark": "Znak wodny",
   "Wednesday": "Środa",
   "What's New": "Co nowego",
-  "When rated or hovered": "Po ocenieniu lub wskazaniu kursorem",
+  "Stars on hover": "Gwiazdki po wskazaniu",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Gwiazdki po wskazaniu: flagi i kolorowe etykiety są widoczne zawsze; gwiazdki i znak edycji pojawiają się, gdy zdjęcie jest wskazane kursorem lub zaznaczone.",
   "White Balance": "Balans bieli",
   "White Balance Selector": "Próbnik balansu bieli",
   "White Balance Selector (W)": "Próbnik balansu bieli (W)",
@@ -2283,5 +2284,10 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Stack — click to expand (S)": "Stos — kliknij, aby rozwinąć (S)",
+  "Stack — click to collapse (S)": "Stos — kliknij, aby zwinąć (S)",
+  "Virtual copy": "Kopia wirtualna",
+  "Right-click ▸ Locate Missing File… to find it again.": "Kliknij prawym przyciskiem → Znajdź brakujący plik…, aby go odnaleźć ponownie.",
+  "Right-click ▸ Reload from Disk to try again.": "Kliknij prawym przyciskiem → Wczytaj ponownie z dysku, aby spróbować jeszcze raz."
 }

@@ -18,7 +18,6 @@
   "+{} more": "+{} dalších",
   ", {failed} file{} not readable": ", nečitelné soubory: {failed}{:.0}",
   ", {} label": ", štítek: {}",
-  ", {} star{}": ", hvězdičky: {}{:.0}",
   "1 task is still running: {names}. Quitting stops it.": "Stále běží 1 úloha: {names}. Ukončení aplikace ji zastaví.",
   "; {kept} already had a location": "; {kept} již mělo polohu",
   "; {n} gained synonyms": "; {n} získalo synonyma",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  ", rating {} of 5": ", hodnocení: {} z 5"
 }

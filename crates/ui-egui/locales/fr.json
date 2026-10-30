@@ -1567,7 +1567,8 @@
   "Watermark": "Filigrane",
   "Wednesday": "Mercredi",
   "What's New": "Nouveautés",
-  "When rated or hovered": "Lors de la notation ou du survol",
+  "Stars on hover": "Étoiles au survol",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Étoiles au survol : les drapeaux et les étiquettes de couleur sont toujours visibles ; les étoiles et la marque de retouche apparaissent quand une photo est survolée ou sélectionnée.",
   "White Balance": "Balance des blancs",
   "White Balance Selector": "Sélecteur de balance des blancs",
   "White Balance Selector (W)": "Sélecteur de balance des blancs (W)",
@@ -2390,5 +2391,10 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Stack — click to expand (S)": "Pile — cliquer pour déplier (S)",
+  "Stack — click to collapse (S)": "Pile — cliquer pour replier (S)",
+  "Virtual copy": "Copie virtuelle",
+  "Right-click ▸ Locate Missing File… to find it again.": "Clic droit → Localiser le fichier manquant… pour le retrouver.",
+  "Right-click ▸ Reload from Disk to try again.": "Clic droit → Recharger depuis le disque pour réessayer."
 }

@@ -186,7 +186,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Podobne zdjęcia: {n}{:.0} · Widok → Wyczyść filtry, aby zobaczyć wszystkie",
   "Moved; {} photo(s) relinked": "Przeniesiono; ponownie powiązane zdjęcia: {}",
   "{} label (click more labels to show any of them)": "{} etykieta (kliknij kolejne etykiety, aby wyświetlić dowolną z nich)",
-  ", {} star{}": ", gwiazdki: {}{:.0}",
   ", {} label": ", {} etykieta",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Pobieranie z {host}. Po pobraniu i weryfikacji LightCraft zainstaluje plik, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  ", rating {} of 5": ", ocena: {} na 5"
 }

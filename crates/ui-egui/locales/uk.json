@@ -1526,7 +1526,8 @@
   "Watched folder": "Відстежувана тека",
   "Watermark": "Водяний знак",
   "What's New": "Що нового",
-  "When rated or hovered": "Після оцінювання або наведення",
+  "Stars on hover": "Зірки при наведенні",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Зірки при наведенні: прапорці й кольорові мітки видно завжди; зірки та позначка редагування з’являються, поки фото під курсором або вибране.",
   "White Balance": "Баланс білого",
   "White Balance Selector": "Вибір балансу білого",
   "White Balance Selector (W)": "Вибір балансу білого (W)",
@@ -2354,5 +2355,10 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Stack — click to expand (S)": "Стос — клацніть, щоб розгорнути (S)",
+  "Stack — click to collapse (S)": "Стос — клацніть, щоб згорнути (S)",
+  "Virtual copy": "Віртуальна копія",
+  "Right-click ▸ Locate Missing File… to find it again.": "Клацніть правою кнопкою → Знайти відсутній файл…, щоб знайти його знову.",
+  "Right-click ▸ Reload from Disk to try again.": "Клацніть правою кнопкою → Перезавантажити з диска, щоб спробувати ще раз."
 }

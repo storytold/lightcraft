@@ -2351,7 +2351,6 @@
   "were missing, without touching anything already set.": "saknades, utan att röra något som redan var angivet.",
   "What's New": "Nyheter",
   "When pins show on the photo (Shift+H cycles)": "När nålar visas på fotot (Shift+H växlar)",
-  "When rated or hovered": "När det har betyg eller pekaren är över",
   "when the browser may evict the library. Hosting: the sample cache headers no longer mark the (unhashed) files": "när webbläsaren kan rensa bort biblioteket. Webbhotell: exemplets cache-huvuden markerar inte längre de (ohashade) filerna",
   "whether originals are there is checked on a worker thread (grid thumbnails, the Info panel, the photo menu, Missing": "om originalen finns kontrolleras i en arbetstråd (rutnätsminiatyrer, panelen Info, fotomenyn, Saknas",
   "White Balance": "Vitbalans",
@@ -2429,5 +2428,12 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Right-click ▸ Locate Missing File… to find it again.": "Högerklicka → Leta upp saknad fil… för att hitta den igen.",
+  "Right-click ▸ Reload from Disk to try again.": "Högerklicka → Läs in igen från disk för att försöka igen.",
+  "Stack — click to collapse (S)": "Stapel — klicka för att komprimera (S)",
+  "Stack — click to expand (S)": "Stapel — klicka för att expandera (S)",
+  "Stars on hover": "Stjärnor vid pekaren",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Stjärnor vid pekaren: flaggor och färgetiketter visas alltid; stjärnorna och märket för redigerad visas när pekaren är över ett foto eller när det är markerat.",
+  "Virtual copy": "Virtuell kopia"
 }

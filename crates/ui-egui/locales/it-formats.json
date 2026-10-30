@@ -195,7 +195,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Foto simili: {n}{:.0} · Visualizza → Cancella filtri per vederle tutte",
   "Moved; {} photo(s) relinked": "Spostata; foto ricollegate: {}",
   "{} label (click more labels to show any of them)": "Etichetta {} (fai clic su altre etichette per mostrarne una qualsiasi)",
-  ", {} star{}": ", stelle: {}{:.0}",
   ", {} label": ", etichetta {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Scaricato da {host}. Quando è arrivato ed è stato verificato, LightCraft lo installa e {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  ", rating {} of 5": ", valutazione: {} su 5"
 }
