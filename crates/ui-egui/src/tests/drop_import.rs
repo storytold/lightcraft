@@ -822,18 +822,187 @@ fn a_waiting_review_never_replaces_a_running_import() {
     h.step();
     let Some(review) = h.app.ui.dialog.clone() else { panic!("the review opens once the dialog is closed") };
     assert!(matches!(review, Dialog::Import { .. }));
-    // an import that started anyway (a Local folder browse, say) is the one that runs
+    // an import that started anyway (a Local folder browse, say) is the one that runs: the review's OK waits behind it
     h.app.import = Some(crate::import::ImportTask::new(vec![dir.path("more")], json!({"mode": "add"}), 0, false));
-    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &review).is_err(), "the review's OK is refused");
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &review);
+    assert!(r.as_ref().is_ok_and(|v| v["queued"].as_u64().is_some()), "the review's OK waits in line: {r:?}");
     assert_eq!(h.app.import.as_ref().map(|t| t.total), Some(1), "the running import stays");
-    assert!(h.step_until(SETTLE, |h| h.app.import.is_none()), "it runs to the end");
-    assert_eq!(photos(&h), 1, "only the running import's photo arrives");
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "both run to the end");
+    assert_eq!(photos(&h), 3, "the running import's photo arrives, then the review's two");
 }
 
-/// A drop while an import runs would open a review whose OK replaces the running import: it is
+/// Given a Local folder being read, when an import review is confirmed, then its OK waits in line like any import
+/// asked for while the lane is taken (it is not refused with "An import is running"), and runs when the read ends.
+#[test]
+fn a_review_confirmed_while_a_local_folder_is_read_waits_in_line() {
+    let dir = Scratch::new("review-browse");
+    let mut h = app(&dir);
+    crate::import::open(&mut h.app, vec![dir.path("trip")]).unwrap();
+    assert!(h.step_until(SETTLE, |h| h.app.scan.is_none()), "the scan ends");
+    h.step();
+    let Some(review) = h.app.ui.dialog.clone() else { panic!("the review is open") };
+    let _browse = crate::import::stall_scan_of(&mut h.app, true);
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &review);
+    assert!(r.as_ref().is_ok_and(|v| v["queued"].as_u64().is_some()), "the review's OK waits in line: {r:?}");
+    h.app.scan = None;
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "it ran");
+    assert_eq!(photos(&h), 2, "the review's two photos");
+}
+
+/// Given Auto Import's folder listing that comes in while another import runs, then what it found waits in line and
+/// is imported when that import ends: the files are not offered again (the engine has noted them as tried).
+#[test]
+fn an_auto_import_that_finds_files_while_an_import_runs_waits_in_line() {
+    let dir = Scratch::new("auto-waits");
+    let mut h = app(&dir);
+    write_png(&dir.path("watched/w.png"), 7);
+    let watched = dir.path("watched");
+    h.app.session.import_defaults.auto_folder = Some(watched.clone());
+    let listing = || lightcraft_engine::cmd::library::list_auto_import_folder(&watched).unwrap();
+    // (a file is taken once its size has stayed the same between two listings)
+    crate::import::auto_import_listed(&mut h.app, listing());
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    crate::import::auto_import_listed(&mut h.app, listing());
+    assert_eq!(h.app.session.activity.waiting().iter().map(|t| t.kind).collect::<Vec<_>>(), vec!["import"], "it waits in line");
+    assert!(h.app.ui.toast.is_none(), "an Auto Import is quiet: {:?}", h.app.ui.toast);
+    drop(hold);
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "it ran");
+    assert_eq!(photos(&h), 1, "w.png came in");
+}
+
+/// Given an Auto Import that waits in line, when it is taken out of the line (the ✕, `activity.cancel`), then its
+/// files are offered again: the next listings import them (they were noted as tried when the scan handed them over).
+#[test]
+fn an_auto_import_taken_out_of_the_line_is_offered_again() {
+    let dir = Scratch::new("auto-untried");
+    let mut h = app(&dir);
+    write_png(&dir.path("watched/w.png"), 7);
+    let watched = dir.path("watched");
+    h.app.session.import_defaults.auto_folder = Some(watched.clone());
+    let listing = || lightcraft_engine::cmd::library::list_auto_import_folder(&watched).unwrap();
+    crate::import::auto_import_listed(&mut h.app, listing());
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    crate::import::auto_import_listed(&mut h.app, listing());
+    let waiting = h.app.session.activity.waiting();
+    assert_eq!(waiting.len(), 1, "it waits in line");
+    h.app.session.activity.cancel(waiting[0].id).unwrap();
+    drop(hold);
+    // (the file is taken again once its size has stayed the same between two listings)
+    crate::import::auto_import_listed(&mut h.app, listing());
+    crate::import::auto_import_listed(&mut h.app, listing());
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "it ran");
+    assert_eq!(photos(&h), 1, "w.png came in after all");
+}
+
+/// Given an Auto Import that waits in line for its album, when the album is deleted before its turn and the start is
+/// refused, then its files are offered again: the next listings import them.
+#[test]
+fn an_auto_import_whose_start_is_refused_is_offered_again() {
+    let dir = Scratch::new("auto-refused");
+    let mut h = app(&dir);
+    write_png(&dir.path("watched/w.png"), 7);
+    let watched = dir.path("watched");
+    h.app.session.import_defaults.auto_folder = Some(watched.clone());
+    h.app.session.import_defaults.auto_album = Some("Arrivals".into());
+    let album = h.app.session.execute("album.create", &json!({"name": "Arrivals"})).unwrap()["id"].as_u64().unwrap();
+    let listing = || lightcraft_engine::cmd::library::list_auto_import_folder(&watched).unwrap();
+    crate::import::auto_import_listed(&mut h.app, listing());
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    crate::import::auto_import_listed(&mut h.app, listing());
+    assert_eq!(h.app.session.activity.waiting().len(), 1, "it waits in line");
+    h.app.session.execute("album.delete", &json!({"id": album})).unwrap();
+    drop(hold);
+    h.step();
+    assert!(h.app.import.is_none() && h.app.session.activity.list().is_empty(), "its start was refused: nothing runs");
+    assert_eq!(photos(&h), 0);
+    crate::import::auto_import_listed(&mut h.app, listing());
+    crate::import::auto_import_listed(&mut h.app, listing());
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "it ran");
+    assert_eq!(photos(&h), 1, "w.png came in after all");
+}
+
+/// Given a line that is full, when Auto Import's listing comes in while an import runs, then the folder is left to its
+/// next listing (its files aren't noted as tried), and imported once there is room.
+#[test]
+fn an_auto_import_with_no_room_in_line_is_left_for_the_next_listing() {
+    use lightcraft_engine::activity::{Cancel, MAX_WAITING, Request};
+    let dir = Scratch::new("auto-full");
+    let mut h = app(&dir);
+    write_png(&dir.path("watched/w.png"), 7);
+    let watched = dir.path("watched");
+    h.app.session.import_defaults.auto_folder = Some(watched.clone());
+    let listing = || lightcraft_engine::cmd::library::list_auto_import_folder(&watched).unwrap();
+    let hold = h.app.session.activity.start("import", "Importing", Cancel::Yes);
+    for _ in 0..MAX_WAITING {
+        h.app.session.activity.enqueue("import", "Importing", Request { command: "app:import".into(), params: json!({}) }).unwrap();
+    }
+    crate::import::auto_import_listed(&mut h.app, listing());
+    crate::import::auto_import_listed(&mut h.app, listing());
+    assert_eq!(h.app.session.activity.waiting().len(), MAX_WAITING, "no room: nothing was added");
+    h.app.session.activity.cancel_all();
+    crate::import::auto_import_listed(&mut h.app, listing());
+    crate::import::auto_import_listed(&mut h.app, listing());
+    assert_eq!(h.app.session.activity.waiting().iter().map(|t| t.kind).collect::<Vec<_>>(), vec!["import"], "now it waits in line");
+    drop(hold);
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "it ran");
+    assert_eq!(photos(&h), 1, "w.png came in");
+}
+
+/// Given an import that runs, when photos are dropped directly on the window, then they are not refused: they wait in
+/// line behind it and are imported when it ends.
+#[test]
+fn a_direct_drop_while_an_import_runs_waits_in_line() {
+    let dir = Scratch::new("running-waits");
+    let mut h = app(&dir);
+    h.app.ui.settings.import_dropped_directly = true;
+    write_png(&dir.path("more/c.png"), 3);
+    // (held by a row of the lane, so that it can't finish between the frames of the drop)
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    drop_files(&mut h, &[dir.path("trip")], false);
+    assert_eq!(h.app.session.activity.waiting().iter().map(|t| t.kind).collect::<Vec<_>>(), vec!["import"]);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Queued")), "{:?}", h.app.ui.toast);
+    drop(hold);
+    assert!(h.step_until(SETTLE, |h| h.app.import.is_none() && h.app.session.activity.list().is_empty()), "both run to the end");
+    assert_eq!(photos(&h), 2, "the dropped folder's two photos");
+}
+
+/// Given an import that runs and two more waiting in line behind it, then each waiting one has a row saying when it
+/// starts and a ✕ named for it; ✕ takes that one out of the line and leaves the running import alone.
+#[test]
+fn a_waiting_import_shows_a_row_and_its_cross_takes_it_out_of_the_line() {
+    let dir = Scratch::new("waiting-rows");
+    let mut h = app(&dir);
+    h.app.ui.settings.import_dropped_directly = true;
+    write_png(&dir.path("more/c.png"), 3);
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    drop_files(&mut h, &[dir.path("trip")], false);
+    drop_files(&mut h, &[dir.path("more")], false);
+    let waiting = h.app.session.activity.waiting();
+    assert_eq!(waiting.len(), 2, "{waiting:?}");
+    let (first, second) = (waiting[0].id, waiting[1].id);
+    for _ in 0..3 {
+        h.step();
+    }
+    let drawn = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    assert!(drawn(&h, &format!("activity:row:{first}")) && drawn(&h, &format!("activity:row:{second}")), "a row each: {:?}", h.app.widgets);
+    assert!(said(&h, "Starts next") && said(&h, "Starts after 1 more"), "{:?}", h.painted_text());
+    let cross = format!("activity:cancel:{second}");
+    assert!(drawn(&h, &cross), "✕ on the waiting row");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": cross}), T)["ok"], true);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.app.session.activity.waiting().iter().map(|t| t.id).collect::<Vec<_>>(), vec![first], "only the first still waits");
+    assert!(!drawn(&h, &format!("activity:row:{second}")), "its row is gone");
+    assert!(h.app.session.activity.list().iter().any(|t| !t.waiting && t.kind == "import"), "the running import is untouched");
+    assert!(!hold.is_cancelled());
+    drop(hold);
+}
+
+/// A drop while a scan runs would open a review whose OK replaces the import the scan starts: it is
 /// refused instead, and the card says so.
 #[test]
-fn a_drop_while_an_import_runs_is_refused() {
+fn a_drop_while_a_scan_runs_is_refused() {
     let dir = Scratch::new("running");
     let mut h = app(&dir);
     write_png(&dir.path("more/c.png"), 3);
@@ -851,9 +1020,9 @@ fn a_drop_while_an_import_runs_is_refused() {
     assert_eq!(photos(&h), 0);
 }
 
-/// An import that is running stays the one that runs: a direct drop doesn't start a second.
+/// A scan that is running stays the one that runs: a direct drop doesn't start a second import beside it.
 #[test]
-fn a_direct_drop_while_an_import_runs_is_refused_too() {
+fn a_direct_drop_while_a_scan_runs_is_refused_too() {
     let dir = Scratch::new("running-direct");
     let mut h = app(&dir);
     h.app.ui.settings.import_dropped_directly = true;

@@ -1148,6 +1148,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan) → {imported, folder, warnings?: [{path, code, profile?, mode?, fields?}], import?}",
             always,
             |s, p| {
+                s.untry_auto_imports();
                 let Some(folder) = s.import_defaults.auto_folder.clone() else { return Ok(json!({"imported": [], "folder": null})) };
                 // only files that stopped growing: a file still being written is left for later
                 let known: std::collections::HashSet<String> = s

@@ -16,8 +16,6 @@
   "=  exactly": "=  přesně",
   "A blank template keeps the original names.": "Prázdná šablona zachová původní názvy.",
   "A filter is hiding this view's photos: change it, or clear it (View → Clear Filters)": "Fotografie v tomto zobrazení skrývá filtr: změňte jej nebo jej zrušte (Zobrazení → Zrušit filtry)",
-  "A folder is already being synchronized": "Již probíhá synchronizace složky",
-  "A folder is being synchronized": "Probíhá synchronizace složky",
   "A keyword set needs a name": "Sada klíčových slov musí mít název",
   "A one-time download of about": "Jednorázové stažení přibližně",
   "A pen's pressure sets the size and flow of the brush": "Přítlak pera určuje velikost a tok štětce",
@@ -2024,7 +2022,6 @@
   "Visualize range": "Zobrazit rozsah",
   "Vivid": "Živé",
   "Vivid Pop": "Živé zvýraznění",
-  "Wait for the import to finish": "Počkejte na dokončení importu",
   "Waiting to start…": "Čekání na spuštění…",
   "Warm Film": "Teplý film",
   "Warm Glow": "Teplá záře",
@@ -2408,5 +2405,9 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Queued: it starts when the task ahead of it ends": "Ve frontě: začne, až skončí úloha před ní",
+  "Another library was opened: nothing was done": "Byla otevřena jiná knihovna: nic se neprovedlo",
+  "Photos of the folder changed while it was read: nothing was done": "Fotografie ve složce se během čtení změnily: nic se neprovedlo",
+  "Starts next": "Začne jako další"
 }
