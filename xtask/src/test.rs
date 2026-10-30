@@ -156,37 +156,21 @@ fn names<'a>(packages: impl Iterator<Item = &'a Package>) -> String {
     packages.map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
 }
 
-/// The resource limits a test binary run directly gets, where the caller doesn't set them
-/// ([`super::caller_sets`]: `.cargo/config.toml`'s `RUST_TEST_THREADS` default doesn't count).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Caps {
-    /// `cargo xtask test`: all of CI's caps ([`super::apply_ci_caps`]), so `RUST_TEST_THREADS` is
-    /// the RAM-aware `min(build jobs by available RAM, 4)` that `ci`'s cargo runs get.
-    Ci,
-    /// `ci --quick`: only `RUST_TEST_THREADS = min(CPUs, 4)`, its default before `test` existed.
-    QuickCi,
-}
-
 /// Run one test binary as `cargo test` would (from its package's directory, with its
-/// `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`) under `caps`, with `args`; skips the tests record
-/// go to `skip_log`. The one place `test` and `ci --quick` start a test binary and wait for it.
-/// The error says how it ended: its exit status, the signal that killed it, or why it didn't start.
-pub fn run_binary(root: &Path, binary: &Binary, args: &[&str], skip_log: Option<&Path>, caps: Caps) -> Result<(), String> {
+/// `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`) under CI's caps ([`super::apply_ci_caps`]: where the
+/// caller doesn't set it, `RUST_TEST_THREADS` is the RAM-aware `min(build jobs by available RAM, 4)`
+/// of `ci`'s cargo runs; `.cargo/config.toml`'s default doesn't count, [`super::caller_sets`]), with
+/// `args`; skips the tests record go to `skip_log`. The one place `test` and `ci --quick` start a
+/// test binary and wait for it. The error says how it ended: its exit status, the signal that killed
+/// it, or why it didn't start.
+pub fn run_binary(root: &Path, binary: &Binary, args: &[&str], skip_log: Option<&Path>) -> Result<(), String> {
     let dir = Path::new(&binary.manifest).parent().unwrap_or(root);
     let mut c = Command::new(&binary.exe);
     c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", &binary.package).args(args);
     if let Some(log) = skip_log {
         c.env(crate::ci_report::SKIP_LOG_ENV, log);
     }
-    match caps {
-        Caps::Ci => super::apply_ci_caps(&mut c),
-        Caps::QuickCi => {
-            if !super::caller_sets("RUST_TEST_THREADS") {
-                // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
-                c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
-            }
-        }
-    }
+    super::apply_ci_caps(&mut c);
     let shown = std::iter::once(binary.label()).chain(args.iter().map(|a| (*a).to_owned())).collect::<Vec<_>>().join(" ");
     eprintln!("$ {shown}");
     let status = c.status().map_err(|e| format!("failed to start: {e}"))?;
@@ -242,7 +226,7 @@ pub fn selected(root: &Path, packages: &BTreeSet<String>, skip_log: &Path) -> Re
         println!("no test binaries in {}", names(packages.values()));
         return Ok(());
     }
-    let outcome = run_all(&binaries, true, |b| run_binary(root, b, &[], Some(skip_log), Caps::QuickCi));
+    let outcome = run_all(&binaries, true, |b| run_binary(root, b, &[], Some(skip_log)));
     if outcome.failed.is_empty() {
         Ok(())
     } else {
@@ -356,7 +340,7 @@ pub fn run(raw: &[&str]) -> Result<(), String> {
         if binaries.is_empty() {
             println!("no test binaries in {}", names(packages.values()));
         }
-        let outcome = run_all(&binaries, args.keep_going, |b| run_binary(&root, b, &args.test_args, None, Caps::Ci));
+        let outcome = run_all(&binaries, args.keep_going, |b| run_binary(&root, b, &args.test_args, None));
         summary.push(format!("{} of {} test binaries passed", outcome.passed, binaries.len()));
         if outcome.not_run > 0 {
             summary.push(format!("{} not run after the first failure (--keep-going runs them)", outcome.not_run));
@@ -549,7 +533,7 @@ mod tests {
     #[test]
     fn a_binary_that_cannot_start_reports_why() {
         let missing = Binary { package: "a".into(), manifest: "/nonexistent/a/Cargo.toml".into(), exe: "/nonexistent/a/target/a-0".into() };
-        let err = run_binary(Path::new("/nonexistent"), &missing, &[], None, Caps::QuickCi).unwrap_err();
+        let err = run_binary(Path::new("/nonexistent"), &missing, &[], None).unwrap_err();
         assert!(err.starts_with("failed to start:"), "{err}");
     }
 
@@ -557,9 +541,9 @@ mod tests {
     #[test]
     fn a_failing_binary_reports_its_exit_status() {
         let binary = Binary { package: "sh".into(), manifest: "/Cargo.toml".into(), exe: "/bin/sh".into() };
-        let err = run_binary(Path::new("/"), &binary, &["-c", "exit 3"], None, Caps::QuickCi).unwrap_err();
+        let err = run_binary(Path::new("/"), &binary, &["-c", "exit 3"], None).unwrap_err();
         assert_eq!(err, "exit status: 3");
-        let err = run_binary(Path::new("/"), &binary, &["-c", "kill -9 $$"], None, Caps::QuickCi).unwrap_err();
+        let err = run_binary(Path::new("/"), &binary, &["-c", "kill -9 $$"], None).unwrap_err();
         assert!(err.contains("SIGKILL"), "{err}");
     }
 }
