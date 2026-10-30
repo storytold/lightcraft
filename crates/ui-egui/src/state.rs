@@ -319,7 +319,7 @@ pub struct UiState {
     pub navigator: bool,
     /// App preferences (Settings dialog).
     pub settings: AppSettings,
-    /// Window full screen requested (⇧⌘F); the host applies it (`None` = no change pending).
+    /// Window full screen requested (⇧⌘F, ⌃⌘F on macOS); the host applies it (`None` = no change pending).
     #[serde(skip)]
     pub window_fullscreen: Option<bool>,
     /// Compare view: (select, candidate) photo ids.

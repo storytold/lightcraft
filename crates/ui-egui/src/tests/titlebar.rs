@@ -139,14 +139,14 @@ fn the_search_field_stays_centred_on_the_window() {
     assert_eq!(windowed.center().x, window_centre, "windowed, the field is centred on the window");
     // the filter icon rides with the field, so it moves whenever the field does
     let filter = widget(&h, "icon:filter").center().x;
-    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), T);
+    h.request("ui.menu.invoke", json!({"id": "view.enterFullScreen"}), T);
     play(&mut h);
     assert!(h.app.window_is_fullscreen);
     let full_screen = widget(&h, "field:search");
     assert_eq!(full_screen.center().x, window_centre, "full screen leaves it centred");
     assert_eq!(full_screen.width(), windowed.width(), "and the same width");
     assert_eq!(widget(&h, "icon:filter").center().x, filter);
-    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), T);
+    h.request("ui.menu.invoke", json!({"id": "view.enterFullScreen"}), T);
     play(&mut h);
     assert!(!h.app.window_is_fullscreen);
     assert_eq!(widget(&h, "field:search").center().x, window_centre, "and so does leaving it");
@@ -159,12 +159,12 @@ fn full_screen_moves_the_left_buttons_into_the_traffic_lights_space() {
     let window_right = 1200.0;
     let windowed = widget(&h, "icon:sidebar").left();
     assert_eq!(windowed, 78.0, "windowed, the bar leaves room for the traffic lights");
-    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), T);
+    h.request("ui.menu.invoke", json!({"id": "view.enterFullScreen"}), T);
     play(&mut h);
     assert!(h.app.window_is_fullscreen);
     let right_padding = window_right - widget(&h, "icon:discord").right();
     assert_eq!(widget(&h, "icon:sidebar").left(), right_padding, "My Photos as far from the left edge as Discord is from the right");
-    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), T);
+    h.request("ui.menu.invoke", json!({"id": "view.enterFullScreen"}), T);
     play(&mut h);
     assert!(!h.app.window_is_fullscreen);
     assert_eq!(widget(&h, "icon:sidebar").left(), windowed, "leaving full screen restores the room for the traffic lights");

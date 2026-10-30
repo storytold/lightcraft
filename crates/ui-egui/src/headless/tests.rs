@@ -4351,7 +4351,7 @@ fn settings_dialog_by_keyboard_and_clicks() {
 }
 
 /// F: full-screen preview (arrows step, I cycles the info overlay, Esc exits); ⌘I cycles the
-/// overlay in Detail; ⇧⌘F asks the host for window full screen.
+/// overlay in Detail; ⇧⌘F (⌃⌘F on macOS) asks the host for window full screen.
 #[test]
 fn full_screen_preview_and_info_overlay_by_keyboard() {
     use crate::state::InfoOverlay;
@@ -4382,9 +4382,11 @@ fn full_screen_preview_and_info_overlay_by_keyboard() {
     assert_eq!(h.app.ui.info_overlay, InfoOverlay::Exposure);
     h.request("ui.key", json!({"key": "i", "cmd": true}), t);
     assert_eq!(h.app.ui.info_overlay, InfoOverlay::Off);
-    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), t);
+    // ⌃⌘F on macOS (the system's key), ⇧⌘F elsewhere
+    let window_full_screen = json!({"key": "f", "cmd": true, "ctrl": cfg!(target_os = "macos"), "shift": !cfg!(target_os = "macos")});
+    h.request("ui.key", window_full_screen.clone(), t);
     assert!(h.app.window_is_fullscreen);
-    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), t);
+    h.request("ui.key", window_full_screen, t);
     assert!(!h.app.window_is_fullscreen);
     h.settle(SETTLE);
 }

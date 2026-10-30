@@ -35,6 +35,59 @@ fn select_only_active_chord(h: &mut crate::headless::Headless) {
     assert_eq!(r["ok"], true, "{r}");
 }
 
+/// On macOS ⌃⌘F (window full screen) is not ⌘F (Find) with Control held, and a bare ⌃F is not
+/// window full screen: Control counts as Command only where Ctrl *is* Command (Windows, Linux).
+/// The menu bar takes both keys itself; this is what the handler does when it gets them (no native
+/// menu, `LIGHTCRAFT_NO_NATIVE_MENU`).
+#[cfg(target_os = "macos")]
+#[test]
+fn control_command_f_is_window_full_screen_and_not_find_and_control_f_is_nothing() {
+    let mut h = library();
+    let t = std::time::Duration::from_secs(20);
+    h.request("ui.key", json!({"key": "f", "ctrl": true}), t);
+    h.step();
+    assert!(!h.app.window_is_fullscreen, "⌃F alone is not window full screen");
+    h.request("ui.key", json!({"key": "f", "cmd": true, "ctrl": true}), t);
+    h.step();
+    assert!(h.app.window_is_fullscreen, "⌃⌘F is");
+    assert!(!h.app.ui.focus_search && !h.app.text_focus, "and it doesn't also run Find (⌘F)");
+}
+
+/// On macOS a Control binding (⌃H, HDR…) is Control alone: ⌃⌘H, which is Command's, doesn't run it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_control_binding_does_not_match_with_command_held_on_macos() {
+    let mut h = library();
+    let t = std::time::Duration::from_secs(20);
+    h.app.session.execute("library.select", &json!({"ids": [1, 2, 3]})).unwrap();
+    h.request("ui.key", json!({"key": "h", "cmd": true, "ctrl": true}), t);
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "⌃⌘H is not ⌃H");
+    h.request("ui.key", json!({"key": "h", "ctrl": true}), t);
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "⌃H opens HDR…");
+}
+
+/// ⌃⌘F, the macOS default of window full screen, survives Restore and recording: Control is never
+/// Command there, so the saved text keeps both, and Find (⌘F) keeps its own key.
+#[cfg(target_os = "macos")]
+#[test]
+fn control_command_f_survives_restore_and_recording_without_taking_finds_key() {
+    let mut keymap = crate::shortcuts::Keymap::new();
+    crate::shortcuts::assign(&mut keymap, "view.enterFullScreen", None).unwrap();
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.enterFullScreen"), None, "cleared");
+    let lost = crate::shortcuts::reset(&mut keymap, "view.enterFullScreen").unwrap();
+    assert!(lost.is_empty(), "Restore takes no other command's key: {lost:?}");
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.enterFullScreen"), Some("Ctrl+Cmd+F"));
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.focusSearch"), Some("Cmd+F"));
+    // recording the chord: the dialog hands over what `format` writes for the key press
+    let recorded = crate::shortcuts::format(egui::Modifiers { ctrl: true, mac_cmd: true, command: true, ..Default::default() }, egui::Key::F);
+    assert_eq!(recorded.as_deref().and_then(crate::shortcuts::parse), crate::shortcuts::parse("Ctrl+Cmd+F"));
+    let lost = crate::shortcuts::assign(&mut keymap, "view.enterFullScreen", recorded.as_deref()).unwrap();
+    assert!(lost.is_empty(), "recording ⌃⌘F takes no other command's key: {lost:?}");
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "view.focusSearch"), Some("Cmd+F"));
+}
+
 #[test]
 fn select_only_active_keeps_the_active_photo_and_the_edit_undo_step() {
     use crate::state::ViewMode;

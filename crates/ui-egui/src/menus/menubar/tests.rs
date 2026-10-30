@@ -823,3 +823,36 @@ fn no_two_menu_commands_share_a_label() {
     }
     assert!(clashes.is_empty(), "{clashes:#?}");
 }
+
+/// The View menu's window full screen row: `(label, shortcut, checked)`.
+fn window_full_screen_row(a: &LightcraftApp) -> (String, Option<String>, Option<bool>) {
+    let bar = menu_bar(a);
+    let view = &bar.iter().find(|(title, _)| title == "View").unwrap().1;
+    match find(view, "view.enterFullScreen") {
+        Some(MenuNode::Item { label, shortcut, checked, .. }) => (label.clone(), shortcut.clone(), *checked),
+        other => panic!("View has no Enter Full Screen row: {other:?}"),
+    }
+}
+
+/// Given the macOS menu bar (AppKit's own full-screen row is switched off), Then LightCraft's row
+/// is the only one, reads Exit Full Screen while the window is full screen like every Mac app's,
+/// takes the system key ⌃⌘F, and shows no check mark besides the changing label.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_the_window_full_screen_row_flips_its_label_and_takes_the_system_key() {
+    let mut a = app();
+    a.window_is_fullscreen = false;
+    assert_eq!(window_full_screen_row(&a), ("Enter Full Screen".into(), Some("Ctrl+Cmd+F".into()), None));
+    a.window_is_fullscreen = true;
+    assert_eq!(window_full_screen_row(&a), ("Exit Full Screen".into(), Some("Ctrl+Cmd+F".into()), None));
+}
+
+/// Given the in-window menu of Windows and Linux, Then the row keeps its label, its ⇧Ctrl+F key
+/// and its check mark.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn off_macos_the_window_full_screen_row_keeps_its_label_key_and_check_mark() {
+    let mut a = app();
+    a.window_is_fullscreen = true;
+    assert_eq!(window_full_screen_row(&a), ("Enter Full Screen".into(), Some("Cmd+Shift+F".into()), Some(true)));
+}

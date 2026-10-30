@@ -425,7 +425,8 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "library.holdView" => Some(app.session.hold_view),
         "view.fullScreenPreview" => Some(u.fullscreen),
         "view.lightsOut" => Some(u.lights_out != crate::state::LightsOut::On),
-        "view.enterFullScreen" => Some(app.window_is_fullscreen),
+        // macOS says it in the label instead (`live_label`), as AppKit's own row does
+        "view.enterFullScreen" => (!cfg!(target_os = "macos")).then_some(app.window_is_fullscreen),
         "panel.edit" => panel(RightPanel::Edit),
         "panel.profiles" => panel(RightPanel::Profiles),
         "panel.crop" => panel(RightPanel::Crop),
@@ -456,6 +457,7 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
         "photo.virtualCopy" if n > 1 => crate::i18n::tr_format!("Create {n} Virtual Copies", n = n),
         "dialog.rename" if n > 1 => crate::i18n::tr_format!("Rename {n} Photos…", n = n),
         "app.showInFinder" => crate::i18n::tr(crate::menus::reveal_label()).to_string(),
+        "view.enterFullScreen" if cfg!(target_os = "macos") && app.window_is_fullscreen => "Exit Full Screen".into(),
         _ => label.to_string(),
     }
 }
