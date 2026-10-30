@@ -17,6 +17,9 @@ use crate::state::ViewMode;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
+/// How dark (alpha of black) the photos being dragged are painted: as dark as a rejected photo's thumbnail.
+const DRAGGED_DIM: u8 = 110;
+
 /// Thumbnail render size (pixels, long edge) for a cell of `pts` points.
 fn thumb_px(pts: f32, ppp: f32) -> usize {
     let px = (pts * ppp).ceil() as usize;
@@ -406,6 +409,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         // only the rows on screen and a screen above and below it (their thumbnails are prefetched)
         let prefetch = viewport.expand2(vec2(0.0, viewport.height()));
+        // the photos a drag carries, as a set once per frame: a cell asks about itself, and a large selection mustn't be scanned for each
+        let dragged: Option<HashSet<u64>> = app.ui.dragging_photos.as_ref().map(|d| d.iter().copied().collect());
         for row in rows_between(&lay.rows, prefetch.top(), prefetch.bottom()) {
             for i in row.start..row.end {
                 let (Some(&id), Some(&rect)) = (ids.get(i), lay.cells.get(i)) else { continue };
@@ -416,7 +421,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 visible_ids.insert(id);
                 let r = rect.translate(origin.to_vec2());
                 let onscreen = rect.intersects(viewport);
-                cell(app, ui, id, r, square, onscreen, ppp);
+                cell(app, ui, id, r, CellDraw { square, onscreen, ppp }, dragged.as_ref());
                 if let Some((sid, pos)) = stacks.get(&id) {
                     stack_badge(app, ui, id, *sid, *pos, r, square);
                 }
@@ -763,7 +768,15 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
-fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
+/// How a grid cell is drawn: square cells or justified ones, whether it is on screen, the screen's pixels per point.
+struct CellDraw {
+    square: bool,
+    onscreen: bool,
+    ppp: f32,
+}
+
+fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, draw: CellDraw, dragged: Option<&HashSet<u64>>) {
+    let CellDraw { square, onscreen, ppp } = draw;
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     let resp = ui.interact(r, egui::Id::unique(("cell", id.0)), Sense::click_and_drag());
@@ -781,7 +794,14 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     } else {
         r
     };
-    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, selected, active, onscreen, ppp });
+    // the photos being dragged step back while the drag lasts: what moves is the label at the pointer, and a drop's
+    // target is the thing to look at. Those are the photos a drop would carry (`drag_started` below takes the
+    // selection of that moment), whatever the selection becomes before the button is let go. The dimming goes
+    // right over the thumbnail, under the selection ring, labels and badges, so those stay as bright as ever; a
+    // rejected photo already has its own dimming (the same shade, painted further down, over its marks), so a
+    // dragged one keeps that one and is dimmed once, not twice.
+    let dim = photo.flag != Flag::Reject && dragged.is_some_and(|dragged| dragged.contains(&id.0));
+    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, selected, active, onscreen, ppp, dim });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
     paint_cell_badges(app, p, &t, &photo, img_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
@@ -814,7 +834,12 @@ fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> S
 }
 
 fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) {
-    let ThumbFlags { square, selected, active, onscreen, ppp } = flags;
+    let ThumbFlags { square, selected, active, onscreen, ppp, dim } = flags;
+    let dim_dragged = |p: &egui::Painter, rect: Rect| {
+        if dim {
+            p.rect_filled(rect, 0.0, Color32::from_black_alpha(DRAGGED_DIM));
+        }
+    };
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
     if let Some(tex) = app.renderer.thumb(id) {
@@ -822,6 +847,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         // Preserve the decoded preview's ratio when it differs from the catalog dimensions.
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
         p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        dim_dragged(p, fit);
         if active {
             p.rect_stroke(fit.expand(if square { 2.0 } else { 0.0 }), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
         } else if selected {
@@ -830,6 +856,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, t.skeleton);
+        dim_dragged(p, ph);
         // not drawn yet (or unreadable): the selection is still visible
         if active {
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
@@ -987,6 +1014,8 @@ struct ThumbFlags {
     active: bool,
     onscreen: bool,
     ppp: f32,
+    /// a photo being dragged: painted darker
+    dim: bool,
 }
 
 struct BadgeFlags {
