@@ -1067,6 +1067,11 @@ fn avif_ten_bit() {
 /// unknown keys (naming the nearest known one) and values of the wrong kind or range.
 #[test]
 fn export_params_are_validated() {
+    assert_invalid_export_params();
+    assert_export_options_round_trip();
+}
+
+fn assert_invalid_export_params() {
     use serde_json::json;
     let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
     let e = err(json!({"longEdgee": 400}));
@@ -1092,6 +1097,11 @@ fn export_params_are_validated() {
             .to_string()
             .starts_with("invalid parameters for `export.savePreset`")
     );
+}
+
+fn assert_export_options_round_trip() {
+    use serde_json::json;
+    let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
     // everything the presets, the dialog, Export with Previous and `render --opt` send passes
     for p in builtin_presets() {
         ExportOptions::from_params(&p.params).unwrap_or_else(|e| panic!("{}: {e}", p.name));

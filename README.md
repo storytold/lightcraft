@@ -570,6 +570,14 @@ option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-window
 A silent install is per-user by default. `INSTALLFOLDER` chooses the folder, not who it is installed for;
 add `ALLUSERS=1`, from an elevated terminal or deployment tool, for an all-users install.
 
+**Update or uninstall asks for an old `.msi`, or stops with error 1612 or 1714?** Windows removes the installed version
+with its own cached copy of that version's installer; if the copy is gone, it asks for the original file and stops
+(an update then ends with error 1603). Download the release MSI of the version and build you have installed from
+[all releases](https://github.com/storytold/lightcraft/releases) and run
+`msiexec /fv "<path to that .msi>" /qb+ /norestart`, approving the permission prompt if Windows shows one. That restores
+the cached copy; then retry the update or uninstall. Opening the MSI, or choosing Repair or Uninstall on it, may still
+fail. Error 1603 has other causes too; if this doesn't help, open an issue with the error message.
+
 ### macOS
 
 | Build | File | Notes |

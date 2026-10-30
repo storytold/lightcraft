@@ -214,6 +214,32 @@ fn switching_language_translates_and_restores() {
     assert_eq!(tr("Exposure"), "Exposure");
 }
 
+fn assert_format_specs(language: &Locale) {
+    let text = tr_format!("{count} smart preview{} · {:.1} MB", "s", 12.345, count = 3);
+    assert!(text.contains("12.3") && !text.contains("12.34"), "{language:?}: {text}");
+    let merging = tr_format!("Merging… {stage} {:.0}%", 42.4, stage = "Aligning");
+    assert!(merging.contains("42%"), "{language:?}: {merging}");
+    let delta = tr_format!("{label} {d:+} on every selected photo", label = "Exposure", d = 5);
+    assert!(delta.contains("+5"), "{language:?}: {delta}");
+    let reading = tr_format!("Reading photos… {} of {}", 3, 10);
+    let (three, ten) = (reading.find('3'), reading.find("10"));
+    assert!(three.is_some() && ten.is_some(), "{language:?}: {reading}");
+}
+
+fn assert_format_values_kept(language: &Locale) {
+    let name = "Color 1234.56 {title} 日本語";
+    let added = tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22);
+    assert!(added.contains(name) && added.contains("22"), "{language:?}: {added}");
+    for n in [0, 1, 2, 5, 22] {
+        let imported = tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" });
+        assert!(imported.contains(&n.to_string()), "{language:?}: {imported}");
+    }
+    // The trailing argument is queue progress, not an English plural suffix.
+    let queued = tr_format!(" · {queued} waiting", queued = 5);
+    let denoising = tr_format!("Denoising {name}: {done} of {total} tiles{}", queued, name = "IMG.CR3", done = 1, total = 4);
+    assert!(denoising.contains("IMG.CR3") && denoising.contains('5'), "{language:?}: {denoising}");
+}
+
 /// Format strings carry their values in every language, and a language without a translation
 /// falls back to the English format rather than dropping the values.
 #[test]
@@ -228,26 +254,8 @@ fn formats_render_in_every_language() {
     // text (an album name with braces and CJK) and counts are never dropped.
     for language in Locale::ALL {
         set_language(*language);
-        let text = tr_format!("{count} smart preview{} · {:.1} MB", "s", 12.345, count = 3);
-        assert!(text.contains("12.3") && !text.contains("12.34"), "{language:?}: {text}");
-        let merging = tr_format!("Merging… {stage} {:.0}%", 42.4, stage = "Aligning");
-        assert!(merging.contains("42%"), "{language:?}: {merging}");
-        let delta = tr_format!("{label} {d:+} on every selected photo", label = "Exposure", d = 5);
-        assert!(delta.contains("+5"), "{language:?}: {delta}");
-        let reading = tr_format!("Reading photos… {} of {}", 3, 10);
-        let (three, ten) = (reading.find('3'), reading.find("10"));
-        assert!(three.is_some() && ten.is_some(), "{language:?}: {reading}");
-        let name = "Color 1234.56 {title} 日本語";
-        let added = tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22);
-        assert!(added.contains(name) && added.contains("22"), "{language:?}: {added}");
-        for n in [0, 1, 2, 5, 22] {
-            let imported = tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" });
-            assert!(imported.contains(&n.to_string()), "{language:?}: {imported}");
-        }
-        // The trailing argument is queue progress, not an English plural suffix.
-        let queued = tr_format!(" · {queued} waiting", queued = 5);
-        let denoising = tr_format!("Denoising {name}: {done} of {total} tiles{}", queued, name = "IMG.CR3", done = 1, total = 4);
-        assert!(denoising.contains("IMG.CR3") && denoising.contains('5'), "{language:?}: {denoising}");
+        assert_format_specs(language);
+        assert_format_values_kept(language);
     }
     set_language(Locale::En);
     assert_eq!(tr_format!("Reading photos… {} of {}", 3, 10), "Reading photos… 3 of 10");
@@ -1128,24 +1136,7 @@ fn a_dropped_photos_notice_names_every_outcome_of_the_import_and_is_silent_for_d
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Polish: the menu and control channel select it, dates read day.month.year, and every count
-/// reads right for any number. Polish has three plural forms (1 zdjęcie, 2 zdjęcia, 5 zdjęć), so
-/// counts follow their noun ("Zaimportowane zdjęcia: 22") instead of a form that fits only some.
-#[test]
-fn polish_switches_formats_dates_and_reads_every_count() {
-    use crate::control::{ControlRequest, Outcome};
-    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
-    app.run("app.language.polish", serde_json::json!({})).unwrap();
-    assert_eq!(app.ui.language, Locale::Pl);
-    assert_eq!(Locale::Pl.name(), "Polski");
-    assert_eq!(crate::menubar::checked(&app, "app.language.polish"), Some(true));
-    assert_eq!(tr("File"), "Plik");
-    assert_eq!(tr("Exposure"), "Ekspozycja");
-    assert_eq!(date_group_label("2026-09-20", false), "Niedziela, 20.09.2026");
-    assert_eq!(date_group_label("2026-09-20", true), "Niedziela, 20");
-    assert_eq!(date_group_label("2026-09", false), "09.2026");
-    assert_eq!(date_group_label("2026", false), "2026");
-    assert_eq!(display_time("2026-09-20T16:04:05"), "Niedziela, 20.09.2026 16:04:05");
+fn assert_polish_counts() {
     for n in [0, 1, 2, 3, 4, 5, 12, 21, 22, 25, 111] {
         let s = if n == 1 { "" } else { "s" };
         assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("Zaimportowane zdjęcia: {n}"));
@@ -1159,20 +1150,20 @@ fn polish_switches_formats_dates_and_reads_every_count() {
         assert_eq!(tr_format!("Delete {n} Photos", n = n), format!("Usuń zdjęcia ({n})"));
         assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("Ustawienia: {n}"));
     }
-    let name = String::from("Color 1234.56 {title} 日本語");
-    assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Dodano do „{name}”: 22"));
-    let saved = serde_json::to_string(&app.ui).unwrap();
-    assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Pl);
-    let ctx = egui::Context::default();
+}
+
+fn assert_polish_selected_by_tags(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
+    use crate::control::{ControlRequest, Outcome};
     for tag in ["pl", "pl-PL", "pl_PL.UTF-8", "PL-pl"] {
         assert_eq!(Locale::parse_tag(tag), Some(Locale::Pl), "{tag}");
         let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": tag}));
-        let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
+        let Outcome::Done(reply) = crate::control::handle(app, ctx, &request) else { panic!("expected reply") };
         assert_eq!(reply["ok"], true);
         assert_eq!(language(), Locale::Pl);
     }
-    let text = painted_text(&ctx, &mut app, Locale::Pl);
-    assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");
+}
+
+fn assert_polish_glyphs(ctx: &egui::Context) {
     ctx.fonts_mut(|fonts| {
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
             let font = egui::FontId::new(13.0, family);
@@ -1181,5 +1172,34 @@ fn polish_switches_formats_dates_and_reads_every_count() {
             }
         }
     });
+}
+
+/// Polish: the menu and control channel select it, dates read day.month.year, and every count
+/// reads right for any number. Polish has three plural forms (1 zdjęcie, 2 zdjęcia, 5 zdjęć), so
+/// counts follow their noun ("Zaimportowane zdjęcia: 22") instead of a form that fits only some.
+#[test]
+fn polish_switches_formats_dates_and_reads_every_count() {
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    app.run("app.language.polish", serde_json::json!({})).unwrap();
+    assert_eq!(app.ui.language, Locale::Pl);
+    assert_eq!(Locale::Pl.name(), "Polski");
+    assert_eq!(crate::menubar::checked(&app, "app.language.polish"), Some(true));
+    assert_eq!(tr("File"), "Plik");
+    assert_eq!(tr("Exposure"), "Ekspozycja");
+    assert_eq!(date_group_label("2026-09-20", false), "Niedziela, 20.09.2026");
+    assert_eq!(date_group_label("2026-09-20", true), "Niedziela, 20");
+    assert_eq!(date_group_label("2026-09", false), "09.2026");
+    assert_eq!(date_group_label("2026", false), "2026");
+    assert_eq!(display_time("2026-09-20T16:04:05"), "Niedziela, 20.09.2026 16:04:05");
+    assert_polish_counts();
+    let name = String::from("Color 1234.56 {title} 日本語");
+    assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Dodano do „{name}”: 22"));
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Pl);
+    let ctx = egui::Context::default();
+    assert_polish_selected_by_tags(&mut app, &ctx);
+    let text = painted_text(&ctx, &mut app, Locale::Pl);
+    assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");
+    assert_polish_glyphs(&ctx);
     set_language(Locale::En);
 }

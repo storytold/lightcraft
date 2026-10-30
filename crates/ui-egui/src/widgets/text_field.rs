@@ -162,14 +162,10 @@ impl<'a> TextField<'a> {
         self
     }
 
-    /// Draw the field and return its response, any ending this frame, and whether an edit is
-    /// under way. Per-frame state keeps the pre-edit text for Esc, the selection across the
-    /// context menu, and select-on-focus; single-line Enter ends the edit, and focus loss ends it
-    /// except when the focus went to the field's own menu (a choice from the menu resumes the
-    /// edit). The menu offers cut/copy/paste/select-all (paste is omitted on the web; egui also
-    /// handles their keyboard shortcuts), and a field not drawn on the previous pass starts clean.
-    pub fn show(self, ui: &mut Ui) -> TextFieldResponse {
-        let id = id(self.widget);
+    /// The field's remembered state at the start of a pass: a field not drawn on the previous pass starts afresh,
+    /// a begun edit or a choice made from the menu last frame is carried out, and a field focused by the previous
+    /// pass selects its text when it asks to.
+    fn prepare(&self, ui: &mut Ui, id: egui::Id) -> Memo {
         let mut memo: Memo = ui.data_mut(|d| d.get_temp(id.with("memo"))).unwrap_or_default();
         // a field not drawn last frame (its dialog or panel closed) starts afresh: an edit, a menu
         // or a choice from it that was under way is gone with it
@@ -207,6 +203,19 @@ impl<'a> TextField<'a> {
             memo.before = Some(self.text.clone());
             select_all(ui.ctx(), id, self.text);
         }
+        memo
+    }
+
+    /// Draw the field and return its response, any ending this frame, and whether an edit is
+    /// under way. Per-frame state keeps the pre-edit text for Esc, the selection across the
+    /// context menu, and select-on-focus; single-line Enter ends the edit, and focus loss ends it
+    /// except when the focus went to the field's own menu (a choice from the menu resumes the
+    /// edit). The menu offers cut/copy/paste/select-all (paste is omitted on the web; egui also
+    /// handles their keyboard shortcuts), and a field not drawn on the previous pass starts clean.
+    pub fn show(self, ui: &mut Ui) -> TextFieldResponse {
+        let id = id(self.widget);
+        let pass = ui.ctx().cumulative_pass_nr();
+        let mut memo = self.prepare(ui, id);
         let name = self.label.clone().or_else(|| self.hint.clone());
         let mut edit = if self.multiline { egui::TextEdit::multiline(self.text) } else { egui::TextEdit::singleline(self.text) };
         edit = edit.id(id);

@@ -1,6 +1,6 @@
 use super::display::duration_slider;
 use super::widgets::{check, choices, heading, hint, row};
-use super::*;
+use super::{LightcraftApp, Tokens, Value, json, register};
 
 /// The Slideshow tab: the slide preview, then the settings, in one column the width of the page
 /// (the page scrolls; a column beside the preview would be wider than the window). Without

@@ -2775,6 +2775,109 @@ fn browse_a_local_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn hide_rects(h: &mut Headless) -> Vec<(String, Vec<f64>)> {
+    let w = h.request("ui.widgets", json!({"filter": "source:local:"}), Duration::from_secs(10));
+    w["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| (x["id"].as_str().unwrap().to_string(), x["rect"].as_array().unwrap().iter().filter_map(|v| v.as_f64()).collect()))
+        .collect()
+}
+
+fn hide_ids(h: &mut Headless) -> Vec<String> {
+    hide_rects(h).into_iter().map(|(id, _)| id).collect()
+}
+
+fn hide_menu(h: &mut Headless) -> Vec<String> {
+    let w = h.request("ui.widgets", json!({"filter": "local:restoreHidden:"}), Duration::from_secs(10));
+    w["result"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// Hides `path` through the command and settles the frames.
+fn hide_path(h: &mut Headless, path: &str) {
+    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+}
+
+/// Keeps and browses `path` the way Browse Folder… does; returns whether anything was hidden before.
+fn hide_browse_and_hide(h: &mut Headless, path: &str, size: [f32; 2]) -> bool {
+    let t = Duration::from_secs(10);
+    // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
+    // request runs frames, so keep it first (no frame sees it browsed but not yet kept)
+    let r = h.request("engine.execute", json!({"command": "local.addRoot", "params": {"path": path}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": path}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let row = format!("source:local:{path}");
+    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the browsed folder is listed: {:?}", hide_ids(h));
+    // the "Show hidden locations" row appears only while something is hidden
+    let hidden_before = !h.app.ui.hidden_locations.is_empty();
+    assert_eq!(hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), hidden_before);
+    // hide it while it is still being browsed
+    hide_path(h, path);
+    // give any listing a reveal would wait for time to arrive
+    for _ in 0..20 {
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    h.settle(SETTLE);
+    let after = hide_rects(h);
+    let after_ids: Vec<&str> = after.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(!after_ids.contains(&format!("source:local:{path}").as_str()), "{after_ids:?}");
+    let restore = after.iter().find(|(id, _)| id == "source:local:restoreHidden").map(|(_, r)| r.clone());
+    let restore = restore.unwrap_or_else(|| panic!("no restore row: {after_ids:?}"));
+    assert!(restore[1] >= 0.0 && restore[1] + restore[3] <= f64::from(size[1]), "the restore row is in view: {restore:?} {after_ids:?}");
+    assert!(h.app.session.browse.is_some(), "hiding does not stop browsing");
+    hidden_before
+}
+
+/// A second hidden place: the row lists them, and each comes back on its own (issue #2114:
+/// the row used to bring every hidden place back at once).
+fn hide_second_place_restores_alone(h: &mut Headless, path: &str, path2: &str) {
+    let t = Duration::from_secs(10);
+    for (command, params) in [("local.addRoot", json!({"path": path2})), ("local.hide", json!({"path": path2}))] {
+        let r = h.request("engine.execute", json!({"command": command, "params": params}), t);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(SETTLE);
+    assert!(hide_menu(h).is_empty(), "the list opens from the row");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
+    h.settle(SETTLE);
+    let items = hide_menu(h);
+    assert!(items.contains(&format!("local:restoreHidden:{path}")) && items.contains(&"local:restoreHidden:all".to_string()), "{items:?}");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("local:restoreHidden:{path}")}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert!(!h.app.ui.hidden_locations.iter().any(|x| x == path), "{:?}", h.app.ui.hidden_locations);
+    assert!(h.app.ui.hidden_locations.iter().any(|x| x == path2), "the other place stays hidden");
+    assert!(hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), "still something to restore");
+}
+
+fn hide_restore_all_then_single(h: &mut Headless, path: &str, path2: &str, hidden_before: bool) {
+    let t = Duration::from_secs(10);
+    // two hidden again: Restore All brings every one back
+    hide_path(h, path);
+    assert!(h.app.ui.hidden_locations.len() >= 2, "{:?}", h.app.ui.hidden_locations);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "local:restoreHidden:all"}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
+    assert!(!hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), "nothing left to restore");
+    // one hidden: the row brings it back itself, no list
+    hide_path(h, path2);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert!(hide_menu(h).is_empty(), "no list for a single hidden place");
+    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
+    if !hidden_before {
+        // (with Home hidden for this test, the folder is back inside Home's tree instead)
+        assert!(hide_ids(h).contains(&format!("source:local:{path}")));
+    }
+}
+
 /// Local: Remove from Local hides a sidebar location (nothing on disk changes) and the
 /// "Show hidden locations" row puts it back. The folder is browsed and kept the way Browse
 /// Folder… does it, in the temporary folder — on Windows beneath Home, whose tree must not
@@ -2788,96 +2891,16 @@ fn local_location_can_be_hidden_and_restored() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.to_string_lossy().to_string();
-    let rects = |h: &mut Headless| -> Vec<(String, Vec<f64>)> {
-        let w = h.request("ui.widgets", json!({"filter": "source:local:"}), t);
-        w["result"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| (x["id"].as_str().unwrap().to_string(), x["rect"].as_array().unwrap().iter().filter_map(|v| v.as_f64()).collect()))
-            .collect()
-    };
-    let ids = |h: &mut Headless| -> Vec<String> { rects(h).into_iter().map(|(id, _)| id).collect() };
     h.request("ui.set", json!({"leftPanel": true}), t);
     h.hide_home_above(&dir);
-    // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
-    // request runs frames, so keep it first (no frame sees it browsed but not yet kept)
-    let r = h.request("engine.execute", json!({"command": "local.addRoot", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let row = format!("source:local:{path}");
-    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the browsed folder is listed: {:?}", ids(&mut h));
-    // the "Show hidden locations" row appears only while something is hidden
-    let hidden_before = !h.app.ui.hidden_locations.is_empty();
-    assert_eq!(ids(&mut h).iter().any(|i| i == "source:local:restoreHidden"), hidden_before);
-    // hide it while it is still being browsed
-    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    // give any listing a reveal would wait for time to arrive
-    for _ in 0..20 {
-        h.step();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    h.settle(SETTLE);
-    let after = rects(&mut h);
-    let after_ids: Vec<&str> = after.iter().map(|(id, _)| id.as_str()).collect();
-    assert!(!after_ids.contains(&format!("source:local:{path}").as_str()), "{after_ids:?}");
-    let restore = after.iter().find(|(id, _)| id == "source:local:restoreHidden").map(|(_, r)| r.clone());
-    let restore = restore.unwrap_or_else(|| panic!("no restore row: {after_ids:?}"));
-    assert!(restore[1] >= 0.0 && restore[1] + restore[3] <= f64::from(size[1]), "the restore row is in view: {restore:?} {after_ids:?}");
-    assert!(h.app.session.browse.is_some(), "hiding does not stop browsing");
+    let hidden_before = hide_browse_and_hide(&mut h, &path, size);
     assert!(dir.is_dir(), "the folder itself is untouched");
-    // a second hidden place: the row lists them, and each comes back on its own (issue #2114:
-    // the row used to bring every hidden place back at once)
     let dir2 = std::env::temp_dir().join(format!("lc-ui-hide-{}-b", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir2);
     std::fs::create_dir_all(&dir2).unwrap();
     let path2 = dir2.to_string_lossy().to_string();
-    for (command, params) in [("local.addRoot", json!({"path": path2})), ("local.hide", json!({"path": path2}))] {
-        let r = h.request("engine.execute", json!({"command": command, "params": params}), t);
-        assert_eq!(r["ok"], true, "{r}");
-    }
-    h.settle(SETTLE);
-    let menu = |h: &mut Headless| -> Vec<String> {
-        let w = h.request("ui.widgets", json!({"filter": "local:restoreHidden:"}), t);
-        w["result"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect()
-    };
-    assert!(menu(&mut h).is_empty(), "the list opens from the row");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
-    let items = menu(&mut h);
-    assert!(items.contains(&format!("local:restoreHidden:{path}")) && items.contains(&"local:restoreHidden:all".to_string()), "{items:?}");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("local:restoreHidden:{path}")}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert!(!h.app.ui.hidden_locations.iter().any(|x| x == &path), "{:?}", h.app.ui.hidden_locations);
-    assert!(h.app.ui.hidden_locations.iter().any(|x| x == &path2), "the other place stays hidden");
-    assert!(ids(&mut h).iter().any(|i| i == "source:local:restoreHidden"), "still something to restore");
-    // two hidden again: Restore All brings every one back
-    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(h.app.ui.hidden_locations.len() >= 2, "{:?}", h.app.ui.hidden_locations);
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "local:restoreHidden:all"}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
-    assert!(!ids(&mut h).iter().any(|i| i == "source:local:restoreHidden"), "nothing left to restore");
-    // one hidden: the row brings it back itself, no list
-    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path2}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert!(menu(&mut h).is_empty(), "no list for a single hidden place");
-    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
-    if !hidden_before {
-        // (with Home hidden for this test, the folder is back inside Home's tree instead)
-        assert!(ids(&mut h).contains(&format!("source:local:{path}")));
-    }
+    hide_second_place_restores_alone(&mut h, &path, &path2);
+    hide_restore_all_then_single(&mut h, &path, &path2, hidden_before);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&dir2);
 }

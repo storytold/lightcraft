@@ -1,6 +1,6 @@
 use super::folders::folder_tree;
-use super::rows::row;
-use super::*;
+use super::rows::Row;
+use super::{Icon, LibrarySource, LightcraftApp, SidebarSection, json, register};
 
 /// Local's folders as they stand this frame, and the folder being browsed among them.
 pub(super) struct LocalNow {
@@ -61,8 +61,7 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
         let reveal = local.owner == Some(i);
         folder_tree(app, ui, path, name, path, 0.0, current, reveal, transient);
     }
-    if app.services.pick_folder.is_some() && row(app, ui, "local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…"), None, false, 0.0).clicked()
-    {
+    if app.services.pick_folder.is_some() && Row::new("local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…")).show(app, ui).clicked() {
         let picked = app.services.pick_folder.as_mut().and_then(|f| f());
         if let Some(path) = picked {
             match app.run("library.browse", json!({"path": path})) {
@@ -80,7 +79,8 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
     let hidden = now.hidden.len();
     if hidden > 0 {
         let label = crate::i18n::tr_format!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
-        let resp = row(app, ui, "local:restoreHidden", Icon::Folder, &label, None, false, 0.0)
+        let resp = Row::new("local:restoreHidden", Icon::Folder, &label)
+            .show(app, ui)
             .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"));
         if let [(_, only)] = now.hidden.as_slice() {
             if resp.clicked() {
@@ -505,7 +505,7 @@ mod tests {
         for frame in 0..3 {
             let raw = HeadlessView::raw_input(egui::vec2(300.0, 200.0), 1.0, frame as f64 / 60.0, vec![]);
             view.run(raw, |ui| {
-                super::row(&mut app, ui, "all", super::Icon::Photos, "All Photos", None, false, 0.0);
+                super::Row::new("all", super::Icon::Photos, "All Photos").show(&mut app, ui);
                 super::folder_tree(&mut app, ui, path, "Pictures", path, 0.0, None, false, false);
             });
             widgets = crate::widgets::take_registry(&view.ctx);

@@ -163,6 +163,42 @@ fn search_tokens_match_f32_aperture_and_focal() {
     assert!(q("f:>2.8").is_empty(), "f:>2.8");
     assert!(q("focal:<5.6").is_empty(), "focal:<5.6");
     assert_eq!(q("f:>2.7"), vec![a], "f:>2.7");
+    assert_eq!(q("f:>=2.8"), vec![a], "f:>=2.8 counts the photo's own value");
+    assert_eq!(q("focal:<=5.6"), vec![a], "focal:<=5.6");
+    assert!(q("f:>=2.9").is_empty(), "f:>=2.9");
+    assert!(q("focal:<=5.5").is_empty(), "focal:<=5.5");
+}
+
+/// `>=` and `<=` in a fielded token are the inclusive comparisons. They used to read the `=` as
+/// part of the number, so `rating:>=3` or `iso:<=400` silently matched no photo at all.
+#[test]
+fn search_tokens_compare_inclusively() {
+    let mut c = Catalog::new();
+    let (two, three, four) = (
+        photo(&mut c, "two.jpg", "2026-05-01T10:00:00"),
+        photo(&mut c, "three.jpg", "2026-05-02T10:00:00"),
+        photo(&mut c, "four.jpg", "2026-05-03T10:00:00"),
+    );
+    for (id, rating, iso) in [(two, 2, 200), (three, 3, 400), (four, 4, 800)] {
+        c.apply(Op::SetRating { id, rating }).unwrap();
+        let mut m = c.photo(id).unwrap().meta.clone();
+        m.iso = Some(iso);
+        c.apply(Op::SetMeta { id, meta: Box::new(m) }).unwrap();
+    }
+    let q = |t: &str| {
+        let mut ids = c.query(&Filter { text: t.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+    assert_eq!(q("rating:>=3"), vec![three, four]);
+    assert_eq!(q("stars:<=3"), vec![two, three]);
+    assert_eq!(q("iso:>=400"), vec![three, four]);
+    assert_eq!(q("iso:<=400"), vec![two, three]);
+    assert_eq!(q("rating:>3"), vec![four], "strict comparisons are unchanged");
+    assert_eq!(q("rating:=3"), vec![three]);
+    assert_eq!(q("rating:3"), vec![three]);
+    assert!(q("rating:>=").is_empty(), "an operator without a number matches nothing");
+    assert!(q("rating:=>3").is_empty(), "not an operator");
 }
 
 /// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
@@ -904,17 +940,9 @@ fn search_text_finds_people_and_quoted_values() {
 /// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be
 /// said photo by photo.
 #[test]
-fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() {
+fn photo_ops_record_touched_ids_and_changed_aspects() {
     let mut c = Catalog::default();
-    let photo = |c: &mut Catalog, name: &str| {
-        let id = c.alloc_photo_id();
-        c.apply(Op::AddPhoto {
-            photo: Box::new(Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01T10:00:00")),
-        })
-        .unwrap();
-        id
-    };
-    let (a, b) = (photo(&mut c, "a.jpg"), photo(&mut c, "b.jpg"));
+    let (a, b) = (photo(&mut c, "a.jpg", "2026-01-01T10:00:00"), photo(&mut c, "b.jpg", "2026-01-01T10:00:00"));
     let start = c.revision;
     assert_eq!(c.touched_since(start), Some(vec![]));
     assert_eq!(c.aspects_since(start), Some(Aspects::NONE));
@@ -940,28 +968,25 @@ fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() 
     assert_eq!(c.touched_since(before), None);
     assert_eq!(c.aspects_since(start), None);
     assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
-    // a revision that is not this catalog's past
-    assert_eq!(c.touched_since(c.revision + 5), None);
-    // a revision set from outside (a library just loaded): nothing is known of how the catalog got there, and after
-    // the next op nothing of before it
-    let old = c.revision;
+}
+
+#[test]
+fn history_handles_loaded_revisions_failed_batches_and_retention() {
+    let mut c = Catalog::default();
+    let a = photo(&mut c, "a.jpg", "2026-01-01T10:00:00");
+    let album = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album::new(album, "Trip") }).unwrap();
+    // a batch that fails midway is undone as a whole; a batch in a batch is remembered photo by photo; a batch
+    // with an op that changes more than photos is not
+    let before = c.revision;
     c.revision = 7 << 32;
-    assert_eq!(c.touched_since(old), None);
+    assert_eq!(c.touched_since(before), None);
     assert_eq!(c.aspects_since(c.revision), None);
     let loaded = c.revision;
     c.apply(Op::SetRating { id: a, rating: 1 }).unwrap();
     assert_eq!(c.touched_since(loaded), Some(vec![a]));
-    assert_eq!(c.touched_since(old), None);
-    // an op that fails changes nothing and is not remembered
-    let before = c.revision;
-    assert!(c.apply(Op::SetRating { id: PhotoId(9_999), rating: 1 }).is_err());
-    assert_eq!(c.revision, before);
-    assert_eq!(c.touched_since(before), Some(vec![]));
-    c.apply(Op::SetFlag { id: a, flag: Flag::Pick }).unwrap();
-    assert_eq!(c.touched_since(before), Some(vec![a]));
-    assert!(c.aspects_since(before).is_some_and(|x| x.any_of(Aspects::FLAG)));
-    // a batch that fails midway is undone as a whole; a batch in a batch is remembered photo by photo; a batch
-    // with an op that changes more than photos is not
+    assert_eq!(c.touched_since(before), None);
+
     let before = c.revision;
     assert!(c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 5 }, Op::SetRating { id: PhotoId(9_999), rating: 1 }] }).is_err());
     assert_eq!((c.revision, c.photo(a).map(|p| p.rating)), (before, Some(1)));

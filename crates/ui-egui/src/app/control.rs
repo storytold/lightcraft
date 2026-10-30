@@ -1,4 +1,4 @@
-use super::*;
+use super::{ControlResponse, GESTURE_TIMEOUT_MS, GestureFrame, LightcraftApp, MAX_PENDING_GESTURES, PendingGesture, Sender, Value};
 use crate::control;
 
 impl LightcraftApp {

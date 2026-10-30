@@ -2,7 +2,7 @@ use super::batch::run_batch;
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
-use super::*;
+use super::{ExportOptions, Metadata, OutputDepth};
 
 /// One exported file.
 pub struct Exported {

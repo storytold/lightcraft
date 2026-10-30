@@ -7,7 +7,7 @@ use super::pairs::{
 };
 use super::proxy::{LensGeometry, proxies};
 use super::tone::{HighlightCheck, ToneFit, fit_tone, highlights, highlights_hold};
-use super::*;
+use super::{CameraLook, CameraTransform, D50, D65, HsvTable, Mat3, PROPHOTO, REC2020, RawImage, Rgb32f, ToneMap, bradford, luminance_2020};
 
 /// A camera JPEG pixel's channels may differ by this much (linear) and still count as grey.
 const GREY_SPREAD: f32 = 0.002;

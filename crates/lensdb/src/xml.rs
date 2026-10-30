@@ -74,7 +74,6 @@ fn unescape(s: &str) -> String {
 
 pub(crate) fn parse(s: &str) -> Result<Node, Error> {
     let mut reader = quick_xml::Reader::from_str(s);
-    reader.config_mut().check_end_names = false;
     let mut stack = vec![Node { name: "#root".into(), ..Default::default() }];
     let mut count = 0usize;
     loop {
