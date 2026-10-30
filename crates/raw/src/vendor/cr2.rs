@@ -25,8 +25,8 @@
 
 mod sraw;
 
-use super::{active_rows, black_from_columns, white_from_data};
-use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
+use super::{active_rows, black_from_columns_sourced, white_from_data_sourced};
+use crate::{BlackLevel, Cfa, ColorData, LevelSource, LevelSources, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
 use lightcraft_tiff::{ByteOrder, Ifd, Tiff, Value, makernote, tags as t};
@@ -270,10 +270,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let kelvin_presets = color_data.as_deref().and_then(kelvin_presets_from_color_data);
     let wb = color_data.as_deref().and_then(wb_from_color_balance).or_else(|| wb_from_wb_info(mn.as_ref()?));
     let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
-    let white = white_from_data(&active_rows(&data, width, active), prec as u32);
-    let black = match masked_columns(&data, width, active, white) {
-        cols if cols.len() >= 2 => black_from_columns(&data, width, cols, active.y..active.y + active.height, active),
-        _ => BlackLevel::uniform(0.0),
+    let (white, white_source) = white_from_data_sourced(&active_rows(&data, width, active), prec as u32);
+    let (black, black_source) = match masked_columns(&data, width, active, white) {
+        cols if cols.len() >= 2 => black_from_columns_sourced(&data, width, cols, active.y..active.y + active.height, active),
+        _ => (BlackLevel::uniform(0.0), LevelSource::Fallback),
     };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
@@ -298,6 +298,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         opcodes: OpcodeLists::default(),
         metadata,
         lens_metadata: Default::default(),
+        level_sources: LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -305,6 +306,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::super::black_from_columns;
     use super::*;
     use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
@@ -360,6 +362,15 @@ pub(crate) mod tests {
         TiffWriter::new(ByteOrder::Little, false)
             .write(&[ifd0, IfdBuilder::new().with(1, Value::Short(vec![0])), IfdBuilder::new().with(1, Value::Short(vec![0])), ifd3])
             .unwrap()
+    }
+
+    /// A frame with no masked border and no saturation plateau says so: both levels are fallbacks.
+    #[test]
+    fn levels_without_masked_columns_or_plateau_are_fallbacks() {
+        let (bytes, _) = synthetic_cr2(64, 10, None);
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!(r.level_sources, LevelSources { black: LevelSource::Fallback, white: LevelSource::Fallback });
+        assert_eq!(r.white, vec![16383.0]);
     }
 
     #[test]

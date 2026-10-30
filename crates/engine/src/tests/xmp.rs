@@ -589,6 +589,7 @@ pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xm
     use lightcraft_raw::*;
     let cfa = Cfa::bayer(cfa).unwrap();
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

@@ -44,6 +44,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
     };
     let metadata = lightcraft_meta::Metadata { make: Some("Synth".into()), model: Some("Cam 1".into()), rating: Some(3), ..Default::default() };
     RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

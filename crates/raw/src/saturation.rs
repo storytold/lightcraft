@@ -120,6 +120,7 @@ mod tests {
             })
             .collect();
         RawImage {
+            level_sources: Default::default(),
             format: RawFormat::Dng,
             width: 64,
             height: 64,

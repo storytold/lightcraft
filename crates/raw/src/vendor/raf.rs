@@ -21,7 +21,7 @@
 //!   renders. Bayer bodies (X-A series) use RGGB at (0, 0), verified by colour renders.
 //! - Striped predictive compression is decoded by `rafc`; see `docs/raf-compression.md`.
 
-use super::white_from_data;
+use super::white_from_data_sourced;
 use crate::unpack::{unpack_lsb, unpack_words32_msb};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_geom::Orientation;
@@ -179,24 +179,25 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     let active = if active.width == 0 || active.height == 0 { Rect::new(0, 0, w, hgt) } else { active };
     // black levels: one per CFA position, anchored at (0, 0) of the raw data; re-anchor at the active area
-    let black = match ifd.f64s(0xf00a) {
+    let (black, black_source) = match ifd.f64s(0xf00a) {
         Some(v) if v.len() == cfa.pattern.len() && v.iter().any(|b| *b != v[0]) => {
             let (cw, chh) = (cfa.width, cfa.height);
             let values = (0..chh * cw).map(|i| v[((i / cw + active.y) % chh) * cw + (i % cw + active.x) % cw] as f32).collect();
-            BlackLevel { repeat_rows: chh, repeat_cols: cw, values, ..Default::default() }
+            (BlackLevel { repeat_rows: chh, repeat_cols: cw, values, ..Default::default() }, crate::LevelSource::Metadata)
         }
-        Some(v) if !v.is_empty() => BlackLevel::uniform(v[0] as f32),
-        _ => BlackLevel::uniform(0.0),
+        Some(v) if !v.is_empty() => (BlackLevel::uniform(v[0] as f32), crate::LevelSource::Metadata),
+        _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
     };
     let wb =
         ifd.f64s(0xf00e).filter(|v| v.len() >= 3 && v.iter().take(3).all(|x| *x > 0.0)).map(|v| [(v[1] / v[0]) as f32, 1.0, (v[2] / v[0]) as f32]);
-    let white = white_from_data(&data, bits);
+    let (white, white_source) = white_from_data_sourced(&data, bits);
 
     let mut metadata = h.jpeg.map(lightcraft_meta::extract).unwrap_or_default();
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let orientation = metadata.orientation.unwrap_or(Orientation::Normal);
     let img = RawImage {
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
         format: RawFormat::Raf,
         width: w,
         height: hgt,

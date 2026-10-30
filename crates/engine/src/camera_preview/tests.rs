@@ -181,6 +181,7 @@ fn camera_jpeg_matches_the_sensor_proxy_size_exactly() {
 fn linear_arw_gets_a_sensor_proxy_without_demosaicing() {
     use lightcraft_raw::{BlackLevel, ColorData, OpcodeLists, Orientation, RawData, RawFormat, Rect};
     let mut raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Arw,
         width: 32,
         height: 32,
@@ -567,6 +568,7 @@ fn hue_sat_keeps_colours_the_table_leaves_bright_exactly_as_before() {
 fn raw_of(format: RawFormat, make: &str, model: &str, color: lightcraft_raw::ColorData) -> RawImage {
     let area = lightcraft_raw::Rect::new(0, 0, 2, 2);
     RawImage {
+        level_sources: Default::default(),
         format,
         width: 2,
         height: 2,
@@ -1987,6 +1989,7 @@ fn monochrome_look_reads_the_files_black_and_white_jpeg() {
     let (w, h) = (192usize, 128usize);
     let level = |x: usize, y: usize| 0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32);
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Arw,
         width: w,
         height: h,

@@ -83,11 +83,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         _ => return Err(RawError::Unsupported("Erf raw without a 2x2 CFAPattern".into())),
     };
     let mn = maker_note(bytes, &tiff);
-    let black = match mn.as_ref().and_then(|m| m.u64s(MN_BLACK)).as_deref() {
-        Some(v @ [_, _, _, _]) if v.iter().all(|&b| b < 4095) => {
-            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: v.iter().map(|&b| b as f32).collect(), delta_h: vec![], delta_v: vec![] }
-        }
-        _ => BlackLevel::uniform(0.0),
+    let (black, black_source) = match mn.as_ref().and_then(|m| m.u64s(MN_BLACK)).as_deref() {
+        Some(v @ [_, _, _, _]) if v.iter().all(|&b| b < 4095) => (
+            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: v.iter().map(|&b| b as f32).collect(), delta_h: vec![], delta_v: vec![] },
+            crate::LevelSource::Metadata,
+        ),
+        _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
     };
     let size = mn.as_ref().and_then(|m| Some((m.u32(MN_WIDTH)? as usize, m.u32(MN_HEIGHT)? as usize)));
     let crop = match size {
@@ -103,13 +104,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .ok_or_else(|| RawError::Corrupt("Erf strip outside file".into()))?;
     let mut d = vec![0u16; n];
     unpack(src, &mut d);
-    let white = super::white_from_data(&d, 12);
+    let (white, white_source) = super::white_from_data_sourced(&d, 12);
     let wb = crate::wb_estimate::as_shot(bytes, &crate::wb_estimate::Frame { data: &d, width: w, crop, cfa: &cfa, black: &black, white });
     let data = if mode == Mode::Full { RawData::U16(d) } else { RawData::U16(Vec::new()) };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
         format: RawFormat::Erf,
         width: w,
         height: h,

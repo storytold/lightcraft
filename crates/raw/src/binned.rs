@@ -148,6 +148,7 @@ mod tests {
     fn raw_from(n: &Normalized, black: f32, white: f32) -> RawImage {
         let data = n.data.iter().map(|&v| (v * (white - black) + black).round() as u16).collect();
         RawImage {
+            level_sources: Default::default(),
             format: RawFormat::Dng,
             width: n.width,
             height: n.height,

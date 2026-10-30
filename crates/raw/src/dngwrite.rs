@@ -542,6 +542,7 @@ pub fn write_rendered_dng(
         ..Default::default()
     };
     let raw = RawImage {
+        level_sources: Default::default(),
         format: crate::RawFormat::Dng,
         width,
         height,
@@ -580,6 +581,7 @@ mod tests {
         let (w, h) = (8usize, 8usize);
         let full = Rect::new(0, 0, w, h);
         let raw = RawImage {
+            level_sources: Default::default(),
             format: RawFormat::Dng,
             width: w,
             height: h,

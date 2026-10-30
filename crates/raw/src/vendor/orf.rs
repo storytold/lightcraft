@@ -36,7 +36,7 @@
 //!   pattern is anchored at the sensor origin (assumed) or at the active area. Files without a usable tag fall back
 //!   to the green diagonal found from the data, which can't tell red from blue (GRBG or RGGB is assumed).
 
-use super::{cfa_from_exif, white_from_data};
+use super::{cfa_from_exif, white_from_data_sourced};
 use crate::tiffraw::{Packing, read_image};
 use crate::unpack::unpack_msb;
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
@@ -294,13 +294,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         _ => Rect::new(0, 0, w, h),
     };
     let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
-    let black = match ip.as_ref().and_then(|i| i.f64s(BLACK)).as_deref() {
+    let (black, black_source) = match ip.as_ref().and_then(|i| i.f64s(BLACK)).as_deref() {
         Some(v @ [_, _, _, _]) => {
             let a = cfa.shifted(active.x, active.y);
             let values = a.pattern.iter().map(|&c| [v[0], (v[1] + v[2]) / 2.0, v[3]][c as usize] as f32).collect();
-            BlackLevel { repeat_rows: 2, repeat_cols: 2, values, ..Default::default() }
+            (BlackLevel { repeat_rows: 2, repeat_cols: 2, values, ..Default::default() }, crate::LevelSource::Metadata)
         }
-        _ => BlackLevel::uniform(mn.as_ref().filter(|_| ip.is_none()).and_then(|m| maker_note_black(m, bits)).unwrap_or(0.0)),
+        _ => match mn.as_ref().filter(|_| ip.is_none()).and_then(|m| maker_note_black(m, bits)) {
+            Some(b) => (BlackLevel::uniform(b), crate::LevelSource::Metadata),
+            None => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
+        },
     };
     let wb = ip
         .as_ref()
@@ -314,11 +317,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             let g = |tag| m.ifd.f64s(tag).and_then(|v| v.first().copied()).filter(|g| *g > 25.6 && *g < 2560.0);
             Some([(g(MN_WB_RED)? / 256.0) as f32, 1.0, (g(MN_WB_BLUE)? / 256.0) as f32])
         });
-    let white = white_from_data(samples, bits);
+    let (white, white_source) = white_from_data_sourced(samples, bits);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
         format: RawFormat::Orf,
         width: w,
         height: h,

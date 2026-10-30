@@ -292,6 +292,7 @@ mod tests {
         use lightcraft_raw::{BlackLevel, Cfa, OpcodeLists, RawData, RawFormat, Rect};
         let (w, h) = (16usize, 12usize);
         RawImage {
+            level_sources: Default::default(),
             format: RawFormat::Cr2,
             width: w,
             height: h,

@@ -676,6 +676,32 @@ pub struct ColorData {
     pub kelvin_presets: Option<kelvin_presets::KelvinPresets>,
 }
 
+/// Where a black or white level came from. Rendering ignores it; code that compares or stacks frames can refuse
+/// a [`LevelSource::Fallback`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LevelSource {
+    /// The decoder doesn't say (every decoder that hasn't been annotated yet).
+    #[default]
+    Unknown,
+    /// Stated by the file: a tag, a maker note or a table.
+    Metadata,
+    /// Measured from the file's masked (optical black) samples.
+    MaskedPixels,
+    /// Inferred from the picture samples, e.g. a saturation plateau.
+    Inferred,
+    /// Neither read from the file nor measured from it: a default (0 or a format constant for black, the full bit
+    /// range or a format constant for white). Not necessarily wrong: a frame with no clipped highlights has no
+    /// saturation plateau to find.
+    Fallback,
+}
+
+/// The [`LevelSource`] of a [`RawImage`]'s black and white levels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LevelSources {
+    pub black: LevelSource,
+    pub white: LevelSource,
+}
+
 /// A decoded raw image.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawImage {
@@ -713,6 +739,9 @@ pub struct RawImage {
     /// validated components are in `opcodes`.
     #[serde(default)]
     pub lens_metadata: LensMetadata,
+    /// Where `black` and `white` came from. Not meaningful in [`Mode::Header`], where measured levels are placeholders.
+    #[serde(default)]
+    pub level_sources: LevelSources,
 }
 
 /// Black-subtracted, white-normalised data covering the active area.

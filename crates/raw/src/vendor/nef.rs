@@ -290,6 +290,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crate::stretched_height(crop.height, pixel_aspect) as u32);
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Nef,
         width: w,
         height: h,
@@ -606,6 +607,7 @@ fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: lightcraft_tiff
     metadata.width = Some(w as u32);
     metadata.height = Some(h as u32);
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Nef,
         width: w,
         height: h,

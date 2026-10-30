@@ -75,7 +75,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .and_then(|s| s.get(..need))
         .ok_or_else(|| RawError::Corrupt(format!("Mrw sensor data truncated (needs {need} bytes)")))?;
     let cfa = Cfa::bayer_static(p.cfa);
-    let (data, white) = if mode == Mode::Full {
+    let (data, white, white_source) = if mode == Mode::Full {
         let mut d = vec![0u16; n];
         if p.packed {
             unpack::unpack_msb(src, 12, &mut d);
@@ -85,10 +85,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
                 *v = (*v).min(4095);
             }
         }
-        let white = super::white_from_data(&d, 12);
-        (RawData::U16(d), white)
+        let (white, white_source) = super::white_from_data_sourced(&d, 12);
+        (RawData::U16(d), white, white_source)
     } else {
-        (RawData::U16(Vec::new()), 4095.0)
+        (RawData::U16(Vec::new()), 4095.0, crate::LevelSource::Unknown)
     };
     let wb = m.block(b"WBG").and_then(|b| wb_from(b, &cfa));
     let tiff = m.block(b"TTW").and_then(|b| Tiff::parse(b).ok());
@@ -97,6 +97,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     metadata.height = Some(p.image.1 as u32);
     let orientation = tiff.as_ref().and_then(|t| t.ifds.first()).and_then(|i| i.u16(t::ORIENTATION)).unwrap_or(1);
     let img = RawImage {
+        level_sources: crate::LevelSources { black: crate::LevelSource::Fallback, white: white_source },
         format: RawFormat::Mrw,
         width: w,
         height: h,

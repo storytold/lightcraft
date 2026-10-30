@@ -375,6 +375,7 @@ pub(super) fn decode(bytes: &[u8], tiff: &Tiff, raw: &Ifd, mode: Mode) -> Result
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Cr2,
         width: w,
         height: h,

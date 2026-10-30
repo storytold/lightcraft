@@ -29,6 +29,7 @@ fn cfa_helpers() {
 fn a_picture_made_elsewhere_is_finished_like_develop_does() {
     let (w, h) = (12usize, 10usize);
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,
@@ -82,6 +83,7 @@ fn a_picture_made_elsewhere_is_finished_like_develop_does() {
 fn an_active_area_that_wraps_past_the_image_is_corrupt() {
     let (w, h) = (12usize, 10usize);
     let mut raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

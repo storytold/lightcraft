@@ -405,6 +405,7 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     metadata.width = Some(developed.0 as u32);
     metadata.height = Some(developed.1 as u32);
     let img = RawImage {
+        level_sources: Default::default(),
         format,
         width: w,
         height: h,
