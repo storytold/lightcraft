@@ -2,12 +2,78 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{Album, Flag, Meta, Op, Photo, Source};
+use std::collections::HashSet;
+
+use lightcraft_catalog::{Album, AlbumId, Catalog, Flag, Meta, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 
 use crate::Session;
 
+/// Fill the session's catalog with the demo photos and albums directly (no undo step, no
+/// journal entry): a new in-memory session, or a new library that asked for them.
 pub fn load(s: &mut Session) {
+    for op in ops(s) {
+        let _ = s.catalog.apply(op);
+    }
+    select_first(s);
+}
+
+/// Select the first photo shown, so there is one to look at.
+pub fn select_first(s: &mut Session) {
+    if let Some(first) = s.visible_cloned().first() {
+        s.selection = crate::Selection::single(*first);
+    }
+}
+
+/// Select the first of `ids` that is shown, so a photo just added is there to look at; nothing
+/// changes when none of them is shown (another album is open, a filter hides them).
+pub fn select_first_of(s: &mut Session, ids: &HashSet<PhotoId>) {
+    if let Some(first) = s.visible_cloned().iter().find(|id| ids.contains(id)) {
+        s.selection = crate::Selection::single(*first);
+    }
+}
+
+/// What takes the sample photos out: every demo photo (wherever it is: albums, stacks), the
+/// albums they alone filled, and the folders that held only such albums. An album that also holds
+/// a photo of the person's own stays, with that photo (and a cover that was a sample becomes its
+/// first photo left). Returns the op, how many photos go, and the albums that go.
+pub fn remove_ops(c: &Catalog) -> (Op, usize, Vec<AlbumId>) {
+    let samples: Vec<PhotoId> = c.photos().filter(|p| matches!(p.source, Source::Demo { .. })).map(|p| p.id).collect();
+    let gone: HashSet<PhotoId> = samples.iter().copied().collect();
+    let filled_by_samples =
+        |a: &Album| !a.folder && a.smart.is_none() && !a.quick && !a.photos.is_empty() && a.photos.iter().all(|p| gone.contains(p));
+    let mut albums: Vec<AlbumId> = c.albums().filter(|a| filled_by_samples(a)).map(|a| a.id).collect();
+    // a folder goes when everything in it goes: one level of folders per round, so a chain is
+    // taken in at most one round per album (bounded, in case the albums hold each other)
+    let mut changed = true;
+    let mut rounds = 0;
+    let most_rounds = c.albums().count() + 1;
+    while changed && rounds < most_rounds {
+        rounds += 1;
+        let emptied: Vec<AlbumId> = c
+            .albums()
+            .filter(|f| f.folder && f.photos.is_empty() && !albums.contains(&f.id))
+            .filter(|f| {
+                let mut inside = c.albums().filter(|a| a.parent == Some(f.id)).peekable();
+                inside.peek().is_some() && inside.all(|a| albums.contains(&a.id))
+            })
+            .map(|f| f.id)
+            .collect();
+        changed = !emptied.is_empty();
+        albums.extend(emptied);
+    }
+    let mut ops = vec![c.delete_photos_permanently_ops(&samples)];
+    // an album that stays shows one of its own photos, not a removed sample
+    for a in c.albums().filter(|a| !albums.contains(&a.id) && a.cover.is_some_and(|p| gone.contains(&p))) {
+        ops.push(Op::SetAlbumCover { id: a.id, cover: a.photos.iter().copied().find(|p| !gone.contains(p)) });
+    }
+    // inner albums before the folders that hold them
+    ops.extend(albums.iter().map(|id| Op::RemoveAlbum { id: *id }));
+    (Op::Batch { ops }, samples.len(), albums)
+}
+
+/// The ops that add the demo photos and albums (ids are taken from the catalog).
+pub fn ops(s: &mut Session) -> Vec<Op> {
     let scenes = lightcraft_scenes::demo_library();
     let mut ids = Vec::new();
     let mut ops = Vec::new();
@@ -99,12 +165,29 @@ pub fn load(s: &mut Session) {
             album: Album { id, name: name.into(), parent, folder: false, photos, cover, smart: None, quick: false, order: None },
         });
     }
-    for op in ops {
-        let _ = s.catalog.apply(op);
+    ops
+}
+
+/// The name of the folder [`ops_in_folder`] puts the sample albums in, unless asked for another
+/// (the interface asks for it in its language).
+pub const SAMPLES_FOLDER: &str = "Sample Photos";
+
+/// [`ops`], with every album in one folder named `folder`, so the samples' albums stay together
+/// and apart from the ones the person makes.
+pub fn ops_in_folder(s: &mut Session, folder: &str) -> Vec<Op> {
+    let mut ops = ops(s);
+    let id = s.catalog.alloc_album_id();
+    for op in &mut ops {
+        if let Op::AddAlbum { album } = op
+            && album.parent.is_none()
+        {
+            album.parent = Some(id);
+        }
     }
-    if let Some(first) = s.visible_cloned().first() {
-        s.selection = crate::Selection::single(*first);
-    }
+    let at = ops.iter().position(|op| matches!(op, Op::AddAlbum { .. })).unwrap_or(ops.len());
+    let album = Album { id, name: folder.into(), parent: None, folder: true, photos: vec![], cover: None, smart: None, quick: false, order: None };
+    ops.insert(at, Op::AddAlbum { album });
+    ops
 }
 
 /// Procedural scenes are deterministic but costly to evaluate: every pixel runs the scene's noise

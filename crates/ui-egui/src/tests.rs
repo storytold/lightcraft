@@ -67,6 +67,7 @@ mod recheck;
 mod rename_person;
 mod rules_editor;
 mod sam_setup;
+mod samples;
 mod scroll;
 mod slider_reset;
 mod slideshow;

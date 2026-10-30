@@ -157,6 +157,15 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Sample photos, when you want them
+- Help ▸ Add Sample Photos adds 24 procedural sample photos with their keywords and their albums, to try LightCraft on.
+  The albums come in one folder, "Sample Photos" (named in the interface's language), apart from the ones you make, and
+  a message says how many photos came and where to look. It is one undo step, and it is refused while samples are
+  already in the library, Recently Deleted included.
+- Help ▸ Remove Sample Photos takes out every sample photo (virtual copies and those in Recently Deleted too), the albums
+  only they filled and the folders left empty, in one undo step. An album that also holds a photo of yours stays, with
+  that photo. `library.addSamples` (with an optional `folder` name) and `library.removeSamples` do the same for agents.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

@@ -130,6 +130,14 @@ fn grid_menu_shortcut_hints_follow_the_cycle_key() {
 }
 
 #[test]
+fn the_sample_photo_items_sit_before_about_in_the_help_menu() {
+    let a = app();
+    let help = menu_bar(&a).into_iter().find(|(t, _)| t == "Help").expect("Help menu").1;
+    let at = |id: &str| help.iter().position(|n| matches!(n, MenuNode::Item { id: i, .. } if i == id)).unwrap_or_else(|| panic!("{id} is in Help"));
+    assert!(at("library.addSamples") < at("app.about") && at("library.removeSamples") < at("app.about"));
+}
+
+#[test]
 fn view_menu_offers_the_hold_and_the_refresh_and_checks_the_hold_while_it_is_on() {
     let mut a = app();
     let view = |a: &LightcraftApp| menu_bar(a).into_iter().find(|(t, _)| t == "View").expect("View menu").1;

@@ -12,6 +12,7 @@
   "Add “{}” to Favorites": "「{}」をお気に入りに追加",
   "Added {n} photo{} to My Photos": "マイフォトに{n}枚を追加しました{:.0}",
   "Added {n} photo{} to “{}”": "「{1}」に{n}枚を追加しました{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "サンプル写真を {n} 枚追加しました。アルバムは「{folder}」にあり、キーワードも付いています",
   "All {n} selected photos move by the same amount.": "選択中の{n}枚を同じ時間だけずらします",
   "Already in “{}”": "すでに「{}」にあります",
   "Auto Sync: edits apply to {n} photos": "自動同期：{n}枚に編集を適用",
