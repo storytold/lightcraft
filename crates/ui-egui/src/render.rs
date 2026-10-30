@@ -1089,13 +1089,15 @@ impl Renderer {
 
     /// Why a photo has no grid thumbnail and won't get one: the thumbnail's own render failed, or the embedded
     /// preview failed and nothing else is on its way (an unedited raw asks for no other: see `request_thumb`).
-    /// A new embedded-preview request (another size or look) is on its way too; a retry of the very
-    /// request that failed keeps the failure until it answers.
+    /// A new request of either kind (another size or look, a relinked file) is on its way too; a retry of
+    /// the very request that failed keeps the failure until it answers.
     pub fn thumb_failure(&self, id: PhotoId) -> Option<&str> {
-        let quick = Slot::ThumbQuick(id);
-        self.failure(Slot::Thumb(id)).or_else(|| {
-            if self.is_pending(Slot::Thumb(id)) || (self.is_pending(quick) && !self.retrying(quick)) { None } else { self.failure(quick) }
-        })
+        let (full, quick) = (Slot::Thumb(id), Slot::ThumbQuick(id));
+        if self.is_pending(full) && !self.retrying(full) {
+            return None;
+        }
+        // a full-render failure that stands, else the embedded preview's, unless a new request of it is on its way
+        self.failure(full).or_else(|| if self.is_pending(quick) && !self.retrying(quick) { None } else { self.failure(quick) })
     }
 
     /// Why the last render of `photo` for `slot` failed: a view slot shows one photo after

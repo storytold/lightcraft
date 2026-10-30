@@ -1973,3 +1973,16 @@ fn thumb_failure_waits_for_a_new_quick_request_but_not_for_a_retry_of_the_failed
     r.pending.insert(Slot::ThumbQuick(id), (1, 10));
     assert_eq!(r.thumb_failure(id), Some("no embedded preview"));
 }
+
+#[test]
+fn thumb_failure_waits_for_a_new_full_request_but_not_for_a_retry_of_the_failed_one() {
+    let id = PhotoId(7);
+    let mut r = Renderer::default();
+    r.failed.insert(Slot::Thumb(id), (1, "decode failed".into(), 0, id));
+    // the size changed or the file was relinked: a replacement with another key is on its way, so the cell is loading
+    r.pending.insert(Slot::Thumb(id), (3, 10));
+    assert_eq!(r.thumb_failure(id), None, "a replacement of the failed full render is pending");
+    // the very request that failed is asked for again: until it answers the failure stands
+    r.pending.insert(Slot::Thumb(id), (1, 10));
+    assert_eq!(r.thumb_failure(id), Some("decode failed"));
+}
