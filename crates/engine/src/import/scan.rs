@@ -17,7 +17,7 @@ pub struct ScanInput {
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
 /// already). One pass over the library, and a record only for a file that was found: a folder of
 /// a hundred files in a library of millions costs a hundred records.
-pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate)> {
+pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate, Option<String>)> {
     let found: std::collections::HashSet<&Path> = files.iter().map(Path::new).collect();
     let mut by_path = HashMap::new();
     if found.is_empty() {
@@ -35,18 +35,28 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
                 height: p.height,
                 file_size: p.file_size,
                 captured: p.captured.clone(),
-                duplicate: Some("path".into()),
+                // a file that was only browsed (Local) is not in the library: importing it promotes it
+                // (a trashed browse record still counts as the path's)
+                duplicate: (!p.local || p.deleted).then(|| "path".into()),
                 existing: Some(p.id.0),
+                local: p.local && !p.deleted,
                 ..Default::default()
             };
-            by_path.insert(PathBuf::from(path), (p.id, c));
+            by_path.insert(PathBuf::from(path), (p.id, c, p.content_hash.clone()));
         }
     }
     by_path
 }
 
+/// Whether the file of a browsed (Local) record is no longer the one that was browsed: its size on disk is not the
+/// recorded one, the check the probes kept from a scan go by. A record without a size and a file that can't be read
+/// count as unchanged (a file that is gone is the record's own business).
+pub(super) fn local_file_changed(path: &str, recorded: u64) -> bool {
+    !cfg!(target_arch = "wasm32") && recorded > 0 && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() != recorded)
+}
+
 /// Which photo of the library has each of the contents `hashes` (the later one where several
-/// have it). One pass over the library, and an entry only for a content that was asked about.
+/// have it; a copy that was only browsed in Local isn't in the library). One pass over the library, and an entry only for a content that was asked about.
 pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
     let wanted: std::collections::HashSet<&str> = hashes.collect();
     let mut by_hash = HashMap::new();
@@ -54,7 +64,8 @@ pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: 
         return by_hash;
     }
     for p in library.photos() {
-        if let Some(h) = &p.content_hash
+        if !p.local
+            && let Some(h) = &p.content_hash
             && wanted.contains(h.as_str())
         {
             by_hash.insert(h.clone(), p.id);
@@ -120,7 +131,18 @@ pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) ->
 /// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]).
 pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
     use std::sync::atomic::Ordering::Relaxed;
-    let by_path = library_files(&input.library, &files);
+    let mut by_path = library_files(&input.library, &files);
+    // a browsed file that was replaced since is not the one its record describes: it is read again like a new file
+    // (the record's stored content, kept from the browse, would give the wrong answer against the library), and
+    // its candidate still names the record and says it was only browsed, unless the library has that content
+    let mut replaced: HashMap<PathBuf, PhotoId> = HashMap::new();
+    by_path.retain(|path, (id, c, _)| {
+        let changed = c.local && local_file_changed(&path.to_string_lossy(), c.file_size);
+        if changed {
+            replaced.insert(path.clone(), *id);
+        }
+        !changed
+    });
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
     // probes from a preceding `scan` are reused when the file is unchanged (same size)
@@ -145,15 +167,39 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
     // (who in the library has a content that was probed: asked once the probes are in)
-    let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
+    let probed_hashes = probes
+        .values()
+        .filter_map(|r| r.as_ref().ok())
+        .filter_map(|info| info.content_hash.as_deref())
+        // (and the browsed files the library has by path: they are offered unless it has the content too)
+        .chain(by_path.values().filter(|(_, c, _)| c.local).filter_map(|(_, _, h)| h.as_deref()));
     let mut seen_hash: HashMap<String, Option<u64>> =
         library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
+    // (a content's browsed first copy: its path, until the first file of its own with that content stands in for it)
+    let mut browsed_first: HashMap<String, String> = HashMap::new();
     for f in files {
-        if let Some((_, c)) = by_path.get(Path::new(&f)) {
+        if let Some((_, c, hash)) = by_path.get(Path::new(&f)) {
             let mut c = c.clone();
             c.name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
+            // a browsed file the library has the content of (or an earlier file here promotes) is a duplicate
+            if c.local
+                && let Some(h) = hash
+            {
+                match seen_hash.get(h) {
+                    Some(existing) => {
+                        c.duplicate = Some("content".into());
+                        c.existing = *existing;
+                    }
+                    None => {
+                        // (the library doesn't have it: a browsed record isn't a library photo, and
+                        // the import looks the library up when it runs)
+                        seen_hash.insert(h.clone(), None);
+                        browsed_first.insert(h.clone(), f.clone());
+                    }
+                }
+            }
             out.push(c);
             continue;
         }
@@ -171,9 +217,25 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                         Some(existing) => {
                             c.duplicate = Some("content".into());
                             c.existing = *existing;
+                            // (the first copy of a browsed photo that is a file of its own stands in for it when
+                            // copying leaves the browsed one out: said once per content; a browsed file doesn't)
+                            if existing.is_none() && !replaced.contains_key(Path::new(&f)) {
+                                c.browsed_twin = browsed_first.remove(h);
+                            }
                         }
                         None => {
                             seen_hash.insert(h.clone(), None);
+                        }
+                    }
+                }
+                if let Some(id) = replaced.get(Path::new(&f)) {
+                    // still the browsed record's file, as for one that is as browsed: Copy and Move leave it out, and the
+                    // first twin of its own stands in for it there
+                    c.local = true;
+                    if c.duplicate.is_none() {
+                        c.existing = Some(id.0);
+                        if let Some(h) = &info.content_hash {
+                            browsed_first.insert(h.clone(), f.clone());
                         }
                     }
                 }

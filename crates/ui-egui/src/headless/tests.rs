@@ -3146,6 +3146,41 @@ fn cmd_q_quits() {
     assert!(h.quit_requested());
 }
 
+/// File → Import from Folder… on a folder that was browsed in Local offers its photos, adding
+/// them in place (they aren't "In library" yet), and confirming brings them into the library.
+#[test]
+fn import_from_folder_offers_the_photos_browsed_in_local() {
+    let mut h = demo([1300.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let dir = std::env::temp_dir().join(format!("lc-ui-browsed-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    for (i, name) in ["a.png", "b.png"].iter().enumerate() {
+        let mut img = img.clone();
+        img.data[0][0] = i as u8; // different bytes per file
+        std::fs::write(dir.join(name), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    }
+    let library_before = h.app.session.catalog.photos().filter(|p| !p.local).count();
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.local).count(), 2, "both browsed");
+    let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review: {:?}", h.app.ui.dialog) };
+    assert_eq!(opts.candidates.len(), 2);
+    assert!(opts.candidates.iter().all(|c| c.duplicate.is_none()), "browsed is not \"In library\": {:?}", opts.candidates);
+    assert_eq!(opts.selected_paths().len(), 2, "both offered, checked");
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.catalog.photos().filter(|p| !p.local).count(), library_before + 2, "both joined the library");
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.local).count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// File → Import from Folder… opens the import review for a folder (searched recursively).
 #[test]
 fn add_folder_opens_the_import_review() {

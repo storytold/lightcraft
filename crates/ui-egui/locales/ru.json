@@ -2349,5 +2349,6 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Ключевые слова и пресеты применяются только к новым файлам, а не к фото, которые уже есть в «Локальных»"
 }

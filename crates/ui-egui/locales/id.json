@@ -2339,5 +2339,6 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Kata kunci dan prasetel hanya berlaku untuk berkas baru, bukan foto yang sudah ada di Lokal"
 }

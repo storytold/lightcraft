@@ -34,8 +34,12 @@ pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
 /// the same bytes as one earlier in the list (no library photo) is a copy in the source.
 pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
     let trashed = d.trashed.iter().filter(|t| **t).count();
-    let in_source = d.candidates.iter().filter(|c| c.duplicate.as_deref() == Some("content") && c.existing.is_none()).count();
-    let dups = d.candidates.iter().filter(|c| c.duplicate.is_some()).count().saturating_sub(trashed).saturating_sub(in_source);
+    // (a copy of a browsed photo that copying brings in, because it leaves the browsed one out, is neither)
+    let twins = (0..d.candidates.len()).filter(|i| d.is_copy_twin(*i)).count();
+    let in_source = d.candidates.iter().filter(|c| c.duplicate.as_deref() == Some("content") && c.existing.is_none()).count() - twins;
+    // (a browsed photo isn't offered while copying: it counts as already there)
+    let browsed = if d.copy { (0..d.candidates.len()).filter(|i| d.is_browsed(*i)).count() } else { 0 };
+    let dups = (d.candidates.iter().filter(|c| c.duplicate.is_some()).count() + browsed).saturating_sub(trashed + twins).saturating_sub(in_source);
     (dups, in_source, trashed)
 }
 
@@ -137,23 +141,20 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             .on_hover_text(crate::i18n::tr("Reference the files where they are"))
             .clicked()
         {
-            d.copy = false;
-            d.move_files = false;
+            d.set_transfer(false, false);
         }
         let can_copy = app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some();
         let r =
             ui.add_enabled_ui(can_copy, |ui| crate::widgets::text_button(ui, "importCopy", crate::i18n::tr("Copy"), d.copy && !d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Copy the files (into the library's Originals/, or a folder you choose)")).clicked() {
-            d.copy = true;
-            d.move_files = false;
+            d.set_transfer(true, false);
         }
         let r =
             ui.add_enabled_ui(can_copy, |ui| crate::widgets::text_button(ui, "importMove", crate::i18n::tr("Move"), d.copy && d.move_files)).inner;
         if r.on_hover_text(crate::i18n::tr("Move the files (into the library's Originals/, or a folder you choose), removing them from the source"))
             .clicked()
         {
-            d.copy = true;
-            d.move_files = true;
+            d.set_transfer(true, true);
         }
     });
     let r = ui.label(
@@ -269,6 +270,14 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                     .small(),
             );
         }
+    }
+    if d.options_skip_browsed() {
+        let t = Tokens::get(ui.ctx());
+        ui.label(
+            egui::RichText::new(crate::i18n::tr("Keywords and presets apply to new files only, not to photos already in Local"))
+                .color(t.text_dim)
+                .small(),
+        );
     }
     if d.trashed.iter().any(|t| *t) {
         field(ui, "In Recently Deleted", |ui| {
@@ -425,9 +434,11 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let badge = match (&c.duplicate, &c.error) {
         // checked with "Leave them", the file goes without `onDeleted`: the engine restores it
         (Some(_), _) if in_trash && on => Some(if d.on_deleted == "fresh" { "Will be replaced" } else { "Will be restored" }),
+        (Some(_), _) if d.is_copy_twin(i) => None,
         (Some(_), _) if in_trash => Some("In Recently Deleted"),
         (Some(r), _) if r == "path" => Some("In library"),
         (Some(_), _) => Some("Duplicate"),
+        (None, None) if d.copy && d.is_browsed(i) => Some("In library"),
         (None, Some(_)) => Some("Unreadable"),
         _ => None,
     };
