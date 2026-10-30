@@ -82,10 +82,12 @@ playback, frame previews or video discovery through folder synchronization.
 Before changing records, the importer attempts to save source image records, decoded XMP,
 verbatim develop settings, history, snapshots and collection content to compressed
 `Interop/lightroom-import-N.lca` recovery archives in the LightCraft library. Archiving is
-best-effort: a size limit or write failure produces a warning (naming the `Interop` folder) and
-does not prevent photo import. On a volume without hard links (exFAT, FAT, some network shares) an
-archive is published by claiming its name with an exclusive create and renaming over it, so it
-still never replaces an existing archive.
+best-effort: a size limit, or a failure writing the archive itself, produces a warning (naming the
+`Interop` folder) and does not prevent photo import; an `Interop` folder that can't hold the import
+index refuses the import first (below). On a volume without hard links (exFAT, FAT, some network
+shares) an archive is published by claiming its name with an exclusive create and renaming over
+it, so it still never replaces an existing archive or one another writer claims the same way; a
+process that deletes or replaces the claimed placeholder before the rename is not guarded against.
 Unchanged source data reuses its existing archive. Opaque SQL BLOBs are skipped. Each archive is
 capped at 32 MiB (uncompressed and on disk), with at most eight archives and 128 MiB total
 retained. Oldest managed archives are retired; legacy `.json` archives remain untouched. When an
