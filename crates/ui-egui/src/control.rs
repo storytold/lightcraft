@@ -150,6 +150,8 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "tasks": app.tasks.labels(),
         // every long-running task in flight, as the activity stack shows them (`activity.list`)
         "activity": app.session.activity.list(),
+        // the tasks that ended and left a row (`activity.finished`)
+        "activityFinished": app.session.activity.finished(),
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
         "memory": memory(app),

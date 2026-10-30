@@ -2004,6 +2004,7 @@
   "Add to Apple Photos": "Appleの写真に追加",
   "Adding to Apple Photos…": "Appleの写真に追加中…",
   "not added to Apple Photos (cancelled)": "Appleの写真には追加されませんでした（キャンセル）",
+  "cancelled": "キャンセル",
   "The first time, macOS asks whether LightCraft may control Photos.": "初回は、LightCraftに写真の操作を許可するかmacOSが確認します。",
   "Adding to Apple Photos": "Appleの写真に追加中",
   "\"saved in memory but not written to disk\", the top bar shows a warning, and LightCraft keeps retrying until the": "「メモリーには保存されたがディスクに書き込まれていない」と報告し、上部バーに警告を表示して、LightCraft は",

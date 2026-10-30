@@ -650,6 +650,21 @@ fn photos_move_to_another_folder_with_their_sidecars_and_back_on_undo() {
     assert_eq!(file_of(&s, b), dir.path("out/b.jpg"));
 }
 
+/// A move is a task: when it ran long enough to be worth a row, the row says it was done.
+#[test]
+fn a_move_leaves_a_row_saying_it_was_done() {
+    let dir = Scratch::new("move-row");
+    std::fs::create_dir_all(dir.0.join("in")).unwrap();
+    std::fs::create_dir_all(dir.0.join("out")).unwrap();
+    let mut s = Session::new();
+    s.activity.keep_after(0);
+    let a = add_file(&mut s, &dir.path("in/a.jpg"), "A");
+    let b = add_file(&mut s, &dir.path("in/b.jpg"), "B");
+    s.execute("photo.moveToFolder", &json!({"ids": [a.0, b.0], "folder": dir.path("out")})).unwrap();
+    let row = s.activity.finished().into_iter().next().expect("a row for the move");
+    assert_eq!((row.kind, row.label.as_str(), row.ending), ("move", "Moving 2 photos", crate::activity::Ending::Done));
+}
+
 #[test]
 fn a_name_taken_in_the_destination_refuses_the_move_and_overwrites_nothing() {
     let dir = Scratch::new("move-clash");

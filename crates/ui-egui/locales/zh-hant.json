@@ -2002,6 +2002,7 @@
   "Add to Apple Photos": "加入 Apple 照片",
   "Adding to Apple Photos…": "正在加入 Apple 照片…",
   "not added to Apple Photos (cancelled)": "未加入 Apple 照片（已取消）",
+  "cancelled": "已取消",
   "The first time, macOS asks whether LightCraft may control Photos.": "第一次使用時，macOS 會詢問是否允許 LightCraft 控制「照片」。",
   "Adding to Apple Photos": "正在加入 Apple 照片",
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "找不到圖形處理器：LightCraft 改用 CPU 算繪，速度會慢很多。詳情請見「說明 → 系統資訊」。",

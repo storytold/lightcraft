@@ -1,5 +1,5 @@
-use super::task::ImportTask;
-use super::{ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanProgress, Value, json, scan_with};
+use super::task::{ImportTask, not_readable_text};
+use super::{ImportCandidate, ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanProgress, Value, json, scan_with};
 
 /// A folder scan running on a worker thread (a network share can take minutes to read; the
 /// window must keep answering meanwhile).
@@ -142,6 +142,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
 
 /// Collect a finished scan and open the review (called every frame).
 pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
+    use lightcraft_engine::activity::{Ending, Failure, Outcome};
     show_pending_review(app, ctx);
     let Some(task) = app.scan.as_ref() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -150,7 +151,9 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             if task.guard.is_cancelled() {
                 // ✕: the worker stops at its next file; don't wait for it (a NAS read can take a while)
-                app.scan = None;
+                if let Some(task) = app.scan.take() {
+                    task.guard.finish(Outcome::ended(Ending::Stopped));
+                }
                 return;
             }
             let (total, done) = (task.progress.total.load(Ordering::Relaxed), task.progress.done.load(Ordering::Relaxed));
@@ -160,15 +163,52 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         Err(_) => {
-            app.scan = None;
+            // the worker died (a panic, logged)
+            if let Some(task) = app.scan.take() {
+                task.guard.finish(Outcome::ended(Ending::Died));
+            }
             app.toast(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };
     let Some(task) = app.scan.take() else { return };
+    // (a scan another one replaced was let go without a word; one here that was cancelled was stopped by its ✕)
     if task.progress.cancel.load(Ordering::Relaxed) {
+        task.guard.finish(Outcome::ended(Ending::Stopped));
         return;
     }
+    // the Local view's row says which folder; a folder opened again replaces its last row instead of adding one
+    let path = task.browse.then(|| app.session.browse.as_ref().map(|b| b.path.clone())).flatten();
+    // files that could not be read are a problem the row says, by name (in the Local view, by where they are in its
+    // folder: two subfolders can hold the same name): the Local view leaves them out, so nothing later would
+    let named = |c: &ImportCandidate| {
+        path.as_ref()
+            .and_then(|root| std::path::Path::new(&c.path).strip_prefix(root).ok())
+            .map_or_else(|| c.name.clone(), |rel| rel.to_string_lossy().into_owned())
+    };
+    let failed = out.candidates.iter().filter(|c| c.error.is_some()).count();
+    let failures: Vec<Failure> = out
+        .candidates
+        .iter()
+        .filter_map(|c| c.error.as_ref().map(|e| Failure { name: named(c), reason: e.clone() }))
+        .take(lightcraft_engine::activity::MAX_FAILURES)
+        .collect();
+    let found_none = out.candidates.is_empty() && !task.browse;
+    if let Some(path) = &path {
+        for old in app.session.activity.finished() {
+            if old.kind == "scan" && old.path.as_ref() == Some(path) {
+                let _ = app.session.activity.dismiss(old.id);
+            }
+        }
+    }
+    task.guard.finish(Outcome {
+        ending: if failed > 0 { Ending::Problems } else { Ending::Done },
+        detail: if found_none { crate::i18n::tr("No photos found").to_string() } else { not_readable_text(failed) },
+        failed,
+        failures,
+        path,
+        ..Default::default()
+    });
     app.session.import_probes = out.probes;
     if task.browse {
         // the folder and the ones its photos are in count as browsed now, as `library.browse` records them, so
@@ -190,7 +230,8 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let undo0 = app.session.undo.len();
             let total = queue.len();
             let _ = total;
-            app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true));
+            let root = app.session.browse.as_ref().map(|b| b.path.clone());
+            app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true).named_below(root.into_iter().collect()));
         }
         return;
     }

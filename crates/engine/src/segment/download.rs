@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use lightcraft_segment::fetch::{self, Options, Progress};
 
-use crate::activity::{Activity, Cancel, Unit};
+use crate::activity::{Activity, Cancel, Ending, Outcome, Unit};
 
 /// What the session sees of a download.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -126,6 +126,7 @@ impl Downloader {
         task.detail(name);
         task.progress(0, s.total.load(Ordering::SeqCst));
         let guard = Running(s.clone());
+        let name = name.to_string();
         let spawned = std::thread::Builder::new().name("sam3-download".into()).spawn(move || {
             let s = guard.0.clone();
             let mut last_file = String::new();
@@ -141,14 +142,14 @@ impl Downloader {
             let r =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch::download(files, &mirrors, &dir, &opts, &s.cancel, &mut on_progress)));
             let cancelled = matches!(r, Ok(Err(fetch::DownloadError::Cancelled)));
-            let error = match r {
+            let (error, outcome) = match r {
                 Ok(Ok(())) => {
                     s.finished.store(true, Ordering::SeqCst);
                     log::info!("SAM 3 model downloaded to {}", dir.display());
-                    None
+                    (None, Outcome::default())
                 }
-                Ok(Err(e)) => Some(e.to_string()),
-                Err(_) => Some("the download failed unexpectedly".to_string()),
+                Ok(Err(e)) => (Some(e.to_string()), error_outcome(&e)),
+                Err(_) => (Some("the download failed unexpectedly".to_string()), Outcome::ended(Ending::Died)),
             };
             if let Some(e) = &error {
                 log::warn!("SAM 3 download: {e}");
@@ -158,6 +159,8 @@ impl Downloader {
             text.error = error;
             drop(text);
             drop(guard);
+            // last: whoever sees the row go finds the download over
+            task.finish(outcome.about(&name));
         });
         match spawned {
             Ok(_) => Ok(true),
@@ -166,5 +169,29 @@ impl Downloader {
                 Err(format!("could not start the download: {e}"))
             }
         }
+    }
+}
+
+/// How a download that ended with `e` ends its row: only one that was cancelled is stopped (the cancel flag may be set
+/// when another error comes, and the status says `cancelled` for the cancelled ones alone).
+fn error_outcome(e: &fetch::DownloadError) -> Outcome {
+    match e {
+        fetch::DownloadError::Cancelled => Outcome::ended(Ending::Stopped),
+        e => Outcome::failed(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Given a download that failed for a reason other than being cancelled (the cancel flag may be set meanwhile), then
+    /// the row says it failed: only a cancelled download is stopped.
+    #[test]
+    fn only_a_cancelled_download_is_stopped() {
+        let disk = fetch::DownloadError::Disk("disk full".into());
+        let o = error_outcome(&disk);
+        assert_eq!((o.ending, o.detail.as_str()), (Ending::Failed, "disk full"));
+        assert_eq!(error_outcome(&fetch::DownloadError::Cancelled).ending, Ending::Stopped);
     }
 }
