@@ -30,6 +30,27 @@ fn demo(size: [f32; 2]) -> Headless {
     headless(lightcraft_engine::Session::with_demo(), size)
 }
 
+#[test]
+fn ui_set_rejects_invalid_interface_sizes_without_changing_preferences() {
+    let mut h = headless(lightcraft_engine::Session::new(), [900.0, 560.0]);
+    for invalid in [json!(1), json!(49), json!(301), json!(65536), json!(-1), json!(1.5), json!("150"), json!(null)] {
+        let before = h.app.ui.settings.clone();
+        let response = h.request("ui.set", json!({"settings": {"interfaceSize": invalid, "askBeforeDelete": !before.confirm_delete}}), T);
+        assert_eq!(response["ok"], false, "{invalid}: {response}");
+        assert_eq!(h.app.ui.settings, before, "an invalid patch is atomic: {invalid}");
+    }
+    for percent in [0, 50, 157, 300] {
+        let response = h.request("ui.set", json!({"settings": {"interfaceSize": percent, "askBeforeDelete": false}}), T);
+        assert_eq!(response["ok"], true, "{percent}: {response}");
+        assert_eq!(h.app.ui.settings.interface_size, percent);
+        assert!(!h.app.ui.settings.confirm_delete);
+    }
+    let response = h.request("ui.set", json!({"settings": {"askBeforeDelete": true}}), T);
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(h.app.ui.settings.interface_size, 300);
+    assert!(h.app.ui.settings.confirm_delete);
+}
+
 /// Given Settings open on `tab`, drawn until its layout has settled.
 fn show(h: &mut Headless, tab: &str) {
     let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": tab}}), T);

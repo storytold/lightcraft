@@ -138,6 +138,7 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
+    applied_interface_size: Option<(u16, f32)>,
     pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
@@ -628,4 +629,44 @@ pub struct Caches {
     pub grid: panels::grid::GridCache,
     /// What the grid did on its frames (benchmarks and tests check unchanged frames stay cheap).
     pub grid_stats: panels::grid::GridStats,
+}
+
+#[cfg(test)]
+mod interface_size_tests {
+    use super::*;
+
+    #[test]
+    fn interface_size_survives_restart_and_display_scale_changes() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let ctx = egui::Context::default();
+        for native in [1.0, 1.5, 2.0] {
+            for percent in [0, 100, 150, 157, 200] {
+                app.run("app.interfaceSize", serde_json::json!({"percent": percent})).unwrap();
+                let saved = serde_json::to_string(&app.ui).unwrap();
+                app.ui = serde_json::from_str(&saved).unwrap();
+                let mut input = egui::RawInput::default();
+                input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native);
+                for _ in 0..2 {
+                    let mut output = ctx.run_ui(input.clone(), |ui| app.logic(ui.ctx()));
+                    output.textures_delta.clear();
+                }
+                let expected = if percent == 0 { native } else { percent as f32 / 100.0 };
+                assert!((ctx.pixels_per_point() - expected).abs() < 0.001);
+                assert_eq!(app.ui.settings.interface_size, percent);
+            }
+        }
+        for invalid in [serde_json::json!(-1), serde_json::json!(301), serde_json::json!(1.5), serde_json::json!("150"), serde_json::Value::Null] {
+            let before = app.ui.settings.interface_size;
+            assert!(app.run("app.interfaceSize", serde_json::json!({"percent": invalid})).is_err());
+            assert_eq!(app.ui.settings.interface_size, before);
+        }
+        for (persisted, expected) in [(0, 0), (1, 50), (49, 50), (50, 50), (300, 300), (301, 300), (u16::MAX, 300)] {
+            app.ui.settings.interface_size = persisted;
+            let saved = serde_json::to_string(&app.ui).unwrap();
+            app.ui = serde_json::from_str::<UiState>(&saved).unwrap().sanitized();
+            assert_eq!(app.ui.settings.interface_size, expected);
+            let again = serde_json::to_string(&app.ui).unwrap();
+            assert_eq!(serde_json::from_str::<UiState>(&again).unwrap().settings.interface_size, expected);
+        }
+    }
 }

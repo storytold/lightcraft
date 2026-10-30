@@ -107,6 +107,9 @@ impl LightTheme {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
+    /// Interface size in percent of a physical pixel, or zero to follow the display scale.
+    #[serde(deserialize_with = "lenient")]
+    pub interface_size: u16,
     /// Library opened at launch when no `--library` is given (empty = the default location).
     pub library_path: String,
     /// Libraries opened recently, newest first (File ▸ Open Recent Library; at most
@@ -210,6 +213,7 @@ pub enum LightroomImport {
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
+            interface_size: 0,
             library_path: String::new(),
             recent_libraries: Vec::new(),
             recent_opened: Default::default(),

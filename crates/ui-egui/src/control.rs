@@ -375,6 +375,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Ok(s) => s,
                 Err(e) => return err(e),
             };
+            // Check the raw patch before lenient preference decoding can turn malformed values
+            // into Auto. Control requests use the same range as app.interfaceSize.
+            if let Some(size) = p.pointer("/settings/interfaceSize")
+                && !size.as_u64().is_some_and(|size| size == 0 || (50..=300).contains(&size))
+            {
+                return err("ui.set: `settings.interfaceSize` must be 0 (Auto) or an integer from 50 to 300");
+            }
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
             lightcraft_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {

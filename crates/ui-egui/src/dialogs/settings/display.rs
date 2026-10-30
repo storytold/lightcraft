@@ -75,7 +75,24 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     hint(ui, t, crate::i18n::tr("Profiles assigned in your desktop's colour settings are usually in ~/.local/share/icc."));
 }
 
+/// Draw interface preferences, including persistent sizing or automatic display scaling.
+/// Size edits use the same validated UI command as control-channel requests.
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    row(ui, t, crate::i18n::tr("Interface size"), |ui| {
+        let percent = &mut app.ui.settings.interface_size;
+        let mut automatic = *percent == 0;
+        let auto = ui.checkbox(&mut automatic, crate::i18n::tr("Auto"));
+        register(ui, "check:settings.interfaceSizeAuto", auto.rect);
+        if auto.changed() {
+            *percent = if automatic { 0 } else { 100 };
+        }
+        let mut value = if automatic { 100 } else { (*percent).clamp(50, 300) };
+        let response = ui.add_enabled(!automatic, egui::DragValue::new(&mut value).range(50..=300).suffix("%"));
+        register(ui, "value:settings.interfaceSize", response.rect);
+        if response.changed() {
+            *percent = value;
+        }
+    });
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
     heading(ui, t, crate::i18n::tr("Filmstrip"));
