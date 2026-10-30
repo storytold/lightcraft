@@ -86,10 +86,7 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<Stored, String> {
                 problems.push(format!("could not remove the temporary {}: {error}", temporary.display()));
             }
             let matched = entry.path.clone();
-            let mut all = managed.clone();
-            if let Err(error) = prune_existing(directory, &mut all, Some(&matched)) {
-                problems.push(error);
-            }
+            problems.extend(prune_existing(&managed, Some(&matched)));
             return Ok(Stored::new(matched, problems));
         }
     }
@@ -151,12 +148,20 @@ fn clean_up_after_publish(temporary: &Path, quarantined: &[(PathBuf, PathBuf)]) 
         }
         _ => {}
     }
-    for (old, held) in quarantined {
-        if let Err(error) = remove_managed_file(held) {
-            problems.push(format!("could not retire {} (left as {}): {error}", old.display(), held.display()));
-        }
-    }
+    problems.extend(retire(quarantined));
     problems
+}
+
+/// Remove quarantined old archives and say which could not be removed. Every removal is tried, so
+/// one stuck archive does not keep the rest.
+fn retire(quarantined: &[(PathBuf, PathBuf)]) -> Vec<String> {
+    quarantined
+        .iter()
+        .filter_map(|(old, held)| {
+            let error = remove_managed_file(held).err()?;
+            Some(format!("could not retire {} (left as {}): {error}", old.display(), held.display()))
+        })
+        .collect()
 }
 
 /// Store source data when possible. An archive that reaches its bounded size is
@@ -402,15 +407,13 @@ fn retirement_set_protected(entries: &[Managed], protected: Option<&Path>) -> Re
     Ok(retirees)
 }
 
-fn prune_existing(directory: &Path, entries: &mut [Managed], protected: Option<&Path>) -> Result<(), String> {
-    let retirees = retirement_set_protected(entries, protected)?;
-    let quarantined = quarantine(&retirees)?;
-    for (old, held) in quarantined {
-        if let Err(error) = remove_managed_file(&held) {
-            return Err(format!("could not retire {} from {}: {error}", old.display(), directory.display()));
-        }
+/// Retire what the retention limits no longer allow, keeping `protected`, and say what could not be
+/// retired.
+fn prune_existing(entries: &[Managed], protected: Option<&Path>) -> Vec<String> {
+    match retirement_set_protected(entries, protected).and_then(|retirees| quarantine(&retirees)) {
+        Ok(quarantined) => retire(&quarantined),
+        Err(error) => vec![error],
     }
-    Ok(())
 }
 
 fn quarantine(entries: &[Managed]) -> Result<Vec<(PathBuf, PathBuf)>, String> {
@@ -736,6 +739,26 @@ mod tests {
         assert!(!temporary.exists() && !held_gone.exists());
         let stored = Stored::new(path.join("lightroom-import-2.lca"), problems);
         assert!(stored.cleanup_failed.is_some_and(|note| note.contains("could not retire")));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Reusing a matching archive retires the old ones the same way: one that can't be removed is
+    /// named, and the ones after it are still removed and named when they fail too.
+    #[test]
+    fn retire_tries_every_archive_and_names_each_one_it_could_not_remove() {
+        let path = tempdir();
+        let held = |slot: usize| path.join(format!(".lightroom-retire-test-{slot}.tmp"));
+        let old = |slot: usize| path.join(format!("lightroom-import-{slot}.lca"));
+        fs::create_dir(held(0)).unwrap();
+        fs::write(held(1), b"old").unwrap();
+        fs::create_dir(held(2)).unwrap();
+        let quarantined: Vec<_> = (0..3).map(|slot| (old(slot), held(slot))).collect();
+        let problems = retire(&quarantined);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        for (problem, slot) in problems.iter().zip([0, 2]) {
+            assert!(problem.starts_with(&format!("could not retire {} (left as {})", old(slot).display(), held(slot).display())), "{problems:?}");
+        }
+        assert!(!held(1).exists());
         fs::remove_dir_all(path).unwrap();
     }
 
