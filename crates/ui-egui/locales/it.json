@@ -2332,6 +2332,9 @@
   "Image on Black": "Immagine su nero",
   "Image on White": "Immagine su bianco",
   "White on Black": "Bianco su nero",
+  "Moving photos": "Spostamento delle foto",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Un errore ha interrotto lo spostamento (vedi il registro). La libreria segue i file già spostati.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Un errore ha interrotto lo spostamento (vedi il registro). La libreria potrebbe non seguire tutti i file già spostati: Trova foto mancanti ricollega quelli persi.",
   "View Options…": "Opzioni di visualizzazione…",
   "View Options": "Opzioni di visualizzazione",
   "Loupe View": "Vista lente",
@@ -2361,5 +2364,7 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Questa libreria è aperta senza il suo blocco, quindi gli spostamenti interrotti restano come sono finché non viene aperta con il blocco; Trova foto mancanti ricollega i file spostati.",
+  "Unfinished moves": "Spostamenti incompleti"
 }

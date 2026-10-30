@@ -1,18 +1,23 @@
 //! Things the user must not miss (issue #103): settings files that were damaged or unreadable when
-//! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
-//! are only in memory or while tasks that would be cut short are running (issue #345).
+//! the library opened (and host warnings such as a damaged `ui.json`), moves an earlier run cut
+//! short, and quitting while changes are only in memory or while tasks that would be cut short are
+//! running (issue #345).
 
 use egui::{Align2, RichText, vec2};
+use lightcraft_engine::move_intent::{MoveProblem, Recovered};
 
 use crate::theme::Tokens;
 use crate::widgets::WidgetHit;
 use crate::{LightcraftApp, QuitPrompt};
 
-/// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
-/// been tried.
+/// Collect the library's settings-file warnings (each is shown once), what following moves an earlier run cut short
+/// came to, and the no-GPU notice once the GPU device has been tried.
 pub fn logic(app: &mut LightcraftApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
+    if let Some(r) = app.session.take_recovered_moves() {
+        app.move_notice = recovered_text(&r);
+    }
     use lightcraft_engine::gpu;
     if app.gpu_notice && app.gpu_applied == Some(true) && gpu::ready() {
         app.gpu_notice = false;
@@ -56,6 +61,51 @@ fn unsaved_message(n: usize, e: &str) -> String {
     crate::i18n::tr_format!("{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.", s, lost, n = n, e = e)
 }
 
+/// What following moves an earlier run cut short came to, in the person's language; `None` when there is nothing to
+/// say.
+pub fn recovered_text(r: &Recovered) -> Option<String> {
+    use crate::i18n::tr_format;
+    if r.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if r.relinked > 0 {
+        parts.push(tr_format!(
+            "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.",
+            r.relinked
+        ));
+    }
+    if r.waiting > 0 {
+        parts.push(tr_format!(
+            "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.",
+            r.waiting
+        ));
+    }
+    if r.copies_removed > 0 {
+        parts.push(tr_format!("Copies removed from the new place, because the original was still where the library has it: {}.", r.copies_removed));
+    }
+    for p in &r.problems {
+        parts.push(match p {
+            MoveProblem::UnreadableRecord { record, error } => {
+                tr_format!("A record of a move ({}) can't be read ({}); it was left as it is.", record, error)
+            }
+            MoveProblem::BothPlaces { from, to } => tr_format!("{} was being moved and is now at both places: the library keeps {}.", to, from),
+            MoveProblem::SidecarStayed { to, error } => tr_format!("A sidecar of {} couldn't follow it ({}).", to, error),
+            MoveProblem::NotFollowed { error } => {
+                tr_format!("The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.", error)
+            }
+            MoveProblem::NotSaved { error } => {
+                tr_format!("The files that were being moved are followed, but that couldn't be saved ({}).", error)
+            }
+            MoveProblem::Unprotected => crate::i18n::tr(
+                "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.",
+            )
+            .to_string(),
+        });
+    }
+    Some(parts.join(" "))
+}
+
 /// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
 /// can be cancelled (an import, an export…) are asked about first; then changes that couldn't be
 /// written are retried — the log, then a snapshot of everything in memory.
@@ -64,7 +114,14 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         return true;
     }
     // before the library is touched: a Cancel here keeps working with it
-    let running = app.session.activity.running_cancellable();
+    let mut running = app.session.activity.running_cancellable();
+    // photos on their way to another folder can't be stopped, but quitting cuts the move short
+    if app.move_run.is_some()
+        && !app.quit_cuts_move
+        && let Some(task) = app.session.activity.list().into_iter().find(|t| t.kind == "move")
+    {
+        running.push(task);
+    }
     if !running.is_empty() {
         let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
         app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(running.len(), &names)));
@@ -102,11 +159,12 @@ enum Choice {
 /// the main view or a `Middle` dialog. The control channel and raw keyboard/event handlers do not
 /// go through that hit test, however: they must consult this explicit barrier as well.
 pub(crate) fn prompt_layer(app: &LightcraftApp) -> Option<egui::LayerId> {
-    let id = match (&app.quit_prompt, app.notices.is_empty()) {
-        (Some(QuitPrompt::Tasks(_)), _) => "quit-tasks",
-        (Some(QuitPrompt::Unsaved(_)), _) => "quit-unsaved",
-        (None, false) => "settings-notice",
-        (None, true) => return None,
+    let id = match (&app.quit_prompt, app.move_notice.is_some(), app.notices.is_empty()) {
+        (Some(QuitPrompt::Tasks(_)), ..) => "quit-tasks",
+        (Some(QuitPrompt::Unsaved(_)), ..) => "quit-unsaved",
+        (None, true, _) => "move-notice",
+        (None, false, false) => "settings-notice",
+        (None, false, true) => return None,
     };
     Some(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(id)))
 }
@@ -138,10 +196,11 @@ struct PromptKey {
 /// Identity of the prompt currently owning input: its layer, text and, for the settings-notice
 /// queue, the number of notices remaining, including the one shown. `None` when no prompt is up.
 fn prompt_key(app: &LightcraftApp) -> Option<PromptKey> {
-    let (layer, text, queue_len) = match (&app.quit_prompt, app.notices.first()) {
-        (Some(prompt), _) => (prompt_layer(app)?, prompt.text().to_string(), 0),
-        (None, Some(text)) => (prompt_layer(app)?, text.clone(), app.notices.len()),
-        (None, None) => return None,
+    let (layer, text, queue_len) = match (&app.quit_prompt, &app.move_notice, app.notices.first()) {
+        (Some(prompt), ..) => (prompt_layer(app)?, prompt.text().to_string(), 0),
+        (None, Some(text), _) => (prompt_layer(app)?, text.clone(), 0),
+        (None, None, Some(text)) => (prompt_layer(app)?, text.clone(), app.notices.len()),
+        (None, None, None) => return None,
     };
     Some(PromptKey { layer, text, queue_len })
 }
@@ -536,10 +595,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.quit_prompt = None;
         if buttons.get(i).is_some_and(|(_, _, choice)| *choice == Choice::QuitAnyway) {
             app.session.activity.cancel_all();
+            // a move can't be stopped, so choosing to quit is what lets it be cut short
+            app.quit_cuts_move = true;
             // unsaved changes still get their own question
             if may_close(app) {
                 app.ui.quit = true;
             }
+        } else {
+            app.quit_cuts_move = false;
         }
         return;
     }
@@ -570,7 +633,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.quit_confirmed = true;
                 app.ui.quit = true;
             }
-            Some(Choice::Cancel | Choice::Ok) | None => app.quit_prompt = None,
+            Some(Choice::Cancel | Choice::Ok) | None => {
+                app.quit_prompt = None;
+                app.quit_cuts_move = false;
+            }
+        }
+        return;
+    }
+    if let Some(text) = app.move_notice.clone() {
+        let buttons = [("moveNoticeOk", "OK", Choice::Ok)];
+        if window(ctx, "move-notice", "Unfinished moves", &text, &buttons, &mut app.notice_input).is_some() {
+            app.move_notice = None;
         }
         return;
     }

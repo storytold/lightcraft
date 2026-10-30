@@ -2283,5 +2283,10 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Moving photos": "Przenoszenie zdjęć",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Przenoszenie zatrzymał błąd (zobacz dziennik). Biblioteka podąża za plikami, które już przeniesiono.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Przenoszenie zatrzymał błąd (zobacz dziennik). Biblioteka może nie podążać za wszystkimi plikami, które już przeniesiono: Znajdź brakujące zdjęcia łączy ponownie te, które utraciła.",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Ta biblioteka jest otwarta bez blokady, więc przerwane przenoszenia pozostają bez zmian, dopóki biblioteka nie zostanie otwarta z blokadą; Znajdź brakujące zdjęcia ponownie łączy przeniesione pliki.",
+  "Unfinished moves": "Nieukończone przenoszenia"
 }

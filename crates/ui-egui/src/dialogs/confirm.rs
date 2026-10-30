@@ -215,7 +215,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             if *dont_ask {
                 app.ui.settings.ask_before_move = false;
             }
-            crate::panels::left::move_photos(app, Some(ids), folder).map(|n| json!({"moved": n}))
+            let ctx = app.tasks.repaint.clone().unwrap_or_default();
+            crate::move_task::start(app, &ctx, &json!({"ids": ids, "folder": folder}))
         }
         // the catalog found: no file dialog; none: File ▸ Import Lightroom Catalog… asks for it
         Dialog::LightroomCatalog { catalog, .. } => {

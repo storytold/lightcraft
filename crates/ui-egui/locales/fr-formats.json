@@ -248,7 +248,6 @@
   "{what} merge cancelled": "Fusion {what} annulée",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Photos locales ignorées : {n}{0:.0} — les albums contiennent des photos de la bibliothèque (ajoutez-les d’abord à Mes photos)",
   "New Folder in “{name}”": "Nouveau dossier dans « {name} »",
-  "Moved {} photo(s)": "{} photo(s) déplacée(s)",
   "not added to Apple Photos: {e}": "non ajouté à Apple Photos : {e}",
   "{n} added to Apple Photos album “{album}”": "{n} ajouté(s) à l'album Apple Photos « {album} »",
   "{n} added to Apple Photos": "{n} ajouté(s) à Apple Photos",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Photos en cours de déplacement à la dernière fermeture de LightCraft : {}. La bibliothèque pointe maintenant là où sont les fichiers ; Modifier → Annuler les remet en place.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Fichiers en cours de déplacement inaccessibles pour l'instant (un disque non connecté ?) : {}. LightCraft vérifiera à la prochaine ouverture de cette bibliothèque.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Un relevé de déplacement ({}) est illisible ({}) ; il a été laissé tel quel.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} était en cours de déplacement et se trouve maintenant aux deux endroits : la bibliothèque garde {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Un fichier annexe de {} n'a pas pu le suivre ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "La bibliothèque n'a pas pu suivre les fichiers en cours de déplacement ({}) ; Rechercher les photos manquantes les relie à nouveau.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "La bibliothèque suit les fichiers qui étaient en cours de déplacement, mais cela n'a pas pu être enregistré ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Copies supprimées du nouvel emplacement, car l’original se trouvait toujours là où la bibliothèque le place : {}."
 }

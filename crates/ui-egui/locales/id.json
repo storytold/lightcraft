@@ -1191,6 +1191,9 @@
   "Moves every photo imported from this disk to Recently Deleted; no file is touched": "Memindahkan semua foto yang diimpor dari disk ini ke Baru dihapus; tidak ada file yang diubah",
   "Moves the files and their XMP sidecars into this folder; never overwrites": "Memindahkan file beserta file sidecar XMP-nya ke folder ini; file yang sudah ada tidak akan ditimpa",
   "Moves the photos imported from this folder to Recently Deleted; no file is touched": "Memindahkan foto yang diimpor dari folder ini ke Baru dihapus; file di disk tidak diubah",
+  "Moving photos": "Memindahkan foto",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Pemindahan dihentikan oleh kesalahan (lihat log). Pustaka mengikuti file yang sudah dipindahkan.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Pemindahan dihentikan oleh kesalahan (lihat log). Pustaka mungkin tidak mengikuti semua file yang sudah dipindahkan: Cari foto hilang menautkan kembali file yang terlepas.",
   "Multi": "Multi",
   "Muted": "Redup",
   "Muted Film": "Film Kalem",
@@ -2339,5 +2342,7 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Pustaka ini terbuka tanpa kuncinya, sehingga pemindahan yang terputus dibiarkan apa adanya sampai pustaka dibuka dengan kunci; Cari foto hilang menautkan kembali file yang sudah dipindahkan.",
+  "Unfinished moves": "Pemindahan yang belum selesai"
 }

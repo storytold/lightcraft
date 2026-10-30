@@ -57,6 +57,8 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+pub mod move_intent;
+pub mod move_job;
 pub mod open_path;
 pub mod originals;
 mod pdf;
@@ -120,6 +122,11 @@ pub enum EngineError {
     /// The work was cancelled (by the person, an agent or a newer request): not a failure.
     #[error("{0}")]
     Cancelled(String),
+    /// A background move of photos is running and this change would clash with it (open another
+    /// library, move other files, take a moving photo out of the library or point it at another
+    /// file): nothing was changed ([`ErrorKind::MoveInProgress`]).
+    #[error("{0}")]
+    MoveInProgress(String),
     /// The feature needs `model`, which is not installed (or still downloading): a frontend
     /// offers its download (terms first) on [`ErrorKind::ModelMissing`], not on the message.
     #[error("{msg}")]
@@ -331,6 +338,18 @@ pub struct Session {
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
     pub(crate) library_identity: Arc<()>,
+    /// The move to another folder running in the background, if any ([`move_job`]): other file
+    /// moves wait for it, and its photos' sidecars are written once it ends.
+    pub(crate) moving: std::sync::Weak<move_job::MoveTicket>,
+    /// Records of file moves now in the catalog ([`move_intent`]), removed once it is saved.
+    pub(crate) settled_moves: Vec<std::path::PathBuf>,
+    /// Photos whose automatic sidecar write waits for their file to arrive at the folder it is
+    /// being moved to ([`move_job`]); written when the move ends. Not a failure: no notice.
+    pub(crate) held_sidecars: std::collections::BTreeSet<PhotoId>,
+    /// The photos this session put on the list of held writes kept beside the move records
+    /// ([`move_intent`]): without the library's lock, it takes back only these, and leaves the
+    /// entries another run (or program) put there.
+    pub(crate) held_listed: std::collections::BTreeSet<PhotoId>,
     /// XMP sidecar preferences (persisted with the library).
     pub xmp: sidecar::XmpPrefs,
     /// Parameters of the last export (`app.export` params, minus targets), persisted in prefs.json.
@@ -501,6 +520,10 @@ impl Session {
             active_spot: None,
             library: None,
             library_identity: Arc::new(()),
+            moving: std::sync::Weak::new(),
+            settled_moves: Vec::new(),
+            held_sidecars: Default::default(),
+            held_listed: Default::default(),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
             last_merge: Default::default(),
@@ -612,7 +635,10 @@ impl Session {
             // persistence trouble (a failed compaction, an older queued change still unwritten by
             // a command that changed nothing) doesn't fail the command; `library.info` reports it.
             let produced = self.pending_log.len() > log_start;
-            if let Err(e @ EngineError::NotSaved(_)) = self.persist()
+            let saved = self.persist();
+            // the records of moves this command settled go once the catalog that follows them is saved
+            self.clear_settled_moves();
+            if let Err(e @ EngineError::NotSaved(_)) = saved
                 && produced
                 && r.is_ok()
             {
@@ -630,6 +656,7 @@ impl Session {
 
     /// Apply an op as one undoable step.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
+        self.refuse_detaching(&self.detached_moving_photos(&op))?;
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
@@ -842,29 +869,42 @@ impl Session {
         // The entry is detached from self.undo/self.redo: include it before any global
         // repair can retire, then retry revalidates it before moving its own packets.
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
+        // A step that would take a moving photo out of the library or point it at another file says how many.
+        self.refuse_detaching(&self.detached_moving_photos(&entry.op))?;
         // Repair discarded file steps before another path change can stale their exact paths.
         // Unrelated metadata history must remain usable while a sidecar is still unwritable.
         if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+            self.refuse_while_moving()?;
             self.repair_sidecars_with(fs).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         }
         rename::retry_sidecars(fs, &mut entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         let op = &entry.op;
+        let moves = self.file_moves(op);
+        // noted before anything moves: a stop part-way is found and followed at the next open
+        let record = self.record_moves(&moves)?;
         let folder = entry.folder.as_ref();
-        if let Some(f) = folder {
-            cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
+        if let Some(f) = folder
+            && let Err(e) = cmd::browse::folder_on_disk(&f.from, &f.to)
+        {
+            self.settle_moves(record);
+            return Err(EngineError::Other(format!("can't move the folder back: {e}")));
         }
         let undo_folder = || {
             if let Some(f) = folder {
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
-        let moves = self.file_moves(op);
-        if let Err(mut e) = rename::move_all(fs, &moves) {
+        let moved = rename::move_all(fs, &moves);
+        if let Err(mut e) = moved {
             entry.retry_sidecars.append(&mut e.pending_sidecars);
             if e.stuck.is_empty() {
                 undo_folder();
             }
-            let (message, mut inverses) = self.follow_stuck(op, e, false);
+            let (message, mut inverses, followed) = self.follow_stuck(op, e, false);
+            // (a library that could not follow keeps the record for the next open)
+            if followed {
+                self.settle_moves(record);
+            }
             // A later successful retry observes the corrected paths. Retain their old paths
             // now, so the opposite history direction still restores the entire original step.
             inverses.append(&mut entry.retry_inverse);
@@ -873,6 +913,7 @@ impl Session {
         }
         match self.apply_catalog(op.clone()) {
             Ok(inv) => {
+                self.settle_moves(record);
                 if let Some(f) = folder {
                     cmd::browse::follow_folder(self, &f.from, &f.to);
                 }
@@ -891,8 +932,10 @@ impl Session {
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
                 if let Err(mut be) = rename::move_all(fs, &back) {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
+                    // the files stay at the new place and the library doesn't point there: the record stays for the next open
                     return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
                 }
+                self.settle_moves(record);
                 undo_folder();
                 Err(e)
             }

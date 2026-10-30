@@ -1349,6 +1349,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "lastError": lib.last_error,
                 // settings files that were unreadable or damaged at open (kept, defaults used)
                 "settingsWarnings": lib.settings_warnings,
+                // moves an earlier run cut short, followed when the library opened (null: none)
+                "recoveredMoves": lib.recovered_moves,
                 // changes applied in memory whose write failed (retried by every save)
                 "unsavedOps": s.unsaved().map_or(0, |u| u.0),
                 "unsavedError": s.unsaved().map(|u| u.1),

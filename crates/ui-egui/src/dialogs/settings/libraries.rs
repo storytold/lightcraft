@@ -11,6 +11,9 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if app.import.is_some() || app.scan.is_some() {
         return Err("wait for the import to finish before switching libraries".into());
     }
+    if app.move_run.is_some() {
+        return Err("wait for the photos being moved to arrive before switching libraries".into());
+    }
     Ok(())
 }
 
@@ -68,6 +71,8 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     let previous_dir = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
     let previous = previous_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
     app.session.close_library().map_err(|e| e.to_string())?;
+    // what the open of the library being left found of its moves isn't about the next one
+    app.move_notice = None;
     let opened = app.session.open_library(&dir, false).map(|_| ()).map_err(|e| format!("{path}: {e}"));
     app.lightroom_last = None;
     app.lightroom_result = None;

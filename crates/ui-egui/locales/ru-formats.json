@@ -248,7 +248,6 @@
   "{what} merge cancelled": "{what}: слияние отменено",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальных фото: {n}{0:.0} — в альбомах только фото из библиотеки (сначала добавьте их в «Мои фото»)",
   "New Folder in “{name}”": "Новая папка в «{name}»",
-  "Moved {} photo(s)": "Перемещено фото: {}",
   "not added to Apple Photos: {e}": "не добавлено в Apple Фото: {e}",
   "{n} added to Apple Photos album “{album}”": "Добавлено в альбом «{album}» Apple Фото: {n}",
   "{n} added to Apple Photos": "Добавлено в Apple Фото: {n}",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Фото, которые перемещались при последнем закрытии LightCraft: {}. Библиотека теперь указывает туда, где находятся файлы; Правка → Отменить вернёт их.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Перемещаемые файлы, которые сейчас недоступны (диск не подключён?): {}. LightCraft проверит снова при следующем открытии этой библиотеки.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Запись о перемещении ({}) не читается ({}); она оставлена как есть.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} перемещался и теперь находится в обоих местах: библиотека оставляет {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "XMP-файл для {} не удалось переместить вместе с ним ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Библиотека не смогла последовать за перемещавшимися файлами ({}); «Найти отсутствующие фото» свяжет их заново.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Библиотека следует за перемещавшимися файлами, но сохранить это не удалось ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Копии, удалённые из нового места, потому что оригинал оставался там, где его хранит библиотека: {}."
 }

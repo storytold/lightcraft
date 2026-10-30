@@ -2390,5 +2390,10 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Moving photos": "Déplacement des photos",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Une erreur a arrêté le déplacement (voir le journal). La bibliothèque suit les fichiers déjà déplacés.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Une erreur a arrêté le déplacement (voir le journal). La bibliothèque peut ne pas suivre tous les fichiers déjà déplacés : Rechercher les photos manquantes rétablit le lien de ceux qu’elle a perdus.",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Cette bibliothèque est ouverte sans son verrou : les déplacements interrompus sont laissés tels quels jusqu’à une ouverture avec le verrou ; Rechercher les photos manquantes relie à nouveau les fichiers déplacés.",
+  "Unfinished moves": "Déplacements inachevés"
 }

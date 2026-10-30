@@ -2343,6 +2343,9 @@
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Ein Gesichtsmodell nutzt die GPU nur, wenn eine Prüfung zeigt, dass sie dieselben Ergebnisse schneller liefert.",
   "Checking the GPU for faces": "GPU für Gesichter wird geprüft",
+  "Moving photos": "Fotos werden verschoben",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Das Verschieben wurde durch einen Fehler angehalten (siehe Protokoll). Die Bibliothek folgt den Dateien, die schon verschoben waren.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Das Verschieben wurde durch einen Fehler angehalten (siehe Protokoll). Die Bibliothek folgt möglicherweise nicht allen Dateien, die schon verschoben waren: Fehlende Fotos suchen verknüpft die verlorenen wieder.",
   "Set Folder Color Label": "Ordner-Farbmarkierung festlegen",
   "Photo Below": "Foto darunter",
   "Photo Above": "Foto darüber",
@@ -3440,5 +3443,7 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Diese Bibliothek ist ohne ihre Sperre geöffnet; abgebrochene Verschiebungen bleiben daher unverändert, bis sie mit der Sperre geöffnet wird. Fehlende Fotos suchen verknüpft verschobene Dateien neu.",
+  "Unfinished moves": "Unvollständige Verschiebungen"
 }

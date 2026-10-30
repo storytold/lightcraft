@@ -248,7 +248,6 @@
   "{what} merge cancelled": "{what}-Zusammenfügung abgebrochen",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Übersprungen: {n} lokale Fotos{0:.0} – Alben enthalten Bibliotheksfotos (zuerst zu „Meine Fotos“ hinzufügen)",
   "New Folder in “{name}”": "Neuer Ordner in „{name}“",
-  "Moved {} photo(s)": "{} Foto(s) verschoben",
   "not added to Apple Photos: {e}": "nicht zu Apple Fotos hinzugefügt: {e}",
   "{n} added to Apple Photos album “{album}”": "{n} zum Apple-Fotos-Album „{album}“ hinzugefügt",
   "{n} added to Apple Photos": "{n} zu Apple Fotos hinzugefügt",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Fotos, die beim letzten Beenden von LightCraft verschoben wurden: {}. Die Bibliothek zeigt jetzt dorthin, wo die Dateien sind; Bearbeiten → Rückgängig holt sie zurück.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Verschobene Dateien, die gerade nicht erreichbar sind (ein nicht verbundenes Laufwerk?): {}. LightCraft sieht beim nächsten Öffnen dieser Bibliothek wieder nach.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Ein Verschiebeeintrag ({}) kann nicht gelesen werden ({}); er bleibt unverändert.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} wurde verschoben und liegt jetzt an beiden Orten: Die Bibliothek behält {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Eine Begleitdatei von {} konnte nicht mitgenommen werden ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Die Bibliothek konnte den verschobenen Dateien nicht folgen ({}); Fehlende Fotos suchen verknüpft sie neu.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Die Bibliothek folgt den verschobenen Dateien, aber das konnte nicht gespeichert werden ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Kopien am neuen Ort entfernt, weil das Original noch dort lag, wo die Bibliothek es führt: {}."
 }

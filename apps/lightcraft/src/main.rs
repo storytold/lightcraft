@@ -104,6 +104,8 @@ impl eframe::App for App {
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // a finished move's result is waiting for a frame that won't come: the library follows it now
+        self.0.finish_ready_move();
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
         if let Err(e) = self.1.save(&self.0) {

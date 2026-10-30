@@ -240,7 +240,6 @@
   "{what} merge cancelled": "Unione {what} annullata",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Foto locali saltate: {n}{0:.0}; gli album contengono foto della libreria (prima aggiungile a Le mie foto)",
   "New Folder in “{name}”": "Nuova cartella in “{name}”",
-  "Moved {} photo(s)": "Foto spostate: {}",
   "not added to Apple Photos: {e}": "non aggiunte a Foto di Apple: {e}",
   "{n} added to Apple Photos album “{album}”": "Aggiunte all'album “{album}” di Foto di Apple: {n}",
   "{n} added to Apple Photos": "Aggiunte a Foto di Apple: {n}",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Foto in spostamento all'ultima chiusura di LightCraft: {}. La libreria ora punta a dove si trovano i file; Modifica → Annulla le riporta indietro.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "File in spostamento non raggiungibili ora (un disco non collegato?): {}. LightCraft controllerà di nuovo alla prossima apertura di questa libreria.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Impossibile leggere un registro di spostamento ({}) ({}); è stato lasciato com'era.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} era in spostamento e ora si trova in entrambi i posti: la libreria tiene {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Un file collaterale di {} non è riuscito a seguirlo ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "La libreria non è riuscita a seguire i file in spostamento ({}); Trova foto mancanti li ricollega.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "La libreria segue i file che erano in spostamento, ma non è stato possibile salvarlo ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Copie rimosse dalla nuova posizione, perché l’originale era ancora dove la libreria lo registra: {}."
 }

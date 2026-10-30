@@ -251,7 +251,6 @@
   "{what} merge cancelled": "Penggabungan {what} dibatalkan",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "{n} foto Lokal{:.0} dilewati: album hanya dapat berisi foto pustaka (tambahkan ke Foto saya terlebih dahulu)",
   "New Folder in “{name}”": "Folder baru di “{name}”",
-  "Moved {} photo(s)": "{} foto dipindahkan",
   "not added to Apple Photos: {e}": "tidak ditambahkan ke Apple Photos: {e}",
   "{n} added to Apple Photos album “{album}”": "{n} ditambahkan ke album Apple Photos “{album}”",
   "{n} added to Apple Photos": "{n} ditambahkan ke Apple Photos",
@@ -305,5 +304,13 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Foto yang sedang dipindahkan saat LightCraft terakhir ditutup: {}. Pustaka sekarang menunjuk ke lokasi file; Edit → Urungkan memindahkannya kembali.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "File yang sedang dipindahkan dan tidak dapat dijangkau sekarang (disk tidak terhubung?): {}. LightCraft akan memeriksa lagi saat pustaka ini dibuka berikutnya.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Catatan pemindahan ({}) tidak dapat dibaca ({}); catatan dibiarkan apa adanya.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} sedang dipindahkan dan kini berada di kedua tempat: pustaka mempertahankan {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "File sidecar milik {} tidak dapat mengikutinya ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Pustaka tidak dapat mengikuti file yang sedang dipindahkan ({}); Cari foto hilang menautkannya kembali.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Pustaka mengikuti file yang sedang dipindahkan, tetapi itu tidak dapat disimpan ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Salinan yang dihapus dari lokasi baru, karena file aslinya masih berada di tempat pustaka mencatatnya: {}."
 }

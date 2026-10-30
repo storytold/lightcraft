@@ -104,7 +104,6 @@
   "Matches: {}": "Shody: {}",
   "Merging… {stage} {:.0}%": "Slučování… {stage} {:.0}%",
   "Move {what} to Recently Deleted?": "Přesunout {what} do nedávno odstraněných?",
-  "Moved {} photo(s)": "Přesunuto fotografií: {}",
   "Moved; {} photo(s) relinked": "Přesunuto; znovu propojeno fotografií: {}",
   "Named ({named_n})": "Pojmenované ({named_n})",
   "New Folder in “{name}”": "Nová složka v „{name}“",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Fotografie, které se přesouvaly, když se LightCraft naposledy zavřel: {}. Knihovna teď ukazuje tam, kde soubory jsou; Úpravy → Zpět je vrátí.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Přesouvané soubory, které teď nejsou dostupné (nepřipojený disk?): {}. LightCraft se podívá znovu při příštím otevření této knihovny.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Záznam o přesunu ({}) nelze přečíst ({}); zůstal, jak byl.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} se přesouval a je teď na obou místech: knihovna ponechává {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Přidružený soubor XMP k {} se s ním nepřesunul ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Knihovna nemohla následovat soubory, které se přesouvaly ({}); Najít chybějící fotografie je znovu propojí.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Knihovna následuje soubory, které se přesouvaly, ale nepodařilo se to uložit ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Kopie odstraněné z nového místa, protože originál byl stále tam, kde ho knihovna má: {}."
 }

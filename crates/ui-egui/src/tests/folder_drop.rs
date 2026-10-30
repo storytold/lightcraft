@@ -1,7 +1,8 @@
 //! Photos dragged from the grid onto a Folders row move there on disk: the row lights up, the
 //! dragged label says where they will go, a closed folder held under the pointer opens, and a
-//! release asks first (unless the person said not to), then moves the files (one undo step).
-//! Photos that can't go there, or are there already, say so and stay where they are.
+//! release asks first (unless the person said not to), then moves the files in the background
+//! (one undo step; `move_task`). Photos that can't go there, or are there already, say so and
+//! stay where they are.
 
 use std::path::{Path, PathBuf};
 
@@ -109,6 +110,11 @@ fn toast(h: &Headless) -> String {
     h.app.ui.toast.as_ref().map(|(t, _, _)| t.clone()).unwrap_or_default()
 }
 
+/// Let the background move end, as the frames that follow it do.
+fn settle(h: &mut Headless) {
+    assert!(crate::move_task::wait(&mut h.app, &h.view.ctx, std::time::Duration::from_secs(20)), "the move ended");
+}
+
 #[test]
 fn photos_dropped_on_a_folder_move_there_on_disk() {
     let (root, trip, home) = folders("move");
@@ -138,6 +144,7 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     assert!(trip.join("beach.png").is_file(), "not before Move");
     h.step();
     click(&mut h, "button:dialogOk");
+    settle(&mut h);
     // Then the file moved, the photo follows it, and the toast says Undo moves it back
     assert!(home.join("beach.png").is_file() && !trip.join("beach.png").exists(), "moved on disk");
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap();
@@ -239,6 +246,7 @@ fn photos_that_leave_the_view_leave_the_selection() {
     release(&mut h, target.center());
     h.step();
     click(&mut h, "button:dialogOk");
+    settle(&mut h);
     assert!(home.join("beach.png").is_file(), "moved");
     // it left trip's view, and the selection with it: a Delete next can't reach it unseen
     assert!(!h.app.session.selection.contains(lightcraft_catalog::PhotoId(beach)), "{:?}", h.app.session.selection);
@@ -315,6 +323,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     // the question, with Don't ask again ticked
     click(&mut h, "check:moveDontAsk");
     click(&mut h, "button:dialogOk");
+    settle(&mut h);
     assert!(home.join("beach.png").is_file());
     assert!(!h.app.ui.settings.ask_before_move, "kept in Settings");
     // the next drop goes at once
@@ -323,6 +332,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     h.step();
     let target = folder_row(&h, &home).unwrap();
     drop_beach(&mut h, dunes, target);
+    settle(&mut h);
     assert!(h.app.ui.dialog.is_none(), "not asked");
     assert!(home.join("dunes.png").is_file(), "moved at once");
     let _ = std::fs::remove_dir_all(&root);
@@ -344,5 +354,142 @@ fn a_question_left_open_while_another_library_opens_moves_nothing() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["error"].as_str().unwrap_or_default().contains("Another library was opened"), "{r}");
     assert!(trip.join("beach.png").is_file() && !home.join("beach.png").exists(), "nothing moved");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_background_move_shows_its_progress_and_holds_back_other_moves_until_it_ends() {
+    let (root, trip, home) = folders("background");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    // When an agent asks for the move in the background, the call comes back at once
+    let r = h.app.run("photo.moveToFolder", json!({"ids": [beach], "folder": home.to_string_lossy(), "background": true})).unwrap();
+    assert_eq!(r, json!({"background": true, "files": 1}));
+    // Then the activity stack shows it, with how far it has got and no ✕ (it can't be stopped)
+    let row = h.app.session.activity.list().into_iter().find(|t| t.kind == "move").expect("a row for the move");
+    assert_eq!((row.label.as_str(), row.total, row.cancellable), ("Moving photos", 1, false));
+    let inspect = crate::control::inspect(&h.app, &h.view.ctx);
+    assert_eq!(inspect["move"]["running"]["files"], 1, "{}", inspect["move"]);
+    // and, until it ends, another move waits for it, and Quit asks first
+    let e = h.app.run("photo.moveToFolder", json!({"ids": [garden], "folder": trip.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("being moved"), "{e}");
+    assert_eq!(toast(&h), e, "said where the person sees it: the status line isn't drawn");
+    // so is a change that would take the moving photo out of the library, whichever menu or button asked
+    h.app.ui.toast = None;
+    h.app.run("library.select", json!({"ids": [beach]})).unwrap();
+    let e = h.app.run("photo.deletePermanently", json!({"ids": [beach]})).unwrap_err();
+    assert_eq!(e, "1 photo is being moved to another folder: wait for the move to finish");
+    assert_eq!(toast(&h), e);
+    assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).is_some());
+    assert!(!crate::panels::notices::may_close(&mut h.app), "Quit asks while the move runs");
+    assert!(format!("{:?}", h.app.quit_prompt).contains("Moving photos"), "{:?}", h.app.quit_prompt);
+    h.app.quit_prompt = None;
+    settle(&mut h);
+    // Once it ends: the file moved, the photo follows, the row is gone and the end is reported
+    assert!(home.join("beach.png").is_file() && !trip.join("beach.png").exists());
+    let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap();
+    assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if Path::new(path) == home.join("beach.png")));
+    assert!(h.app.session.activity.list().is_empty());
+    assert!(toast(&h).starts_with("Moved 1 photo to “home”."), "{}", toast(&h));
+    let inspect = crate::control::inspect(&h.app, &h.view.ctx);
+    assert_eq!(inspect["move"]["running"], serde_json::Value::Null);
+    assert_eq!(inspect["move"]["last"], json!({"moved": 1, "folder": home.to_string_lossy()}));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_background_move_refused_for_another_running_move_says_so_in_a_toast() {
+    let (root, trip, home) = folders("background-refused");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    h.app.run("photo.moveToFolder", json!({"ids": [beach], "folder": home.to_string_lossy(), "background": true})).unwrap();
+    // a menu, key or button that asks for the move in the background drops the returned error: the toast is what the person sees
+    let e = h.app.run("photo.moveToFolder", json!({"ids": [garden], "folder": trip.to_string_lossy(), "background": true})).unwrap_err();
+    assert!(e.contains("being moved"), "{e}");
+    assert_eq!(toast(&h), e, "said where the person sees it");
+    // and it stays up for 6 s of the app clock
+    h.app.ui.toast = None;
+    let _ = h.app.run("photo.moveToFolder", json!({"ids": [garden], "folder": trip.to_string_lossy(), "background": true}));
+    let expires = h.app.ui.toast.as_ref().map(|(_, until, _)| *until).expect("a toast");
+    assert!((expires - (h.app.tick_now() + 6.0)).abs() < 1.0, "{expires}");
+    settle(&mut h);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_move_started_from_the_grid_or_a_folder_row_that_is_refused_says_so_for_as_long_as_an_error() {
+    // the Folders rows and the grid's Move to Folder… start a move through `move_task::start` directly
+    let (root, trip, home) = folders("start-refused");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    h.app.run("photo.moveToFolder", json!({"ids": [beach], "folder": home.to_string_lossy(), "background": true})).unwrap();
+    h.app.ui.toast = None;
+    let ctx = h.view.ctx.clone();
+    let e = crate::move_task::start(&mut h.app, &ctx, &json!({"ids": [garden], "folder": trip.to_string_lossy()})).unwrap_err();
+    assert!(e.contains("being moved"), "{e}");
+    let (text, until, _) = h.app.ui.toast.clone().expect("the refusal is told");
+    assert_eq!(text, e);
+    assert!(until - h.app.tick_now() > 5.0, "an error stays 6 s, not the 1.4 s of a plain toast: {}", until - h.app.tick_now());
+    settle(&mut h);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_move_refused_when_the_question_is_answered_stays_up_as_long_as_an_error() {
+    let (root, trip, home) = folders("question-refused");
+    std::fs::copy(trip.join("beach.png"), trip.join("dunes.png")).unwrap();
+    let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)]);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let target = folder_row(&h, &home).unwrap();
+    let (beach, dunes) = (id_of(&h, "beach.png"), id_of(&h, "dunes.png"));
+    h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(beach));
+    drop_beach(&mut h, beach, target);
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::MovePhotos { .. })), "{:?}", h.app.ui.dialog);
+    // another move starts while the question is up: the answer is refused
+    // (started on the engine and never run: it holds the library as a move on a worker would)
+    let _held = lightcraft_engine::move_job::start(&mut h.app.session, &json!({"ids": [dunes], "folder": home.to_string_lossy()})).unwrap();
+    h.app.ui.toast = None;
+    click(&mut h, "button:dialogOk");
+    let (text, until, _) = h.app.ui.toast.clone().expect("the refusal is told");
+    assert!(text.contains("being moved"), "{text}");
+    assert!(until - h.app.tick_now() > 5.0, "an error stays 6 s, not the 1.4 s of a plain toast: {}", until - h.app.tick_now());
+    settle(&mut h);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn quit_anyway_quits_while_a_move_without_a_stop_button_runs() {
+    let (root, _trip, _home) = folders("quit");
+    let mut h = app(&[]);
+    let _stalled = crate::move_task::stalled(&mut h.app);
+    assert!(!crate::panels::notices::may_close(&mut h.app), "Quit asks while the move runs");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:quitAnyway"), "the prompt is shown");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:quitAnyway"}), std::time::Duration::from_secs(10))["ok"], true);
+    assert!(h.quit_requested(), "Quit Anyway quits instead of asking again");
+    // Cancel keeps working, and the next quit asks again
+    h.app.ui.quit = false;
+    h.app.quit_cuts_move = false;
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_move_that_finished_as_the_app_exits_is_followed_by_the_library() {
+    let (root, trip, home) = folders("exit");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let beach = id_of(&h, "beach.png");
+    h.app.run("photo.moveToFolder", json!({"ids": [beach], "folder": home.to_string_lossy(), "background": true})).unwrap();
+    // no frame runs `poll`: wait until the worker has finished (so its result is sent), then the
+    // exit path gets exactly one look
+    h.app.move_run.as_mut().unwrap().worker.take().unwrap().join().unwrap();
+    assert!(home.join("beach.png").is_file());
+    h.app.finish_ready_move();
+    let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap();
+    assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if Path::new(path) == home.join("beach.png")), "{:?}", photo.source);
+    assert!(h.app.move_run.is_none());
     let _ = std::fs::remove_dir_all(&root);
 }

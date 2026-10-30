@@ -2200,5 +2200,10 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Moving photos": "正在移动照片",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "移动因出错而停止（见日志）。图库会跟随已移动的文件。",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "移动因出错而停止（见日志）。图库可能没有跟随所有已移动的文件：用“查找缺失的照片”可重新关联丢失的文件。",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "此图库未取得锁就被打开，因此被中断的移动会保持原样，直到图库带锁打开；用“查找缺失的照片”可重新关联已移动的文件。",
+  "Unfinished moves": "未完成的移动"
 }

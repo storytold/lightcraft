@@ -130,7 +130,6 @@
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
   "Move {what} to Recently Deleted?": "Chuyển {what} vào Đã xóa gần đây?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
-  "Moved {} photo(s)": "Đã di chuyển {} ảnh",
   "Moved; {} photo(s) relinked": "Đã di chuyển; liên kết lại {} ảnh",
   "Named ({named_n})": "Có tên ({named_n})",
   "New Folder in “{name}”": "Thư mục mới trong «{name}»",
@@ -305,5 +304,13 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Ảnh đang được di chuyển khi LightCraft đóng lần trước: {}. Thư viện giờ trỏ tới nơi các tệp đang ở; Chỉnh sửa → Hoàn tác sẽ chuyển chúng về.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Các tệp đang được di chuyển mà hiện không truy cập được (ổ đĩa chưa kết nối?): {}. LightCraft sẽ kiểm tra lại vào lần mở thư viện này tiếp theo.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Không đọc được bản ghi về một lần di chuyển ({}) ({}); bản ghi được giữ nguyên.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} đang được di chuyển và giờ nằm ở cả hai nơi: thư viện giữ {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Sidecar của {} không thể đi theo tệp ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Thư viện không thể theo các tệp đang được di chuyển ({}); Tìm ảnh bị thiếu sẽ liên kết lại chúng.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Thư viện đi theo các tệp đang được di chuyển, nhưng không lưu được ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Các bản sao đã bị xóa khỏi vị trí mới vì bản gốc vẫn ở nơi thư viện ghi nhận: {}."
 }

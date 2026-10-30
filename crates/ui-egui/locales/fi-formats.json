@@ -130,7 +130,6 @@
   "Move {n} photo{} to “{}”?": "Siirretäänkö kuvat kohteeseen ”{1}” ({n}){0:.0}?",
   "Move {what} to Recently Deleted?": "Siirretäänkö {what} Äskettäin poistettuihin?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Siirretty kuvia kohteeseen ”{1}”: {n}{0:.0}. Muokkaa → Kumoa siirtää ne takaisin.",
-  "Moved {} photo(s)": "Siirretty kuvia: {}",
   "Moved; {} photo(s) relinked": "Siirretty; yhdistetty uudelleen kuvia: {}",
   "Named ({named_n})": "Nimetyt ({named_n})",
   "New Folder in “{name}”": "Uusi kansio kohteessa ”{name}”",
@@ -305,5 +304,13 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Kuvia siirrettiin, kun LightCraft suljettiin viimeksi: {}. Kirjasto osoittaa nyt sinne, missä tiedostot ovat; Muokkaa → Kumoa siirtää ne takaisin.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Siirrettäviä tiedostoja, joihin ei nyt saada yhteyttä (levy ei ole kytketty?): {}. LightCraft yrittää uudelleen, kun tämä kirjasto avataan seuraavan kerran.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Siirron tietuetta ({}) ei voi lukea ({}); se jätettiin ennalleen.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} oli siirrettävänä ja on nyt molemmissa paikoissa: kirjasto pitää kohteen {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Tiedoston {} sivutiedosto ei voinut seurata sitä ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Kirjasto ei voinut seurata siirrettäviä tiedostoja ({}); Etsi puuttuvat kuvat yhdistää ne uudelleen.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Kirjasto seuraa siirrettäviä tiedostoja, mutta sitä ei voitu tallentaa ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Uudesta paikasta poistetut kopiot, koska alkuperäinen oli yhä siellä, missä kirjasto sen tuntee: {}."
 }

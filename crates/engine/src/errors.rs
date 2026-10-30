@@ -27,6 +27,9 @@ pub enum ErrorKind {
     LightroomCatalog,
     /// The work was cancelled: not a failure.
     Cancelled,
+    /// Photos are being moved to another folder in the background and the change would clash with
+    /// the move: nothing was changed, and a frontend says so where the person sees it.
+    MoveInProgress,
     /// The feature needs this model, which is not installed (or still downloading).
     ModelMissing(AiModel),
     Other,
@@ -44,6 +47,7 @@ impl EngineError {
             Self::LibraryInUse(_) => ErrorKind::LibraryInUse,
             Self::LightroomCatalog { .. } => ErrorKind::LightroomCatalog,
             Self::Cancelled(_) => ErrorKind::Cancelled,
+            Self::MoveInProgress(_) => ErrorKind::MoveInProgress,
             Self::ModelMissing { model, .. } => ErrorKind::ModelMissing(*model),
             Self::Other(_) => ErrorKind::Other,
         }

@@ -252,7 +252,6 @@
   "{what} merge cancelled": "{what}合成をキャンセルしました",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "ローカル写真{n}枚をスキップしました{0:.0}：アルバムに入れられるのはライブラリの写真です（先にマイフォトに追加してください）",
   "New Folder in “{name}”": "「{name}」に新規フォルダ",
-  "Moved {} photo(s)": "{} 枚の写真を移動しました",
   "not added to Apple Photos: {e}": "Appleの写真に追加されませんでした：{e}",
   "{n} added to Apple Photos album “{album}”": "{n}件をAppleの写真のアルバム「{album}」に追加しました",
   "{n} added to Apple Photos": "{n}件をAppleの写真に追加しました",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "前回 LightCraft を閉じたときに移動中だった写真: {}。ライブラリはファイルの現在の場所を指すようになりました。編集 → 取り消す で元に戻せます。",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "移動中のファイルのうち、今はアクセスできないもの (ディスクが接続されていない?): {}。次にこのライブラリを開いたときにもう一度確認します。",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "移動の記録 ({}) を読み込めません ({})。そのまま残しました。",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} は移動中で、現在両方の場所にあります。ライブラリは {1} を使います。",
+  "A sidecar of {} couldn't follow it ({}).": "{} のサイドカーを一緒に移動できませんでした ({})。",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "移動中だったファイルにライブラリを合わせられませんでした ({})。見つからない写真を探す で再リンクできます。",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "移動中だったファイルにライブラリを合わせましたが、保存できませんでした ({})。",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "元のファイルがライブラリの記録どおりの場所に残っていたため、新しい場所から削除したコピー：{}。"
 }

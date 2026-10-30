@@ -2349,5 +2349,10 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Moving photos": "Перемещение фото",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Перемещение остановлено из-за ошибки (см. журнал). Библиотека следует за уже перемещёнными файлами.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Перемещение остановлено из-за ошибки (см. журнал). Библиотека может не следовать за всеми уже перемещёнными файлами: «Найти отсутствующие фото» заново свяжет потерянные.",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Эта библиотека открыта без блокировки, поэтому прерванные перемещения остаются как есть, пока библиотека не будет открыта с блокировкой; «Найти отсутствующие фото» заново свяжет перемещённые файлы.",
+  "Unfinished moves": "Незавершённые перемещения"
 }

@@ -234,7 +234,6 @@
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "Geometria z Lightrooma dla {path} nie została zachowana; zapisane przekształcenie Upright nie jest obsługiwane.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "Geometria z Lightrooma dla {path} nie została zachowana; zapisane przekształcenie jest pomijane, ponieważ Upright jest wyłączony.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Geometria z Lightrooma dla {path} nie została zachowana; tryb {mode} zostanie obliczony ponownie.",
-  "Moved {} photo(s)": "Przeniesione zdjęcia: {}",
   "New Folder in “{name}”": "Nowy folder w „{name}”",
   "Restored {} photo{} from Recently Deleted": "Przywrócone z Ostatnio usuniętych zdjęcia: {}{:.0}",
   "XMP adjustments were not imported for {path}: {fields}.": "Korekty XMP dla {path} nie zostały zaimportowane: {fields}.",
@@ -305,5 +304,13 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Zdjęcia przenoszone podczas ostatniego zamknięcia LightCraft: {}. Biblioteka wskazuje teraz miejsce, w którym są pliki; Edytuj → Cofnij przywróci je.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Przenoszone pliki, które są teraz niedostępne (niepodłączony dysk?): {}. LightCraft sprawdzi ponownie przy następnym otwarciu tej biblioteki.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Nie można odczytać zapisu przeniesienia ({}) ({}); pozostawiono go bez zmian.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} był przenoszony i jest teraz w obu miejscach: biblioteka zachowuje {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Plik pomocniczy {} nie mógł zostać przeniesiony razem z nim ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "Biblioteka nie mogła podążyć za przenoszonymi plikami ({}); Znajdź brakujące zdjęcia połączy je ponownie.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "Biblioteka podąża za przenoszonymi plikami, ale nie udało się tego zapisać ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Kopie usunięte z nowego miejsca, ponieważ oryginał nadal był tam, gdzie biblioteka go ma: {}."
 }

@@ -252,7 +252,6 @@
   "{what} merge cancelled": "已取消 {what} 合并",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已跳过 {n} 张本地照片{0:.0}：相册只能收录图库中的照片（请先添加到我的照片）",
   "New Folder in “{name}”": "在“{name}”中新建文件夹",
-  "Moved {} photo(s)": "已移动 {} 张照片",
   "not added to Apple Photos: {e}": "未添加到 Apple 照片：{e}",
   "{n} added to Apple Photos album “{album}”": "已将 {n} 个添加到 Apple 照片相册“{album}”",
   "{n} added to Apple Photos": "已将 {n} 个添加到 Apple 照片",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "上次关闭 LightCraft 时正在移动的照片：{}。图库现在指向文件所在的位置；编辑 → 撤销 可移回。",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "正在移动但现在无法访问的文件（磁盘未连接？）：{}。下次打开此图库时 LightCraft 会再次检查。",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "无法读取移动记录（{}）（{}）；已保持原样。",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} 正在移动，现在两个位置都有：图库保留 {1}。",
+  "A sidecar of {} couldn't follow it ({}).": "{} 的附属文件未能随之移动（{}）。",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "图库未能跟随正在移动的文件（{}）；查找缺失的照片 可重新链接它们。",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "图库已跟随正在移动的文件，但无法保存（{}）。",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "已从新位置删除的副本（原文件仍在图库记录的位置）：{}。"
 }

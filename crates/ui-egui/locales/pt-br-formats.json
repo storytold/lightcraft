@@ -252,7 +252,6 @@
   "{what} merge cancelled": "{what} mesclagem cancelada",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Fotos locais ignoradas: {n}{0:.0} — álbuns contêm fotos da biblioteca (adicione-as às Minhas fotos primeiro)",
   "New Folder in “{name}”": "Nova pasta em “{name}”",
-  "Moved {} photo(s)": "{} foto(s) movida(s)",
   "not added to Apple Photos: {e}": "não adicionadas ao Fotos da Apple: {e}",
   "{n} added to Apple Photos album “{album}”": "{n} adicionadas ao álbum “{album}” do Fotos da Apple",
   "{n} added to Apple Photos": "{n} adicionadas ao Fotos da Apple",
@@ -305,5 +304,13 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Photos being moved when LightCraft last closed: {}. The library now points at where the files are; Edit → Undo moves them back.": "Fotos sendo movidas quando o LightCraft foi fechado pela última vez: {}. A biblioteca agora aponta para onde os arquivos estão; Editar → Desfazer as traz de volta.",
+  "Files being moved that can't be reached now (a disk not connected?): {}. LightCraft looks again the next time this library opens.": "Arquivos sendo movidos que não podem ser acessados agora (um disco desconectado?): {}. O LightCraft verifica de novo na próxima vez que esta biblioteca for aberta.",
+  "A record of a move ({}) can't be read ({}); it was left as it is.": "Um registro de movimentação ({}) não pode ser lido ({}); ele foi deixado como estava.",
+  "{} was being moved and is now at both places: the library keeps {}.": "{0} estava sendo movido e agora está nos dois lugares: a biblioteca mantém {1}.",
+  "A sidecar of {} couldn't follow it ({}).": "Um arquivo XMP auxiliar de {} não conseguiu acompanhá-lo ({}).",
+  "The library couldn't follow the files that were being moved ({}); Find Missing Photos relinks them.": "A biblioteca não conseguiu acompanhar os arquivos que estavam sendo movidos ({}); Localizar fotos ausentes os vincula de novo.",
+  "The files that were being moved are followed, but that couldn't be saved ({}).": "A biblioteca acompanha os arquivos que estavam sendo movidos, mas isso não pôde ser salvo ({}).",
+  "Copies removed from the new place, because the original was still where the library has it: {}.": "Cópias removidas do novo local, porque o original ainda estava onde a biblioteca o registra: {}."
 }

@@ -1191,6 +1191,9 @@
   "Moves every photo imported from this disk to Recently Deleted; no file is touched": "Siirtää kaikki tältä levyltä tuodut kuvat Äskettäin poistettuihin; tiedostoihin ei kosketa",
   "Moves the files and their XMP sidecars into this folder; never overwrites": "Siirtää tiedostot ja niiden XMP-sivutiedostot tähän kansioon; ei koskaan korvaa mitään",
   "Moves the photos imported from this folder to Recently Deleted; no file is touched": "Siirtää tästä kansiosta tuodut kuvat Äskettäin poistettuihin; tiedostoihin ei kosketa",
+  "Moving photos": "Kuvia siirretään",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Virhe pysäytti siirron (katso loki). Kirjasto seuraa jo siirrettyjä tiedostoja.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Virhe pysäytti siirron (katso loki). Kirjasto ei välttämättä seuraa kaikkia jo siirrettyjä tiedostoja: Etsi puuttuvat kuvat yhdistää menetetyt uudelleen.",
   "Multi": "Useita",
   "Muted": "Hillitty",
   "Muted Film": "Hillitty filmi",
@@ -2327,5 +2330,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "This library is open without its lock, so moves that were cut short are left as they are until it opens with the lock; Find Missing Photos relinks files that moved.": "Tämä kirjasto on avattu ilman lukitusta, joten keskeytyneet siirrot jätetään ennalleen, kunnes kirjasto avataan lukituksen kanssa; Etsi puuttuvat kuvat yhdistää siirretyt tiedostot uudelleen.",
+  "Unfinished moves": "Keskeneräiset siirrot"
 }

@@ -139,6 +139,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "status": app.ui.status,
         "copied": app.copied,
         "notices": app.notices,
+        "moveNotice": app.move_notice,
         "quitPrompt": app.quit_prompt.as_ref().map(crate::QuitPrompt::text),
         // how hard the background face scan may work right now, and why it is judged so (see `panels::faces::scan_pace`)
         "faceScan": {"pace": app.caches.faces_pace, "focused": app.caches.faces_in_front, "pending": app.caches.faces_pending, "indexed": app.caches.faces_indexed},
@@ -148,6 +149,8 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
+        // photos being moved to another folder (`photo.moveToFolder {background: true}`), and how the last move ended
+        "move": {"running": app.move_run.as_ref().map(crate::move_task::MoveRun::status), "last": app.last_move},
         // every long-running task in flight, as the activity stack shows them (`activity.list`)
         "activity": app.session.activity.list(),
         // commands waiting on a native file dialog shown off the UI thread (`pick`)

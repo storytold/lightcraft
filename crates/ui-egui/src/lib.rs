@@ -32,6 +32,7 @@ pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+pub mod move_task;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -167,12 +168,17 @@ pub struct LightcraftApp {
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// What following moves an earlier run cut short came to, shown once under its own title
+    /// ([`panels::notices::recovered_text`]); not a settings problem.
+    pub move_notice: Option<String>,
     /// Quitting was stopped to ask first: changes couldn't be saved, or tasks are running.
     pub quit_prompt: Option<QuitPrompt>,
     /// Keyboard/focus/input state for the prompt above, including its one-frame creation barrier.
     pub(crate) notice_input: panels::notices::PromptInput,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// Quit Anyway was chosen while photos were moving: the move (which has no ✕) is cut short.
+    pub quit_cuts_move: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).
@@ -304,6 +310,10 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// Photos being moved to another folder in the background (`move_task`).
+    pub move_run: Option<move_task::MoveRun>,
+    /// How the last background move ended (`ui.inspect` → `move.last`).
+    pub last_move: Option<Value>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
