@@ -704,3 +704,113 @@ fn keyword_tree_caps_a_keyword_at_the_list_depth() {
     let deepest = tree_paths(&c.keyword_tree()).iter().map(|(p, _)| p.split(SEP).count()).max().unwrap_or(0);
     assert_eq!(deepest, MAX_LEVELS);
 }
+
+/// A batch delete takes each named keyword with what is below it, at any depth and in any case,
+/// and leaves a keyword that only shares a name prefix ("Cats" next to "Cat").
+#[test]
+fn batch_delete_takes_nested_keywords_in_any_case_and_not_a_shared_name_prefix() {
+    let (mut c, ids) = lib(&[&["Cat", "Cats", "Animals|CAT|Kitten|Tiny", "Animals|Dog", "Cat food"]]);
+    let op = c.delete_keywords_ops(&["cat".to_string(), "animals|dog".to_string()]).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(kws(&c, ids[0]), ["Cats", "Animals|CAT|Kitten|Tiny", "Cat food"]);
+    // Named twice, in two cases, and with one below the other: still one batch that works.
+    let op = c.delete_keywords_ops(&["Animals".to_string(), "ANIMALS".to_string(), "animals|cat".to_string()]).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(kws(&c, ids[0]), ["Cats", "Cat food"]);
+}
+
+/// Every keyword named must exist: "Cat" isn't there because "Cats" is, and a keyword below a
+/// named one doesn't make a second name exist.
+#[test]
+fn batch_delete_refuses_a_name_that_only_prefixes_another() {
+    let (c, _) = lib(&[&["Cats", "Animals|Dog"]]);
+    let err = c.delete_keywords_ops(&["Cats".to_string(), "Cat".to_string()]).unwrap_err();
+    assert!(err.to_string().contains("no keyword “Cat”"), "{err}");
+    let err = c.delete_keywords_ops(&["Animals".to_string(), "Animals|Do".to_string()]).unwrap_err();
+    assert!(err.to_string().contains("no keyword “Animals|Do”"), "{err}");
+}
+
+/// A batch move reparents each moved keyword with what is below it, at any depth and in any
+/// case, and leaves a keyword that only shares a name prefix with a moved one.
+#[test]
+fn batch_move_reparents_nested_keywords_in_any_case_and_not_a_shared_name_prefix() {
+    let (mut c, ids) = lib(&[&["Cat", "Cats", "Pets|DOG|Puppy|Tiny", "Pets|Doge", "Home"], &["pets|dog|puppy", "PETS|DOG"]]);
+    let (op, moves) = c.move_keywords_ops(&["cat".to_string(), "pets|dog".to_string()], Some("Home")).unwrap();
+    c.apply(op).unwrap();
+    assert_eq!(moves, [("Cat".to_string(), "Home|Cat".to_string()), ("Pets|DOG".to_string(), "Home|DOG".to_string())]);
+    assert_eq!(kws(&c, ids[0]), ["Home|Cat", "Cats", "Home|DOG|Puppy|Tiny", "Pets|Doge", "Home"]);
+    // a photo's own spelling of a moved keyword, in another case, moves too
+    assert_eq!(kws(&c, ids[1]), ["Home|DOG|puppy", "Home|DOG"]);
+}
+
+fn list_it(c: &mut Catalog, path: &str, words: &str) {
+    let words: Vec<&str> = words.split_whitespace().collect();
+    c.apply(Op::SetKeyword { path: path.into(), info: Some(with_synonyms(&words)) }).unwrap();
+}
+
+/// A batch move refuses, with the same message as before, a keyword that isn't there, a name that
+/// is taken where it goes (by a photo's keyword, or by one only below a listed one), a move
+/// inside itself and two keywords with one name.
+#[test]
+fn batch_move_refusals() {
+    let (mut c, _) = lib(&[&["Cat", "Pets|Dog", "Home|Cat", "A|Fish", "B|fish", "Top", "Pets"]]);
+    list_it(&mut c, "Home|Zoo|Lion", "");
+    let s = |v: &[&str]| v.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+    let err = c.move_keywords_ops(&s(&["cat", "Nope"]), Some("Home")).unwrap_err();
+    assert!(err.to_string().contains("no keyword “Nope”"), "{err}");
+    assert!(matches!(c.move_keywords_ops(&s(&["cat"]), Some("home")), Err(CatalogError::KeywordExists(t)) if t == "Home|Cat"));
+    assert!(c.move_keywords_ops(&s(&["Pets"]), Some("Home|Zoo")).is_ok());
+    list_it(&mut c, "Home|Pets|Bird", "");
+    assert!(matches!(c.move_keywords_ops(&s(&["Pets"]), Some("Home")), Err(CatalogError::KeywordExists(t)) if t == "Home|Pets"));
+    let err = c.move_keywords_ops(&s(&["Pets"]), Some("pets|dog")).unwrap_err();
+    assert!(err.to_string().contains("can't move a keyword inside itself"), "{err}");
+    let err = c.move_keywords_ops(&s(&["a|fish", "b|FISH"]), Some("Top")).unwrap_err();
+    assert!(err.to_string().contains("two of them are named “fish”"), "{err}");
+    let err = c.move_keywords_ops(&[], None).unwrap_err();
+    assert!(err.to_string().contains("no keyword to move"), "{err}");
+}
+
+/// A batch move takes the listings (with their attributes) under each moved keyword along, and
+/// leaves the others.
+#[test]
+fn batch_move_takes_listings_along() {
+    let (mut c, _) = lib(&[&["Home"]]);
+    for (p, w) in [("Pets|Dog", "hound"), ("Pets|Dog|Puppy", "pup"), ("Pets|Doge", "meme"), ("Cat", "kitty"), ("Home", "")] {
+        list_it(&mut c, p, w);
+    }
+    let (op, _) = c.move_keywords_ops(&["pets|dog".to_string(), "CAT".to_string()], Some("Home")).unwrap();
+    c.apply(op).unwrap();
+    let now: Vec<(&str, Vec<&str>)> =
+        c.keyword_list.values().map(|l| (l.path.as_str(), l.info.synonyms.iter().map(String::as_str).collect())).collect();
+    assert_eq!(
+        now,
+        [("Home", vec![]), ("Home|Cat", vec!["kitty"]), ("Home|Dog", vec!["hound"]), ("Home|Dog|Puppy", vec!["pup"]), ("Pets|Doge", vec!["meme"])]
+    );
+}
+
+/// The one pass over the keyword list that moves every listing at once gives the ops of one
+/// `list_move_ops` per move, in the same order, also where a landing merges into a listing that
+/// is there already.
+#[test]
+fn batch_list_moves_equal_one_list_move_per_move() {
+    let (mut c, _) = lib(&[&[]]);
+    for (p, w) in [
+        ("Pets|Dog", "hound"),
+        ("Pets|Dog|Puppy", "pup"),
+        ("Pets|Doge", "meme"),
+        ("Cat", "kitty"),
+        ("Home|Dog", "canine"),
+        ("Home|Dog|Puppy", "pup"),
+        ("Home", ""),
+    ] {
+        list_it(&mut c, p, w);
+    }
+    for moves in [
+        vec![("Pets|Dog".to_string(), "Home|Dog".to_string()), ("Cat".to_string(), "Home|Cat".to_string())],
+        vec![("Cat".to_string(), "Top".to_string())],
+        vec![],
+    ] {
+        let one_by_one: Vec<Op> = moves.iter().flat_map(|(f, t)| c.list_move_ops(std::slice::from_ref(f), t)).collect();
+        assert_eq!(c.list_moves_ops(&moves), one_by_one, "{moves:?}");
+    }
+}
