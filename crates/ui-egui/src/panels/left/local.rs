@@ -131,7 +131,7 @@ pub(crate) struct LocalPlaces {
     pub browse_root: Option<String>,
 }
 
-fn folder_label(path: &str) -> String {
+pub(super) fn folder_label(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string())
 }
 

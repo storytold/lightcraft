@@ -1,6 +1,7 @@
 use super::albums::top_level_drop_target;
-use super::rows::{ROW_HEIGHT, note_width};
-use super::{Align2, Icon, LightcraftApp, Rect, Sense, SidebarSection, Tokens, icon_button, json, paint, pos2, register, vec2};
+use super::local::folder_label;
+use super::rows::{MAX_ELIDE_CHARS, ROW_HEIGHT, current_mark, elide_end, note_width};
+use super::{Align2, Icon, LibrarySource, LightcraftApp, Rect, Sense, SidebarSection, Tokens, icon_button, json, paint, pos2, register, vec2};
 
 /// Space above a section's header.
 pub(super) const SECTION_GAP: f32 = 10.0;
@@ -181,6 +182,35 @@ pub fn section_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     );
 }
 
+/// A name as the header says it: `None` for no name or an empty one, and kept to a length a
+/// tooltip can show, however long a file made it.
+fn shown_name(name: Option<String>) -> Option<String> {
+    let name = name.filter(|n| !n.trim().is_empty())?;
+    let keep = 4 * MAX_ELIDE_CHARS;
+    Some(if name.chars().count() > keep { name.chars().take(keep).chain(std::iter::once('…')).collect() } else { name })
+}
+
+/// What the grid shows that has its row in `section`, named as those rows name it: the album
+/// (as the grid's title says it), the Local or library folder by its own name,
+/// the date or the keyword. `None` when the section holds none of it (All Photos, Picks and
+/// the like are rows of no section).
+pub(crate) fn shown_in(app: &LightcraftApp, section: SidebarSection) -> Option<String> {
+    let s = &app.session;
+    shown_name(match section {
+        SidebarSection::Albums => matches!(s.source, LibrarySource::Album(_)).then(|| crate::i18n::source_title(s)),
+        SidebarSection::Local => {
+            let browsed = s.browse.as_ref().filter(|_| s.source == LibrarySource::Folder);
+            browsed.map(|b| folder_label(&b.path))
+        }
+        SidebarSection::Folders if s.source == LibrarySource::LibraryFolder => s.library_folder.as_deref().map(folder_label),
+        SidebarSection::Folders => None,
+        // the date in its dated form ("September 2026", as the Date chip and the grid header say it), not `2026-09`:
+        // the year and month rows that give a short label its context are folded away; a keyword by its own name, not its path
+        SidebarSection::ByDate => s.filter.date.as_deref().map(|d| crate::i18n::date_group_label(d, false)),
+        SidebarSection::Keywords => s.filter.keyword.as_deref().map(|k| k.rsplit('|').next().unwrap_or(k).to_string()),
+    })
+}
+
 /// A section's header in `r`: a disclosure chevron in the gutter (where tree rows have their
 /// chevron), then the bold title; a click folds or unfolds the section (kept in the UI state, so
 /// it survives restarts), and what the section adds to its header (its button, see `header_button`) sits at
@@ -207,7 +237,13 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     }
     crate::widgets::context_menu(&resp, |ui| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
-    crate::widgets::announce_disclosure(&resp, true, open, title);
+    // folded, the row that says "this is shown" is out of sight: the header says it instead
+    let current = if open { None } else { shown_in(app, section) };
+    let name = match &current {
+        Some(what) => crate::i18n::tr_format!("{title}, showing {what}", title = title, what = what),
+        None => title.to_string(),
+    };
+    crate::widgets::announce_disclosure(&resp, true, open, &name);
     // what is visible of the header: its bar and count end at the panel's edge, like a row's
     let edge = r.right().min(visible_right(ui));
     let hovered = resp.hovered() && app.ui.dragging_section.is_none();
@@ -219,15 +255,39 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     register(ui, format!("{widget}Chevron:{id}"), Rect::from_center_size(c, vec2(16.0, 16.0)));
     let col = if hovered { t.text } else { t.text_dim };
     paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, col);
-    ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.5), t.text_label);
+    let title_rect = ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.5), t.text_label);
     let button = header_button(section);
     // (an album being dragged puts "Top Level" in the Albums header)
     let room = !(section == SidebarSection::Albums && app.ui.dragging_album.is_some());
-    if !open && rows > 0 && app.ui.show_counts && room {
-        // folded: how much is in there (left of the header's own button)
-        let right = edge - 18.0 - if button.is_some() { HEADER_BUTTON + 4.0 } else { 0.0 };
-        let count = ui.painter().text(pos2(right, r.center().y), Align2::RIGHT_CENTER, rows.to_string(), t.font(12.5), t.text_dim);
+    // where the title's side of the header ends: at the count, the button or the edge
+    let mut free_until = edge - 18.0 - if button.is_some() { HEADER_BUTTON + 4.0 } else { 0.0 };
+    // folded: how much is in there (left of the header's own button); not beside the name of
+    // what is shown, where it would read as that row's own count
+    if !open && rows > 0 && app.ui.show_counts && room && current.is_none() {
+        let count = ui.painter().text(pos2(free_until, r.center().y), Align2::RIGHT_CENTER, rows.to_string(), t.font(12.5), t.text_dim);
         register(ui, format!("{widget}Count:{id}"), count);
+        free_until = count.left();
+    }
+    if let Some(what) = &current {
+        // the same bar as the row it stands in for, and that row's name after the title as far
+        // as there is room (never over the button)
+        let mark = current_mark(ui, r.top() + 2.0, r.bottom() - 2.0);
+        register(ui, format!("{widget}Current:{id}"), mark);
+        let font = t.font(12.5);
+        let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_dim).size().x;
+        let left = title_rect.right() + 10.0;
+        let fits = if room { (free_until - 10.0 - left).max(0.0) } else { 0.0 };
+        let shown = elide_end(what, fits, measure);
+        if let Some(shown) = &shown {
+            let at = ui.painter().text(pos2(left, r.center().y), Align2::LEFT_CENTER, shown, font.clone(), t.text_dim);
+            register(ui, format!("{widget}CurrentName:{id}"), at);
+        }
+        // in full on hover when it is cut or left out; not over the header's own button, whose
+        // tooltip is the button's
+        let on_button = button.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| header_button_rect(ui, r).contains(p));
+        if shown.as_deref() != Some(what.as_str()) && !on_button {
+            resp.clone().on_hover_text(crate::i18n::tr_format!("Showing {what}", what = what));
+        }
     }
     if section == SidebarSection::Albums {
         top_level_drop_target(app, ui, r);

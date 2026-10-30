@@ -2080,6 +2080,166 @@ fn the_selection_bar_stays_inside_the_panel() {
     assert!(bar.right() <= panel.right(), "the bar {bar:?} ends inside the panel {panel:?}");
 }
 
+/// Given any of the four themes, when a source is chosen, then its row carries a bar at the
+/// panel's left edge that stands 4.5:1 against the panel beside it and the row's own fill, and
+/// its count reads as body text (both read from the pixels). A row the pointer rests on has no bar.
+#[test]
+fn the_row_of_what_is_shown_stands_out_in_every_theme() {
+    use crate::theme::{ThemeKind, contrast};
+    for kind in ThemeKind::ALL {
+        let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+        exec(&mut h, "view.theme", json!({"theme": kind.id()}));
+        click(&mut h, "source:picks");
+        let r = h.request("ui.hoverWidget", json!({"id": "source:recentlyAdded"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let img = h.snapshot(SETTLE);
+        assert_eq!(h.view.ctx.pixels_per_point(), 1.0, "the test samples pixels at point coordinates");
+        let t = crate::theme::Tokens::get(&h.view.ctx);
+        let px = |x: f32, y: f32| img.pixels[y.round() as usize * img.size[0] + x.round() as usize];
+        let (mark, bar) = (widget(&h, "currentMark:picks"), widget(&h, "highlight:picks"));
+        assert!(mark.width() >= 3.0 && mark.height() >= 24.0, "a bar, not a hairline: {mark:?}");
+        let (line, fill) = (px(mark.center().x, mark.center().y), px(bar.left() + 5.0, bar.center().y));
+        assert!(contrast(line, t.chrome) >= 4.5, "{kind:?}: the bar {line:?} against the panel {:?}", t.chrome);
+        assert!(contrast(line, fill) >= 4.5, "{kind:?}: the bar {line:?} against the row's fill {fill:?}");
+        // the count as it is drawn: the pixel of it that differs most from the fill
+        let count = widget(&h, "count:picks");
+        let mut best = 1.0f32;
+        for y in count.top().floor() as usize..count.bottom().ceil() as usize {
+            for x in count.left().floor() as usize..count.right().ceil() as usize {
+                best = best.max(contrast(img.pixels[y * img.size[0] + x], fill));
+            }
+        }
+        assert!(best >= 4.5, "{kind:?}: the count on the row's fill {fill:?} reaches {best}");
+        // a hovered row is a fill alone
+        assert!(!has(&h, "currentMark:recentlyAdded"), "{kind:?}");
+        let hover = widget(&h, "source:recentlyAdded");
+        let edge = px(mark.center().x, hover.center().y);
+        assert!(contrast(edge, t.chrome) < 1.5, "{kind:?}: a hovered row has no bar: {edge:?}");
+    }
+}
+
+/// The bar keeps clear of a row's disclosure triangle (a folder at the top level has its
+/// triangle hard against the panel's edge).
+#[test]
+fn the_bar_of_what_is_shown_keeps_clear_of_triangles() {
+    // (a disk is a row of the top level: its triangle's box starts at the panel's edge)
+    let mut h = folders_app(&["/Users/me/a.jpg", "/Volumes/nas/p/b.jpg", "/Volumes/nas/c.jpg"]);
+    click(&mut h, "source:libfolder:/Volumes/nas");
+    let (mark, toggle) = (widget(&h, "currentMark:libfolder:/Volumes/nas"), widget(&h, "libraryFolderToggle:/Volumes/nas"));
+    assert!(mark.right() <= toggle.left(), "the bar {mark:?} ends where the triangle's box {toggle:?} begins");
+}
+
+/// Scrolled sideways, the bar is still at the panel's edge, over the rows that slid under it and
+/// over the scroll area's shading of its edge: it reads as it does unscrolled (it used to fade to
+/// 2:1 there, with triangles and names drawn across it).
+#[test]
+fn the_bar_reads_the_same_when_the_rows_are_scrolled_sideways() {
+    use crate::theme::contrast;
+    // deep enough that the levels, stepping right by no more than the narrowest step, still
+    // do not fit the panel
+    let deep: String = ('a'..='z').chain('a'..='l').map(|c| format!("/{c}")).collect();
+    // (tall enough for the whole chain: Recently Deleted is above it now)
+    let mut h = folders_app_sized(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")], [1400.0, 1400.0]);
+    click(&mut h, "source:libfolder:/a");
+    let panel = widget(&h, "panel:left_panel");
+    assert!(crate::panels::left::content_width(&h.view.ctx) > panel.width() + 40.0, "there is somewhere to scroll to");
+    let r = h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.scroll", json!({"dx": -60.0, "dy": 0.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let img = h.snapshot(SETTLE);
+    assert!(widget(&h, "source:all").left() < panel.left() - 20.0, "the rows did scroll: {:?}", widget(&h, "source:all"));
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    let mark = widget(&h, "currentMark:libfolder:/a");
+    assert!((mark.left() - panel.left()).abs() <= 1.5, "the bar stays at the panel's edge: {mark:?} / {panel:?}");
+    for y in [mark.top() + 3.0, mark.center().y, mark.bottom() - 3.0] {
+        for x in [mark.left() + 0.5, mark.center().x, mark.right() - 0.5] {
+            let px = img.pixels[y.floor() as usize * img.size[0] + x.floor() as usize];
+            assert_eq!(px, t.selected_mark(), "nothing is drawn over the bar at {x},{y}");
+            assert!(contrast(px, t.chrome) >= 4.5 && contrast(px, t.canvas) >= 4.5);
+        }
+    }
+}
+
+/// Given an album is shown, when Albums is folded, then its header carries the bar and the
+/// album's name after its title, in place of the count of its rows (the row that would say so is
+/// out of sight); no other header does, and both go when something else is shown.
+#[test]
+fn a_folded_section_says_what_it_holds_of_what_is_shown() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let album = h.app.session.catalog.albums().find(|a| !a.folder).map(|a| a.id.0).expect("a demo album");
+    exec(&mut h, "library.source", json!({"kind": "album", "id": album}));
+    let marks = |h: &Headless| -> Vec<String> {
+        let mut m: Vec<String> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("sidebarSectionCurrent:").map(str::to_string)).collect();
+        m.sort();
+        m
+    };
+    assert!(marks(&h).is_empty(), "open, the section shows the row itself: no mark");
+    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "collapsed": true}));
+    assert_eq!(marks(&h), ["albums"], "folded, the header says so");
+    let (said, plus) = (widget(&h, "sidebarSectionCurrentName:albums"), widget(&h, "icon:albumNew"));
+    assert!(said.width() > 0.0 && said.right() < plus.left(), "the name {said:?} stays clear of the button {plus:?}");
+    assert!(!has(&h, "sidebarSectionCount:albums"), "the count of its rows would read as the album's own");
+    // the bar is a shape of its own, as on a row
+    let img = h.snapshot(SETTLE);
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    let mark = widget(&h, "sidebarSectionCurrent:albums");
+    let px = img.pixels[mark.center().y.round() as usize * img.size[0] + mark.center().x.floor() as usize];
+    assert!(crate::theme::contrast(px, t.chrome) >= 4.5, "{px:?}");
+    for other in ["local", "byDate", "folders", "keywords"] {
+        exec(&mut h, "view.sidebarSection", json!({"section": other, "collapsed": true}));
+    }
+    assert_eq!(marks(&h), ["albums"], "only the section that holds it");
+    assert!(has(&h, "sidebarSectionCount:keywords"), "a section that holds none of it keeps its count");
+    // a long name in a narrow panel is cut at its end, before the + button
+    let whole = widget(&h, "sidebarSectionCurrentName:albums").width();
+    exec(&mut h, "album.rename", json!({"id": album, "name": "Travel and weddings and pets of every year so far"}));
+    let r = h.request("ui.set", json!({"leftWidth": 200.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let (said, plus) = (widget(&h, "sidebarSectionCurrentName:albums"), widget(&h, "icon:albumNew"));
+    assert!(said.width() > whole.min(20.0) && said.right() < plus.left(), "cut before the button: {said:?} {plus:?}");
+    assert_eq!(marks(&h), ["albums"]);
+    click(&mut h, "source:all");
+    assert!(marks(&h).is_empty(), "All Photos is in no section");
+    assert!(has(&h, "sidebarSectionCount:albums"), "and the count is back");
+}
+
+/// What a folded section says is shown is what its rows say: a month by its name, a keyword by
+/// its own name, a folder by its own name (not "Folder", not the path).
+#[test]
+fn what_is_shown_is_named_as_its_row_names_it() {
+    use crate::panels::left::shown_in;
+    use crate::sidebar::SidebarSection as S;
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
+    let said = |h: &Headless, s: S| shown_in(&h.app, s);
+    assert_eq!(said(&h, S::Folders), None, "All Photos");
+    exec(&mut h, "library.source", json!({"kind": "libraryFolder", "path": "/pics/trip"}));
+    assert_eq!(said(&h, S::Folders).as_deref(), Some("trip"), "the row's own name");
+    assert_eq!(said(&h, S::Albums), None);
+    exec(&mut h, "library.source", json!({"kind": "all"}));
+    exec(&mut h, "library.filter", json!({"date": "2026-01"}));
+    // the dated form, as the Date chip says it: the rows that would give the year are folded away
+    let month = said(&h, S::ByDate);
+    assert_eq!(month, Some(crate::i18n::date_group_label("2026-01", false)), "not the key");
+    assert!(month.is_some_and(|m| m.contains("2026")), "the year is named");
+    exec(&mut h, "library.filter", json!({"date": null, "keyword": "travel|lisbon"}));
+    assert_eq!(said(&h, S::Keywords).as_deref(), Some("lisbon"), "the keyword's own name, not its path");
+    // a keyword of any length (they come from files) is cut to what a panel can show, at once
+    let long = "weddings ".repeat(20_000);
+    exec(&mut h, "library.filter", json!({"keyword": long}));
+    let said_long = said(&h, S::Keywords).unwrap_or_default();
+    assert!(said_long.chars().count() < 1000 && said_long.starts_with("weddings"), "{} characters", said_long.chars().count());
+    exec(&mut h, "view.sidebarSection", json!({"section": "keywords", "collapsed": true}));
+    h.settle(SETTLE);
+    assert!(has(&h, "sidebarSectionCurrent:keywords"));
+    // Local: the folder browsed, by its name
+    h.app.session.source = lightcraft_engine::LibrarySource::Folder;
+    h.app.session.browse = Some(lightcraft_engine::Browse { path: "/somewhere/Weddings".into(), ..Default::default() });
+    assert_eq!(said(&h, S::Local).as_deref(), Some("Weddings"));
+}
+
 /// Select All in the loupe: every filmstrip cell of a selected photo is drawn selected, not just
 /// the active one (issue #298).
 #[test]

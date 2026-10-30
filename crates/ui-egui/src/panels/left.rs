@@ -30,12 +30,14 @@ pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
 #[cfg(test)]
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
-use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
+use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, paint_current_marks, set_tree_open};
 pub(crate) use rows::{content_width, indent_step, step_for};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;
+#[cfg(test)]
+pub(crate) use sections::shown_in;
 use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sections_menu};
 
 /// Draw the My Photos sidebar: title and open-library name, the scrollable sources, albums,
@@ -69,7 +71,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         let counts = app.caches.counts(&app.session.catalog);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
-        egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+        let rows = egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             drag_auto_scroll(app, ui);
             // where the visible part of the content starts (screen y), for the pinned header
             let view_top = ui.cursor().top() + viewport.min.y;
@@ -193,5 +195,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.ctx().request_repaint();
             }
         });
+        paint_current_marks(ui, rows.inner_rect);
     });
 }

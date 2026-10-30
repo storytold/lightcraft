@@ -120,6 +120,26 @@ impl ThemeKind {
     }
 }
 
+/// How far apart two colours are in lightness, as WCAG measures it: 1 (the same) to 21 (black on
+/// white). Text wants 4.5 against what it sits on, a line or a mark 3.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    fn luminance(c: Color32) -> f32 {
+        let lin = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    }
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// `from`, moved toward `to` in small steps until it stands `ratio`:1 against every colour in
+/// `against`; `to` itself when nothing on the way does.
+fn toward_until(from: Color32, to: Color32, against: &[Color32], ratio: f32) -> Color32 {
+    (0..=64u8).map(|i| crate::widgets::lerp(from, to, i as f32 / 64.0)).find(|c| against.iter().all(|a| contrast(*c, *a) >= ratio)).unwrap_or(to)
+}
+
 impl Default for Tokens {
     fn default() -> Self {
         Tokens {
@@ -251,6 +271,22 @@ impl Tokens {
                 ..base
             },
         }
+    }
+
+    /// The bar at the left edge of the row of what is shown (the source or filter the grid
+    /// follows), and of a folded section that holds it: a neutral taken from the panel toward
+    /// the text until it stands 4.5:1 against the panel, the row's own fill ([`Tokens::canvas`])
+    /// and a hovered row beside it. It is the one mark of "this is where you are" that does not
+    /// lean on a faint fill; a bar, not an outline, so outlines stay free for what the keyboard
+    /// is on.
+    pub fn selected_mark(&self) -> Color32 {
+        toward_until(self.chrome, self.text, &[self.chrome, self.canvas, self.hover], 4.5)
+    }
+
+    /// A count on the row of what is shown: [`Tokens::text_dim`] is too faint on that row's fill
+    /// in the light themes, so it is taken toward the text until it reads as body text does.
+    pub fn selected_count(&self) -> Color32 {
+        toward_until(self.text_dim, self.text, &[self.canvas], 4.6)
     }
 
     pub fn get(ctx: &egui::Context) -> Tokens {
@@ -470,6 +506,24 @@ mod tests {
             let (line, zoom) = ctx.options(|o| (o.input_options.line_scroll_speed, o.input_options.scroll_zoom_speed));
             assert_eq!(line, WHEEL_LINE_POINTS, "{kind:?}");
             assert!(((zoom * line).exp() - (40.0_f32 / 200.0).exp()).abs() < 1e-4, "{kind:?}: a notch zooms {}", (zoom * line).exp());
+        }
+    }
+
+    /// In every theme the shown row's bar stands 4.5:1 against the panel, the row's fill and a
+    /// hovered row, and the count on that row reads as body text; black on white is 21:1.
+    #[test]
+    fn the_shown_rows_bar_and_count_read_in_every_theme() {
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert_eq!(contrast(Color32::GRAY, Color32::GRAY), 1.0);
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            let (mark, count) = (t.selected_mark(), t.selected_count());
+            for beside in [t.chrome, t.canvas, t.hover] {
+                assert!(contrast(mark, beside) >= 4.5, "{kind:?}: {mark:?} beside {beside:?}");
+            }
+            assert!(contrast(count, t.canvas) >= 4.5, "{kind:?}: {count:?}");
+            // no louder than it has to be: the bar stays short of the text's own weight
+            assert!(contrast(mark, t.chrome) < contrast(t.text, t.chrome), "{kind:?}: {mark:?}");
         }
     }
 

@@ -157,6 +157,15 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### The sidebar shows where you are
+- The row of what the grid shows (an album, a folder, Picks, a keyword or date it is narrowed to) now has a bar
+  at the panel's left edge and its name in a heavier face, as well as its fill. In every theme the fill alone
+  was close to the panel's own colour, and in Paper it was nearly the colour of a row the pointer rests on. In
+  the light themes the count on that row is darker, so it reads on the fill.
+- A folded section that holds what is shown has the same bar and says its name after the section's title
+  ("Albums  Lisbon") where the count of its rows was, so folding Albums no longer hides which album you are
+  in. A long name is cut to fit; hover the header for all of it.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

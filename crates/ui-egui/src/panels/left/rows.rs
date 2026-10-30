@@ -1,4 +1,4 @@
-use super::albums::MARK_W;
+use super::albums::{MARK_W, pinned_rect};
 use super::{Align2, Icon, LightcraftApp, Rect, Sense, Tokens, paint, pos2, register, vec2};
 
 /// How wide the sidebar's content needs to be, from the widest row of the last frame: rows are
@@ -21,6 +21,51 @@ pub(super) const SCROLL_TO_ROW: &str = "left-scroll-to-row";
 /// Temp-data key of the Folders choice whose rows above were last opened ([`reveal_chosen`]):
 /// removed, they open again.
 pub(super) const LIBFOLDER_REVEALED: &str = "libfolder-revealed";
+
+/// How wide the bar of what is shown is.
+const CURRENT_MARK_W: f32 = 3.0;
+
+/// The bar that says "this is what the grid shows", from `top` to `bottom` at the left edge of
+/// what is visible of the sidebar. It is painted once the rows are ([`paint_current_marks`]):
+/// over whatever a sideways scroll brings under it, and over the scroll area's own shading of
+/// its edge, so it reads the same wherever the rows are scrolled to. Returns its rect.
+pub(super) fn current_mark(ui: &egui::Ui, top: f32, bottom: f32) -> Rect {
+    ui.data_mut(|d| d.get_temp_mut_or_default::<Vec<[f32; 2]>>(egui::Id::unique("left-current-marks")).push([top, bottom]));
+    let left = ui.clip_rect().left();
+    Rect::from_min_max(pos2(left, top), pos2(left + CURRENT_MARK_W, bottom))
+}
+
+/// Paints the bars asked for this frame ([`current_mark`]) inside `view`, what is visible of the
+/// rows, and below the pinned header, which covers the rows it is over.
+pub(super) fn paint_current_marks(ui: &egui::Ui, view: Rect) {
+    let marks = ui.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Vec<[f32; 2]>>(egui::Id::unique("left-current-marks"))));
+    let top_limit = pinned_rect(ui).map_or(view.top(), |p| p.bottom().max(view.top()));
+    let color = Tokens::get(ui.ctx()).selected_mark();
+    for [top, bottom] in marks {
+        let (top, bottom) = (top.max(top_limit), bottom.min(view.bottom()));
+        if bottom > top {
+            ui.painter().rect_filled(Rect::from_min_max(pos2(view.left(), top), pos2(view.left() + CURRENT_MARK_W, bottom)), 0.0, color);
+        }
+    }
+}
+
+/// The most characters of a name tried when it is cut to fit: more than the widest panel shows,
+/// and a bound on the layouts one very long name (a keyword from a file) costs each frame.
+pub(super) const MAX_ELIDE_CHARS: usize = 160;
+
+/// `text` cut at its end to fit `max` (as `width` measures it), with an ellipsis; `None` when
+/// not even one character and the ellipsis fit. (Names are cut at the end: unlike a path, their
+/// start says the most.)
+pub(super) fn elide_end(text: &str, max: f32, width: impl Fn(&str) -> f32) -> Option<String> {
+    if width(text) <= max {
+        return Some(text.to_string());
+    }
+    // (a name from a file can be any length: no more of it is tried than a panel could show)
+    (1..text.chars().count().min(MAX_ELIDE_CHARS))
+        .rev()
+        .map(|keep| text.chars().take(keep).chain(std::iter::once('…')).collect::<String>())
+        .find(|cand| width(cand) <= max)
+}
 
 /// A row says how wide it needs to be.
 pub(super) fn note_width(ui: &egui::Ui, w: f32) {
@@ -158,8 +203,12 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
     let edge = r.right().min(visible_right);
     let inner = Rect::from_min_max(r.min + vec2(8.0, 0.0), pos2((r.right() - 8.0).min(edge - 8.0).max(r.left() + 8.0), r.bottom()));
     if selected {
+        // what is shown: the fill, and a bar at the panel's left edge that reads in every theme
+        // (the fill alone is close to the panel's own colour, and to a hovered row's)
         ui.painter().rect_filled(inner, 4.0, t.canvas);
         register(ui, format!("highlight:{id}"), inner);
+        let mark = current_mark(ui, r.top(), r.bottom());
+        register(ui, format!("currentMark:{id}"), mark);
     } else if resp.hovered() {
         ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
     }
@@ -169,10 +218,13 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
         icon,
         if selected { t.text } else { t.icon },
     );
-    let font = t.font(13.5);
     let color = if selected { t.text } else { t.text_label };
     // a count of nothing is there, but fainter: the rows that hold photos stand out
-    let count_color = |n: usize| if n == 0 { t.text_dim.gamma_multiply(0.55) } else { t.text_dim };
+    let count_color = |n: usize| match (selected, n) {
+        (true, _) => t.selected_count(),
+        (false, 0) => t.text_dim.gamma_multiply(0.55),
+        (false, _) => t.text_dim,
+    };
     let count_galley = count.filter(|_| app.ui.show_counts).map(|n| ui.painter().layout_no_wrap(n.to_string(), t.font(12.5), count_color(n)));
     let label_left = r.left() + 42.0 + indent;
     let count_left = count_galley.as_ref().map_or(edge - 18.0, |g| edge - 18.0 - g.size().x);
@@ -182,15 +234,22 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
         ui.painter().circle_filled(dot.center(), 4.0, c);
         register(ui, format!("labelMark:{id}"), dot);
     }
-    // the name gives way to the count: cut with an ellipsis, in full on hover
+    // the name gives way to the count: cut with an ellipsis, in full on hover. What is shown has
+    // its name in the heavier face (a second sign that is not a colour) while that fits; the
+    // rows ask for the width of the regular face either way, so choosing a row never changes how
+    // wide they are, and the heavier face never pushes a panel that just fit into scrolling
     let room = count_left - mark_w - 8.0 - label_left;
-    let measure = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
+    let measure_in = |font: &egui::FontId, s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), color).size().x;
+    let regular = t.font(13.5);
+    let heavy = t.semibold(13.5);
+    let font = if selected && measure_in(&heavy, label) <= room { heavy } else { regular.clone() };
+    let measure = |s: &str| measure_in(&font, s);
     let full_w = measure(label);
     let shown = if full_w <= room { label.to_string() } else { crate::widgets::elide_head(label, room.max(0.0), measure) };
     let label_rect = ui.painter().text(pos2(label_left, r.center().y), Align2::LEFT_CENTER, &shown, font.clone(), color);
     register(ui, format!("label:{id}"), label_rect);
     let resp = if shown != label { resp.on_hover_text(label) } else { resp };
-    note_width(ui, row_need(indent, full_w, mark_w, count_galley.as_ref().map(|g| g.size().x)));
+    note_width(ui, row_need(indent, measure_in(&regular, label), mark_w, count_galley.as_ref().map(|g| g.size().x)));
     if let Some(galley) = count_galley {
         let rect = Rect::from_min_size(pos2(edge - 18.0 - galley.size().x, r.center().y - galley.size().y / 2.0), galley.size());
         register(ui, format!("count:{id}"), rect);
@@ -234,11 +293,15 @@ fn row_need(indent: f32, name_w: f32, mark_w: f32, count_w: Option<f32>) -> f32 
 
 /// The disclosure chevron at the left of a tree row (`indent` is the row's): right-pointing
 /// when closed, down when open, registered as widget `widget` for the control channel. Returns
-/// its response: the caller flips the open state on `clicked()`.
+/// its response: the caller flips the open state on `clicked()`. Its box starts where the bar of
+/// what is shown ends ([`current_mark`]): on a top-level row the 16 pt box reached over the bar,
+/// and a click on the bar folded the row. The box narrows on both sides, so it stays centred on
+/// the glyph, which is drawn where it was: chevrons and section headers still line up.
 fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open: bool, id: egui::Id, widget: String) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let c = pos2(row.rect.left() + 10.0 + indent_x(ui.ctx(), indent), row.rect.center().y);
-    let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
+    let over_bar = (ui.clip_rect().left() + CURRENT_MARK_W - (c.x - 8.0)).clamp(0.0, 8.0);
+    let tri = Rect::from_center_size(c, vec2(16.0 - 2.0 * over_bar, 16.0));
     let tr = ui.interact(tri, id, Sense::click());
     register(ui, widget, tri);
     let col = if tr.hovered() { t.text } else { t.text_dim };

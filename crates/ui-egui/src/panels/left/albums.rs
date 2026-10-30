@@ -123,7 +123,7 @@ pub(super) fn pointer_over_row(ui: &egui::Ui, rect: Rect) -> bool {
 }
 
 /// Where the pinned header was drawn last frame, if one was (rows are laid out before it).
-fn pinned_rect(ui: &egui::Ui) -> Option<Rect> {
+pub(super) fn pinned_rect(ui: &egui::Ui) -> Option<Rect> {
     ui.data(|d| d.get_temp::<Option<Rect>>(egui::Id::unique("left-pinned-rect"))).flatten()
 }
 
