@@ -237,14 +237,16 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
         ui.ctx().data_mut(|d| d.insert_temp(mem, (key, now)));
     }
     let still = if last == key { now - since } else { 0.0 };
-    // the first preview (or another photo's) at once, a changing layout once it has settled
-    if current.is_none() || still >= DEBOUNCE {
+    // the first preview (or another photo's) at once, a changing layout once it has settled (none while the
+    // Settings filter only reads the page for its text: nothing of it is shown)
+    let reading = super::reading_for_filter(ui.ctx());
+    if !reading && (current.is_none() || still >= DEBOUNCE) {
         let side = crate::panels::detail::texture_side(ui.ctx());
         let edge = app.ui.settings.loupe_edge(pw.max(ph) as f32, usize::MAX, side);
         if let Some(job) = app.session.slide_job_look(&s, &overlays, id, pw, ph, Some(edge), false) {
             app.renderer.request(Slot::SlidePreview, job, 90);
         }
-    } else {
+    } else if !reading {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((DEBOUNCE - still).clamp(0.01, DEBOUNCE)));
     }
     let Some(tex) = app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == id) else {
