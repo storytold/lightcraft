@@ -152,7 +152,9 @@ fn odd_folders_never_fail_the_check() {
     // a one-letter name with a multibyte character never cuts inside it
     let _ = lightroom_catalog_at(&root.join("é"));
     let _ = lightroom_catalog_at(&root.join("ataé-data"));
-    #[cfg(unix)]
+    // APFS rejects invalid UTF-8 filenames with EILSEQ; these on-disk fixtures are Unix-only
+    // outside macOS. The checks above still exercise hostile paths on every platform.
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         use std::os::unix::ffi::OsStrExt;
         // APFS (macOS) refuses names that are not valid UTF-8 (EILSEQ): there the non-UTF-8 cases are skipped and
@@ -173,6 +175,15 @@ fn odd_folders_never_fail_the_check() {
         }
         std::fs::write(lr.join("b.lrcat"), b"x").unwrap();
         assert_eq!(lightroom_catalog_at(&lr), Some(LightroomPlace { catalog: Some(lr.join("b.lrcat")) }), "non-UTF-8 entries skipped");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // Even on APFS, hostile non-UTF-8 path arguments must be handled without a panic.
+        let _ = lightroom_catalog_at(&root.join(std::ffi::OsStr::from_bytes(b"\xff\xfe")));
+        let lr = root.join("symlink-target");
+        std::fs::create_dir_all(&lr).unwrap();
+        std::fs::write(lr.join("b.lrcat"), b"x").unwrap();
         // a symlink to a catalog folder is one too; a dangling one is not
         std::os::unix::fs::symlink(&lr, root.join("link")).unwrap();
         assert!(lightroom_catalog_at(&root.join("link")).is_some());

@@ -640,6 +640,12 @@ fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
         s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge| Ok((p.clone(), i.clone()))));
         s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
         let id = s.active().unwrap();
+        // The synthetic loader models raw decoder facts, so the catalog must agree.
+        let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+        raw.format = "DNG".into();
+        raw.kind = lightcraft_catalog::MediaKind::Raw;
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
         let r = s.execute("library.smartPreviews", &json!({})).unwrap();
         assert_eq!(r["built"], 1, "{r}");
         s.set_develop(id, edit, "reproduction").unwrap();
@@ -1680,6 +1686,212 @@ fn smart_header(file: &Path) -> Value {
     serde_json::from_slice(&bytes[start..nl]).unwrap()
 }
 
+/// A decoder upgrade changes the interpretation, not the original's bytes or proxy filename.
+#[test]
+fn reload_invalidates_preview_only_smart_previews() {
+    reload_smart_preview_transition(false, false, false);
+}
+
+#[test]
+fn reload_virtual_copy_updates_shared_smart_preview_family() {
+    reload_smart_preview_transition(true, false, false);
+}
+
+#[test]
+fn reload_unavailable_smart_preview_drive_is_retryable() {
+    reload_smart_preview_transition(false, true, false);
+}
+
+#[test]
+fn undo_rebuild_rejects_mismatched_smart_preview_interpretation() {
+    reload_smart_preview_transition(false, false, true);
+}
+
+fn reload_smart_preview_transition(from_copy: bool, unplug: bool, rebuild_after_undo: bool) {
+    use crate::media::SourceLevel;
+    use lightcraft_catalog::Op;
+    use std::sync::atomic::Ordering;
+
+    let dir = temp_dir(&format!("smart-decoder-upgrade-{from_copy}-{unplug}-{rebuild_after_undo}"));
+    let path = dir.join("photo.orf");
+    // Procedural pixels stand in for the two decoder versions; no downloaded corpus is needed.
+    write_png(&path, 9);
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let sensor = upgrading_raw_decoder(&mut s);
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    let mut copy = (**s.catalog.photo(id).unwrap()).clone();
+    copy.id = s.catalog.alloc_photo_id();
+    copy.copy_of = Some(id);
+    let copy_id = copy.id;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    let mut sibling = (**s.catalog.photo(copy_id).unwrap()).clone();
+    sibling.id = s.catalog.alloc_photo_id();
+    let sibling_id = sibling.id;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(sibling) }).unwrap();
+    let reload_ids = if from_copy { json!([copy_id.0, sibling_id.0]) } else { json!([id.0]) };
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    let smart_dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&smart_dir, &before);
+    let flat = smart_dir.join(crate::smart::file_name(&before));
+    s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
+    assert!(crate::smart::is_valid(&file) && !crate::smart::is_stale(&file));
+    let old = std::fs::read(&file).unwrap();
+    std::fs::write(&flat, &old).unwrap(); // both layouts must be invalidated
+    assert_eq!(s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap()["reloaded"], json!([]));
+    assert_eq!(std::fs::read(&file).unwrap(), old, "an unchanged interpretation keeps its proxy");
+
+    sensor.store(true, Ordering::SeqCst);
+    if unplug {
+        // A selected external folder disappears while its proxies survive on the drive.
+        s.smart_previews_dir = Some(smart_dir.clone());
+        let offline = dir.join("offline-previews");
+        std::fs::rename(&smart_dir, &offline).unwrap();
+        let err = s.execute("photo.reload", &json!({"ids": reload_ids})).unwrap_err().to_string();
+        assert!(err.contains("reconnect"), "{err}");
+        assert!(!s.catalog.photo(id).unwrap().develops_raw());
+        assert!(!smart_dir.exists(), "do not recreate an unavailable drive");
+        std::fs::rename(&offline, &smart_dir).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), old);
+    }
+    std::fs::remove_file(&flat).unwrap();
+    std::fs::create_dir(&flat).unwrap(); // an unremovable proxy must not allow the catalog switch
+    assert!(s.execute("photo.reload", &json!({"ids": [id.0]})).is_err());
+    assert!(!s.catalog.photo(id).unwrap().develops_raw());
+    std::fs::remove_dir(&flat).unwrap();
+    std::fs::write(&file, &old).unwrap();
+    std::fs::write(&flat, &old).unwrap();
+    let r = s.execute("photo.reload", &json!({"ids": reload_ids})).unwrap();
+    assert_eq!(r["reloaded"], json!([id.0, copy_id.0, sibling_id.0]));
+    let after = s.catalog.photo(id).unwrap().clone();
+    assert_eq!((&after.content_hash, after.file_size, &after.develop), (&before.content_hash, before.file_size, &before.develop));
+    assert_eq!(crate::smart::sharded_file_path(&smart_dir, &after), file);
+    assert!(after.develops_raw() && s.catalog.photo(copy_id).unwrap().develops_raw());
+    assert!(!file.exists() && !flat.exists(), "JPEG-derived proxies cannot be used as raw");
+    let r = s.execute("library.smartPreviews", &json!({"ids": [id.0, copy_id.0]})).unwrap();
+    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+    let rebuilt = std::fs::read(&file).unwrap();
+    assert_ne!(rebuilt, old);
+    assert_eq!(smart_header(&file)["look_version"], json!(crate::camera_preview::LOOK_VERSION));
+    assert_smart_preview_undo_redo(&mut s, id, copy_id, &file, &flat, &old, rebuild_after_undo);
+    s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    for id in [id, copy_id, sibling_id] {
+        s.media.forget(id);
+        let ph = s.catalog.photo(id).unwrap();
+        let source = s.media.source_ref(ph, SourceLevel::Preview).load_source().unwrap();
+        assert!(source.info_or(crate::media::source_info(ph)).raw);
+        assert!((source.image.data[0][0] - 0.2).abs() < 0.02, "offline uses the rebuilt sensor pixels");
+    }
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn assert_smart_preview_undo_redo(s: &mut Session, id: PhotoId, copy_id: PhotoId, file: &Path, flat: &Path, old: &[u8], rebuild_after_undo: bool) {
+    let rebuilt = std::fs::read(file).unwrap();
+    // Undo and Redo change the same interpretation as Reload. An invalidation failure must
+    // preserve both the catalog and the undo entry, so the user can fix the folder and retry.
+    std::fs::create_dir(flat).unwrap();
+    assert!(s.execute("edit.undo", &json!({})).is_err());
+    assert!(s.catalog.photo(id).unwrap().develops_raw());
+    std::fs::remove_dir(flat).unwrap();
+    std::fs::write(file, &rebuilt).unwrap();
+    std::fs::write(flat, &rebuilt).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().develops_raw());
+    assert!(!file.exists() && !flat.exists(), "Undo must discard sensor proxies before restoring preview-only state");
+    if rebuild_after_undo {
+        let r = s.execute("library.smartPreviews", &json!({"ids": [copy_id.0]})).unwrap();
+        assert_eq!(r["built"], 0, "cannot label newly decoded sensor pixels as preview-only: {r}");
+        assert!(r["failed"][0][1].as_str().unwrap().contains("Reload"), "{r}");
+        assert!(!file.exists() && !flat.exists());
+    }
+    std::fs::write(file, old).unwrap();
+    std::fs::write(flat, old).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().develops_raw());
+    assert!(!file.exists() && !flat.exists(), "Redo must discard JPEG proxies before restoring raw state");
+}
+
+fn upgrading_raw_decoder(s: &mut Session) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use crate::media::ProbeInfo;
+    use lightcraft_catalog::MediaKind;
+    use lightcraft_pipeline::SourceInfo;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let sensor = Arc::new(AtomicBool::new(false));
+    let upgraded = sensor.clone();
+    s.media.file_probe = Some(Arc::new(move |_| {
+        Ok(ProbeInfo {
+            width: 48,
+            height: 32,
+            format: "ORF".into(),
+            kind: MediaKind::Raw,
+            file_size: 1234,
+            content_hash: Some("unchanged".into()),
+            preview_only: (!upgraded.load(Ordering::SeqCst)).then(|| "compressed ORF".into()),
+            ..Default::default()
+        })
+    }));
+    let upgraded = sensor.clone();
+    s.media.file_loader = Some(Arc::new(move |path, _| {
+        std::fs::read(path).map_err(|e| e.to_string())?;
+        let raw = upgraded.load(Ordering::SeqCst);
+        Ok((
+            lightcraft_raster::Rgb32f::filled(48, 32, if raw { [0.2, 0.4, 0.6] } else { [0.8; 3] }),
+            SourceInfo { raw, relative_wb: raw, ..Default::default() },
+        ))
+    }));
+    sensor
+}
+
+/// Relinking unchanged bytes after a decoder upgrade changes the source interpretation too.
+#[test]
+fn relink_invalidates_preview_only_smart_previews() {
+    use lightcraft_catalog::{Op, PhotoId};
+    let dir = temp_dir("smart-relink-decoder-upgrade");
+    let path = dir.join("old.dng");
+    std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    // Emulate an older catalog that could only read this raw's embedded JPEG.
+    s.catalog
+        .apply(Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: Some("old decoder".into()),
+            preview_checked: String::new(),
+        })
+        .unwrap();
+    let smart_dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&smart_dir, &p);
+    let flat = smart_dir.join(crate::smart::file_name(&p));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let bytes = crate::smart::encode(&lightcraft_raster::Rgb32f::filled(48, 32, [0.8; 3]), None).unwrap();
+    std::fs::write(&file, &bytes).unwrap();
+    std::fs::write(&flat, &bytes).unwrap();
+    let moved = dir.join("moved.dng");
+    std::fs::rename(&path, &moved).unwrap();
+    s.execute("photo.relink", &json!({"id": id.0, "path": moved.to_string_lossy()})).unwrap();
+    let after = s.catalog.photo(id).unwrap();
+    assert!(after.develops_raw());
+    assert_eq!(after.content_hash, p.content_hash, "relinking did not change the bytes");
+    assert!(!file.exists() && !flat.exists(), "Relink must invalidate both JPEG proxy layouts");
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A camera tone curve with a recognisable shape (`k` changes it).
 fn test_tone(k: f32) -> lightcraft_pipeline::tone::CameraTone {
     lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
@@ -1762,7 +1974,12 @@ impl SmartLookCase {
         let png_file = crate::smart::sharded_file_path(&dir, session.catalog.photo(png_id).unwrap());
         let (old, new) = (test_tone(1.5), test_tone(3.5));
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
-        let plain_loader = session.media.file_loader.clone().unwrap();
+        let decode = session.media.file_loader.clone().unwrap();
+        let plain_loader: crate::media::FileLoader = std::sync::Arc::new(move |path, max_edge| {
+            let (img, mut info) = decode(path, max_edge)?;
+            info.raw = Path::new(path).file_name().is_some_and(|name| name == "a.png");
+            Ok((img, info))
+        });
         session.media.file_loader = Some(look_loader(plain_loader.clone(), old, calls.clone()));
         Self { src, lib, session, id, dir, file, png_file, old, new, calls, plain_loader }
     }

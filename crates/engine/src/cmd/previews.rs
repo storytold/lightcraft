@@ -315,9 +315,9 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
 /// how to load the original at preview size, whether the photo can take a preview-fitted look:
 /// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
-/// the fit changes; an older encoding makes any proxy stale).
+/// the fit changes; an older encoding makes any proxy stale), whether the catalog interprets it as raw.
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool, bool);
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 #[cfg(not(target_arch = "wasm32"))]
@@ -384,7 +384,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, look) in jobs {
+    for (id, path, source, look, raw) in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -416,6 +416,11 @@ fn smart_run(
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
+                        // Undo can restore the old preview-only state, but cannot undo a decoder
+                        // upgrade. Offline proxies use catalog facts, so these must agree first.
+                        if src.info.as_ref().is_some_and(|info| info.raw != raw) {
+                            return Err("source interpretation changed; use Reload from Disk before building smart previews".into());
+                        }
                         let info = src.info_or(Default::default());
                         crate::smart::encode(&src.image, Some(&info))
                     })
@@ -483,7 +488,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
         let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, preview_fitted_look(&ph)));
+        jobs.push((id, path, source, preview_fitted_look(&ph), ph.develops_raw()));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -528,7 +533,9 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| {
+            (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p), p.develops_raw())
+        })
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
@@ -542,8 +549,8 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .map(|(id, path, source, look, raw)| (id, crate::smart::existing_file_path(dir, path), source, look, raw))
+        .filter(|(_, path, _, look, _)| crate::smart::is_stale_for(path, *look))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since

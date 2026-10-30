@@ -12,6 +12,7 @@ mod dng;
 mod lossy_dng;
 mod nrw_be16;
 mod olympus_samsung_corpus;
+mod orf_corpus;
 mod rendered_dng;
 mod robust;
 mod sony_leica_corpus;

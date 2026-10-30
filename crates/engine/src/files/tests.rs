@@ -1774,3 +1774,67 @@ fn existing_photo_settings_are_not_rewritten() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An E-PL7 imports and develops its sensor data, not its JPEG. Reload also upgrades a photo
+/// from a pre-decoder catalog without replacing the file or losing the user's edits.
+#[test]
+fn corpus_epl7_raw_import_and_reload_keep_sensor_development() {
+    use serde_json::json;
+    let path = std::env::var_os("LIGHTCRAFT_CORPUS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+        .join("raw/orf-olympus-epl7.orf");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+            return;
+        }
+        Err(e) => panic!("{}: {e}", path.display()),
+    };
+    let (image, info) = load_bytes(&bytes, 400).unwrap();
+    assert!(info.raw && info.relative_wb, "must use sensor data, not the rendered JPEG");
+    assert!(info.camera_tone.is_some(), "the colour chart supports the guarded camera look");
+    assert_eq!((image.width, image.height), (400, 300));
+    assert!(image.data.iter().flatten().all(|v| v.is_finite()));
+    let mut s = crate::Session::new().with_fs();
+    let result = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(result["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert!(p.develops_raw());
+    assert_eq!((p.width, p.height, p.preview_only.clone()), (4608, 3456, None));
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    let settings = s.catalog.photo(id).unwrap().develop.clone();
+    // Same content hash and file size: a new decoder, not a changed original, clears the flag.
+    s.catalog
+        .apply(lightcraft_catalog::Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: Some("Olympus compressed ORF".into()),
+            preview_checked: String::new(),
+        })
+        .unwrap();
+    assert!(!s.catalog.photo(id).unwrap().develops_raw());
+    // An old build's proxy contains the embedded JPEG, with a still-current look version.
+    let dir = std::env::temp_dir().join(format!("lc-epl7-smart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let proxy = crate::smart::sharded_file_path(&dir, &p);
+    std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+    let (jpeg, _) = load_embedded_preview(&bytes, 400).unwrap();
+    let old = crate::smart::encode(&jpeg, None).unwrap();
+    std::fs::write(&proxy, &old).unwrap();
+    s.media.smart_dir = Some(dir.clone());
+    let result = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(result["reloaded"], json!([id.0]));
+    assert!(s.catalog.photo(id).unwrap().develops_raw());
+    assert_eq!(s.catalog.photo(id).unwrap().develop, settings);
+    assert!(!proxy.exists(), "the unchanged ORF's JPEG proxy must be invalidated");
+    let result = s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(result["built"], 1, "{result}");
+    assert_ne!(std::fs::read(&proxy).unwrap(), old, "rebuilt from sensor data");
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
+}

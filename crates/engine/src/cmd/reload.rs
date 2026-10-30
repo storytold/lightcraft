@@ -38,13 +38,19 @@ pub struct Tickets {
 /// file-system calls.
 pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     let ids = s.targets(p)?;
+    let mut seen = std::collections::HashSet::new();
     s.reload_tickets.last = s.reload_tickets.last.saturating_add(1);
     let ticket = s.reload_tickets.last;
     Ok(ids
         .into_iter()
-        .filter_map(|id| match s.catalog.photo(id).map(|ph| &ph.source) {
-            Some(Source::File { path }) => Some(Item { id, path: path.clone(), ticket }),
-            _ => None,
+        .filter_map(|id| {
+            let ph = s.catalog.photo(id)?;
+            // Reload a shared original once when several virtual copies are selected.
+            let ph = ph.copy_of.and_then(|id| s.catalog.photo(id)).unwrap_or(ph);
+            match &ph.source {
+                Source::File { path } if seen.insert(ph.id) => Some(Item { id: ph.id, path: path.clone(), ticket }),
+                _ => None,
+            }
         })
         .collect())
 }

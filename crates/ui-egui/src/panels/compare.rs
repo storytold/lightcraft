@@ -606,7 +606,7 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let reference = app.ui.reference.map(PhotoId).filter(|r| live(app, *r));
     let (Some(r), Some(active)) = (reference, app.session.active()) else {
-        super::empty_message(ui, canvas, "No reference photo", "Right-click a photo ▸ Set as Reference Photo, then View → Reference View (Shift+R)");
+        super::empty_message(ui, canvas, "No reference photo", "Right-click a photo → Set as Reference Photo, then View → Reference View (Shift+R)");
         return;
     };
     let area = canvas.shrink(18.0);

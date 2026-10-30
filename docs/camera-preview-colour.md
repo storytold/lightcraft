@@ -1,5 +1,7 @@
 # Sony ARW, Nikon NEF, Panasonic RW2, Fujifilm RAF, Canon CR3/CR2, Pentax PEF, Samsung SRW, Olympus ORF, Epson ERF and Minolta MRW starting look
 
+> **Last updated:** 2026-10-28 · **Change:** minor (lossless compressed ORF feeds the camera fit; PEN E-PL7 checked)
+
 ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW, ORF, ERF and MRW decoding supply sensor data and camera white-balance multipliers, but currently no measured camera colour matrix. Treating camera RGB as linear sRGB produces a dark, muted default rendering. The loader now estimates a file-local starting look from that file's embedded camera JPEG, only when a usable camera matrix is absent. All output pixels still come from the RAW sensor data; there is no JPEG replacement or uniform saturation boost.
 
 ## Colour and tone are separate
@@ -297,10 +299,18 @@ doesn't pass, so a file can only stay as before or move closer to its camera JPE
 
 ### Olympus ORF
 
-The ORF decoder (uncompressed files) supplies the as-shot white balance (ImageProcessing `WB_RBLevels`) and no colour
+The ORF decoder (uncompressed and lossless compressed files) supplies the as-shot white balance (ImageProcessing `WB_RBLevels`) and no colour
 matrix, so ORF takes the same fit, gates and relative white balance. The reference is the camera's preview JPEG (on the
-E-1 the 1280 × 960 one the maker note points to). All three decodable corpus files are accepted (held-out RMS against
-the neutral fallback): E-1 0.126 → 0.014, E-400 0.087 → 0.022, XZ-2 0.061 → 0.023. Compressed ORFs (E-M1, E-M10 III)
-still open from their embedded JPEG. Against Lightroom Classic's render of a CC0 E-1 photo (2000 px, ΔE00 of the
+E-1 the 1280 × 960 one the maker note points to). The three originally decodable corpus files are accepted (held-out RMS against
+the neutral fallback): E-1 0.126 → 0.014, E-400 0.087 → 0.022, XZ-2 0.061 → 0.023. Compressed ORFs now develop sensor
+data too ([orf.md](orf.md): 23 exact sensor references); the PEN E-PL7 colour-chart sample accepts the guarded fit,
+checked in `files::tests::corpus_epl7_raw_import_and_reload_keep_sensor_development`. This is not chart calibration.
+Against Lightroom Classic's render of a CC0 E-1 photo (2000 px, ΔE00 of the
 unedited render) the starting look moved from 11.25 to 8.30. Lightroom frames that E-1 file about 4 × 11 sensor pixels
 differently from the crop the file records (`CropLeft`/`CropTop` 36, 34); the file's own crop is kept.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-12 | minor | Compressed ORF now develops sensor data through the existing guarded fit; PEN E-PL7 fit/import/render/reload regression; no claim of measured calibration |
