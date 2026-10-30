@@ -1572,15 +1572,15 @@ fn uncompressed_leaf_mos_imports_as_a_preview_only_raw() {
     assert_eq!((plain.kind, plain.preview_only, plain.width, plain.height), (MediaKind::Image, None, 16, 12));
 }
 
-/// A GoPro GPR (DNG with VC-5 coded data, no preview anywhere) still imports, described from its
-/// headers; loading it says what is wrong instead of naming a bare TIFF compression number.
+/// A GoPro GPR (DNG with VC-5 coded data, no preview anywhere) imports, described from its headers, and
+/// develops from its sensor data.
 #[test]
-fn gopro_vc5_dng_imports_and_fails_to_load_with_a_clear_reason() {
+fn gopro_vc5_dng_imports_and_loads() {
     use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
-    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
-    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![16]));
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![48]));
     ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
     ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
     ifd.set(t::PHOTOMETRIC, Value::Short(vec![32803]));
@@ -1588,12 +1588,15 @@ fn gopro_vc5_dng_imports_and_fails_to_load_with_a_clear_reason() {
     ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
     ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
     ifd.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
-    ifd.set_image(ImageData::Tiles { tile_width: 32, tile_height: 16, tiles: vec![vec![0x5au8; 400]] });
+    ifd.set(t::WHITE_LEVEL, Value::Short(vec![16383]));
+    let tile = lightcraft_raw::testdata::vc5_stream(64, 48, [4000, 8192, 8192, 8192], 0);
+    ifd.set_image(ImageData::Tiles { tile_width: 64, tile_height: 48, tiles: vec![tile] });
     let f = TiffWriter::default().write(&[ifd]).unwrap();
+    assert!(crate::import::EXTENSIONS.contains(&"gpr"), "folder imports find .GPR files");
     let p = probe_bytes("GOPR0001.GPR", &f).unwrap();
-    assert_eq!((p.kind, p.preview_only, p.width, p.height), (MediaKind::Raw, None, 32, 16));
-    let e = load_bytes(&f, 16).unwrap_err();
-    assert!(e.contains("GoPro VC-5") && e.contains("not decoded yet"), "{e}");
+    assert_eq!((p.kind, p.preview_only, p.width, p.height), (MediaKind::Raw, None, 64, 48));
+    let (img, src) = load_bytes(&f, 64).unwrap();
+    assert_eq!((img.width, img.height, src.raw), (64, 48, true));
 }
 
 /// Any failure of a recognised raw (not only an unsupported variant) can fall back to its preview;
