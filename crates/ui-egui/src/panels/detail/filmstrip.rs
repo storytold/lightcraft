@@ -97,7 +97,6 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
             register(ui, format!("film:{}", id.0), cr);
             let state = app.session.selection.state_of(*id);
-            let sel = state == lightcraft_engine::SelectionState::Active;
             let p = ui.painter();
             let label = app.session.catalog.photo(*id).and_then(|ph| ph.label);
             let selected = state != lightcraft_engine::SelectionState::NotSelected;
@@ -129,11 +128,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
                 let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
                 p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                if sel {
-                    p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
-                } else if state == lightcraft_engine::SelectionState::Selected {
-                    p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::from_gray(170)), StrokeKind::Outside);
-                }
+                film_ring(p, fr, state, Color32::from_gray(170));
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {
@@ -162,6 +157,16 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                         crate::panels::grid::toggle_stack(app, ui.ctx(), *id);
                     }
                 }
+            } else {
+                // not loaded yet (or unreadable): the selection shows on the placeholder drawn above, as in the grid
+                // (a light theme's skeleton is itself mid-gray: the other selected photos' ring takes the dim text color)
+                let light = t.skeleton.r() > 0x80;
+                let ring = if light { t.text_dim } else { Color32::from_gray(170) };
+                // in a light theme the white ring is pale on the pale cell: a dark line outside it keeps it readable
+                if light && state == lightcraft_engine::SelectionState::Active {
+                    p.rect_stroke(img_area.expand(1.5), 0.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Outside);
+                }
+                film_ring(p, img_area, state, ring);
             }
             if resp.clicked() {
                 let m = ui.input(|i| i.modifiers);
@@ -201,6 +206,17 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
         (true, true) => crate::i18n::tr("This photo can't be opened").to_string(),
         (false, true) => format!("{file_name}, {}", crate::i18n::tr("This photo can't be opened")),
     }
+}
+
+/// The ring around a filmstrip photo: white for the active one, `selected` (gray) for the other selected ones.
+fn film_ring(p: &egui::Painter, r: Rect, state: lightcraft_engine::SelectionState, selected: Color32) {
+    use lightcraft_engine::SelectionState::{Active, Selected};
+    let color = match state {
+        Active => Color32::WHITE,
+        Selected => selected,
+        _ => return,
+    };
+    p.rect_stroke(r, 0.0, Stroke::new(1.5, color), StrokeKind::Outside);
 }
 
 /// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
