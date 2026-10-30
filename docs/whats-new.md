@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### On macOS, a long job keeps the Mac awake
+- While an export, import, preview build, merge or other job you started is running, the Mac no longer goes to sleep
+  on its own and macOS no longer slows the app down when its window is hidden or minimized. Both end as soon as the
+  last job finishes or is canceled.
+
+### On macOS, the Dock icon shows how many jobs are running
+- The Dock icon of LightCraft carries a badge with the number of jobs you started that are running (an export, an
+  import, a preview build…). It goes away when the last one ends, so a job in a minimized window can still be seen.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

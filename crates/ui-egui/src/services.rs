@@ -35,6 +35,14 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
 
+/// Told when the work that should keep the machine awake changes: `Some(reason)` while a job the person started runs
+/// (the reason names it), `None` once nothing needs it. Called only on a change, always from the UI thread.
+pub type KeepAwakeFn = Box<dyn FnMut(Option<&str>)>;
+
+/// Told how many jobs the person started are running, for the Dock badge: the count, `0` once none is. Called only on
+/// a change, always from the UI thread.
+pub type DockBadgeFn = Box<dyn FnMut(usize)>;
+
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
@@ -129,4 +137,8 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// Keep the system from sleeping or throttling the app while a long job runs (macOS App Nap and idle sleep).
+    pub keep_awake: Option<KeepAwakeFn>,
+    /// Show how many jobs are running on the app's Dock icon (macOS).
+    pub dock_badge: Option<DockBadgeFn>,
 }
