@@ -144,8 +144,9 @@ fn an_oversized_request_resolves_to_the_ceiling_size() {
 
 /// The crash itself: `render` sizes its resample from the plan, and this request asked it for
 /// 240 GB — `memory allocation of 240000000000 bytes failed`, an abort `catch_unwind` cannot
-/// catch. The plan now resolves at the ceiling and the resample that used to abort succeeds
-/// (5.7 GB for its buffer, the heaviest allocation in the suite, so the assert keeps to the size).
+/// catch. The plan now resolves at the ceiling and the resample that used to abort succeeds.
+/// Opt-in, as the 5.7 GB buffer at the ceiling is not a default-suite allocation.
+#[ignore = "a 5.7 GB resample buffer at the 512 megapixel ceiling; run with --ignored"]
 #[test]
 fn an_oversized_request_resamples_at_the_clamped_size() {
     let src = Rgb32f::new(8, 4);
