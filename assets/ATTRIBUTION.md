@@ -54,3 +54,14 @@ Notes
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their licences and attribution in its
   `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
   releases). Never commit font files here; add new fonts to craft-fonts (craftrules `standards/fonts.md`).
+
+## Android launcher icons (lightcraft)
+
+`apps/lightcraft-android/android/app/src/main/res/` holds the Android Studio new-project template's
+default launcher art, unmodified: the adaptive icon in `mipmap-anydpi-v26/` composes the foreground
+drawable with the template's background colour, and the density folders hold the same stand-in at
+each scale.
+
+| Path | Asset | Creator | Source | Licence | Added | Modifications |
+|---|---|---|---|---|---|---|
+| `apps/lightcraft-android/android/app/src/main/res/` | Android launcher art | The Android Open Source Project | Android Studio new-project template, default launcher icons | Apache-2.0 | 2026-10-24 | none |
