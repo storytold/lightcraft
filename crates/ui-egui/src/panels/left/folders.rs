@@ -1,6 +1,6 @@
 use super::albums::pointer_over_row;
 use super::local::{same_folder, subfolders};
-use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
+use super::rows::{INDENT_STEP, Inside, LIBFOLDER_REVEALED, Row, Said, out_of_sight, set_tree_open, tree_inside, tree_open, tree_toggle};
 use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
 
 /// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
@@ -21,11 +21,12 @@ pub(super) fn folder_tree(
     current: Option<&str>,
     reveal: bool,
     transient: bool,
+    above: Option<Said>,
 ) {
     let open_id = egui::Id::unique(("folder-open", place.to_string(), path.to_string()));
     let sel = current.is_some_and(|c| same_folder(c, path));
     let on_the_way = !sel && current.is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
-    let mut open = tree_open(ui, open_id, false);
+    let mut open = tree_open(ui, open_id, false, above);
     if reveal && on_the_way {
         // opened once per browsed folder: collapsing it again afterwards sticks
         let revealed_id = egui::Id::unique(("folder-revealed", place.to_string(), path.to_string()));
@@ -40,7 +41,7 @@ pub(super) fn folder_tree(
         // at the tree's own indent, as in Albums and Folders: the triangle sits in the gutter and the
         // icon lines up with the rows above
         let resp = Row::new(&format!("local:{path}"), Icon::Folder, name).selected(sel).indent(indent).show(app, ui).on_hover_text(path);
-        let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"));
+        let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"), Inside::Folds);
         if !tr.clicked()
             && resp.clicked()
             && let Err(e) = app.run("library.browse", json!({"path": path}))
@@ -100,8 +101,9 @@ pub(super) fn folder_tree(
         });
     }
     if open && indent < INDENT_STEP * 8.0 {
+        let inside = tree_inside(ui, open_id, above);
         for (n, p) in subfolders(ui, path).iter() {
-            folder_tree(app, ui, place, n, p, indent + INDENT_STEP, current, reveal, false);
+            folder_tree(app, ui, place, n, p, indent + INDENT_STEP, current, reveal, false, inside);
         }
     }
 }
@@ -291,7 +293,7 @@ pub(super) fn reveal_chosen(app: &LightcraftApp, ui: &egui::Ui, tree: &[FolderNo
         for n in nodes {
             if lightcraft_catalog::query::folder_within(chosen, &n.path) && !same_folder(chosen, &n.path) {
                 let key = lightcraft_catalog::query::folder_key(&n.path);
-                ui.data_mut(|d| d.insert_temp(egui::Id::unique(("libfolder-open", key)), true));
+                set_tree_open(ui, egui::Id::unique(("libfolder-open", key)), true);
                 open_above(ui, &n.children, chosen);
             }
         }
@@ -309,14 +311,16 @@ pub(crate) fn folder_row_of<'a>(tree: &'a [FolderNode], dir: &str) -> Option<&'a
         .find_map(|n| if same_folder(&n.path, dir) { Some(n) } else { folder_row_of(&n.children, dir) })
 }
 
-pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode], indent: f32) {
+/// The rows of the Folders tree. `above`: what holds for these rows from the rows above them
+/// ([`tree_inside`]).
+pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode], indent: f32, above: Option<Said>) {
     for n in nodes {
         let key = lightcraft_catalog::query::folder_key(&n.path);
         let open_id = egui::Id::unique(("libfolder-open", key.clone()));
         // a disk starts open, and so does a folder that holds nothing itself and leads to one
         // folder (`Users` → `me`): the first row where the library branches is what you look for
         let leads_on = n.own == 0 && n.children.len() == 1;
-        let mut open = tree_open(ui, open_id, n.volume || leads_on);
+        let mut open = tree_open(ui, open_id, n.volume || leads_on, above);
         // a row whose path would cover other disks' photos too only opens and closes
         let name = if n.selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
         let id = format!("libfolder:{}", n.path);
@@ -324,7 +328,7 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
             folder_row(app, ui, n, &id, &name, indent, open_id, &mut open);
         }
         if open && !n.children.is_empty() {
-            folder_rows(app, ui, &n.children, indent + INDENT_STEP);
+            folder_rows(app, ui, &n.children, indent + INDENT_STEP, tree_inside(ui, open_id, above));
         }
     }
 }
@@ -345,7 +349,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
     folder_drop_target(app, ui, &resp, n, open_id, open);
     let mut toggled = false;
     if !n.children.is_empty() {
-        let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path));
+        let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path), Inside::OpensAndFolds);
         toggled = tr.clicked();
         // the triangle sits on the row and takes its clicks: the menu opens from it too
         row_menu(app, &tr, n);

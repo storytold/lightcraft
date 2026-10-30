@@ -246,24 +246,95 @@ fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open
     tr
 }
 
-/// Whether the tree row `key` is open: what the user last chose this session, else `default`.
-pub(super) fn tree_open(ui: &egui::Ui, key: egui::Id, default: bool) -> bool {
-    ui.data(|d| d.get_temp(key)).unwrap_or(default)
+/// What was last said of a tree row (or of all the rows inside one), and when: `at` counts what
+/// the user said this session, so what was said last holds.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Said {
+    open: bool,
+    at: u64,
+}
+
+/// The later of two sayings.
+fn newest(a: Option<Said>, b: Option<Said>) -> Option<Said> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if b.at > a.at { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Where what is said of the rows inside the tree row `key` is kept.
+fn inside_key(key: egui::Id) -> egui::Id {
+    key.with("inside")
+}
+
+/// Say `open` of the tree row `key` (and of the rows inside it, when `with_inside`) from now on.
+fn say(ui: &egui::Ui, key: egui::Id, open: bool, with_inside: bool) {
+    ui.data_mut(|d| {
+        let now = d.get_temp_mut_or_default::<u64>(egui::Id::unique("tree-said"));
+        *now += 1;
+        let said = Said { open, at: *now };
+        d.insert_temp(key, said);
+        if with_inside {
+            d.insert_temp(inside_key(key), said);
+        }
+    });
+}
+
+/// Whether the tree row `key` is open: the last thing said of it this session, or of a row above
+/// it (`above`, see [`tree_inside`]), whichever is later, else `default`. A row that is not drawn
+/// yet is as it is said when it is.
+pub(super) fn tree_open(ui: &egui::Ui, key: egui::Id, default: bool, above: Option<Said>) -> bool {
+    newest(ui.data(|d| d.get_temp(key)), above).map_or(default, |s| s.open)
+}
+
+/// What holds for the rows inside the tree row `key`: what was last said of all of them, or of
+/// all the rows above `key` (`above`), whichever is later.
+pub(super) fn tree_inside(ui: &egui::Ui, key: egui::Id, above: Option<Said>) -> Option<Said> {
+    newest(ui.data(|d| d.get_temp(inside_key(key))), above)
 }
 
 /// Open or close the tree row `key` from now on.
 pub(super) fn set_tree_open(ui: &egui::Ui, key: egui::Id, open: bool) {
-    ui.data_mut(|d| d.insert_temp(key, open));
+    say(ui, key, open, false);
+}
+
+/// What a click on a triangle with Option (Alt) held does to the rows inside its row.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Inside {
+    /// Nothing: they have no rows inside them, so there is nothing to say of them (a month's
+    /// days, keywords that hold none).
+    Alone,
+    /// They open and fold with it.
+    OpensAndFolds,
+    /// They fold with it; opened, it opens alone (Local: opening every folder inside would read
+    /// them all from the disk, down to the last).
+    Folds,
 }
 
 /// The chevron of a tree row that has rows inside it (Albums' folders, Local, By Date, Folders,
-/// Keywords): a click flips `open` and remembers it under `key`. Returns the chevron's response
-/// (it sits on the row and takes its clicks, so a row's context menu is attached to it too).
-pub(super) fn tree_toggle(ui: &mut egui::Ui, row: &egui::Response, indent: f32, key: egui::Id, open: &mut bool, widget: String) -> egui::Response {
+/// Keywords): a click flips `open` and remembers it under `key`. With Option (Alt) held, it opens
+/// or folds all the rows inside the row too, however many (`inside`): that is said once, of all
+/// of them, and each row checks it when it is drawn. Returns the chevron's response (it sits on
+/// the row and takes its clicks, so a row's context menu is attached to it too).
+pub(super) fn tree_toggle(
+    ui: &mut egui::Ui,
+    row: &egui::Response,
+    indent: f32,
+    key: egui::Id,
+    open: &mut bool,
+    widget: String,
+    inside: Inside,
+) -> egui::Response {
     let tri = disclosure_chevron(ui, row, indent, *open, key.with("triangle"), widget);
     if tri.clicked() {
         *open = !*open;
-        set_tree_open(ui, key, *open);
+        let option = ui.input(|i| i.modifiers.alt);
+        let all = option && (inside == Inside::OpensAndFolds || (inside == Inside::Folds && !*open));
+        say(ui, key, *open, all);
+        if option && inside == Inside::Alone {
+            // (what was said of the rows inside it when it had some with rows of their own)
+            ui.data_mut(|d| d.remove::<Said>(inside_key(key)));
+        }
     }
     let label = if *open { crate::i18n::tr("Collapse") } else { crate::i18n::tr("Expand") };
     tri.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));

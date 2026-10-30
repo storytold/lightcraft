@@ -3,3 +3,4 @@
 
 mod accessibility;
 mod docking_workflows;
+mod sidebar_branch;
