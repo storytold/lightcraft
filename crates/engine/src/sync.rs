@@ -7,7 +7,7 @@
 //! - **new** files: supported files the library doesn't have, by path or by content (the import
 //!   scan's duplicate rules, [`crate::import::scan_with`]);
 //! - **missing** photos: library photos in the folder whose file is gone (the Missing Photos rule,
-//!   [`crate::cmd::missing::checked_path`]);
+//!   [`lightcraft_catalog::Photo::library_file`]);
 //! - **metadata** updates: photos whose XMP sidecar file was saved after the photo came into the
 //!   library or was last edited here, and says something the library doesn't (rating, flag,
 //!   label, metadata, capture time or develop settings). Reading one makes the sidecar win, as
@@ -231,7 +231,7 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
         std::slice::from_ref(&folder),
         scan.skip(),
         crate::walk::Limits::default(),
-        Some(&mut |dir, names, complete| {
+        Some(&mut |dir, names, complete, _| {
             use std::sync::atomic::Ordering::Relaxed;
             progress.folders_listed.fetch_add(1, Relaxed);
             let files = names.iter().filter(|(_, kind)| *kind == crate::walk::EntryKind::File).count();
@@ -267,7 +267,7 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     );
     let mut changes = FolderChanges { path: folder, seen, ..Default::default() };
     for ((p, _), check) in photos.iter().zip(checks) {
-        let Some(file) = crate::cmd::missing::checked_path(p) else { continue };
+        let Some(file) = p.library_file() else { continue };
         let found = FolderPhoto { id: p.id.0, path: file.to_string() };
         match check {
             Check::Missing => changes.missing.push(found),
@@ -280,14 +280,12 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
         if moved_from.values().any(|to| *to == c.path) {
             continue;
         }
-        let browsed = c.existing.and_then(|id| labels.photo(PhotoId(id))).is_some_and(|p| p.local && !p.deleted);
         match (c.duplicate.as_deref(), &c.error) {
-            // a file only looked at in Local is not in the library yet: it is new
-            (Some("path"), _) if browsed => changes.new.push(ImportCandidate { duplicate: None, existing: None, ..c }),
             (Some("path"), _) => {}
             (Some(_), _) => changes.duplicates += 1,
             (None, Some(_)) => changes.unreadable.push(c),
-            (None, None) => changes.new.push(c),
+            // (a file only looked at in Local is not in the library yet: it is new)
+            (None, None) => changes.new.push(ImportCandidate { existing: None, local: false, ..c }),
         }
     }
     let missing = std::mem::take(&mut changes.missing);
@@ -345,7 +343,7 @@ fn match_moved(
             by_hash.entry(base_hash(h)).or_default().push_back(path);
         }
     }
-    let usable = |c: &&ImportCandidate| c.error.is_none() && c.duplicate.as_deref() != Some("path");
+    let usable = |c: &&ImportCandidate| c.error.is_none() && c.duplicate.as_deref() != Some("path") && !c.local;
     let mut moved: HashMap<String, String> = HashMap::new();
     for c in candidates.iter().filter(usable) {
         let hash = probes.get(&c.path).and_then(|i| i.content_hash.as_deref());
@@ -424,7 +422,7 @@ struct Listed {
 
 /// Whether the disk is asked about `name` whatever the listing holds: a name Windows takes for
 /// a device (`NUL`, `aux.jpg`: there in every folder, or not openable where it is listed).
-fn asks_the_disk(name: &str) -> bool {
+pub(crate) fn asks_the_disk(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or_default().trim_end_matches(' ').to_ascii_lowercase();
     // (`COM` and `LPT` with any one digit, the superscript ones Windows also takes among them)
     let numbered = ["com", "lpt"].iter().any(|port| {
@@ -437,7 +435,7 @@ fn asks_the_disk(name: &str) -> bool {
 /// Whether `name` can only be found under itself in some case: ASCII, and nothing in it that a
 /// file system resolves another way (a short name with `~`, a stream after `:`, dots or spaces
 /// at its end, which Windows drops).
-fn plain_name(name: &str) -> bool {
+pub(crate) fn plain_name(name: &str) -> bool {
     name.is_ascii() && !name.contains(['~', ':']) && !name.ends_with(['.', ' ']) && !name.is_empty()
 }
 
@@ -510,7 +508,7 @@ impl Listing {
 }
 
 fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing) -> Check {
-    let Some(file) = crate::cmd::missing::checked_path(p) else { return Check::Nothing };
+    let Some(file) = p.library_file() else { return Check::Nothing };
     let file = Path::new(file);
     if !listing.or_ask(listing.exists(file), || file.exists()) {
         Check::Missing
@@ -893,3 +891,7 @@ impl SyncCommit {
 #[cfg(test)]
 #[path = "sync/tests_listing.rs"]
 mod tests_listing;
+
+#[cfg(test)]
+#[path = "sync/tests_browsed.rs"]
+mod tests_browsed;

@@ -211,12 +211,21 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if s.catalog.photo(id).is_some_and(|p| p.local) {
                     ops.push(Op::SetLocal { id, local: false });
                 }
+                // "Import as new": a trashed photo with the same content is replaced, as for a new file
+                if let Some(old) = s.catalog.photo(id).and_then(|p| p.content_hash.as_ref()).and_then(|h| trash_hash.get(h))
+                    && purged.insert(*old)
+                {
+                    purge.push(*old);
+                }
                 report.imported.push(id.0);
             }
             PreparedItem::Duplicate { path, existing, reason, hash } => {
                 let existing = existing.or_else(|| {
                     let h = hash?;
-                    new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
+                    new_hash
+                        .get(&h)
+                        .copied()
+                        .or_else(|| s.catalog.photos().find(|p| !p.local && p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
                 });
                 let trashed = existing.filter(|id| s.catalog.photo(*id).is_some_and(|p| p.deleted));
                 match trashed {
@@ -226,7 +235,11 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                             ops.push(Op::SetDeleted { id, deleted: false });
                             // matched by content from another path, and the file the record
                             // points at is gone (moved, renamed): the photo follows the file
-                            if reason == "content" && trashed_file_is_gone(&s.catalog, id) {
+                            // (not onto a path another record holds, a file only browsed in Local)
+                            if reason == "content"
+                                && trashed_file_is_gone(&s.catalog, id)
+                                && !s.catalog.photos().any(|p| matches!(&p.source, Source::File { path: held } if *held == path))
+                            {
                                 ops.push(crate::cmd::missing::relink_op(id, &path));
                             }
                             report.restored.push(id.0);

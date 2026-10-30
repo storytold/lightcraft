@@ -1,6 +1,6 @@
-use super::files::{expand, probe_all};
+use super::files::{expand_knowing, probe_all};
 use super::types::ImportCandidate;
-use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
@@ -12,12 +12,14 @@ pub struct ScanInput {
     /// ([`library_hashes`]), on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed, for the import that follows.
+    listed: ListedFolders,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
 /// already). One pass over the library, and a record only for a file that was found: a folder of
 /// a hundred files in a library of millions costs a hundred records.
-pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate)> {
+pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate, Option<String>)> {
     let found: std::collections::HashSet<&Path> = files.iter().map(Path::new).collect();
     let mut by_path = HashMap::new();
     if found.is_empty() {
@@ -35,18 +37,21 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
                 height: p.height,
                 file_size: p.file_size,
                 captured: p.captured.clone(),
-                duplicate: Some("path".into()),
+                // a file that was only browsed (Local) is not in the library: importing it promotes it
+                // (a trashed browse record still counts as the path's)
+                duplicate: (!p.local || p.deleted).then(|| "path".into()),
                 existing: Some(p.id.0),
+                local: p.local && !p.deleted,
                 ..Default::default()
             };
-            by_path.insert(PathBuf::from(path), (p.id, c));
+            by_path.insert(PathBuf::from(path), (p.id, c, p.content_hash.clone()));
         }
     }
     by_path
 }
 
 /// Which photo of the library has each of the contents `hashes` (the later one where several
-/// have it). One pass over the library, and an entry only for a content that was asked about.
+/// have it; a copy that was only browsed in Local isn't in the library). One pass over the library, and an entry only for a content that was asked about.
 pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
     let wanted: std::collections::HashSet<&str> = hashes.collect();
     let mut by_hash = HashMap::new();
@@ -54,7 +59,8 @@ pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: 
         return by_hash;
     }
     for p in library.photos() {
-        if let Some(h) = &p.content_hash
+        if !p.local
+            && let Some(h) = &p.content_hash
             && wanted.contains(h.as_str())
         {
             by_hash.insert(h.clone(), p.id);
@@ -77,6 +83,8 @@ pub struct ScanProgress {
 pub struct ScanOutput {
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed (kept with the probes, for the import that follows).
+    pub listed: ListedFolders,
 }
 
 impl ScanInput {
@@ -85,7 +93,13 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            probe: s.media.file_probe.clone(),
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+            listed: ListedFolders::default(),
+        };
         (input, paths.to_vec())
     }
 
@@ -112,8 +126,21 @@ pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
-pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let files = expand(paths, input.skip.as_deref());
+pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
+    let listed = &mut input.listed;
+    let (files, _) = expand_knowing(
+        paths,
+        input.skip.as_deref(),
+        crate::walk::Limits::default(),
+        // (always `true`: nothing here stops the walk. `progress.cancel` is read only once it is over, in
+        // `scan_files`, which stops the probing and returns what it has)
+        Some(&mut |dir, names, complete, modified| {
+            listed.note(dir, names, complete, modified);
+            true
+        }),
+        true,
+        &|_| false,
+    );
     scan_files(input, files, progress)
 }
 
@@ -145,15 +172,34 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
     // (who in the library has a content that was probed: asked once the probes are in)
-    let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
+    let probed_hashes = probes
+        .values()
+        .filter_map(|r| r.as_ref().ok())
+        .filter_map(|info| info.content_hash.as_deref())
+        // (and the browsed files the library has by path: they are offered unless it has the content too)
+        .chain(by_path.values().filter(|(_, c, _)| c.local).filter_map(|(_, _, h)| h.as_deref()));
     let mut seen_hash: HashMap<String, Option<u64>> =
         library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
-        if let Some((_, c)) = by_path.get(Path::new(&f)) {
+        if let Some((id, c, hash)) = by_path.get(Path::new(&f)) {
             let mut c = c.clone();
             c.name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
+            // a browsed file the library has the content of (or an earlier file here promotes) is a duplicate
+            if c.local
+                && let Some(h) = hash
+            {
+                match seen_hash.get(h) {
+                    Some(existing) => {
+                        c.duplicate = Some("content".into());
+                        c.existing = *existing;
+                    }
+                    None => {
+                        seen_hash.insert(h.clone(), Some(id.0));
+                    }
+                }
+            }
             out.push(c);
             continue;
         }
@@ -184,5 +230,5 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    ScanOutput { candidates: out, probes: kept, listed: input.listed }
 }

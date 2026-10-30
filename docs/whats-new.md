@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### Import from Folder… offers the photos you browsed in Local
+- A folder you browsed in Local no longer shows its photos as "In library" and out of reach in the Import review:
+  they are offered, checked, and importing them brings the browsed photos (with their edits) into the library where
+  they are. Copy and Move still leave them out, since they can't be copied from where they already are, and the
+  review says keywords and presets apply to new files only when they are set for such photos.
+- A copy you only browsed in Local (another path with the same content) no longer makes the import report "already in
+  the library", even after the library photo was permanently deleted and the library reopened, and a library photo
+  with the same content is matched before a browsed copy is promoted. Several browsed copies of one file import once.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -82,6 +93,9 @@
   library you open and are imported into it, as files given on the command line are; presets dropped then are
   refused with a note, since they belong to a library.
 
+### Editing a smart album made from an album keeps the album
+- A smart album saved from the view of an album stays limited to that album when you edit its rules and press OK. It used to match the whole library afterwards, because the rules dialog has no album field and replaced the album along with the rules.
+
 ## 2026-10-22
 
 ### Reliability
@@ -156,6 +170,19 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Imports and moves on a network share ask it less
+- Import no longer asks a network share about each photo's `.xmp` sidecar (up to nine names, each a round trip) when
+  the folder's listing, which the import or the Add Photos review has already read, shows there is none. A sidecar in
+  any letter case (`.xmp`, `.XMP`, `.Xmp`, or `<file name>.xmp`) is still found and read. A folder that changed since
+  it was listed, or was too recently changed to tell, is asked about photo by photo. For the folders that have not
+  changed since the review listed them, importing the photos picked in the review also stops asking the share
+  whether each one is a file or a folder before the first one is handled.
+- Renaming photos, moving them to another folder, and undoing either look for their sidecars in one listing of each
+  folder that eight or more photos leave, instead of asking for four names per photo. Sidecars the listing shows
+  still move with their photos (`.xmp` or `.XMP`, as before).
+- Folders that could not be listed completely or whose time can't be read, and files you add one by one, are checked
+  as before.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

@@ -2734,5 +2734,6 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Keywords and presets apply to new files only, not to photos already in Local": "საკვანძო სიტყვები და პრესეტები მხოლოდ ახალ ფაილებზე მოქმედებს და არა იმ ფოტოებზე, რომლებიც უკვე ლოკალშია"
 }

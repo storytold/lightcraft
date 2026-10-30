@@ -877,13 +877,18 @@ pub fn specs() -> Vec<CommandSpec> {
                     view
                 } else {
                     let replace = bool_or(p, "replace", false);
-                    let folder = cur.library_folder.clone();
+                    let (folder, album) = (cur.library_folder.clone(), cur.album);
                     let base = if replace { Default::default() } else { cur };
                     let mut r = merge_rules(&base, p.get("rules").unwrap_or(&Value::Null), "album.setRules", &s.catalog, Some(id))?;
                     // the rules dialog has no folder field: replacing its rules keeps the folder
                     // unless the call says (`libraryFolder: null`) to drop it
                     if replace && p.get("rules").and_then(|r| r.get("libraryFolder")).is_none() {
                         r.library_folder = folder;
+                    }
+                    // nor one for the album or folder of albums a saved view is limited to
+                    // (`album: null` drops it)
+                    if replace && p.get("rules").and_then(|r| r.get("album")).is_none() {
+                        r.album = album;
                     }
                     r
                 };

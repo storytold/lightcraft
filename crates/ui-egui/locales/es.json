@@ -2358,5 +2358,6 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Las palabras clave y los ajustes preestablecidos solo se aplican a archivos nuevos, no a fotos que ya están en Local"
 }

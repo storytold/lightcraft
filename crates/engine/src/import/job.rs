@@ -1,7 +1,7 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{expand, probe_all};
+use super::files::{expand_knowing, probe_all};
 use super::types::{ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
-use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// Import files/folders. See the module docs.
 pub fn import(s: &mut Session, paths: &[String], mode: ImportMode) -> crate::Result<ImportReport> {
@@ -38,14 +38,16 @@ pub struct ImportJob {
     /// as the options said when the import was set up).
     pub(super) library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
-    pub(super) by_path: HashMap<String, (PhotoId, bool)>,
+    pub(super) by_path: HashMap<String, (PhotoId, bool, Option<String>)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
     cache: HashMap<String, ProbeInfo>,
-    naming: crate::sidecar::SidecarNaming,
+    pub(super) naming: crate::sidecar::SidecarNaming,
+    /// The `.xmp` names in the folders [`ImportJob::expand`] listed.
+    pub(super) listed: ListedFolders,
     now: String,
     seq: usize,
     /// Files found so far (folders expanded) and handled so far, for progress.
@@ -192,6 +194,7 @@ impl ImportJob {
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
+            listed: ListedFolders::default(),
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
@@ -209,10 +212,35 @@ impl ImportJob {
         self.prepare_files(files, cancel)
     }
 
+    /// Hand the job the folders the review that started it listed ([`ScanOutput::listed`]).
+    #[must_use]
+    pub fn with_listed(mut self, listed: ListedFolders) -> Self {
+        self.listed = listed;
+        self
+    }
+
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
-    pub fn expand(&self, paths: &[String]) -> Vec<String> {
-        let files = expand(paths, self.lib_dir.as_deref());
+    pub fn expand(&mut self, paths: &[String]) -> Vec<String> {
+        // (a file the review listed is a file: no round trip to a share to ask)
+        let mut listed = std::mem::take(&mut self.listed);
+        let mut walked = ListedFolders::default();
+        // (the folders' times are looked at now, not as an earlier batch found them)
+        listed.new_batch();
+        let (files, _) = expand_knowing(
+            paths,
+            self.lib_dir.as_deref(),
+            crate::walk::Limits::default(),
+            Some(&mut |dir, names, complete, modified| {
+                walked.note(dir, names, complete, modified);
+                true
+            }),
+            true,
+            &|p| listed.is_known_file(p),
+        );
+        listed.absorb(walked);
+        listed.forget_files();
+        self.listed = listed;
         self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
         files
     }
@@ -234,9 +262,12 @@ impl ImportJob {
                 continue;
             }
             if let Source::File { path } = &p.source {
-                self.by_path.insert(path.clone(), (p.id, p.local));
+                self.by_path.insert(path.clone(), (p.id, p.local, p.content_hash.clone()));
             }
-            if let Some(h) = &p.content_hash {
+            // (a copy that was only browsed in Local isn't in the library)
+            if !p.local
+                && let Some(h) = &p.content_hash
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -248,19 +279,30 @@ impl ImportJob {
         use std::sync::atomic::Ordering::Relaxed;
         // the library as it was, kept for the ownership of the shared stem sidecars below
         let library = self.look_up_library();
+        self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
         let mut todo = Vec::new();
         for f in files {
-            match self.by_path.get(f.as_str()).copied() {
-                Some((id, true)) if !opts.local => {
+            match self.by_path.get(f.as_str()).cloned() {
+                Some((id, true, hash)) if !opts.local => {
+                    // a library photo with the same content comes first, and a file promoted earlier
+                    // (here or in a previous batch) counts as the library's from then on
+                    if let Some(h) = &hash {
+                        if let Some(existing) = self.by_hash.get(h) {
+                            out.items.push(PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash });
+                            self.done.fetch_add(1, Relaxed);
+                            continue;
+                        }
+                        self.by_hash.insert(h.clone(), Some(id));
+                    }
                     // a file that was only browsed (Local) joins the library when it is imported for real
-                    self.by_path.insert(f, (id, false));
+                    self.by_path.insert(f, (id, false, hash));
                     out.items.push(PreparedItem::Promote(id));
                     self.done.fetch_add(1, Relaxed);
                 }
-                Some((id, _)) => {
+                Some((id, _, _)) => {
                     out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None });
                     self.done.fetch_add(1, Relaxed);
                 }
@@ -332,7 +374,9 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar_for_import(&stems, self.naming, &path)
+            let packet = self
+                .listed
+                .find_for_import(&stems, self.naming, &path)
                 .and_then(|f| std::fs::read_to_string(f).ok())
                 .or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);

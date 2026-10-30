@@ -127,8 +127,12 @@ pub struct ImportCandidate {
     /// `"path"` (already in the library), `"content"` (same bytes in the library or earlier in this
     /// list): skipped by the import.
     pub duplicate: Option<String>,
-    /// The photo that already has it.
+    /// The photo that already has it. On a browsed candidate (`local`): its record.
     pub existing: Option<u64>,
+    /// The file was only browsed in Local: the library has a record of it (`existing`) that is not in
+    /// the library, so it is not a duplicate and importing it promotes that record.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
     /// Not readable.
     pub error: Option<String>,
     /// A raw variant that can't be decoded yet (why): it imports as preview only.

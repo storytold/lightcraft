@@ -53,6 +53,222 @@ fn recursive_discovery_includes_sony_sr2_and_srf_case_insensitively() {
     std::fs::remove_dir_all(src).unwrap();
 }
 
+/// A file that was only browsed (Local) is not "already in the library": the scan offers it, and
+/// importing it brings the browsed record (with its edits) into the library.
+#[test]
+fn a_browsed_photos_own_file_is_offered_and_joins_the_library_when_imported() {
+    let src = temp_dir("browsed-own");
+    let f = src.join("a.png");
+    write_png(&f, 75);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [f], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 3})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
+    assert_eq!(scan["duplicates"], 0, "{scan}");
+    assert_eq!(scan["candidates"][0]["duplicate"], Value::Null, "{scan}");
+    assert_eq!(scan["candidates"][0]["existing"], id, "the candidate still names the browsed record: {scan}");
+    assert_eq!(scan["candidates"][0]["local"], true, "and says it was only browsed: {scan}");
+    let r = s.execute("library.import", &json!({"paths": [f]})).unwrap();
+    assert_eq!(r["imported"], json!([id]), "{r}");
+    let p = s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap();
+    assert!(!p.local && p.rating == 3, "the same record, now in the library, edits kept");
+    let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
+    assert_eq!(scan["duplicates"], 1, "now it is in the library: {scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A browse record in Recently Deleted still counts as the path's: the scan lists the file as it did,
+/// not as a new browsed file.
+#[test]
+fn a_deleted_browse_record_still_counts_as_the_files_own() {
+    let src = temp_dir("browsed-deleted");
+    let f = src.join("a.png");
+    write_png(&f, 76);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [f], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
+    let scan = s.execute("library.importPreview", &json!({"paths": [f]})).unwrap();
+    assert_eq!(scan["candidates"][0]["duplicate"], "path", "{scan}");
+    assert_eq!(scan["candidates"][0].get("local"), None, "{scan}");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// "Import as new" replaces the trashed library photo with the same content when the browsed twin
+/// is promoted, as it does for a new file.
+#[test]
+fn promoting_a_browsed_twin_as_new_replaces_the_trashed_library_photo() {
+    let src = temp_dir("browsed-fresh");
+    let original = src.join("original.png");
+    let twin = src.join("browsed.png");
+    write_png(&original, 77);
+    std::fs::copy(&original, &twin).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    let old = r["imported"][0].as_u64().unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "local": true})).unwrap();
+    let local = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.delete", &json!({"ids": [old]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "onDeleted": "fresh"})).unwrap();
+    assert_eq!(r["imported"], json!([local]), "{r}");
+    let trashed = s.catalog.photos().filter(|p| p.deleted).count();
+    assert_eq!(trashed, 0, "the trashed twin is gone");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(local)).is_some_and(|p| p.in_library()));
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// Restoring a trashed library photo by the content of a browsed file doesn't relink it onto the
+/// path the browse record holds: that would leave two records on one file.
+#[test]
+fn restoring_by_a_browsed_twin_does_not_relink_onto_its_path() {
+    let src = temp_dir("browsed-restore");
+    let original = src.join("original.png");
+    let renamed = src.join("renamed.png");
+    write_png(&original, 78);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    let old = r["imported"][0].as_u64().unwrap();
+    std::fs::rename(&original, &renamed).unwrap();
+    s.execute("photo.delete", &json!({"ids": [old]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [renamed], "local": true})).unwrap();
+    let local = r["imported"][0].as_u64().unwrap();
+    let r = s.execute("library.import", &json!({"paths": [renamed]})).unwrap();
+    assert_eq!(r["restored"], json!([old]), "{r}");
+    let on_path = s.catalog.photos().filter(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if Path::new(path) == renamed)).count();
+    assert_eq!(on_path, 1, "one record holds the renamed file");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(local)).is_some_and(|p| p.local), "the browse record is left alone");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn local_twin_does_not_block_reimport_after_permanent_delete_and_restart() {
+    use lightcraft_catalog::PhotoId;
+    for mode in ["add", "copy"] {
+        let src = temp_dir(&format!("local-twin-src-{mode}"));
+        let lib = temp_dir(&format!("local-twin-lib-{mode}"));
+        let original = src.join("original.png");
+        let twin = src.join("browsed.png");
+        write_png(&original, 71);
+        std::fs::copy(&original, &twin).unwrap();
+        let bytes = std::fs::read(&original).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let r = s.execute("library.import", &json!({"paths": [original], "mode": mode})).unwrap();
+        let old = r["imported"][0].as_u64().unwrap();
+        let r = s.execute("library.import", &json!({"paths": [twin], "local": true})).unwrap();
+        let local = PhotoId(r["imported"][0].as_u64().unwrap());
+        let before = s.catalog.photo(local).unwrap().clone();
+        s.execute("photo.delete", &json!({"ids": [old]})).unwrap();
+        s.execute("library.source", &json!({"kind": "recentlyDeleted"})).unwrap();
+        s.execute("library.select", &json!({"ids": [old]})).unwrap();
+        s.execute("photo.deletePermanently", &json!({"ids": [old]})).unwrap();
+        s.close_library().unwrap();
+        s.open_library(&lib, false).unwrap();
+        let scan = s.execute("library.importPreview", &json!({"paths": [original]})).unwrap();
+        assert_eq!(scan["duplicates"], 0, "a browsed copy is not a library duplicate: {scan}");
+        let r = s.execute("library.import", &json!({"paths": [original], "mode": mode})).unwrap();
+        assert_eq!(ids(&r, "imported"), 1, "{r}");
+        assert_eq!(ids(&r, "restored"), 0);
+        assert_eq!(ids(&r, "duplicates"), 0);
+        assert_ne!(r["imported"][0], old);
+        assert_eq!(s.catalog.photo(local).unwrap(), &before, "leave the other path's browse record alone");
+        assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1);
+        let scan = s.execute("library.importPreview", &json!({"paths": [original]})).unwrap();
+        assert_eq!(scan["duplicates"], 1, "the actual library photo still counts");
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert_eq!(std::fs::read(&twin).unwrap(), bytes);
+        s.close_library().unwrap();
+        let _ = std::fs::remove_dir_all(src);
+        let _ = std::fs::remove_dir_all(lib);
+    }
+}
+
+#[test]
+fn local_twin_import_matches_the_library_photo_before_promoting() {
+    use lightcraft_catalog::PhotoId;
+    let src = temp_dir("local-twin-priority");
+    let original = src.join("original.png");
+    let twin = src.join("browsed.png");
+    write_png(&original, 72);
+    std::fs::copy(&original, &twin).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 5})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "local": true})).unwrap();
+    let local = PhotoId(r["imported"][0].as_u64().unwrap());
+    let scan = s.execute("library.importPreview", &json!({"paths": [twin]})).unwrap();
+    assert_eq!(scan["duplicates"], 1, "{scan}");
+    assert_eq!(scan["candidates"][0]["existing"], id);
+    let r = s.execute("library.import", &json!({"paths": [twin]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0);
+    assert_eq!(r["duplicates"][0]["existing"], id);
+    s.execute("photo.delete", &json!({"ids": [id]})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [twin], "onDeleted": "skip"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0, "skip must not promote the local twin: {r}");
+    assert_eq!(r["duplicates"][0]["existingDeleted"], true);
+    let r = s.execute("library.import", &json!({"paths": [twin]})).unwrap();
+    assert_eq!(r["restored"], json!([id]));
+    assert!(s.catalog.photo(local).unwrap().local);
+    assert_eq!(s.catalog.photo(PhotoId(id)).unwrap().rating, 5);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn local_twins_are_deduplicated_when_promoted_in_one_import() {
+    let src = temp_dir("local-twin-batch");
+    let a = src.join("a.png");
+    let b = src.join("b.png");
+    let c = src.join("c.png");
+    write_png(&a, 73);
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &c).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2, "browsing shows both paths: {r}");
+    let scan = s.execute("library.importPreview", &json!({"paths": [a, b, c]})).unwrap();
+    assert_eq!(scan["duplicates"], 2, "only one candidate per content: {scan}");
+    let r = s.execute("library.import", &json!({"paths": [a, b, c]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(ids(&r, "duplicates"), 2);
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1);
+    assert_eq!(s.catalog.photos().filter(|p| p.local).count(), 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 0);
+    assert_eq!(s.catalog.photos().filter(|p| p.local).count(), 2);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn local_twin_promotion_counts_across_background_import_batches() {
+    use crate::import::{ImportJob, ImportOptions, commit_prepared};
+    let src = temp_dir("local-twin-worker");
+    let a = src.join("a.png");
+    let b = src.join("b.png");
+    let c = src.join("c.png");
+    write_png(&a, 74);
+    std::fs::copy(&a, &b).unwrap();
+    std::fs::copy(&a, &c).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [a, b], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 4})).unwrap();
+    let mut job = ImportJob::new(&mut s, ImportOptions::default()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let first = job.prepare(&[a.to_string_lossy().to_string()], &cancel);
+    let report = commit_prepared(&mut s, &job.opts, job.now(), first).unwrap();
+    assert_eq!(report.imported, [id], "promote the existing record with its edits");
+    assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().rating, 4);
+    let next = job.prepare(&[b.to_string_lossy().to_string(), c.to_string_lossy().to_string()], &cancel);
+    let report = commit_prepared(&mut s, &job.opts, job.now(), next).unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.duplicates.len(), 2);
+    assert!(report.duplicates.iter().all(|d| d.existing == Some(id)));
+    assert_eq!(s.catalog.photos().filter(|p| p.in_library()).count(), 1);
+    let _ = std::fs::remove_dir_all(src);
+}
+
 #[test]
 fn recursive_import_with_duplicates() {
     let src = temp_dir("src");

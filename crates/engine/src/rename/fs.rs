@@ -1,5 +1,5 @@
 use super::sidecar::PacketVersion;
-use super::{Path, PathBuf, SidecarNaming};
+use super::{HashMap, HashSet, Path, PathBuf, SidecarNaming};
 
 /// Every sidecar that may belong to `path` (both naming conventions, `.xmp` and `.XMP`).
 pub(super) fn sidecars(path: &str) -> Vec<(PathBuf, SidecarNaming, bool)> {
@@ -40,6 +40,18 @@ pub(crate) trait MoveFs {
             Ok(entries) => entries.flatten().any(|e| e.file_name() == name),
             Err(_) => true,
         }
+    }
+    /// The names in folder `dir`, or `None` when it can't be listed or holds more than `budget`
+    /// entries (it stops reading at that many, so a huge folder is never collected).
+    fn list_dir(&self, dir: &Path, budget: usize) -> Option<Vec<std::ffi::OsString>> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir).ok()? {
+            if names.len() == budget {
+                return None;
+            }
+            names.push(entry.ok()?.file_name());
+        }
+        Some(names)
     }
     /// Content observed in a packet, independent of its pathname or inode. Model volumes
     /// override this; disk implementations stream a bounded buffer without retaining the XML.
@@ -160,6 +172,134 @@ impl MoveFs for RealFs {
 
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
         crate::import_move::sibling_photo(sidecar)
+    }
+}
+
+/// A folder with this many photos leaving it is listed once, and its photos' sidecars are looked
+/// for in that listing: asking the disk for four names per photo costs a round trip each on a
+/// network share, found or not. Fewer photos are probed one by one.
+pub(super) const LIST_FOLDER_AT: usize = 8;
+
+/// Directory entries the folder listings of one move may collect in all: the walk's own bound
+/// ([`crate::walk::MAX_ENTRIES`]). A folder past what is left of it isn't listed, and its photos
+/// are probed one by one as before.
+const LIST_ENTRIES_AT_MOST: usize = crate::walk::MAX_ENTRIES;
+
+/// `inner`, with the question "is this sidecar a file?" answered from one listing of each folder
+/// that many photos leave ([`LIST_FOLDER_AT`]) where the listing can vouch for a "no": the folder was
+/// listed whole, and its names are all ASCII (a file system may treat other names alike in other
+/// cases), and the name is a plain one ([`crate::sync::plain_name`], no device names). A name the
+/// listing holds (in any case), a folder not listed or not listed whole, and every other question
+/// go to `inner` as before. A sidecar a move or copy brings into a listed folder is added to its names.
+pub(super) struct ListedSources<'a> {
+    inner: &'a dyn MoveFs,
+    /// folder → the `.xmp` names in it, lower-cased.
+    pub(super) folders: std::cell::RefCell<HashMap<PathBuf, HashSet<String>>>,
+}
+
+impl<'a> ListedSources<'a> {
+    pub(super) fn new(inner: &'a dyn MoveFs, moves: &[(String, String)]) -> Self {
+        Self::with_budget(inner, moves, LIST_ENTRIES_AT_MOST)
+    }
+
+    /// As [`Self::new`], with at most `budget` directory entries listed over all folders.
+    pub(super) fn with_budget(inner: &'a dyn MoveFs, moves: &[(String, String)], mut budget: usize) -> Self {
+        let mut leaving: HashMap<&Path, usize> = HashMap::new();
+        for (from, _) in moves {
+            if let Some(dir) = Path::new(from).parent().filter(|d| !d.as_os_str().is_empty()) {
+                *leaving.entry(dir).or_default() += 1;
+            }
+        }
+        let mut folders = HashMap::new();
+        for (dir, n) in leaving {
+            if n < LIST_FOLDER_AT {
+                continue;
+            }
+            let Some(names) = inner.list_dir(dir, budget) else { continue };
+            // (an override that lists more than the budget it was given breaks the contract: not trusted)
+            let Some(left) = budget.checked_sub(names.len()) else { continue };
+            budget = left;
+            // (any name that is no ASCII text: the listing can't say what another name's other case is)
+            let xmp: Option<HashSet<String>> = names
+                .iter()
+                .map(|n| n.to_str().filter(|n| n.is_ascii()).map(str::to_ascii_lowercase))
+                .collect::<Option<Vec<_>>>()
+                .map(|v| v.into_iter().filter(|n| n.ends_with(".xmp")).collect());
+            if let Some(xmp) = xmp {
+                folders.insert(dir.to_path_buf(), xmp);
+            }
+        }
+        ListedSources { inner, folders: std::cell::RefCell::new(folders) }
+    }
+
+    /// Whether the listing shows `p`, a sidecar name, is not there.
+    fn surely_absent(&self, p: &Path) -> bool {
+        let folders = self.folders.borrow();
+        let (Some(xmp), Some(name)) = (p.parent().and_then(|d| folders.get(d)), p.file_name().and_then(|n| n.to_str())) else { return false };
+        p.to_str().is_some_and(|s| s.ends_with(name))
+            && name.len() > ".xmp".len()
+            && name.to_ascii_lowercase().ends_with(".xmp")
+            && crate::sync::plain_name(name)
+            && !crate::sync::asks_the_disk(name)
+            && !xmp.contains(&name.to_ascii_lowercase())
+    }
+
+    /// A file arrived at `p`: a `.xmp` joins its folder's names (one that leaves changes nothing:
+    /// a name listed that is gone is asked about, and found missing, as before).
+    fn arrived(&self, p: &Path) {
+        let Some(dir) = p.parent() else { return };
+        let mut folders = self.folders.borrow_mut();
+        let Some(xmp) = folders.get_mut(dir) else { return };
+        match p.file_name().and_then(|n| n.to_str()).filter(|n| n.is_ascii()) {
+            Some(name) if name.to_ascii_lowercase().ends_with(".xmp") => {
+                xmp.insert(name.to_ascii_lowercase());
+            }
+            Some(_) => {}
+            None => {
+                folders.remove(dir);
+            }
+        }
+    }
+}
+
+impl MoveFs for ListedSources<'_> {
+    fn exists(&self, p: &Path) -> bool {
+        self.inner.exists(p)
+    }
+    fn is_file(&self, p: &Path) -> bool {
+        !self.surely_absent(p) && self.inner.is_file(p)
+    }
+    fn same_file(&self, a: &Path, b: &Path) -> bool {
+        self.inner.same_file(a, b)
+    }
+    fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        let moved = self.inner.rename_no_replace(a, b);
+        if moved.is_ok() {
+            self.arrived(b);
+        }
+        moved
+    }
+    fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        let copied = self.inner.copy_no_replace(a, b);
+        if copied.is_ok() {
+            self.arrived(b);
+        }
+        copied
+    }
+    fn remove_file(&self, p: &Path) -> std::io::Result<()> {
+        self.inner.remove_file(p)
+    }
+    fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
+        self.inner.stem_sibling(sidecar)
+    }
+    fn listed(&self, p: &Path) -> bool {
+        self.inner.listed(p)
+    }
+    fn list_dir(&self, dir: &Path, budget: usize) -> Option<Vec<std::ffi::OsString>> {
+        self.inner.list_dir(dir, budget)
+    }
+    fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
+        self.inner.packet_version(path)
     }
 }
 

@@ -43,6 +43,8 @@ mod types;
 pub(crate) use commit::workers;
 pub use commit::{batch_size, civil, commit_prepared, system_clock};
 pub use defaults::{CameraDefault, ImportDefaults, apply_import_defaults, has_import_look, import_defaults};
+#[cfg(test)]
+use files::expand_knowing;
 pub use files::{EXTENSIONS, LaunchPath, accept_list, expand, expand_within, is_supported, launch_path};
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
@@ -56,6 +58,13 @@ pub use types::{
     Duplicate, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved, OnDeleted,
     Organize,
 };
+
+mod listed_folders;
+pub use listed_folders::ListedFolders;
+
+#[cfg(test)]
+#[path = "import/tests_listed_folders.rs"]
+mod tests_listed_folders;
 
 #[cfg(test)]
 #[path = "import/tests_known.rs"]

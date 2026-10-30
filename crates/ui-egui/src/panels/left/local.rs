@@ -269,22 +269,30 @@ pub(crate) fn fs_cached<T: Clone + Send + 'static>(ui: &egui::Ui, kind: &'static
         use std::sync::atomic::Ordering;
         let running = fs_running_counter(ui.ctx());
         running.fetch_add(1, Ordering::AcqRel);
-        let (out, path, repaint, done) = (cell.clone(), path.to_string(), ui.ctx().clone(), running.clone());
+        // (settled when the work ends however it ends: a listing that panics must not stay running, nor keep
+        // the count up, which `Headless::busy` waits on)
+        struct Settle<T> {
+            cell: Cell<T>,
+            count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+            repaint: egui::Context,
+        }
+        impl<T> Drop for Settle<T> {
+            fn drop(&mut self) {
+                self.cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).running = false;
+                // after the answer is stored: a frame that sees the count drop also sees the answer
+                self.count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                self.repaint.request_repaint();
+            }
+        }
+        let (path, settle) = (path.to_string(), Settle { cell: cell.clone(), count: running.clone(), repaint: ui.ctx().clone() });
         let work = move || {
             let v = f(&path);
-            let mut e = out.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            e.value = Some(v);
-            e.running = false;
-            drop(e);
-            // after the answer is stored: a frame that sees the count drop also sees the answer
-            done.fetch_sub(1, Ordering::AcqRel);
-            repaint.request_repaint();
+            settle.cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).value = Some(v);
+            drop(settle);
         };
         #[cfg(not(target_arch = "wasm32"))]
-        if std::thread::Builder::new().name("lc-fs-list".into()).spawn(work).is_err() {
-            cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).running = false;
-            running.fetch_sub(1, Ordering::AcqRel);
-        }
+        // (no thread to be had: the closure is dropped unrun, which settles it)
+        let _ = std::thread::Builder::new().name("lc-fs-list".into()).spawn(work);
         #[cfg(target_arch = "wasm32")]
         work();
     }

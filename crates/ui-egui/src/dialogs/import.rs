@@ -127,10 +127,18 @@ impl ImportDialog {
             }
         }
     }
+    /// Candidate `i` is a file whose photo is only browsed (Local): the scan offers it (it isn't in the
+    /// library). Importing it brings that record into the library where
+    /// the file is, whatever the transfer mode.
+    pub fn is_browsed(&self, i: usize) -> bool {
+        self.candidates.get(i).is_some_and(|c| c.error.is_none() && c.duplicate.is_none() && c.local)
+    }
     /// Candidate `i` can be checked: a readable file the library doesn't have, or one whose photo
-    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285).
+    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285). A browsed
+    /// photo can't be copied or moved: the engine would add it in place, so copying leaves it out.
     pub fn importable(&self, i: usize) -> bool {
         self.candidates.get(i).is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i)))
+            && !(self.copy && self.candidates.get(i).is_some_and(|c| c.local))
     }
     /// Candidate `i` is checked by Check All and the file type toggles: with "Leave them", a file in
     /// Recently Deleted is only checked by hand.
@@ -147,7 +155,7 @@ impl ImportDialog {
     }
     /// Any file of type `ty` is checked.
     pub fn type_checked(&self, ty: &str) -> bool {
-        self.candidates.iter().zip(&self.checked).any(|(c, on)| *on && file_type(c) == ty)
+        self.candidates.iter().zip(&self.checked).enumerate().any(|(i, (c, on))| *on && self.importable(i) && file_type(c) == ty)
     }
     /// Check (the importable ones) or uncheck every file of type `ty`: the raws only, say, and not
     /// the JPEGs kept beside them (issue #344).
@@ -221,6 +229,22 @@ impl ImportDialog {
             o => Ok(Some(o.to_string())),
         }
     }
+    /// Importing checked candidate `i` as it stands joins the library with the browsed record it
+    /// names, as the engine's `Promote` does: a browsed file the library doesn't have, or one whose
+    /// content is in Recently Deleted under "Import as new" (which replaces the trashed photo).
+    /// "Restore them" brings the trashed photo back instead and "Leave them" skips the file.
+    fn promotes_browsed(&self, i: usize) -> bool {
+        !self.copy
+            && self.checked.get(i).copied().unwrap_or(false)
+            && self.candidates.get(i).is_some_and(|c| c.local && c.error.is_none())
+            && (self.is_browsed(i) || (self.is_trashed(i) && self.on_deleted == "fresh"))
+    }
+    /// Keywords or a preset are set while a checked browsed photo would join the library as it is:
+    /// the engine applies them to new files only, so the review says so.
+    fn options_skip_browsed(&self) -> bool {
+        let has_options = !self.keywords().is_empty() || !self.preset.is_empty() || !self.metadata_preset.is_empty();
+        has_options && (0..self.candidates.len()).any(|i| self.promotes_browsed(i))
+    }
     fn keywords(&self) -> Vec<String> {
         self.keywords.split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect()
     }
@@ -248,6 +272,77 @@ mod tests {
         let mut candidates: Vec<ImportCandidate> = (0..6).map(|i| ImportCandidate { path: format!("img{i}.jpg"), ..Default::default() }).collect();
         candidates[3].duplicate = Some("content".into());
         ImportDialog::new(candidates)
+    }
+
+    /// A file whose photo is only browsed (Local) comes from the scan as an ordinary candidate that
+    /// still names its record: offered when adding in place; copying or moving would not copy it
+    /// (the engine adds it where it is), so there it counts as already in the library.
+    #[test]
+    fn a_browsed_photo_is_importable_only_when_adding_in_place() {
+        let mut d = dialog();
+        d.candidates[5].local = true;
+        assert!(d.is_browsed(5) && d.importable(5));
+        assert_eq!(dup_counts(&d), (0, 1, 0), "adding in place: not skipped");
+        d.copy = true;
+        assert!(!d.importable(5), "copying leaves it where it is");
+        assert!(!d.selected_paths().contains(&"img5.jpg".to_string()));
+        assert_eq!(dup_counts(&d), (1, 1, 0));
+        assert!(!d.is_browsed(3), "a duplicate isn't browsed");
+        // its library twin is in Recently Deleted: still offered in place ("Import as new" brings it in), never copied
+        d.copy = false;
+        d.candidates[4].local = true;
+        d.candidates[4].duplicate = Some("content".into());
+        d.set_trashed(vec![false, false, false, false, true, false]);
+        assert!(d.importable(4));
+        d.copy = true;
+        assert!(!d.importable(4), "copying would add it where it is");
+    }
+
+    /// A file type's toggle is on only for files that can be imported now.
+    #[test]
+    fn a_file_type_toggle_ignores_browsed_photos_that_copying_cannot_import() {
+        let mut c = ImportCandidate { path: "a.png".into(), local: true, ..Default::default() };
+        c.format = "PNG".into();
+        let mut d = ImportDialog::new(vec![c]);
+        d.copy = true;
+        assert!(!d.type_checked("PNG"));
+        d.copy = false;
+        assert!(d.type_checked("PNG"));
+    }
+
+    /// The review warns that keywords and presets skip a browsed photo only when it matters.
+    #[test]
+    fn keywords_and_presets_are_flagged_only_when_a_browsed_photo_would_skip_them() {
+        let c = ImportCandidate { path: "a.png".into(), local: true, ..Default::default() };
+        let mut d = ImportDialog::new(vec![c]);
+        assert!(!d.options_skip_browsed(), "nothing set, nothing to skip");
+        d.keywords = "beach".into();
+        assert!(d.options_skip_browsed());
+        d.checked[0] = false;
+        assert!(!d.options_skip_browsed(), "unchecked: not imported anyway");
+        d.checked[0] = true;
+        d.copy = true;
+        assert!(!d.options_skip_browsed(), "copying doesn't offer it");
+    }
+
+    /// A browsed photo whose content is in Recently Deleted is promoted only by "Import as new" (the
+    /// engine's `Fresh`, which purges the trashed twin); "Restore them" brings the trashed photo back
+    /// and "Leave them" skips the file, so neither imports the browsed record and the notice stays off.
+    #[test]
+    fn the_notice_follows_the_engines_promotion_of_a_browsed_photo_with_a_trashed_twin() {
+        let c = ImportCandidate { path: "a.png".into(), local: true, duplicate: Some("content".into()), existing: Some(7), ..Default::default() };
+        let mut d = ImportDialog::new(vec![c]);
+        d.set_trashed(vec![true]);
+        d.keywords = "beach".into();
+        d.set_on_deleted("restore");
+        assert!(d.checked[0] && !d.options_skip_browsed(), "Restore brings the trashed photo back, not the browsed one");
+        d.set_on_deleted("fresh");
+        assert!(d.checked[0] && d.options_skip_browsed(), "Import as new promotes the browsed record without the keywords");
+        d.set_on_deleted("");
+        assert!(!d.checked[0] && !d.options_skip_browsed(), "Leave them: unchecked");
+        d.set_on_deleted("fresh");
+        d.copy = true;
+        assert!(!d.options_skip_browsed(), "copying doesn't offer it");
     }
 
     /// Identical copies inside the source folder are not "already in the library" (a fresh library

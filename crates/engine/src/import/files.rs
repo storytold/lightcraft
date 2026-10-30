@@ -76,7 +76,21 @@ pub(crate) fn expand_noting(
     paths: &[String],
     skip: Option<&Path>,
     limits: crate::walk::Limits,
+    note: Option<crate::walk::NoteFolder>,
+) -> (Vec<String>, bool) {
+    expand_knowing(paths, skip, limits, note, false, &|_| false)
+}
+
+/// [`expand_noting`], taking the paths `known_file` says are files as files without asking the
+/// disk (a review hands over thousands of them, and telling a file from a folder is a round trip
+/// each on a network share).
+pub(super) fn expand_knowing(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
     mut note: Option<crate::walk::NoteFolder>,
+    timed: bool,
+    known_file: &dyn Fn(&Path) -> bool,
 ) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
@@ -85,8 +99,9 @@ pub(crate) fn expand_noting(
         if skip.is_some_and(|s| p == s) {
             continue;
         }
-        if p.is_dir() {
+        if !known_file(p) && p.is_dir() {
             let w = match note.as_mut() {
+                Some(note) if timed => crate::walk::files_in_noting_timed(p, skip, limits, is_supported, &mut **note),
                 Some(note) => crate::walk::files_in_noting(p, skip, limits, is_supported, &mut **note),
                 None => crate::walk::files_in(p, skip, limits, is_supported),
             };

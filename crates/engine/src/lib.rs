@@ -68,6 +68,7 @@ pub mod print_color;
 pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
+pub mod relocate;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -136,7 +137,8 @@ pub struct UndoEntry {
     pub label: String,
     pub op: Op,
     /// A folder to rename on disk (`from` → `to`) before `op` is applied: Rename / Move Folder
-    /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists. An
+    /// (whose `op` relinks the photos inside; a located folder, `on_disk: false`, renames nothing
+    /// and only follows). Never overwrites; refused when `to` exists. An
     /// empty `to` removes the (empty) folder `from`, an empty `from` creates `to` (Create Folder).
     pub folder: Option<FolderMove>,
     /// Inverses of logged path corrections from a partially failed history step.
@@ -167,16 +169,20 @@ fn single_photo(op: &Op, depth: usize) -> Option<PhotoId> {
     }
 }
 
-/// A folder renamed or moved on disk as part of an undo step.
+/// A folder renamed or moved on disk as part of an undo step, or (`on_disk: false`) a folder
+/// located where it already is, which moves no file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderMove {
     pub from: String,
     pub to: String,
+    /// The step renames the folder on disk. `false` for a folder located where it already is
+    /// (`folder.updateLocation`): only the photos and the view follow, no file is touched.
+    pub on_disk: bool,
 }
 
 impl FolderMove {
     fn reversed(&self) -> Self {
-        Self { from: self.to.clone(), to: self.from.clone() }
+        Self { from: self.to.clone(), to: self.from.clone(), on_disk: self.on_disk }
     }
 }
 
@@ -628,10 +634,12 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
+    /// undo, redo and opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -645,7 +653,14 @@ impl Session {
         Ok(())
     }
 
+    /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        self.apply_through(op, Catalog::apply)
+    }
+
+    /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
+    /// was), then forget what the session cached of the photos it replaced.
+    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -664,7 +679,7 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        let inv = apply(&mut self.catalog, op)?;
         for id in invalidated {
             self.media.forget(id);
         }
@@ -844,17 +859,19 @@ impl Session {
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         // Repair discarded file steps before another path change can stale their exact paths.
         // Unrelated metadata history must remain usable while a sidecar is still unwritable.
-        if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+        // the folder to rename on disk, if the step has one
+        let on_disk = entry.folder.as_ref().filter(|f| f.on_disk);
+        if on_disk.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
             self.repair_sidecars_with(fs).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         }
         rename::retry_sidecars(fs, &mut entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         let op = &entry.op;
         let folder = entry.folder.as_ref();
-        if let Some(f) = folder {
+        if let Some(f) = on_disk {
             cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
         }
         let undo_folder = || {
-            if let Some(f) = folder {
+            if let Some(f) = on_disk {
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
@@ -873,8 +890,10 @@ impl Session {
         }
         match self.apply_catalog(op.clone()) {
             Ok(inv) => {
-                if let Some(f) = folder {
-                    cmd::browse::follow_folder(self, &f.from, &f.to);
+                match folder {
+                    Some(f) if f.on_disk => cmd::browse::follow_folder(self, &f.from, &f.to),
+                    Some(f) => relocate::follow_located(self, &f.from, &f.to),
+                    None => {}
                 }
                 if entry.retry_inverse.is_empty() {
                     Ok(inv)

@@ -379,7 +379,7 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// How many library photos have no file (Local browse records are not checked; see
-/// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
+/// `Photo::library_file`). Checking stats every file, which on a network share takes
 /// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
 /// at most every 5 s, and at once (after the running check) when the catalog changed.
 pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {

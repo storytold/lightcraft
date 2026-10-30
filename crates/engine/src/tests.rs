@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+mod album_loops;
 mod album_order;
 mod album_remove;
 mod albums_local;
@@ -40,6 +41,7 @@ mod presets_scale;
 mod print;
 mod process;
 mod recheck;
+mod relocate;
 mod segment;
 mod settings_files;
 mod slide;
