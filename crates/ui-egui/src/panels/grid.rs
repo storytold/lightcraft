@@ -1256,6 +1256,7 @@ pub fn toggle_stack(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     }
 }
 
+/// Draw the photo's grid context menu and dispatch the selected action.
 pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     context_menu_open_and_edit(app, ui, id);
     context_menu_rate(app, ui);
@@ -1302,7 +1303,7 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
                 app.toast(
                     ui.ctx(),
-                    crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
+                    crate::i18n::tr_format!("{n} similar photo{} · View → Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
                 );
             }
             Err(e) => app.toast(ui.ctx(), e),

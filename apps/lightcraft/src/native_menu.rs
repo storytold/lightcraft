@@ -497,9 +497,7 @@ impl NativeMenu {
             // events never reach `shortcuts::handle`, so this is the one guard for AppKit's
             // accelerators and clicks: while the blocking library window or a quit/settings notice
             // owns input, a queued command is dropped (Quit stays for the existing confirmation).
-            let (cmd, params) = if key == QUIT {
-                (key, serde_json::json!({}))
-            } else if key == "app.about" || key == SETTINGS {
+            let (cmd, params) = if key == QUIT || key == "app.about" || key == SETTINGS {
                 (key, serde_json::json!({}))
             } else if let Some(it) = self.items.get(&key) {
                 (it.cmd.clone(), it.params.clone())

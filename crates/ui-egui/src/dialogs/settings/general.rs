@@ -3,6 +3,7 @@ use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 // ------------------------------------------------------------------------------------- General
 
+/// Draw the General settings tab, including language and library-location controls.
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
         let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
@@ -87,7 +88,7 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         ui,
         t,
         crate::i18n::tr(
-            "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
+            "Photo → Edit In → Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
         ),
     );
     row(ui, t, crate::i18n::tr("Other editor"), |ui| {

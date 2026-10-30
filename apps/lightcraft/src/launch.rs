@@ -36,6 +36,8 @@ pub(crate) fn launch_imports(args: &[String]) -> (Vec<String>, Vec<String>) {
     launch_imports_in(args, cwd.as_deref(), home.as_deref())
 }
 
+/// Split launch arguments into importable paths and refusal notices. Relative paths use `cwd`;
+/// `home` identifies the whole home folder, which must not be imported.
 pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Option<&std::path::Path>) -> (Vec<String>, Vec<String>) {
     use lightcraft_engine::import::{LaunchPath, launch_path};
     let (mut files, mut notices) = (Vec::new(), Vec::new());
@@ -45,7 +47,7 @@ pub(crate) fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, 
             Some(LaunchPath::Refused { path, why }) => {
                 log::warn!("not importing {path} given at launch: {why}");
                 notices
-                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File ▸ Import Photos…"));
+                    .push(format!("{path} was not imported: it is {why}. To import from it, choose a folder inside it with File → Import Photos…"));
             }
             None => {}
         }
@@ -85,7 +87,7 @@ pub(crate) fn stopped_text(error: &str, lost: Option<&str>) -> String {
     match lost {
         Some(reason) => format!(
             "{error}. The graphics driver reset the GPU ({reason}). LightCraft renders on the CPU from its next start; \
-             Settings ▸ Performance ▸ Use the GPU for rendering turns the GPU back on"
+             Settings → Performance → Use the GPU for rendering turns the GPU back on"
         ),
         None => error.to_string(),
     }
