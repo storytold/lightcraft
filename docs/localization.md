@@ -113,6 +113,14 @@ in code without invalidating anyone's saved preference. `LIGHTCRAFT_LANGUAGE` ac
 locale looks like (`zh_Hans`, `zh-CN`, `en_US`, `ja_JP.UTF-8`) and falls back to the base language
 when a region has no dedicated entry.
 
+With no saved setting, the app starts in the first of the system's preferred languages it has a
+catalog for (the browser's languages in the web build), else English. `LIGHTCRAFT_LANGUAGE`
+overrides that. A language chosen in Settings ▸ General ▸ Language is saved and kept; the first choice
+there, Sync with System, goes back to the system's language and follows it at every start. It is on
+for a new installation, and off for the settings file of an older build, which holds a chosen language.
+It is stored as `followSystemLanguage` in the settings file, written only while on, beside the
+`language` it last resolved to.
+
 ## Release notes
 
 Help ▸ What's New shows `docs/whats-new.md`, and each of its lines (a heading, or one wrapped line of a

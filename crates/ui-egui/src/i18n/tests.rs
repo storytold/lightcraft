@@ -184,7 +184,7 @@ fn locale_tags_normalize() {
     assert_eq!(Locale::parse_tag("xx"), None);
 }
 
-/// The web host's "Auto" (issue #2085): the browser's `navigator.languages` in order, first
+/// The hosts' "Auto" (issue #2085): the browser's `navigator.languages`, or the system's languages, in order, first
 /// shipped language wins, unsupported tags are skipped, an empty or foreign list stays English
 /// ([`default_language`] fallback).
 #[test]
@@ -196,6 +196,9 @@ fn locale_from_tags_takes_the_first_shipped_language() {
     assert_eq!(locale_from_tags(&["zh-TW".into(), "en".into()]), Some(Locale::ZhHant));
     assert_eq!(locale_from_tags(&["ja_JP.UTF-8".into(), "en".into()]), Some(Locale::Ja));
     assert_eq!(locale_from_tags(&["pt".into(), "pt-BR".into()]), Some(Locale::PtBr));
+    // A language set up with a region it has no catalog of its own for (Russian in Slovakia).
+    assert_eq!(locale_from_tags(&["ru-SK".into(), "en-SK".into(), "sk-SK".into()]), Some(Locale::Ru));
+    assert_eq!(locale_from_tags(&["en-US".into(), "ru-RU".into()]), Some(Locale::En));
 }
 
 #[test]
@@ -1201,5 +1204,62 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     let text = painted_text(&ctx, &mut app, Locale::Pl);
     assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");
     assert_polish_glyphs(&ctx);
+    set_language(Locale::En);
+}
+
+/// "Sync with System" (Settings ▸ General ▸ Language): the saved language is the host's default
+/// again at each start, a file without the flag is an explicit choice, and picking a language by
+/// any route (menu command, control channel) leaves the sync.
+#[test]
+fn sync_with_system_takes_the_host_default_until_a_language_is_picked() {
+    use crate::control::{ControlRequest, Outcome};
+    use crate::state::UiState;
+    set_default_language(Locale::De);
+    let read = |saved: &str| serde_json::from_str::<UiState>(saved).unwrap().sanitized();
+
+    // Given settings saved while syncing, the language is the system's now, not the one beside it
+    let synced = read(r#"{"language":"fr","followSystemLanguage":true}"#);
+    assert!(synced.follow_system_language);
+    assert_eq!(synced.language, Locale::De);
+    // And an older build's file, without the flag, keeps its explicit language
+    let explicit = read(r#"{"language":"fr"}"#);
+    assert!(!explicit.follow_system_language);
+    assert_eq!(explicit.language, Locale::Fr);
+    // And the flag is written only while on (an older build reads the same file as before)
+    assert!(!serde_json::to_string(&explicit).unwrap().contains("followSystemLanguage"));
+    let saved = serde_json::to_string(&synced).unwrap();
+    assert!(saved.contains(r#""followSystemLanguage":true"#) && saved.contains(r#""language":"de""#), "{saved}");
+
+    // And a fresh install, with no file, syncs from the start: its first language is the system's
+    // by default, not a choice, so a later change of the system's language is followed
+    let fresh = UiState::default();
+    assert!(fresh.follow_system_language);
+    assert_eq!(fresh.language, Locale::De);
+    assert!(serde_json::to_string(&fresh).unwrap().contains(r#""followSystemLanguage":true"#));
+
+    let ctx = egui::Context::default();
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    let set = |app: &mut crate::LightcraftApp, params: serde_json::Value| {
+        let (request, _) = ControlRequest::new("ui.set", params);
+        let Outcome::Done(reply) = crate::control::handle(app, &ctx, &request) else { panic!("expected reply") };
+        assert_eq!(reply["ok"], true, "{reply}");
+    };
+    // When the control channel turns it on, the language follows the host at once
+    app.ui.language = Locale::Fr;
+    app.ui.follow_system_language = false;
+    set(&mut app, serde_json::json!({"followSystemLanguage": true}));
+    assert_eq!((app.ui.language, language()), (Locale::De, Locale::De));
+    // And no language's menu command is checked while it is on
+    assert_eq!(crate::menubar::checked(&app, "app.language.german"), Some(false));
+    // When a language is picked by its command, the sync is off and that language is kept
+    app.run("app.language.french", serde_json::json!({})).unwrap();
+    assert!(!app.ui.follow_system_language);
+    assert_eq!((app.ui.language, language()), (Locale::Fr, Locale::Fr));
+    assert_eq!(crate::menubar::checked(&app, "app.language.french"), Some(true));
+    // And so is a language set by its tag through the control channel
+    set(&mut app, serde_json::json!({"followSystemLanguage": true}));
+    set(&mut app, serde_json::json!({"language": "ja"}));
+    assert!(!app.ui.follow_system_language);
+    assert_eq!((app.ui.language, language()), (Locale::Ja, Locale::Ja));
     set_language(Locale::En);
 }

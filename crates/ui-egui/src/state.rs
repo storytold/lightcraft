@@ -33,6 +33,14 @@ pub struct UiState {
     pub docking_version: u32,
     #[serde(default = "crate::i18n::default_language")]
     pub language: crate::i18n::Locale,
+    /// Settings ▸ General ▸ Language ▸ "Sync with System": `language` is the host's default
+    /// ([`crate::i18n::default_language`]) at each start, not the one saved. On for a fresh install
+    /// (its first language is the system's, not a choice), off for a file without it (the settings
+    /// of an older build hold a chosen language); written only while on, so a file of an explicit
+    /// choice reads unchanged by an older build, which also keeps the language saved beside it
+    /// when it reads a file with the flag on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_system_language: bool,
     /// The Build Previews run last announced (its identity, finished?).
     #[serde(skip)]
     pub preview_build_seen: Option<(usize, bool)>,
@@ -361,6 +369,7 @@ impl Default for UiState {
             docking: None,
             docking_version: crate::docking::DOCKING_VERSION,
             language: crate::i18n::default_language(),
+            follow_system_language: true,
             preview_build_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
@@ -566,8 +575,15 @@ impl UiState {
             self.open_flyouts.push(id.to_string());
         }
     }
+    /// Syncing with the system's language: the language is the host's now ([`crate::i18n::default_language`]).
+    pub fn resolve_language(&mut self) {
+        if self.follow_system_language {
+            self.language = crate::i18n::default_language();
+        }
+    }
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
+        self.resolve_language();
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);

@@ -3,8 +3,8 @@
 Choose **Edit → Language → ქართული** or **Settings → General → Language**. The choice applies at once
 and is saved for the next launch (`language: "ka"` in `ui.json`); the control command is
 `app.language.georgian`. `LIGHTCRAFT_LANGUAGE` selects it for headless runs and accepts `ka`, `ka-GE`
-and `ka_GE.UTF-8`; the saved value is always `ka`. LightCraft does not follow the system language,
-for Georgian as for every other language.
+and `ka_GE.UTF-8`; the saved value is always `ka`. **Settings → General → Language → Sync with System**
+follows the system's language instead, and choosing a language keeps that language.
 
 The Georgian catalogs cover every key of the other catalogs plus all command and slider labels:
 menus, shortcuts, library, editing, crop, masks, people, import/export, settings, built-in presets and

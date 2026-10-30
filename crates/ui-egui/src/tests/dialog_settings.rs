@@ -128,7 +128,7 @@ fn a_row_of_many_choices_wraps_under_itself() {
     // Given an app window too narrow for the languages in one line
     let mut h = demo([900.0, 560.0]);
     show(&mut h, "general");
-    let languages: Vec<egui::Rect> = (0..crate::i18n::Locale::ALL.len()).map(|i| rect(&h, &format!("button:settingsLanguage-{i}"))).collect();
+    let languages: Vec<egui::Rect> = (0..=crate::i18n::Locale::ALL.len()).map(|i| rect(&h, &format!("button:settingsLanguage-{i}"))).collect();
     // Then they take more than one line
     let first = languages[0];
     assert!(languages.iter().any(|r| r.top() > first.bottom()), "the languages wrap: {languages:?}");
@@ -389,4 +389,27 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
     h.settle(T);
     show(&mut h, "import");
     assert!((rect(&h, "check:settings.perCamera").top() - scrolled).abs() < 0.5, "Import is where it was left after a reopen");
+}
+
+#[test]
+fn the_language_row_can_go_back_to_the_system_s_language() {
+    // Given the system's language is Russian and a language chosen in Settings ▸ General
+    crate::i18n::set_default_language(crate::i18n::Locale::Ru);
+    let mut h = demo([1600.0, 1000.0]);
+    show(&mut h, "general");
+    let picker = crate::i18n::Locale::for_picker();
+    // (the first choice is Sync with System, so the languages follow it)
+    let german = 1 + picker.iter().position(|l| *l == crate::i18n::Locale::De).unwrap();
+    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("button:settingsLanguage-{german}")}), T)["ok"], true);
+    h.settle(T);
+    assert_eq!((h.app.ui.language, h.app.ui.follow_system_language), (crate::i18n::Locale::De, false));
+    // When Sync with System is chosen
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:settingsLanguage-0"}), T)["ok"], true);
+    h.settle(T);
+    // Then the language is the system's at once, and the choice is remembered
+    assert_eq!((h.app.ui.language, h.app.ui.follow_system_language), (crate::i18n::Locale::Ru, true));
+    assert_eq!(crate::i18n::language(), crate::i18n::Locale::Ru);
+    let saved = serde_json::to_string(&h.app.ui).unwrap();
+    assert!(saved.contains(r#""followSystemLanguage":true"#), "{saved}");
+    crate::i18n::set_language(crate::i18n::Locale::En);
 }

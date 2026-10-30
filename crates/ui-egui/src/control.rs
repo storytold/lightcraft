@@ -377,8 +377,16 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             };
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
             lightcraft_develop::presets::deep_merge(&mut v, p);
+            // a language named here is a choice: it ends the sync with the system's, unless the same request turns it on
+            if p.get("language").is_some()
+                && p.get("followSystemLanguage").is_none()
+                && let Some(fields) = v.as_object_mut()
+            {
+                fields.remove("followSystemLanguage");
+            }
             match serde_json::from_value::<crate::UiState>(v) {
                 Ok(mut u) => {
+                    u.resolve_language();
                     if let Err(error) = crate::docking::set_widths(&mut u, p) {
                         return err(error);
                     }

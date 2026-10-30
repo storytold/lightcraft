@@ -3,8 +3,8 @@
 Choose **Edit → Language → Bahasa Indonesia** or **Settings → General → Language**. The choice applies
 at once and is saved for the next launch (`language: "id"` in `ui.json`); the control command is
 `app.language.indonesian`. `LIGHTCRAFT_LANGUAGE` selects it for headless runs and accepts `id`, `id-ID`
-and `id_ID.UTF-8`; the saved value is always `id`. LightCraft does not follow the system language, for
-Indonesian as for every other language.
+and `id_ID.UTF-8`; the saved value is always `id`. **Settings → General → Language → Sync with System**
+follows the system's language instead, and choosing a language keeps that language.
 
 The Indonesian catalogs cover every plain and formats message the other catalogs have (2,258 + 297),
 plus 69 command labels no catalog translated yet: menus, shortcuts, library, editing, crop, masks,

@@ -160,6 +160,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
+        app.ui.follow_system_language = false;
         // Immediately, not on the next frame: the reply and anything else run this frame
         // (menus rebuilt from it, toasts) are already in the new language.
         crate::i18n::set_language(app.ui.language);

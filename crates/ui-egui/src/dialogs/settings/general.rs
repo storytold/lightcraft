@@ -5,11 +5,20 @@ use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
-        let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
+        // "Sync with System" first (as Appearance has it), then the languages by their own names
+        let languages: Vec<_> = std::iter::once((None, "Sync with System"))
+            .chain(crate::i18n::Locale::for_picker().into_iter().map(|language| (Some(language), language.name())))
+            .collect();
+        let mut chosen = (!app.ui.follow_system_language).then_some(app.ui.language);
         // Thirteen language names do not fit one line in a narrow window: wrap them.
-        ui.horizontal_wrapped(|ui| {
-            choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
-        });
+        let changed = ui.horizontal_wrapped(|ui| choices(ui, "settingsLanguage", &languages, &mut chosen)).inner;
+        if changed {
+            app.ui.follow_system_language = chosen.is_none();
+            match chosen {
+                Some(language) => app.ui.language = language,
+                None => app.ui.resolve_language(),
+            }
+        }
         crate::i18n::set_language(app.ui.language);
     });
     heading(ui, t, crate::i18n::tr("Library"));
