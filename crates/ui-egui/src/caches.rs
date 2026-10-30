@@ -152,18 +152,15 @@ impl Caches {
         }
     }
     /// The people named on faces among the photos the filter lets through (its own `person` aside),
-    /// with photo counts.
-    pub fn people(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        filter: &lightcraft_catalog::Filter,
-    ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
-        let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
+    /// with photo counts, each shown by the face chosen for them in the session, else their largest.
+    pub fn people(&mut self, session: &lightcraft_engine::Session) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
+        let (cat, generation) = (&session.catalog, session.people_gen);
+        let key = lightcraft_catalog::Filter { person: None, ..session.filter.clone() };
         match &self.people {
-            Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
+            Some((r, g, f, t)) if *r == cat.revision && *g == generation && *f == key => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(cat.people_in(&key));
-                self.people = Some((cat.revision, key, t.clone()));
+                let t = std::sync::Arc::new(cat.people_in_with(&key, &session.person_covers));
+                self.people = Some((cat.revision, generation, key, t.clone()));
                 t
             }
         }

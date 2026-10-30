@@ -572,6 +572,13 @@ impl Catalog {
     /// People view offers while other filters (a date, a rating, an album…) are active, so picking
     /// a person never ends in an empty grid.
     pub fn people_in(&self, filter: &Filter) -> Vec<Person> {
+        self.people_in_with(filter, &Default::default())
+    }
+
+    /// [`Catalog::people_in`], each person shown by the face chosen for them in `covers` (keyed by the lower-cased,
+    /// trimmed name) when it is among the photos the filter lets through and still bears their name; otherwise by
+    /// their largest face.
+    pub fn people_in_with(&self, filter: &Filter, covers: &std::collections::BTreeMap<String, PersonCover>) -> Vec<Person> {
         let filter = Filter { person: None, ..filter.clone() };
         let mut m: std::collections::HashMap<String, (Person, f64)> = Default::default();
         let prepared = filter.prepare();
@@ -580,6 +587,7 @@ impl Catalog {
             for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
                 let Some(name) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
                 let key = name.to_lowercase();
+                let chosen = covers.get(&key).is_some_and(|c| c.is(p.id, &r.rect));
                 // the face's size in pixels of the photo
                 let area = (r.rect.x1 - r.rect.x0) * (r.rect.y1 - r.rect.y0) * p.width as f64 * p.height as f64;
                 let (person, best) =
@@ -588,7 +596,10 @@ impl Catalog {
                     person.count += 1;
                     seen.push(key);
                 }
-                if area > *best || (area == *best && p.id < person.photo) {
+                if chosen {
+                    // the chosen face: nothing displaces it
+                    (person.photo, person.face, *best) = (p.id, r.rect, f64::INFINITY);
+                } else if area > *best || (area == *best && p.id < person.photo) {
                     (person.photo, person.face, *best) = (p.id, r.rect, area);
                 }
             }
@@ -599,13 +610,41 @@ impl Catalog {
     }
 }
 
+/// The face chosen to show a person by in the People view, instead of their largest one ([`Catalog::people_in_with`]).
+/// Not part of the catalog: the host keeps it beside the library (`people.json`), so a library stays readable by
+/// builds that don't know about it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PersonCover {
+    pub photo: PhotoId,
+    /// The face's box, normalized, as in the photo's regions.
+    pub face: lightcraft_meta::Rect,
+}
+
+impl PersonCover {
+    /// Whether this is the face at `rect` in `photo` (boxes read back from a file may differ in the last digit).
+    pub fn is(&self, photo: PhotoId, rect: &lightcraft_meta::Rect) -> bool {
+        const EPS: f64 = 1e-9;
+        let f = &self.face;
+        self.photo == photo
+            && (f.x0 - rect.x0).abs() < EPS
+            && (f.y0 - rect.y0).abs() < EPS
+            && (f.x1 - rect.x1).abs() < EPS
+            && (f.y1 - rect.y1).abs() < EPS
+    }
+}
+
+/// One face, by its photo and its box: a [`PersonCover`] says which face stands for a person, a `FaceRef` names any
+/// face kept outside the catalog (the faces set aside as "not this person", for one).
+pub type FaceRef = PersonCover;
+
 /// A person named on faces in the library ([`Catalog::people`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Person {
     pub name: String,
     /// Photos they appear in.
     pub count: usize,
-    /// The photo with their largest face, and that face (normalized, in the photo's upright frame).
+    /// The face chosen for them, else the photo with their largest face, and that face (normalized, in the photo's
+    /// upright frame).
     pub photo: PhotoId,
     pub face: lightcraft_meta::Rect,
 }

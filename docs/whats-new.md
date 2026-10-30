@@ -1,5 +1,22 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### A face set aside on a person's page stays set aside
+- On a person's page, × on one of the faces offered in More used to hide it until LightCraft was quit: next time it was
+  offered again. It is now kept: that face is no longer offered in that person's More (it can still be offered for
+  someone else, and name suggestions elsewhere are unchanged). Bring Back Set-Aside Faces, at the top of their page, gives them all back. Kept in the library's
+  `people.json` beside the chosen picture, so the catalog format does not change; it follows Rename Person. Agents:
+  `faces.dismiss {name, photo, index}`, `{name, restore: true}`; `faces.person` counts them (`dismissed`). (#3249)
+
+### Choose the face that shows a person in People
+- On a person's page, right-click one of their faces and choose Use as Person's Picture: People shows them by that
+  face instead of their largest one (often a blurred close-up, or the moment they blinked). A star marks it on their
+  page, and Use Their Largest Face goes back. The choice follows the person through Rename Person, and a face that
+  loses their name no longer stands for them. It is kept in the library's `people.json`, beside the catalog, so the
+  catalog format does not change. Agents: `faces.setCover {name, photo, index}` (`photo: null` for the largest face);
+  `faces.person` says which face is chosen (`cover`). (#3246)
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
