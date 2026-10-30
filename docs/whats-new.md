@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Fujifilm X-T5 film simulation looks
+- X-T5 raws can now be shown in each of the camera's eleven colour film simulations, including REALA ACE and
+  Nostalgic Neg.: open the profile browser and pick one from "X-T5 looks, fitted". Each look was fitted to the X-T5's
+  own conversions of photos in that simulation; on photos it was not fitted to, it lands a median of 1.0 to 1.4
+  ΔE2000 from the camera's conversion, depending on the look. Photos shot at ISO 125 and 200, whose raws the camera
+  exposes a stop differently, are rendered to match too. Fitted from the camera; not made or endorsed by Fujifilm.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -104,6 +113,14 @@
 
 ## 2026-10-21
 
+### Fujifilm X-T4 film simulation looks
+- X-T4 raws can now be shown in each of the camera's nine colour film simulations: open the profile browser and pick one
+  from "X-T4 looks, measured", such as "Vivid (Velvia)". Each look was measured by having an X-T4 convert colour charts
+  in that film simulation, so it follows the camera's own colour and contrast: on 781 photos it lands a median of 0.52
+  to 0.64 ΔE2000 from the camera's own conversion, depending on the look. Exposure, white balance and your other edits apply as
+  usual, Amount blends back towards the starting look, and photos shot at DR200 are brightened a stop as the camera
+  brightens them. Looks render on the CPU, so editing with one is slower than with other profiles. Measured from the
+  camera; not made or endorsed by Fujifilm.
 ### Settings window
 - Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
   size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls (in a very short

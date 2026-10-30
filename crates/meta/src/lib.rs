@@ -150,6 +150,11 @@ pub struct Metadata {
     /// Where the camera focused, from its maker notes ([`focus`]; Sony only for now), on the upright photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<FocusPoint>,
+    /// EV by which the camera exposed the raw relative to its JPEG (Fujifilm RAF header record `0x9650`,
+    /// RawExposureBias): on an X-T5 -1.72 at ISO 250 and up, -0.72 below (that raw is a stop brighter), -2.72 at
+    /// DR200. Set by the raw decoder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_exposure_bias: Option<f64>,
 }
 
 macro_rules! fill {
@@ -224,6 +229,9 @@ impl Metadata {
         }
         if self.focus.is_none() {
             self.focus = other.focus.clone();
+        }
+        if self.raw_exposure_bias.is_none() {
+            self.raw_exposure_bias = other.raw_exposure_bias;
         }
     }
 

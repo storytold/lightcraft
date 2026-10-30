@@ -1,5 +1,4 @@
 use super::colour::{PROXY, file_local_look};
-use super::hue_sat::HueSat;
 use super::look_fit::{with_dro_off_tone, without_clipped};
 use super::pairs::{
     EDGE_CONTRAST, MIN_IMPROVEMENT, PARTIAL_MIN_RANK_CORRELATION, Pairs, collect_pairs, displayed, fit_tone_with_shadows, local_contrast, luma,
@@ -7,7 +6,8 @@ use super::pairs::{
 };
 use super::proxy::{LensGeometry, proxies};
 use super::tone::{HighlightCheck, ToneFit, fit_tone, highlights, highlights_hold};
-use super::{CameraLook, CameraTransform, D50, D65, HsvTable, Mat3, PROPHOTO, REC2020, RawImage, Rgb32f, ToneMap, bradford, luminance_2020};
+use super::{CameraLook, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
+use lightcraft_pipeline::hue_sat::HueSat;
 
 /// A camera JPEG pixel's channels may differ by this much (linear) and still count as grey.
 const GREY_SPREAD: f32 = 0.002;
@@ -206,7 +206,4 @@ fn fit_tone_only_pairs(
     (samples > 0 && better).then_some(look)
 }
 
-/// Linear Rec.2020 D65 → linear ProPhoto RGB D50, the space DNG hue/saturation tables work in.
-pub(super) fn to_prophoto() -> Mat3 {
-    PROPHOTO.from_xyz().mul(&bradford(D65, D50)).mul(&REC2020.to_xyz())
-}
+pub(super) use lightcraft_pipeline::hue_sat::to_prophoto;

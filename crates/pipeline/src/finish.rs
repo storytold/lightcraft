@@ -141,6 +141,11 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
 pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
+    /// A measured camera look, which replaces the tone map (CPU only: the GPU path isn't tried for one).
+    pub look: Option<crate::looks::LookParams>,
+    /// The starting colour's hue/saturation table, when the source was decoded for a look and this render has none
+    /// (CPU only, like the look).
+    pub deferred: Option<std::sync::Arc<lightcraft_raw::profile::HsvTable>>,
     pub tone: ToneMap,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
@@ -220,6 +225,8 @@ impl FinishParams {
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
+            look: crate::looks::LookParams::new(s, info),
+            deferred: crate::looks::deferred_table(s, info),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
@@ -367,11 +374,35 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let srgb = srgb_lut();
     let peak = fp.peak;
     let hdr = peak > 1.0;
+    // the starting look: tone map on luminance, the camera's chroma curve, highlights desaturated into the peak
+    let base_render = |c: [f32; 3]| {
+        let yl = luminance_2020(c);
+        let o = fp.tone.apply(yl);
+        let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+        let k = fp.tone.chroma_scale(o);
+        if k != 1.0 {
+            d = d.map(|v| o + (v - o) * k);
+        }
+        let mx = d[0].max(d[1]).max(d[2]);
+        if mx > peak {
+            let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+            d = d.map(|v| v + (o - v) * t);
+        }
+        d
+    };
+    let look = fp.look.as_ref().and_then(|l| crate::looks::LookRun::new(l, fp.gain));
+    // a source decoded for a look gets its starting colour's table back when no look runs (`looks::deferred_table`;
+    // also when the look's camera colour can't be inverted)
+    let fallback_table = fp.look.as_ref().filter(|_| look.is_none()).and_then(|l| l.camera.hue_sat.as_deref().filter(|_| l.camera.deferred));
+    let deferred = fp.deferred.as_deref().or(fallback_table).and_then(crate::hue_sat::HueSat::new);
     let mut out = vec![T::default(); w * h];
     for_rows(&mut out, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
-            let raw = p.img.data[i];
+            let raw = match &deferred {
+                Some(t) => t.apply(p.img.data[i]).map(|v| v.max(0.0)),
+                None => p.img.data[i],
+            };
             let local = pixel_local_terms(p, &terms, i);
             let l_sat = local.values[11];
             let l_hue = local.values[12];
@@ -393,19 +424,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
             }
 
-            // --- tone map on luminance, highlight desaturation
-            let yl = luminance_2020(c);
-            let o = fp.tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let k = fp.tone.chroma_scale(o);
-            if k != 1.0 {
-                d = d.map(|v| o + (v - o) * k);
-            }
-            let mx = d[0].max(d[1]).max(d[2]);
-            if mx > peak {
-                let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
-            }
+            // --- tone map on luminance, highlight desaturation; a measured look is the whole rendering instead
+            let mut d = match &look {
+                Some(run) => run.apply(c, base_render),
+                None => base_render(c),
+            };
 
             // --- colour
             d = fp.ops.apply(d, l_sat, l_hue);

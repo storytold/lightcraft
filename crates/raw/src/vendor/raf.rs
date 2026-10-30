@@ -1,7 +1,8 @@
 //! Fujifilm RAF — uncompressed, lossless compressed and lossy compressed Bayer and X-Trans.
 //!
 //! Sources: the ExifTool FujiFilm tag-name documentation (RAF header record tags `0x0100` RawImageFullSize,
-//! `0x0110` RawImageCropTopLeft, `0x0111` RawImageCroppedSize, `0x0131` XTransLayout; raw-IFD tags `0xf001`
+//! `0x0110` RawImageCropTopLeft, `0x0111` RawImageCroppedSize, `0x0131` XTransLayout, `0x9650` RawExposureBias;
+//! raw-IFD tags `0xf001`
 //! width, `0xf002` height, `0xf003` bits, `0xf007` strip offset, `0xf008` strip byte count, `0xf00a` black
 //! levels, `0xf00e` WB_GRBLevels) and our own black-box analysis of CC0 samples from raw.pixls.us:
 //!
@@ -31,9 +32,27 @@ use rayon::prelude::*;
 const CROP_TOP_LEFT: u16 = 0x0110;
 const CROPPED_SIZE: u16 = 0x0111;
 const XTRANS_LAYOUT: u16 = 0x0131;
+/// Record `0x9650`: EV the camera applied to the raw for its JPEG, as a signed numerator and a denominator (`i16`,
+/// `u16`; -172 / 100 on an X-T5 at ISO 250).
+const RAW_EXPOSURE_BIAS: u16 = 0x9650;
 /// Raw-IFD flag `0xf006`: 1 in every 12- and 14-bit file here whose samples are packed into 32-bit words (the 12-bit
 /// ones are otherwise an LSB-first stream), 0 where they are an LSB-first stream or 16-bit words.
 const PACKED_WORDS: u16 = 0xf006;
+
+/// Maker-note tags (ExifTool FujiFilm tag names) giving the dynamic range a shot was developed at, in percent:
+/// `0x140b` AutoDynamicRange when the camera chose it (DR Auto), `0x1403` DevelopmentDynamicRange when it was set by
+/// hand. At DR200 and DR400 the camera exposes the sensor one or two stops darker and brightens its rendering back.
+/// Checked against the camera: for 570 X-T4 raws its USB raw conversion reported the dynamic range it developed each
+/// at, and these tags agreed on every one (567 shot on DR Auto, 300 of them at DR200; three public raw.pixls.us
+/// files set to DR100 by hand, which carry `0x1403` and no `0x140b`).
+const MN_AUTO_DYNAMIC_RANGE: u16 = 0x140b;
+const MN_DEVELOPMENT_DYNAMIC_RANGE: u16 = 0x1403;
+
+/// The dynamic range (100, 200 or 400 %) a Fujifilm maker note says the shot was developed at.
+pub(crate) fn dynamic_range(note: &lightcraft_tiff::makernote::MakerNote) -> Option<u32> {
+    let v = note.ifd.u64(MN_AUTO_DYNAMIC_RANGE).or_else(|| note.ifd.u64(MN_DEVELOPMENT_DYNAMIC_RANGE))?;
+    matches!(v, 100 | 200 | 400).then_some(v as u32)
+}
 
 /// The fixed-position header pointers.
 pub(crate) struct Header<'a> {
@@ -90,6 +109,14 @@ pub(crate) fn raw_ifd(raw: &[u8]) -> Result<Ifd> {
     let off = tiff.ifds.first().and_then(|i| i.u64(0xf000)).ok_or_else(|| RawError::Unsupported("RAF without a raw IFD".into()))?;
     let (ifd, _) = lightcraft_tiff::parse_ifd_at(raw, off, ByteOrder::Little, 0, false, &Default::default())?;
     Ok(ifd)
+}
+
+/// [`RAW_EXPOSURE_BIAS`] in EV; `None` without it or with a zero denominator or a value beyond ±16 EV.
+fn raw_exposure_bias(h: &Header) -> Option<f64> {
+    let d = record(h, RAW_EXPOSURE_BIAS).filter(|d| d.len() >= 4)?;
+    let (num, den) = (i16::from_be_bytes([d[0], d[1]]), u16::from_be_bytes([d[2], d[3]]));
+    let ev = f64::from(num) / f64::from(den);
+    (den != 0 && ev.abs() <= 16.0).then_some(ev)
 }
 
 /// The camera name in the file header (bytes 28..60, NUL padded): the Exif `Model` of every sample.
@@ -193,6 +220,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let white = white_from_data(&data, bits);
 
     let mut metadata = h.jpeg.map(lightcraft_meta::extract).unwrap_or_default();
+    metadata.raw_exposure_bias = raw_exposure_bias(&h);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let orientation = metadata.orientation.unwrap_or(Orientation::Normal);
@@ -418,6 +446,53 @@ pub(super) mod tests {
         assert_eq!(decode(raf_flagged(w, h, 12, pack(&px, 12), None, b"", 0)), RawData::U16(px));
     }
 
+    /// A camera JPEG whose Exif carries a Fujifilm maker note holding `tags` as SHORT values.
+    fn jpeg_with_note(tags: &[(u16, u16)]) -> Vec<u8> {
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        let mut note = b"FUJIFILM".to_vec();
+        note.extend(12u32.to_le_bytes());
+        note.extend((tags.len() as u16).to_le_bytes());
+        for (tag, v) in tags {
+            note.extend(tag.to_le_bytes());
+            note.extend(3u16.to_le_bytes());
+            note.extend(1u32.to_le_bytes());
+            note.extend(v.to_le_bytes());
+            note.extend([0, 0]);
+        }
+        note.extend(0u32.to_le_bytes());
+        let mut exif = IfdBuilder::new();
+        exif.set(t::MAKER_NOTE, Value::Undefined(note));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("FUJIFILM".into()));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let tiff = TiffWriter { order: ByteOrder::Big, bigtiff: false }.write(&[ifd0]).unwrap();
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(tiff);
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend(((app1.len() + 2) as u16).to_be_bytes());
+        jpeg.extend(app1);
+        jpeg.extend([0xff, 0xd9]);
+        jpeg
+    }
+
+    /// The dynamic range comes from `0x140b` (DR Auto) or `0x1403` (set by hand); other values, missing tags, a JPEG
+    /// without Exif or cut short and other files give `None`.
+    #[test]
+    fn dynamic_range_is_read_from_the_camera_jpegs_maker_note() {
+        let file = |jpeg: &[u8]| raf(12, 6, 14, vec![0; 12 * 6 * 2], None, jpeg);
+        let dr = |tags: &[(u16, u16)]| crate::fujifilm_dynamic_range(&file(&jpeg_with_note(tags)));
+        assert_eq!(dr(&[(0x1400, 1), (0x1402, 0), (0x140b, 200)]), Some(200), "DR Auto");
+        assert_eq!(dr(&[(0x1402, 1), (0x1403, 100)]), Some(100), "set by hand");
+        assert_eq!(dr(&[(0x1403, 400)]), Some(400));
+        assert_eq!(dr(&[(0x140b, 300)]), None, "not a dynamic range");
+        assert_eq!(dr(&[(0x1400, 1)]), None, "not recorded");
+        assert_eq!(crate::fujifilm_dynamic_range(&file(&[0xff, 0xd8, 0xff, 0xd9])), None, "no Exif");
+        let mut cut = jpeg_with_note(&[(0x140b, 200)]);
+        cut.truncate(30);
+        assert_eq!(crate::fujifilm_dynamic_range(&file(&cut)), None, "a JPEG cut short");
+        assert_eq!(crate::fujifilm_dynamic_range(b"not a raw at all"), None);
+    }
+
     /// The lens tables of the raw IFD reach `Mode::Header` and `Mode::Full` alike, only for validated cameras,
     /// and survive a DNG round trip. The frame is 12 × 4 after the crop records (4, 2).
     #[test]
@@ -456,6 +531,18 @@ pub(super) mod tests {
         assert!(crate::decode(&bytes).unwrap().opcodes.list3.iter().all(|o| !matches!(o, crate::Opcode::WarpRectilinear { .. })));
         let bytes = raf_full(w, h, 16, pack(&[1000; 96], 16), None, b"", 0, "X-T4", &[]);
         assert!(crate::decode(&bytes).unwrap().opcodes.list3.is_empty());
+    }
+
+    #[test]
+    fn raw_exposure_bias_is_read_in_ev_and_bounded() {
+        let bias = |d: &[u8]| raw_exposure_bias(&Header { jpeg: None, records: vec![(RAW_EXPOSURE_BIAS, d)], raw: None });
+        assert_eq!(bias(&[0xff, 0x54, 0x00, 0x64]), Some(-1.72));
+        assert_eq!(bias(&[0x00, 0x48, 0x00, 0x64]), Some(0.72));
+        // no denominator, out of range, short
+        assert_eq!(bias(&[0xff, 0x54, 0x00, 0x00]), None);
+        assert_eq!(bias(&[0x7f, 0xff, 0x00, 0x01]), None);
+        assert_eq!(bias(&[0xff, 0x54]), None);
+        assert_eq!(raw_exposure_bias(&Header { jpeg: None, records: vec![], raw: None }), None);
     }
 
     #[test]

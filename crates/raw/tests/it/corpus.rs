@@ -207,6 +207,25 @@ fn corpus_cr2_as_shot_white_balance() {
     eprintln!("CR2 as-shot WB checked on {seen} files");
 }
 
+/// The raw exposure bias Fujifilm RAFs record in their header (record `0x9650`, ExifTool's RawExposureBias).
+#[test]
+fn corpus_raf_exposure_bias() {
+    let dir = corpus_root().join("raw");
+    let mut seen = 0;
+    for (name, bias) in
+        [("raf-fujifilm-x-t3.raf", -0.72), ("raf-fuji-xh2-6001.raf", -0.72), ("raf-fuji-xe5-8509.raf", -1.72), ("raf-fuji-xt5-6122.raf", -0.72)]
+    {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else {
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
+            continue;
+        };
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(img.metadata.raw_exposure_bias, Some(bias), "{name}");
+        seen += 1;
+    }
+    eprintln!("RAF raw exposure biases checked on {seen} files");
+}
+
 /// raw.pixls.us has the same D5100 scene as 14-bit lossless compressed and uncompressed NEF: the Huffman decode must
 /// match the uncompressed image (up to the small differences between two exposures).
 #[test]
