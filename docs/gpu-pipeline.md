@@ -99,17 +99,21 @@ into the driver, which on Linux may first talk to the display server; with one t
 connection and never answers (a crash-looping WSLg compositor, a stale `WAYLAND_DISPLAY` socket) those
 calls never returned, and every render waiting for the device, and every test that creates one, hung
 for good. wgpu's native calls are synchronous, so each compute device (rendering, denoise, faces) is
-now created, kernels included, on a thread of its own (`lc-gpu-device`, `crates/gpu/src/init.rs`), and
-the caller waits at most `LIGHTCRAFT_GPU_INIT_TIMEOUT` seconds (default 30: a first run that compiles
-every kernel with FXC takes seconds). Past it that device is unavailable for the process, with the
-reason `GPU device creation did not finish in 30 s (LIGHTCRAFT_GPU_INIT_TIMEOUT): …` reported like any
-other creation failure (`perf.gpuReason`, the no-GPU notice, the log), and the blocked thread is left
+now created on a thread of its own (`lc-gpu-device`, `crates/gpu/src/init.rs`), and the caller waits
+at most `LIGHTCRAFT_GPU_INIT_TIMEOUT` seconds (default 30: a first run that compiles every kernel with
+FXC takes seconds). Rendering and faces compile their kernels on that thread, so the limit covers
+them; denoise compiles a model's kernels later (`nn::runner`), under the denoise card setup's own
+30 s limit (`set_up_card`, `crates/engine/src/denoise/gpu.rs`), which this setting does not change.
+Past the limit that device is unavailable for the process, with the reason
+`GPU device creation did not finish in 30 s (LIGHTCRAFT_GPU_INIT_TIMEOUT): …` reported like any other
+creation failure (`perf.gpuReason`, the no-GPU notice, the log), and the blocked thread is left
 behind. That thread, not the caller, holds what must last as long as the driver work does: its share
 of the GPU work in flight, so a quit meanwhile finds the GPU busy (`gpu::wait_idle` returns `false` at
 its own deadline, *Quitting* below), and the crash sentinel, so a quit meanwhile leaves the marker and
 the next launch starts on the CPU (*Crash sentinel* below). While it is left behind, creating another
-kind of device fails at once with the same reason rather than leave a second thread behind; if the
-driver ever answers, the marker is removed, its late device is leaked, not dropped, and later
+kind of device fails at once with the same reason rather than leave a second thread behind, until
+every creation started so far (one may have started before the limit passed) is out of the driver; if
+the driver ever answers, the marker is removed, its late device is leaked, not dropped, and later
 creations are tried again. The desktop window's own device is not covered (#410).
 
 **Quitting.** The devices are never dropped, and renders run on worker threads: a render still inside

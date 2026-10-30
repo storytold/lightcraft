@@ -13,9 +13,10 @@
 //! work does: its share of the GPU work in flight (`exit.rs`: a quit then reports the GPU busy
 //! instead of tearing the driver down under it) and the crash sentinel (`backend.rs`: a quit
 //! leaves the marker, so the next launch starts on the CPU). While one is left behind, later creations (another kind
-//! of device) fail at once with the same reason instead of leaving another thread behind; should
-//! the driver come back, the late device is leaked (never dropped into a driver that just hung)
-//! and creations are tried again.
+//! of device) fail at once with the same reason instead of leaving another thread behind, and
+//! that lasts until every creation thread started so far has come out of the driver (one started
+//! before the limit passed may be stuck in it too); should the driver come back, the late device
+//! is leaked (never dropped into a driver that just hung) and creations are tried again.
 //!
 //! The error scopes popped after creation (`scope.pop()`) need no limit: on native wgpu they
 //! resolve at once, and they are thread-local, so they could not move to another thread anyway.
@@ -68,28 +69,51 @@ fn show(d: Duration) -> String {
     if d >= Duration::from_secs(1) { format!("{} s", d.as_secs()) } else { format!("{} ms", d.as_millis()) }
 }
 
-/// Device creations that are still inside the driver past their limit, and why the first was
-/// given up on.
+/// Device creations admitted and not yet out of the driver, and the reason given when the first
+/// of them was given up on.
 pub(crate) struct Stuck(Mutex<StuckState>);
 
 struct StuckState {
-    threads: usize,
+    /// Creations admitted whose work has not ended: waited for, or given up on and left behind.
+    inside: usize,
+    /// Set when a creation is given up on; cleared once `inside` is back to 0.
     reason: Option<String>,
 }
 
 impl Stuck {
     pub(crate) const fn new() -> Stuck {
-        Stuck(Mutex::new(StuckState { threads: 0, reason: None }))
+        Stuck(Mutex::new(StuckState { inside: 0, reason: None }))
     }
 
     fn lock(&self) -> MutexGuard<'_, StuckState> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Why device creation is not tried now (one is still stuck), or `None`.
+    /// Why device creation is not tried now (one given up on is still in the driver), or `None`.
+    #[cfg(test)]
     fn reason(&self) -> Option<String> {
-        let s = self.lock();
-        if s.threads > 0 { s.reason.clone() } else { None }
+        self.lock().reason.clone()
+    }
+
+    /// Count a creation in, unless one given up on is still in the driver (then why not).
+    fn admit(&self) -> Result<(), String> {
+        let mut s = self.lock();
+        if let Some(why) = &s.reason {
+            return Err(why.clone());
+        }
+        s.inside = s.inside.saturating_add(1);
+        Ok(())
+    }
+}
+
+impl StuckState {
+    /// An admitted creation is out of the driver (or never went in); the last one out lets
+    /// creations be tried again.
+    fn leave(&mut self) {
+        self.inside = self.inside.saturating_sub(1);
+        if self.inside == 0 {
+            self.reason = None;
+        }
     }
 }
 
@@ -137,38 +161,39 @@ fn create_on<T: Send + 'static>(
 ) -> Result<T, String> {
     const WHAT: &str = "device creation";
     let Scope { stuck, gate, marker } = scope;
-    if let Some(why) = stuck.reason() {
-        return Err(why);
-    }
+    // counted from here until the thread's driver work ends, so that a creation given up on meanwhile
+    // keeps new ones out until this one is out too
+    stuck.admit()?;
     // the thread's own share of "GPU work in flight", released when the driver work really ends
-    let work = gate.enter().ok_or(CLOSING)?;
+    let Some(work) = gate.enter() else {
+        stuck.lock().leave();
+        return Err(CLOSING.into());
+    };
     let phase = Arc::new(AtomicU8::new(WAITING));
     let (tx, rx) = mpsc::sync_channel(1);
     let worker_phase = Arc::clone(&phase);
-    std::thread::Builder::new()
-        .name("lc-gpu-device".into())
-        .spawn(move || {
-            let _work = work;
-            let r = marker
-                .run(backends, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(make)).unwrap_or_else(|_| Err(format!("{WHAT} panicked"))));
-            {
-                let mut s = stuck.lock();
-                if worker_phase.load(Ordering::Relaxed) == ABANDONED {
-                    // the caller gave up: never drop a device into the driver that just hung
-                    s.threads = s.threads.saturating_sub(1);
-                    if s.threads == 0 {
-                        s.reason = None;
-                    }
-                    drop(s);
-                    log::warn!("gpu: a device creation that was given up on has finished after all");
-                    std::mem::forget(r);
-                    return;
-                }
-                worker_phase.store(DONE, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new().name("lc-gpu-device".into()).spawn(move || {
+        let _work = work;
+        let r =
+            marker.run(backends, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(make)).unwrap_or_else(|_| Err(format!("{WHAT} panicked"))));
+        {
+            let mut s = stuck.lock();
+            s.leave();
+            if worker_phase.load(Ordering::Relaxed) == ABANDONED {
+                // the caller gave up: never drop a device into the driver that just hung
+                drop(s);
+                log::warn!("gpu: a device creation that was given up on has finished after all");
+                std::mem::forget(r);
+                return;
             }
-            let _ = tx.send(r);
-        })
-        .map_err(|e| format!("{WHAT}: could not start its thread ({e})"))?;
+            worker_phase.store(DONE, Ordering::Relaxed);
+        }
+        let _ = tx.send(r);
+    });
+    if let Err(e) = spawned {
+        stuck.lock().leave();
+        return Err(format!("{WHAT}: could not start its thread ({e})"));
+    }
     match rx.recv_timeout(limit) {
         Ok(r) => r,
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(format!("{WHAT} panicked")),
@@ -183,7 +208,6 @@ fn create_on<T: Send + 'static>(
             let why =
                 format!("GPU {WHAT} did not finish in {} ({LIMIT_ENV}): the graphics driver or display server may not be responding", show(limit));
             log::warn!("gpu: {why}; the GPU is not used");
-            s.threads = s.threads.saturating_add(1);
             Err(s.reason.get_or_insert(why).clone())
         }
     }
@@ -330,6 +354,67 @@ mod tests {
         drop(release);
         assert!(GATE.wait_idle(Duration::from_secs(20)), "idle once the driver work ended");
         eventually("the marker is removed once the driver work ended", || !marker.exists());
+    }
+
+    // Given two creations in the driver at once (B started before A's limit passed) and A given
+    // up on, A coming back does not let new creations in while B is still inside: they keep
+    // failing at once until B is out too
+    #[test]
+    fn a_creation_still_inside_keeps_new_ones_out_after_one_given_up_on_returns() {
+        static STUCK: Stuck = Stuck::new();
+        static GATE: Gate = Gate::new();
+        static ACTIVE: Mutex<u32> = Mutex::new(0);
+        let local = Local::new("two-inside", &STUCK, &GATE, &ACTIVE);
+        // B: waited for (long limit), inside the driver until released
+        let (release_b, blocked_b) = mpsc::channel::<()>();
+        let (b_in, b_entered) = mpsc::channel::<()>();
+        let scope = local.scope();
+        let b = std::thread::spawn(move || {
+            create_on(scope, Duration::from_secs(30), B, move || -> Result<u32, String> {
+                let _ = b_in.send(());
+                let _ = blocked_b.recv();
+                Ok(2)
+            })
+        });
+        b_entered.recv_timeout(Duration::from_secs(20)).expect("B never reached the driver");
+        // A: given up on after 100 ms
+        let (release_a, blocked_a) = mpsc::channel::<()>();
+        let scope = local.scope();
+        let why = within_20_s(move || {
+            create_on(scope, Duration::from_millis(100), B, move || -> Result<u32, String> {
+                let _ = blocked_a.recv();
+                Ok(1)
+            })
+        })
+        .expect_err("A is given up on");
+
+        // A comes back; B is still inside
+        drop(release_a);
+        eventually("A never came out of the driver", || STUCK.lock().inside == 1);
+        assert_eq!(STUCK.reason(), Some(why.clone()), "the reason stays while B is inside");
+        let started = Arc::new(AtomicBool::new(false));
+        let s3 = Arc::clone(&started);
+        let scope = local.scope();
+        let c = within_20_s(move || {
+            create_on(scope, Duration::from_secs(30), B, move || {
+                s3.store(true, Ordering::Relaxed);
+                Ok(3)
+            })
+        });
+        assert_eq!(c, Err(why), "C fails at once");
+        assert!(!started.load(Ordering::Relaxed), "nothing new went into the driver");
+
+        // B comes out: its caller gets the device, and creations are tried again
+        drop(release_b);
+        assert_eq!(b.join().ok(), Some(Ok(2)));
+        assert!(STUCK.reason().is_none());
+        assert_eq!(
+            within_20_s({
+                let scope = local.scope();
+                move || create_on(scope, Duration::from_secs(30), B, || Ok(4))
+            }),
+            Ok(4)
+        );
     }
 
     // Given a creation that returns in time, its result (device or reason) comes back unchanged,
