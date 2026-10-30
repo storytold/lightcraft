@@ -43,6 +43,8 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+mod vram;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::GpuStages;
@@ -144,6 +146,9 @@ pub enum Fault {
     DropWork,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
+    /// The noise reductions plan their bands with this many bytes in this render (not a failure:
+    /// forces several bands on a small image).
+    BandBudget(u64),
 }
 
 thread_local! {

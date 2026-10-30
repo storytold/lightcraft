@@ -1,5 +1,20 @@
 # What's new in LightCraft
 
+## Unreleased
+
+### Luminance noise reduction (process V4)
+- Luminance noise reduction now removes the grain in shadows, where it is strongest, and no longer flattens bright
+  areas or darkens the shadows (issue #1129). Thin lines and fine texture are kept, Detail keeps more fine grain and
+  **Contrast now works**: it keeps coarse structure (and coarse blotches). Moving these sliders no longer redoes the
+  colour noise reduction. New photos get it; photos edited before keep their look until Update to Current Process.
+
+### Colour noise reduction (process V3)
+- Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
+  colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
+  R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
+  coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
+  view is smoothed like the same part of the whole photo and the export.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

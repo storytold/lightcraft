@@ -105,17 +105,22 @@ pub fn radii_for(sigma: f32, w: usize, h: usize) -> Option<[usize; 3]> {
 
 /// Blur with Gaussian `sigma` (pixels). `sigma <= 0.3` returns a copy.
 pub fn gaussian<T: Pixel>(img: &Image<T>, sigma: f32) -> Image<T> {
+    gaussian_owned(img.clone(), sigma)
+}
+
+/// [`gaussian`] of an image the caller no longer needs: blurs it in place of a copy.
+pub fn gaussian_owned<T: Pixel>(img: Image<T>, sigma: f32) -> Image<T> {
     let Some(radii) = radii_for(sigma, img.width, img.height) else {
-        return img.clone();
+        return img;
     };
-    let mut a = img.clone();
-    par_rows(&mut a.data, img.width, |_, row| {
+    let mut a = img;
+    par_rows(&mut a.data, a.width, |_, row| {
         let mut tmp = Vec::with_capacity(row.len());
         for r in radii {
             box_row(row, &mut tmp, r);
         }
     });
-    let mut b = Image::<T>::new(img.width, img.height);
+    let mut b = Image::<T>::new(a.width, a.height);
     for r in radii {
         if r == 0 {
             continue;
