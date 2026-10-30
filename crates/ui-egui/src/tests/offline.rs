@@ -74,7 +74,11 @@ impl Nas {
         let limit = lightcraft_testkit::scaled(WATCHDOG * 2);
         let (mut state, waited) = self.changed.wait_timeout_while(state, limit, |s| !s.0 && s.1 == 0).unwrap();
         if waited.timed_out() {
+            // wake the drive as the watchdog would have, so the calls after this one don't each
+            // wait the whole limit again
             self.forced.store(true, Ordering::SeqCst);
+            state.0 = true;
+            self.changed.notify_all();
         } else if !state.0 {
             state.1 -= 1;
         }
