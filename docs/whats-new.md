@@ -32,6 +32,11 @@
 
 ## 2026-10-23
 
+### Olympus ORF files cut short
+- An uncompressed 12-bit ORF whose raw strip runs past the end of the file is now refused as corrupt (issue #2561).
+  Before, it opened with most of each row left black, and a probe at import could allocate up to 2 GiB for a file of
+  a few kilobytes.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
