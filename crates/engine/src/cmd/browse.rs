@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::import::{ImportMode, ImportOptions, import_with, is_supported};
-use crate::{Browse, LibrarySource, Result, Session};
+use crate::{Browse, EngineError, LibrarySource, Result, Session};
 
 fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.browse";
@@ -299,9 +299,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move to Folder",
             [],
             None,
-            "{folder, ids?} — move the photos' files (default: the selection) with their XMP sidecars into `folder` on disk and relink them; virtual copies follow their master; across volumes the file is copied, verified and only then removed; never overwrites (a name taken in `folder` refuses the whole move); missing/offline and Local photos are refused; one undo step (undo moves them back) → {moved, folder}",
+            "{folder, ids?, skip?} — move the photos' files (default: the selection) with their XMP sidecars into `folder` on disk and relink them; virtual copies follow their master; across volumes the file is copied, verified and only then removed; never overwrites (a name taken in `folder`, or a file that is missing or offline, refuses the whole move unless that photo's id is in `skip`: skipped photos stay put and the rest move); Local photos (and ones with no file) are refused unless skipped; one undo step (undo moves them back) → {moved, folder, skipped: [{id, name, kind: clash|missing|asked}]}",
             always,
             move_to_folder
+        ),
+        cmd!(query
+            "photo.checkMove",
+            "Check Move to Folder",
+            [],
+            None,
+            "{folder, ids?} — how `photo.moveToFolder` would go for the photos (default: the selection), without moving anything → {folder, photos, movable, here, problems: [{id, name, kind: clash|missing|unmovable}]}; photos count as the person sees them (a virtual copy is one, though it moves with its master's file); `here`: already in the folder; a name taken in `folder`, a file that is missing or offline, or a photo that can't move as it is (Local, or no file) or a library photo of the same file as such a photo in the batch, since skipping is by file (`unmovable`) is a problem (pass those ids as `skip` to move the rest)",
+            always,
+            |s, p| crate::move_check::check_command(s, p)
         ),
         cmd!(
             "library.browse",
@@ -387,7 +396,7 @@ fn remove_empty_folder(path: &str) -> std::result::Result<(), String> {
 }
 
 /// A folder path parameter without trailing separators (`None` when missing or blank).
-fn folder_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn folder_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
     str_param(p, key).map(|x| x.trim_end_matches(['/', '\\'])).filter(|x| !x.is_empty())
 }
 
@@ -417,65 +426,42 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// `photo.moveToFolder`: move the photos' files (with their sidecars) into `folder` and relink
 /// them, as one undo step. Virtual copies follow their master's file. Never overwrites: a name
-/// already taken in `folder` refuses the whole move.
+/// already taken in `folder`, or a file that is missing or offline, refuses the whole move,
+/// unless the photo is in `skip`: those stay where they are and the rest move. Refusals are plain
+/// sentences for the person (`photo.checkMove` finds the same problems beforehand).
 fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.moveToFolder";
     let folder = folder_param(p, "folder").ok_or_else(|| bad(C, "missing folder"))?;
     let dir = Path::new(folder);
     if !dir.is_dir() {
-        return Err(bad(C, format!("{folder} is not a folder (create it first with folder.create)")));
+        return Err(EngineError::Other(format!(
+            "“{}” is not a folder (offline, moved or deleted?). Choose another folder",
+            crate::move_check::folder_name(folder)
+        )));
     }
-    let ids = s.targets(p)?;
+    let ids = s.targets(p).map_err(|e| match e {
+        EngineError::BadParams { cmd, msg } if cmd.is_empty() => bad(C, msg),
+        e => e,
+    })?;
     if ids.is_empty() {
-        return Err(bad(C, "no photos to move: select some or give ids"));
+        return Err(EngineError::Other("There are no photos to move. Select some first".into()));
     }
-    let mut plans: Vec<crate::rename::RenamePlan> = Vec::new();
-    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut clashes: Vec<String> = Vec::new();
-    for id in ids {
-        let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
-        if ph.local {
-            return Err(bad(C, format!("{} is not in the library (Local): add it first", ph.file_name)));
-        }
-        let lightcraft_catalog::Source::File { path } = &ph.source else {
-            return Err(bad(C, format!("{} has no file on disk", ph.file_name)));
-        };
-        if plans.iter().any(|pl| pl.from_path.as_deref() == Some(path.as_str())) {
-            continue; // a virtual copy of a photo already moving
-        }
-        let src = Path::new(path);
-        if !src.is_file() {
-            return Err(bad(C, format!("{path} is missing or offline: find it first (Find Missing Photos)")));
-        }
-        let Some(file) = src.file_name() else { return Err(bad(C, format!("{path}: no file name"))) };
-        if src.parent() == Some(dir) {
-            continue; // already there
-        }
-        let to = dir.join(file);
-        let to_s = to.to_string_lossy().to_string();
-        if to.exists() || !taken.insert(to_s.to_lowercase()) {
-            clashes.push(file.to_string_lossy().to_string());
-            continue;
-        }
-        let name = ph.file_name.clone();
-        plans.push(crate::rename::RenamePlan { id: id.0, from: name.clone(), to: name, from_path: Some(path.clone()), to_path: Some(to_s) });
+    let skip = crate::move_check::skip_param(p)?;
+    let sorted = crate::move_check::sort(s, dir, &ids, &skip, false)?;
+    if !sorted.problems.is_empty() {
+        return Err(EngineError::Other(crate::move_check::refusal(folder, &sorted.problems)));
     }
-    if !clashes.is_empty() {
-        let s_ = if clashes.len() == 1 { "" } else { "s" };
-        return Err(bad(
-            C,
-            format!("{} already in {folder}: nothing was moved. Rename the photo{s_} first or choose another folder", clashes.join(", ")),
-        ));
-    }
-    let n = plans.len();
+    let skipped: Vec<Value> = sorted.skipped.iter().map(crate::move_check::Left::json).collect();
+    let n = sorted.plans.len();
     if n == 0 {
-        return Ok(json!({"moved": 0, "folder": folder}));
+        return Ok(json!({"moved": 0, "folder": folder, "skipped": skipped}));
     }
     let plural = |k: usize| if k == 1 { "" } else { "s" };
     let _task = s.activity.start("move", &format!("Moving {n} photo{}", plural(n)), crate::activity::Cancel::No);
     let name = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| folder.to_string());
-    s.apply_file_plans(&crate::rename::RealFs, &plans, &|k| format!("Move {k} Photo{} to “{name}”", plural(k)))?;
-    Ok(json!({"moved": n, "folder": folder}))
+    s.apply_file_plans(&crate::rename::RealFs, &sorted.plans, &|k| format!("Move {k} Photo{} to “{name}”", plural(k)))?;
+    // photos as the person sees them (a virtual copy is one, though it moves with its master's file), not file plans
+    Ok(json!({"moved": sorted.movable, "folder": folder, "skipped": skipped}))
 }
 
 /// After a folder moved from `from` to `to`: a browsed folder at or below it follows.
