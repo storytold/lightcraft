@@ -45,6 +45,79 @@ fn chroma(p: [u8; 4]) -> f32 {
     p[0] as f32 - p[2] as f32
 }
 
+fn bright_camera_info() -> SourceInfo {
+    let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.0005 * 1.3f32.powi(i as i32);
+        [x, x / (x + 0.01)]
+    }))
+    .unwrap();
+    SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() }
+}
+
+#[test]
+fn local_whites_follow_visible_camera_highlights_in_v3() {
+    use lightcraft_develop::{Process, Treatment};
+    // Both patches lie below the old +0.5 scene-EV gate, but the camera renders the lower
+    // patch as bright stone.
+    let src = Rgb32f::from_fn(W, H, |_, y| [if y < H / 2 { 0.00003 } else { 0.018 }; 3]);
+    let info = bright_camera_info();
+    let image = |process: Process, whites: f64| {
+        let mut s = left_mask(LocalAdjustments { whites, ..Default::default() });
+        s.process = process.version();
+        s.treatment = Treatment::Bw;
+        render(&src, &info, &s, &RenderRequest::fit(W, H)).image
+    };
+    let neutral = image(Process::V3, 0.0);
+    let (minus, plus) = (image(Process::V3, -100.0), image(Process::V3, 100.0));
+    let bright = 90 * W + 50;
+    let original = luma(neutral.data[bright]);
+    assert!(original > 180.0, "fixture must be visibly bright: {original}");
+    assert!(luma(minus.data[bright]) < original - 4.0, "negative Whites must lower bright stone");
+    assert!(luma(plus.data[bright]) > original + 4.0, "positive Whites must lift bright stone");
+    assert_eq!(minus.data[20 * W + 50], neutral.data[20 * W + 50], "keep deep shadows");
+    assert_eq!(plus.data[20 * W + 50], neutral.data[20 * W + 50], "keep deep shadows");
+    for y in 0..H {
+        for x in 150..W {
+            assert_eq!(plus.data[y * W + x], neutral.data[y * W + x], "outside mask");
+            assert_eq!(minus.data[y * W + x], neutral.data[y * W + x], "outside mask");
+        }
+    }
+}
+
+#[test]
+fn v3_local_whites_do_not_change_other_adjustments_or_disabled_masks() {
+    use lightcraft_develop::Process;
+    let src = Rgb32f::from_fn(W, H, |x, _| [0.00002 * 1.025f32.powi(x as i32); 3]);
+    let info = bright_camera_info();
+    for (whites, visible, amount) in [(0.0, true, 100.0), (100.0, false, 100.0), (100.0, true, 0.0)] {
+        let mut settings = left_mask(LocalAdjustments { whites, exposure: 0.3, shadows: 35.0, ..Default::default() });
+        settings.process = Process::V3.version();
+        settings.light.shadows = 50.0;
+        settings.light.blacks = -40.0;
+        settings.masks[0].visible = visible;
+        settings.masks[0].adjust.amount = amount;
+        let mut baseline = settings.clone();
+        baseline.masks[0].adjust.whites = 0.0;
+        let req = RenderRequest::fit(W, H);
+        assert_eq!(render(&src, &info, &settings, &req).image, render(&src, &info, &baseline, &req).image);
+    }
+}
+
+#[test]
+fn local_whites_weights_keep_tonal_order_for_steep_camera_curves() {
+    let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| [0.0005 * 1.2f32.powi(i as i32), if i < 16 { 0.005 } else { 0.96 }])).unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let weights = crate::finish::local_whites_lut(&info);
+    assert!(weights.v.iter().all(|w| w.is_finite() && (0.0..=1.0).contains(w)));
+    let step = (crate::tone::LUT_MAX_EV - crate::tone::LUT_MIN_EV) / (crate::tone::LUT_N - 1) as f32;
+    for w in weights.v.windows(2) {
+        assert!(w[1] >= w[0]);
+        assert!(step - 0.8 * (w[1] - w[0]) > 0.0, "Whites -100 must not reverse adjacent scene tones");
+    }
+    assert_eq!(weights.v[0], 0.0);
+    assert_eq!(*weights.v.last().unwrap(), 1.0);
+}
+
 #[test]
 fn local_noise_smooths_luminance_noise_inside_the_mask() {
     let src = Rgb32f::from_fn(W, H, |x, y| [0.18 * (1.0 + 0.12 * noise(x, y, 1)); 3]);

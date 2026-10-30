@@ -794,6 +794,15 @@ pub fn groups1(n: usize) -> [u32; 3] {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn finish_shader_validates_without_a_gpu() {
+        let source = super::module_source(&super::MODULES[0], &super::constants());
+        let module = wgpu::naga::front::wgsl::parse_str(&source).expect("finish shader must parse");
+        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+            .validate(&module)
+            .expect("finish shader must validate");
+    }
+
+    #[test]
     fn limits_override_parses() {
         assert_eq!(super::parse_limits("webgpu"), Some((128 << 20, 256 << 20)));
         assert_eq!(super::parse_limits(" Downlevel "), Some((128 << 20, 256 << 20)));

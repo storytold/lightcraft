@@ -111,13 +111,28 @@ impl ToneMap {
     /// gain map only lifts highlights), then the highlights gain up to `peak − 1` more as in
     /// [`ToneMap::hdr`].
     pub fn camera_hdr(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        Self::camera_hdr_process(curve, contrast, whites, blacks, peak, 0.0, false)
+    }
+
+    /// V3 combines broader negative Blacks with the positive Shadows response.
+    pub fn camera_hdr_v3(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32, shadows: f64) -> ToneMap {
+        Self::camera_hdr_process(curve, contrast, whites, blacks, peak, shadows, true)
+    }
+
+    fn camera_hdr_process(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32, shadows: f64, v3: bool) -> ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
-        let adjustment = Self::display(contrast, whites, blacks);
+        let adjustment = Self::display_hdr_process(contrast, whites, blacks, 1.0, shadows, v3);
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
         let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
+                let ev = if v3 {
+                    let shadow_weight = smooth(-8.0, -6.0, ev) * (1.0 - smooth(-4.0, -3.0, ev));
+                    ev + 0.35 * shadow_weight
+                } else {
+                    ev
+                };
                 let y = curve.apply(GREY * 2f32.powf(ev));
                 let o = if neutral { y } else { adjustment.apply(y) };
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
@@ -181,10 +196,21 @@ impl ToneMap {
     /// source, e.g. a decoded gain-map image) pass through and roll off softly towards `peak`
     /// instead of clipping at 1; SDR sources (≤ 1) render as with [`ToneMap::display`].
     pub fn display_hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        Self::display_hdr_process(contrast, whites, blacks, peak, 0.0, false)
+    }
+
+    /// V3 tone map for display sources, with broader midtone response for Whites and Blacks.
+    pub fn display_hdr_v3(contrast: f64, whites: f64, blacks: f64, peak: f32, shadows: f64) -> ToneMap {
+        Self::display_hdr_process(contrast, whites, blacks, peak, shadows, true)
+    }
+
+    fn display_hdr_process(contrast: f64, whites: f64, blacks: f64, peak: f32, shadows: f64, v3: bool) -> ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let c = (contrast / 100.0) as f32;
         let w = (whites / 100.0) as f32;
         let b = (blacks / 100.0) as f32;
+        let shadow_range = (shadows as f32 / 100.0).clamp(0.0, 1.0);
+        let black_range = if b < 0.0 { if v3 { 0.90 + 0.05 * shadow_range } else { 0.45 } } else { 0.45 };
         let m = GREY.powf(1.0 / 2.2);
         // Neutral sliders are the identity up to white (issue #1945): the SDR shoulder below would
         // pull 1.0 down to 0.9875 (8-bit 255 to 254), so it only shapes an edited curve.
@@ -198,10 +224,10 @@ impl ToneMap {
                     // S-curve anchored at 0, grey and 1
                     p += c * 0.35 * (p - m) * (1.0 - (2.0 * p - 1.0).powi(2));
                     // whites: lift/lower the upper tones; blacks: the lower tones
-                    let up = smooth(0.45, 1.0, p);
-                    p += w * 0.12 * up * (1.0 - p * 0.5);
-                    let lo = 1.0 - smooth(0.0, 0.45, p);
-                    p += b * 0.07 * lo * (p * 2.0).min(1.0);
+                    let up = if v3 { smooth(0.18, 0.90, p) } else { smooth(0.45, 1.0, p) };
+                    p += w * (if v3 { 0.50 } else { 0.12 }) * up * (1.0 - p * 0.5);
+                    let lo = 1.0 - smooth(0.0, black_range, p);
+                    p += b * (if v3 { 0.49 } else { 0.07 }) * lo * (p * 2.0).min(1.0);
                 } else {
                     p += w * 0.12 * 0.5;
                 }
@@ -268,6 +294,28 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn v3_blacks_reach_midtones_while_preserving_white_and_monotonicity() {
+        for shadows in [0.0, 100.0] {
+            let old = ToneMap::display_hdr(0.0, 0.0, -100.0, 1.0);
+            let new = ToneMap::display_hdr_v3(0.0, 0.0, -100.0, 1.0, shadows);
+            assert!(new.apply(GREY) < old.apply(GREY) - 0.005, "shadows {shadows}: black adjustment reaches middle grey");
+            assert!((new.apply(1.0) - old.apply(1.0)).abs() < 1e-5, "white endpoint remains fixed");
+            assert!(new.lut().windows(2).all(|v| v[1] >= v[0]), "shadows {shadows}: curve remains monotone");
+        }
+    }
+
+    #[test]
+    fn v3_whites_reach_lower_midtones_without_moving_black_or_white_anchors() {
+        let old = ToneMap::display_hdr(0.0, 100.0, 0.0, 1.0);
+        let new = ToneMap::display_hdr_v3(0.0, 100.0, 0.0, 1.0, 0.0);
+        let mid = GREY * 2f32.powf(-1.0);
+        assert!(new.apply(mid) > old.apply(mid), "positive Whites reach lower midtones in V3");
+        assert_eq!(new.apply(0.0), 0.0);
+        assert_eq!(new.apply(1.0), old.apply(1.0), "white anchor stays fixed");
+        assert!(new.lut().windows(2).all(|v| v[1] >= v[0]));
+    }
+
     fn knots() -> [[f32; 2]; 32] {
         std::array::from_fn(|i| {
             let x = 0.004 * 1.18f32.powi(i as i32);
@@ -322,6 +370,16 @@ mod tests {
         invalid[1][0] = invalid[0][0];
         assert!(CameraTone::new(invalid).is_none());
         assert!(serde_json::from_value::<CameraTone>(serde_json::json!({"knots": invalid})).is_err());
+    }
+
+    #[test]
+    fn camera_neutral_ev_lift_is_applied_only_by_v3() {
+        let curve = CameraTone::new(knots()).unwrap();
+        let legacy = ToneMap::camera_hdr(&curve, 0.0, 0.0, 0.0, 1.0);
+        let v3 = ToneMap::camera_hdr_v3(&curve, 0.0, 0.0, 0.0, 1.0, 0.0);
+        assert_eq!(legacy.apply(GREY), v3.apply(GREY), "mid-grey remains anchored");
+        let deep_shadow = GREY * 2f32.powf(-5.5);
+        assert!(v3.apply(deep_shadow) > legacy.apply(deep_shadow), "V3 opens the dark transition band");
     }
 
     #[test]
