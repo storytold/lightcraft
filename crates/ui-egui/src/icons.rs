@@ -56,6 +56,8 @@ pub enum Icon {
     SmartAlbum,
     Stack,
     Folder,
+    /// A drag handle: two columns of three dots.
+    Grip,
     /// Edit (a pencil).
     Pencil,
     Photos,
@@ -106,6 +108,10 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// A render failed: a triangle with an exclamation mark.
+    Warning,
+    /// A virtual copy: a page with a folded corner.
+    VirtualCopy,
 }
 
 struct Pen<'a> {
@@ -338,6 +344,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
                 pen.dot(x, 10.0, 1.3);
             }
         }
+        Grip => {
+            for x in [7.0, 13.0] {
+                for y in [4.5, 10.0, 15.5] {
+                    pen.dot(x, y, 1.3);
+                }
+            }
+        }
         Tag => {
             pen.closed(&[(3.0, 3.5), (10.0, 3.5), (17.0, 10.5), (10.5, 17.0), (3.0, 10.0)]);
             pen.dot(7.0, 7.5, 1.2);
@@ -346,6 +359,16 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.circle(10.0, 10.0, 7.5);
             pen.line(&[(10.0, 9.0), (10.0, 14.0)]);
             pen.dot(10.0, 6.3, 0.9);
+        }
+        Warning => {
+            pen.closed(&[(10.0, 3.0), (17.5, 16.5), (2.5, 16.5)]);
+            pen.line(&[(10.0, 8.0), (10.0, 11.8)]);
+            pen.dot(10.0, 14.1, 0.9);
+        }
+        VirtualCopy => {
+            // a page whose top right corner is folded down
+            pen.line(&[(11.0, 3.0), (5.0, 3.0), (5.0, 17.0), (15.0, 17.0), (15.0, 7.0)]);
+            pen.line(&[(11.0, 3.0), (15.0, 7.0), (11.0, 7.0), (11.0, 3.0)]);
         }
         GridPhoto => {
             pen.rect_fill(3.0, 4.0, 10.0, 9.5, 0.5);

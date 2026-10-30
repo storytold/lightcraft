@@ -71,6 +71,16 @@ pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> 
     egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(add_contents)
 }
 
+/// Record whether photos are being carried as the frame starts, for the menus to read. A drag left
+/// over without its button (full screen skips the code that ends it) is not carrying.
+pub fn set_carrying(ctx: &egui::Context, carrying: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("lc-carrying"), carrying));
+}
+
+pub(crate) fn carrying(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("lc-carrying"))).unwrap_or(false)
+}
+
 /// How a context menu on `response` closes this frame: `default`, except on the frame of the
 /// right-click that opens or moves it, which must not close it (see [`context_menu`]).
 pub fn context_menu_close(response: &Response, default: egui::PopupCloseBehavior) -> egui::PopupCloseBehavior {

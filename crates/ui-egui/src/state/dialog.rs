@@ -308,6 +308,9 @@ pub enum Dialog {
         ids: Vec<u64>,
         folder: String,
         name: String,
+        /// How many files the move touches (the drag label's count, `files_moved`): photos
+        /// already in the folder stay, and virtual copies of one file move it once.
+        files: usize,
         dont_ask: bool,
         /// The library the photos were dropped in (`Session::library_generation`): ids are
         /// numbered per library, so in another one they name other photos.

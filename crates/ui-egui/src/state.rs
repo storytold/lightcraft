@@ -498,6 +498,11 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Whether photos, an album, a sidebar section or a keyword are being dragged.
+    pub fn drag_active(&self) -> bool {
+        self.dragging_photos.is_some() || self.dragging_album.is_some() || self.dragging_section.is_some() || self.dragging_keyword.is_some()
+    }
+
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {

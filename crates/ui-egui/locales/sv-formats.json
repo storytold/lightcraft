@@ -22,7 +22,6 @@
   "+{} more": "+{} till",
   ", {failed} file{} not readable": ", {failed} fil{} kunde inte läsas",
   ", {} label": ", {} etikett",
-  ", {} star{}": ", {} stjärna{}",
   "1 task is still running: {names}. Quitting stops it.": "1 uppgift körs fortfarande: {names}. Om du avslutar stoppas den.",
   "; {kept} already had a location": "; {kept} hade redan en plats",
   "; {n} gained synonyms": "; {n} fick synonymer",
@@ -292,9 +291,9 @@
   "…and {more} more": "…och {more} till",
   "Already in “{}”": "Already in “{}”",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Color space: Rec. 2020 {curve} (HDR AVIF)",
-  "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
-  "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Move {n} file{} to “{}”": "Move {n} file{} to “{}”",
+  "Move {n} file{} to “{}”?": "Move {n} file{} to “{}”?",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Moved {n} file{} to “{}”. Edit → Undo moves them back.",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
@@ -305,5 +304,11 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  ", rating {} of 5": ", betyg: {} av 5",
+  "Add {n} photo{} to “{}”": "Lägg till foton i ”{1}”: {n}{0:.0}",
+  "Add “{keyword}” to {n} photo{}": "Lägg till ”{keyword}” på foton: {n}{:.0}",
+  "{n} already there": "redan i albumet: {n}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Regel {n} av {m}: {what}. Flytta med piltangenterna",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupp {n} av {m}: matcha {mode}, antal i gruppen: {count}. Flytta med piltangenterna"
 }

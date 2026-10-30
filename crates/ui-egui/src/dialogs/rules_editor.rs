@@ -6,12 +6,15 @@ use lightcraft_catalog::rules::{FIELD_GROUPS, Kind, Problem, TOP_LEVEL_FIELDS, b
 use lightcraft_catalog::{Match, Rule, RuleSet};
 use serde_json::{Value, json};
 
+use self::rules_move::MAX_GROUP_DEPTH;
+use self::rules_reorder as reorder;
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
 pub mod rules_move;
+pub mod rules_reorder;
 
 /// A sensible starting value for `field` / `op`.
 pub fn default_value(field: &str, op: &str) -> Value {
@@ -304,6 +307,9 @@ fn problem_note(ui: &mut egui::Ui, problem: Option<&Problem>, salt: &str) {
 /// (empty at the top) so each row finds its own problem in `env`.
 pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path: &[usize], env: &Env) {
     let t = Tokens::get(ui.ctx());
+    if depth == 0 {
+        reorder::begin(ui.ctx());
+    }
     ui.horizontal(|ui| {
         ui.label(RichText::new(crate::i18n::tr("Match")).color(t.text_label));
         match_combo(ui, salt, &mut rs.mode);
@@ -311,14 +317,26 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
     });
     let mut remove = None;
     let mut insert: Option<(usize, Rule)> = None;
+    let count = rs.rules.len();
     for (i, rule) in rs.rules.iter_mut().enumerate() {
         let rsalt = format!("{salt}-{i}");
         let here: Vec<usize> = path.iter().copied().chain([i]).collect();
         let problem = env.problems.iter().find(|p| p.path == here);
         match rule {
             Rule::Group { group } => {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        let mode = group.mode;
+                        reorder::grip(
+                            ui,
+                            &reorder::Row {
+                                salt: &rsalt,
+                                path: &here,
+                                count,
+                                group: Some((mode, group.rules.len())),
+                                label: &|| reorder::group_heading(mode),
+                            },
+                        );
                         if ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this group")).clicked() {
                             remove = Some(i);
                         }
@@ -326,9 +344,13 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     });
                     problem_note(ui, problem, &rsalt);
                 });
+                reorder::record(ui.ctx(), &here, frame.response.rect, true);
             }
             Rule::Field { field, op, value } => {
+                let (row_left, row_top) = (ui.available_rect_before_wrap(), ui.cursor().top());
                 ui.horizontal(|ui| {
+                    let label = || reorder::rule_text(field, op, value, &env.albums);
+                    reorder::grip(ui, &reorder::Row { salt: &rsalt, path: &here, count, group: None, label: &label });
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
                     let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
@@ -367,6 +389,8 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     }
                 });
                 problem_note(ui, problem, &rsalt);
+                let row = egui::Rect::from_min_max(egui::pos2(row_left.left(), row_top), egui::pos2(row_left.right(), ui.min_rect().bottom()));
+                reorder::record(ui.ctx(), &here, row, false);
             }
         }
     }
@@ -383,10 +407,13 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
             if add.clicked() {
                 rs.rules.push(new_rule());
             }
-            if depth < 3 && ui.small_button(crate::i18n::tr("+ Group")).clicked() {
+            if depth < MAX_GROUP_DEPTH && ui.small_button(crate::i18n::tr("+ Group")).clicked() {
                 rs.rules.push(Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } });
             }
         });
+    }
+    if depth == 0 {
+        reorder::finish(ui, rs, salt);
     }
 }
 

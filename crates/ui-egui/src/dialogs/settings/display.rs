@@ -7,7 +7,7 @@ use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
 /// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
 /// profile, so wide-gamut and calibrated displays show colours as they are.
 pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    heading(ui, t, crate::i18n::tr("Monitor profile"));
+    heading(ui, t, "Monitor profile");
     let current = app.renderer.display().cloned();
     let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
     row(ui, t, crate::i18n::tr("Profile"), |ui| {
@@ -78,20 +78,21 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
-    heading(ui, t, crate::i18n::tr("Filmstrip"));
+    heading(ui, t, "Filmstrip");
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
-    heading(ui, t, crate::i18n::tr("Grid"));
+    heading(ui, t, "Grid");
     row(ui, t, crate::i18n::tr("Ratings & flags"), |ui| {
         choices(
             ui,
             "settingsGridBadges",
-            &[(GridBadges::Auto, "When rated or hovered"), (GridBadges::Always, "Always"), (GridBadges::Never, "Never")],
+            &[(GridBadges::Auto, "Stars on hover"), (GridBadges::Always, "Always"), (GridBadges::Never, "Never")],
             &mut app.ui.settings.grid_badges,
         );
     });
+    hint(ui, t, "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.");
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
-    heading(ui, t, crate::i18n::tr("Keywords"));
+    heading(ui, t, "Keywords");
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {
         use crate::state::KeywordChips as K;
         choices(ui, "settingsKeywordChips", &[(K::Paths, "Whole names"), (K::Grouped, "Grouped by parent")], &mut app.ui.settings.keyword_chips);
@@ -101,7 +102,7 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         t,
         crate::i18n::tr("Grouped: keywords inside the same keyword share a line naming it, and long lists and the suggestions are shortened."),
     );
-    heading(ui, t, crate::i18n::tr("Detail View"));
+    heading(ui, t, "Detail View");
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
         use crate::state::InfoOverlay as I;
@@ -116,7 +117,7 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
 /// (`view.viewOptions`). Changes apply as they are made.
 pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
-    heading(ui, t, crate::i18n::tr("Loupe View"));
+    heading(ui, t, "Loupe View");
     let mut show = app.ui.info_overlay != I::Off;
     if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay") {
         app.ui.info_overlay = if show { I::Basic } else { I::Off };
@@ -127,7 +128,7 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         });
     });
     for (n, title, defaults) in [(1, "Loupe Info 1", LoupeInfo::INFO1), (2, "Loupe Info 2", LoupeInfo::INFO2)] {
-        heading(ui, t, crate::i18n::tr(title));
+        heading(ui, t, title);
         let lines = if n == 1 { &mut app.ui.settings.loupe_info.info1 } else { &mut app.ui.settings.loupe_info.info2 };
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
@@ -159,7 +160,7 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
             app.ui.settings.loupe_info.briefly = if briefly { info } else { I::Off };
         }
     }
-    heading(ui, t, crate::i18n::tr("General"));
+    heading(ui, t, "General");
     check(ui, "viewOptions.loupeMessages", &mut app.ui.settings.loupe_messages, "Show message when loading or rendering photos");
 }
 
