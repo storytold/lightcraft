@@ -5,13 +5,14 @@
 //! slider mixes in. It is cached data made in the background for the photos being looked at, and never a file in the
 //! library. A model is fetched only when the user presses Download and accepts its terms.
 
+use crate::check::{Check, check};
 use crate::i18n::{tr, tr_format};
 use egui::RichText;
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::denoise::PhotoState;
 use serde_json::{Value, json};
 
-use super::settings::{check, choices, heading, hint};
+use super::settings::{choices, heading, hint};
 use crate::LightcraftApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -145,7 +146,7 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on: bool, applicable: bool) {
     let mut enabled = on || crate::model_setup::denoise_requested(app, id);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
-        let r = ui.add_enabled(applicable, egui::Checkbox::new(&mut enabled, crate::i18n::tr("AI Denoise")));
+        let r = Check::new("denoise.enabled", &mut enabled, "AI Denoise").enabled(applicable).show(ui);
         register(ui, "denoise:enabled", r.rect);
         if r.changed() {
             let _ = app.run("denoise.toggle", json!({"id": id.0, "enabled": enabled}));
@@ -355,7 +356,7 @@ fn speed_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
 fn photos_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Value, status: &Value) {
     heading(ui, t, "Photos");
     let mut auto = list["auto"].as_bool().unwrap_or(true);
-    if check(ui, "settings.denoiseAuto", &mut auto, "Make the denoised picture of the photos I am looking at") {
+    if check(ui, "settings.denoiseAuto", &mut auto, "Make the denoised picture of the photos I am looking at").changed() {
         let _ = app.run("denoise.settings", json!({"auto": auto}));
         app.caches.denoise.epoch += 1;
     }

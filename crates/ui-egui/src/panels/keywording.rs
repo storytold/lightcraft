@@ -17,7 +17,7 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         for (view, id, label) in
             [(V::Keywords, "keywords", "Keywords"), (V::Containing, "containing", "& Containing"), (V::WillExport, "willExport", "Will Export")]
         {
-            let r = ui.selectable_label(app.ui.keywording_view == view, crate::i18n::tr(label));
+            let r = crate::widgets::text_button(ui, &format!("keywordView-{id}"), label, app.ui.keywording_view == view);
             register(ui, format!("keywordView:{id}"), r.rect);
             if r.clicked() {
                 app.ui.keywording_view = view;

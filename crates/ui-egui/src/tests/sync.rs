@@ -194,6 +194,38 @@ fn ticking_remove_missing_also_removes_the_missing_photos() {
     assert_eq!(in_library(&h), vec!["a.png", "b.png"], "one undo step");
 }
 
+/// The count beside a choice is part of it: a click on the number ticks the box, as it did when the count was in the label.
+#[test]
+fn a_click_on_the_count_ticks_the_box_beside_it() {
+    let dir = Scratch::new("count-click");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    let ticked = |h: &Headless| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { remove_missing: true, .. }));
+    assert!(!ticked(&h));
+    for _ in 0..5 {
+        h.step();
+        let row = h.app.widgets.iter().find(|(w, _)| w == "syncRemoveMissing").map(|(_, r)| *r).expect("the row is drawn");
+        // the number painted on that row (the other rows' counts are at other heights)
+        let at = h
+            .view
+            .painted_shapes()
+            .iter()
+            .find_map(|s| match s {
+                egui::Shape::Text(t) if t.galley.job.text == "(1)" && row.y_range().contains(t.visual_bounding_rect().center().y) => {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("the count is painted on its row");
+        let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        if h.step_until(Duration::from_secs(3), ticked) {
+            return;
+        }
+    }
+    panic!("a click on the count never ticked the box: {:?}", h.app.ui.dialog);
+}
+
 #[test]
 fn cancel_leaves_the_library_as_it_was() {
     let dir = Scratch::new("cancel");
@@ -422,4 +454,48 @@ fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_
     p.listed.store(true, Relaxed);
     p.checked.store(10, Relaxed);
     assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
+}
+
+/// The text of every `Shape::Text` in `shapes`.
+fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+    fn walk(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    shapes.iter().for_each(|s| walk(&s.shape, &mut out));
+    out
+}
+
+#[test]
+fn the_dialogs_choices_read_in_the_chosen_language_with_their_counts() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let mut dlg = Dialog::SynchronizeFolder {
+        path: "/photos/trip".into(),
+        name: "trip".into(),
+        disk: false,
+        counts: Some(crate::state::SyncCounts { new: 7, ..Default::default() }),
+        import_new: true,
+        relink_moved: true,
+        remove_missing: false,
+        read_metadata: false,
+    };
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx);
+    crate::i18n::set_language(crate::i18n::Locale::De);
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+    let mut out = ctx.run_ui(raw, |ui| crate::sync::body(&app, ui, &mut dlg));
+    out.textures_delta.clear();
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    let shown = texts(&out.shapes);
+    let german = crate::i18n::Locale::De.tr("Import new photos");
+    assert!(shown.iter().any(|s| s == german), "the German label, translated once: {shown:?}");
+    assert!(shown.iter().any(|s| s == "(7)"), "its count beside it: {shown:?}");
+    if german != "Import new photos" {
+        assert!(!shown.iter().any(|s| s.contains("Import new photos")), "no English fallback: {shown:?}");
+    }
 }

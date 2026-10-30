@@ -162,6 +162,18 @@ pub fn register_geometry(ctx: &egui::Context, id: impl Into<String>, rect: Rect)
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry")).rects.push((id, rect)));
 }
 
+/// The keyboard-focus ring, drawn on top of whatever the control paints so a focused control reads
+/// as focused whether it is idle, hovered or selected. It is drawn inside `rect`, so it survives a
+/// painter clipped to the control. [`crate::check`] draws the same stroke around its box.
+pub fn focus_ring(p: &egui::Painter, rect: Rect, t: &Tokens) {
+    p.rect_stroke(rect, CornerRadius::same(4), focus_stroke(t), StrokeKind::Inside);
+}
+
+/// The stroke of every focus ring: 2 px in the accent colour.
+pub fn focus_stroke(t: &Tokens) -> Stroke {
+    Stroke::new(2.0, t.accent)
+}
+
 /// Esc was handled this frame by something nested (an open popup closed on it): containers such
 /// as dialogs shouldn't close too. Keyed to the frame, so it lapses by itself on the next one.
 pub fn take_escape(ctx: &egui::Context) {
@@ -831,6 +843,9 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     let chev = Rect::from_center_size(pos2(r.left() + 30.0, r.center().y), vec2(16.0, 16.0));
     paint(p, chev, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.text_label);
     p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(14.0), t.text);
+    if resp.has_focus() {
+        focus_ring(p, r, &t);
+    }
     let mut toggled = None;
     // shown while the pointer is anywhere on the header: `resp.hovered()` turns false as soon as the
     // pointer is over the eye itself (the eye is on top), which hid the eye before it could be
@@ -843,6 +858,9 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
         crate::widgets::announce_selected(&er, crate::i18n::tr("Show / hide"), on);
         register(ui, format!("sectionEye:{id}"), eye);
         paint(ui.painter(), eye, Icon::Eye, if on { t.icon } else { t.text_disabled });
+        if er.has_focus() {
+            focus_ring(ui.painter(), eye, &t);
+        }
         if !on {
             ui.painter().line_segment([eye.left_bottom(), eye.right_top()], Stroke::new(1.5, t.text_disabled));
         }
@@ -906,7 +924,63 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let p = ui.painter();
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
+    if resp.has_focus() {
+        focus_ring(p, r, &t);
+    }
     resp
+}
+
+/// [`text_button`] in a box `width` wide, for a grid of them or a button of a fixed width: its text
+/// is cut short with … when it does not fit. `label` is drawn as given (the caller translates it;
+/// it may be a name the user chose); `ink` is its colour (`None`: the text colour; the dimmed one
+/// suits a label that stands for an empty value). Addressable as `button:{id}`.
+pub fn text_button_sized(ui: &mut Ui, id: &str, label: &str, active: bool, width: f32, height: f32, ink: Option<Color32>) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let ink = ink.unwrap_or(t.text);
+    let (r, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
+    register(ui, format!("button:{id}"), r);
+    let fill = if active {
+        t.pressed
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        t.button
+    };
+    let p = ui.painter_at(r);
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    let galley = one_line(&p, label, t.semibold(11.5), ink, r.width() - 12.0);
+    p.galley(r.center() - galley.size() / 2.0, galley, ink);
+    if resp.has_focus() {
+        focus_ring(&p, r, &t);
+    }
+    resp
+}
+
+/// A square toggle showing a colour swatch (the gamut warnings: the colour the warning paints on
+/// the photo). `name` is the tooltip and what a screen reader says. Addressable as `button:{id}`.
+pub fn swatch_toggle(ui: &mut Ui, id: &str, swatch: Color32, active: bool, name: &str) -> Response {
+    let name = crate::i18n::tr(name);
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, name));
+    register(ui, format!("button:{id}"), r);
+    let fill = if active {
+        t.pressed
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        t.button
+    };
+    let p = ui.painter();
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    let chip = Rect::from_center_size(r.center(), vec2(10.0, 10.0));
+    p.rect_filled(chip, 2.0, swatch);
+    p.rect_stroke(chip, 2.0, Stroke::new(1.0, t.text), StrokeKind::Outside);
+    if resp.has_focus() {
+        focus_ring(p, r, &t);
+    }
+    resp.on_hover_text(name)
 }
 
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
@@ -937,6 +1011,9 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
                 p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                if resp.has_focus() {
+                    focus_ring(p, r, &t);
+                }
                 if resp.clicked() {
                     clicked = Some(i);
                 }
@@ -971,6 +1048,9 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     };
     let glyph = (size.x.min(size.y) * 0.62).min(22.0);
     paint(p, Rect::from_center_size(r.center(), vec2(glyph, glyph)), icon, c);
+    if enabled && resp.has_focus() {
+        focus_ring(p, sq, &t);
+    }
     if !tooltip.is_empty() { resp.on_hover_text(tooltip) } else { resp }
 }
 
@@ -992,6 +1072,10 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
+    if resp.has_focus() {
+        // (on a rect grown past the text, which starts at the left edge and would be cut by the ring)
+        focus_ring(ui.painter(), r.expand2(vec2(4.0, 2.0)), &t);
+    }
     if elided { resp.on_hover_text(text) } else { resp }
 }
 
@@ -1210,6 +1294,7 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
 
 pub mod album_picker;
 pub mod button;
+pub mod check;
 pub mod date_picker;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]

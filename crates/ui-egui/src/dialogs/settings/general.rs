@@ -1,5 +1,5 @@
-use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use super::widgets::{choices, heading, hint, path_label, row};
+use super::{LightcraftApp, RichText, StartupView, Tokens, check, json, register};
 
 // ------------------------------------------------------------------------------------- General
 

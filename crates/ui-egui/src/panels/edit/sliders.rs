@@ -2,6 +2,7 @@ use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
     pos2, register, section_header, slider, vec2,
 };
+use crate::check::Check;
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
 pub fn apply_slider_out(
@@ -223,9 +224,8 @@ pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
         let mut v = app.ui.hdr_visualize;
-        let r = ui.checkbox(&mut v, "Visualize HDR");
-        register(ui, "check:hdrVisualize", r.rect);
-        if r.on_hover_text("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it").changed() {
+        let tip = "Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it";
+        if Check::new("hdrVisualize", &mut v, "Visualize HDR").tooltip(tip).show(ui).changed() {
             app.ui.hdr_visualize = v;
         }
     });

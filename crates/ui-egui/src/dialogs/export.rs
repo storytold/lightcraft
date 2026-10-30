@@ -1,5 +1,6 @@
 use super::frame::{field, num};
 use super::{ControlSpec, LightcraftApp, Section, SettingsGroup, Tokens, Track};
+use crate::check::check;
 
 /// The Export dialog's watermark preview: the first exported photo, as wide as the dialog whatever
 /// its shape, with the watermark drawn on it as the file will have it at size `resize` (`None` =
@@ -143,7 +144,7 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
         for (i, g) in SettingsGroup::ALL.iter().enumerate() {
             let key = key_of(g);
             let mut on = groups.contains(&key);
-            let r = cols[i % 2].checkbox(&mut on, crate::i18n::tr(g.label()));
+            let r = check(&mut cols[i % 2], &format!("{tag}-{key}"), &mut on, g.label());
             crate::widgets::register_response(format!("{tag}:{key}"), r.rect, &r);
             if r.changed() {
                 if on {
@@ -206,8 +207,7 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
         (R::Megapixels, "Megapixels"),
         (R::Percent, "Percentage"),
     ];
-    let r_full = ui.checkbox(full, crate::i18n::tr("Full size"));
-    crate::widgets::register(ui, "check:exportFullSize", r_full.rect);
+    check(ui, "exportFullSize", full, "Full size");
     if !*full {
         field(ui, "Resize to", |ui| {
             let cur = MODES.iter().find(|m| m.0 == r.mode).map_or("Long Edge", |m| m.1);
@@ -248,8 +248,7 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
                 r.height = h as u32;
             }
         }
-        let c = ui.checkbox(&mut r.dont_enlarge, crate::i18n::tr("Don't enlarge"));
-        crate::widgets::register(ui, "check:exportDontEnlarge", c.rect);
+        check(ui, "exportDontEnlarge", &mut r.dont_enlarge, "Don't enlarge");
     }
     let mut p = *ppi as f64;
     if num(ui, &PPI, &mut p) {

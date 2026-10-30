@@ -7,6 +7,7 @@
 //! in the activity stack); when it finishes, the result is written, imported and selected
 //! ([`lightcraft_engine::Session::finish_merge`]).
 
+use crate::check::{check, radio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -474,7 +475,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if opts.is_pano() {
                 ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
                 for (v, l) in [("auto", "Auto Select"), ("spherical", "Spherical"), ("cylindrical", "Cylindrical"), ("perspective", "Perspective")] {
-                    if ui.radio(opts.projection == v, crate::i18n::tr(l)).clicked() {
+                    let mut current = opts.projection.as_str();
+                    if radio(ui, &format!("mergeProjection-{v}"), &mut current, v, l).changed() {
                         opts.projection = v.to_string();
                     }
                 }
@@ -483,12 +485,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                 if num(ui, &BOUNDARY_WARP, &mut bw) {
                     opts.boundary_warp = bw.round();
                 }
-                ui.checkbox(&mut opts.fill_edges, crate::i18n::tr("Fill Edges"));
-                ui.checkbox(&mut opts.auto_crop, crate::i18n::tr("Auto Crop"));
+                check(ui, "mergeFillEdges", &mut opts.fill_edges, "Fill Edges");
+                check(ui, "mergeAutoCrop", &mut opts.auto_crop, "Auto Crop");
                 ui.add_space(4.0);
             }
             if opts.is_hdr() {
-                ui.checkbox(&mut opts.align, crate::i18n::tr("Auto Align"));
+                check(ui, "mergeAlign", &mut opts.align, "Auto Align");
                 ui.label(egui::RichText::new(crate::i18n::tr("Deghost Amount")).color(t.text_label));
                 ui.horizontal(|ui| {
                     for (i, (v, l)) in [("none", "None"), ("low", "Low"), ("medium", "Med"), ("high", "High")].iter().enumerate() {
@@ -498,7 +500,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     }
                 });
                 if opts.command == "merge.hdr" {
-                    ui.add_enabled_ui(opts.deghost != "none", |ui| ui.checkbox(&mut opts.show_overlay, crate::i18n::tr("Show Deghost Overlay")));
+                    ui.add_enabled_ui(opts.deghost != "none", |ui| check(ui, "mergeShowOverlay", &mut opts.show_overlay, "Show Deghost Overlay"));
                 }
                 if opts.command == "merge.hdrPanorama" {
                     let mut b = opts.bracket as f64;
@@ -508,8 +510,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                 }
                 ui.add_space(4.0);
             }
-            ui.checkbox(&mut opts.auto_settings, crate::i18n::tr("Auto Settings"));
-            ui.checkbox(&mut opts.stack, crate::i18n::tr("Create Stack"));
+            check(ui, "mergeAutoSettings", &mut opts.auto_settings, "Auto Settings");
+            check(ui, "mergeStack", &mut opts.stack, "Create Stack");
             ui.add_space(8.0);
             ui.label(egui::RichText::new(crate::i18n::tr_format!("{} photos", app.merge.ids.len())).color(t.text_dim));
         });

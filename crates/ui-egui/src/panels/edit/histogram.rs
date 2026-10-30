@@ -4,6 +4,7 @@ use super::{
     Align2, Color32, Histogram, Icon, LightcraftApp, Mesh, PhotoId, Pos2, Rect, RichText, RightPanel, Sense, Slot, Stroke, Tokens, Vertex, divider,
     hex, json, paint, pos2, register, vec2,
 };
+use crate::check::check;
 
 // ------------------------------------------------------------------------------ histogram
 
@@ -235,6 +236,12 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
 
 // ------------------------------------------------------------------------------ soft proofing
 
+/// A gamut warning's linear colour as the colour of its toggle's swatch.
+fn gamut_swatch(c: [f32; 3]) -> Color32 {
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(q(c[0]), q(c[1]), q(c[2]))
+}
+
 /// The Soft Proofing strip under the histogram: proof profile, gamut warnings, Create Proof Copy.
 pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     use lightcraft_engine::pipeline::OutputSpace;
@@ -243,16 +250,17 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::i18n::tr("Soft Proofing")).color(t.text).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // the swatches are the colours the warnings paint on the photo
                 let mut dest = app.ui.proof.dest_warning;
-                let r = ui
-                    .toggle_value(&mut dest, RichText::new("■").color(Color32::from_rgb(255, 40, 40)))
-                    .on_hover_text(crate::i18n::tr("Show destination gamut warning"));
-                register(ui, "button:proofDestWarning", r.rect);
+                let swatch = gamut_swatch(lightcraft_pipeline::output::PROOF_DEST_WARNING);
+                if crate::widgets::swatch_toggle(ui, "proofDestWarning", swatch, dest, "Show destination gamut warning").clicked() {
+                    dest = !dest;
+                }
                 let mut disp = app.ui.proof.display_warning;
-                let r2 = ui
-                    .toggle_value(&mut disp, RichText::new("■").color(Color32::from_rgb(40, 90, 255)))
-                    .on_hover_text(crate::i18n::tr("Show display gamut warning"));
-                register(ui, "button:proofDisplayWarning", r2.rect);
+                let swatch = gamut_swatch(lightcraft_pipeline::output::PROOF_DISPLAY_WARNING);
+                if crate::widgets::swatch_toggle(ui, "proofDisplayWarning", swatch, disp, "Show display gamut warning").clicked() {
+                    disp = !disp;
+                }
                 if dest != app.ui.proof.dest_warning || disp != app.ui.proof.display_warning {
                     let _ = app.run("view.softProof", json!({"destWarning": dest, "displayWarning": disp}));
                 }
@@ -290,15 +298,14 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
                 ui.label(RichText::new(crate::i18n::tr("Intent:")).color(t.text_label));
                 use lightcraft_engine::proof::ProofIntent;
                 for (i, label) in [(ProofIntent::Perceptual, "Perceptual"), (ProofIntent::Relative, "Relative")] {
-                    let r = ui.selectable_label(app.ui.proof_intent == i, crate::i18n::tr(label));
-                    register(ui, format!("button:proofIntent-{}", i.name()), r.rect);
+                    let r = crate::widgets::text_button(ui, &format!("proofIntent-{}", i.name()), label, app.ui.proof_intent == i);
                     if r.clicked() && app.ui.proof_intent != i {
                         let _ = app.run("view.softProof", json!({"intent": i.name()}));
                     }
                 }
             });
             let mut paper = app.ui.proof_paper_ink;
-            let r = ui.checkbox(&mut paper, crate::i18n::tr("Simulate Paper & Ink"));
+            let r = check(ui, "proofPaperInk", &mut paper, "Simulate Paper & Ink");
             register(ui, "button:proofPaperInk", r.rect);
             if r.changed() {
                 let _ = app.run("view.softProof", json!({"paperInk": paper}));

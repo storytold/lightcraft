@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::Tokens;
 use super::frame::{choices, field};
 use crate::LightcraftApp;
+use crate::check::check;
 use crate::pick::{PickKind, PickRequest, Picked};
 
 /// `app.slideshowExport {format, size?, quality?, fps?, container?, fullScreen?, speed?, path?}`:
@@ -114,8 +115,7 @@ pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, 
     });
     let note = match settings.format {
         Format::Pdf => {
-            let r = ui.checkbox(&mut settings.full_screen, crate::i18n::tr("Automatically show full screen"));
-            crate::widgets::register(ui, "check:slideshowExportFullScreen", r.rect);
+            check(ui, "slideshowExportFullScreen", &mut settings.full_screen, "Automatically show full screen");
             "One page per slide (the long side in pixels = points), with the slide duration and fade for the viewer's presentation mode."
         }
         Format::Jpeg => "Numbered JPEG files (name-001.jpg…) in a new folder named in the next step.",

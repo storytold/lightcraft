@@ -49,6 +49,14 @@ pub enum NameMode {
 impl NameMode {
     pub const ALL: [NameMode; 3] = [NameMode::Username, NameMode::DisplayName, NameMode::RealName];
 
+    pub fn id(self) -> &'static str {
+        match self {
+            NameMode::Username => "username",
+            NameMode::DisplayName => "displayName",
+            NameMode::RealName => "realName",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             NameMode::Username => "Username",
@@ -234,7 +242,7 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.label(crate::i18n::tr("Show"));
         for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, crate::i18n::tr(m.label())).clicked() {
+            if crate::widgets::text_button(ui, &format!("creditsNames-{}", m.id()), m.label(), v.names == m).clicked() {
                 v.names = m;
             }
         }
@@ -256,14 +264,10 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             v.ascending = !v.ascending;
         }
         ui.separator();
-        let r = ui.selectable_label(!v.table, crate::i18n::tr("Grab bag"));
-        crate::widgets::register(ui, "button:creditsGrabBag", r.rect);
-        if r.clicked() {
+        if crate::widgets::text_button(ui, "creditsGrabBag", "Grab bag", !v.table).clicked() {
             v.table = false;
         }
-        let r = ui.selectable_label(v.table, crate::i18n::tr("Table"));
-        crate::widgets::register(ui, "button:creditsTable", r.rect);
-        if r.clicked() {
+        if crate::widgets::text_button(ui, "creditsTable", "Table", v.table).clicked() {
             v.table = true;
         }
     });

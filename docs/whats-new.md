@@ -157,6 +157,17 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Tick boxes, radios and toggle buttons look and work the same in panels and dialogs
+- Every tick box and radio button in LightCraft's panels and dialogs is now drawn the same way in all four themes, with a
+  clear outline when empty, an accent fill and white tick when on, and an accent ring where the keyboard is. Toggle
+  buttons, segmented controls, icon buttons, star ratings, drop-down buttons and section headers show the same ring when
+  the keyboard reaches them. Space or Return toggles the tick box with the keyboard, or selects the radio button; screen
+  readers hear each as a checkbox or radio button with its state. A tick box that can't be used now fades and shows why
+  when you hover it. (Menus and drop-down lists keep their own rows for now.)
+- Choices shown as rows of buttons (the Keywording view, Soft Proofing intent, the date picker's precision, About ▸
+  Contributors, the shortcut and keyword set buttons) now use the same toggle button as the rest of the interface. The
+  two gamut warnings in Soft Proofing show a swatch of the colour they paint on the photo.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

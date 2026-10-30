@@ -65,6 +65,7 @@ pub use menus::menubar;
 pub use state::UiState;
 pub use widgets::album_picker;
 pub use widgets::button;
+pub use widgets::check;
 pub use widgets::date_picker;
 pub use widgets::progress;
 pub use widgets::rating;

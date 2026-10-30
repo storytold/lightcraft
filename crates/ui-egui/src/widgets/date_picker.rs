@@ -256,7 +256,7 @@ impl<'a> DatePicker<'a> {
             if precisions.len() > 1 {
                 ui.horizontal(|ui| {
                     for p in precisions {
-                        let r = ui.selectable_label(view.precision == *p, crate::i18n::tr(p.label()));
+                        let r = crate::widgets::text_button(ui, &format!("datePickerPrecision-{}-{id}", p.id()), p.label(), view.precision == *p);
                         register(ui, format!("datePickerPrecision:{}:{id}", p.id()), r.rect);
                         if r.clicked() {
                             view.precision = *p;

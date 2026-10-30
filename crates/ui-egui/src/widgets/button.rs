@@ -382,9 +382,11 @@ impl<'a> Button<'a> {
         if let Some(border) = lk.border {
             p.rect_stroke(rect, radius, Stroke::new(1.0, border), StrokeKind::Inside);
         }
-        // where the keyboard is: an accent ring around it
+        // where the keyboard is: an accent ring around it, in the stroke every focus ring shares. It is
+        // drawn outside the button (the painter above leaves room for it) because a button has its own
+        // fill and border to keep whole; the plainer widget buttons draw theirs inside their rect.
         if resp.has_focus() {
-            p.rect_stroke(rect.expand(2.0), radius + 2.0, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+            p.rect_stroke(rect.expand(2.0), radius + 2.0, crate::widgets::focus_stroke(&t), StrokeKind::Outside);
         }
         let galley = self.galley(ui);
         let icon_s = self.size.icon();

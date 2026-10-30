@@ -1,5 +1,6 @@
 //! The Masking panel: create masks, list them, edit components and local adjustments.
 
+use crate::check::{Check, check};
 use egui::{Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Track};
@@ -501,7 +502,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.ui.mask_overlay_opacity = v as f32;
     }
     let mut pins = app.ui.mask_pins;
-    if ui.checkbox(&mut pins, crate::i18n::tr("Show Pins")).changed() {
+    if check(ui, "maskPins", &mut pins, "Show Pins").changed() {
         let _ = app.run("view.maskPins", json!({"show": pins}));
     }
     if app.ui.mask_pins {
@@ -589,8 +590,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 app.run("mask.update", json!({"component": comp, "shape": MaskShape::LuminanceRange { lo, hi, lo_feather: f, hi_feather: f }}))
             });
             let mut map = app.ui.mask_overlay && app.ui.mask_overlay_mode == "colorOnBw";
-            let r = ui.checkbox(&mut map, crate::i18n::tr("Show Luminance Map"));
-            register(ui, format!("check:lumMap{comp}"), r.rect);
+            let r = check(ui, &format!("lumMap{comp}"), &mut map, "Show Luminance Map");
             if r.changed() {
                 // the luminance map: the photo in black & white with the selected range tinted
                 if map {
@@ -886,17 +886,13 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         });
         let mut auto = app.ui.brush_auto_mask;
-        if ui
-            .checkbox(&mut auto, crate::i18n::tr("Auto Mask"))
-            .on_hover_text(crate::i18n::tr("Paint only areas like the one under the brush"))
-            .changed()
-        {
+        if Check::new("brushAutoMask", &mut auto, "Auto Mask").tooltip("Paint only areas like the one under the brush").show(ui).changed() {
             app.ui.brush_auto_mask = auto;
         }
         let mut pressure = app.ui.brush_pressure;
-        if ui
-            .checkbox(&mut pressure, crate::i18n::tr("Pen Pressure"))
-            .on_hover_text(crate::i18n::tr("A pen's pressure sets the size and flow of the brush"))
+        if Check::new("brushPressure", &mut pressure, "Pen Pressure")
+            .tooltip("A pen's pressure sets the size and flow of the brush")
+            .show(ui)
             .changed()
         {
             app.ui.brush_pressure = pressure;

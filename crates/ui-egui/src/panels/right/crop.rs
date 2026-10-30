@@ -1,4 +1,5 @@
 use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, register, slider, text_button};
+use crate::check::check;
 
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
 const ASPECT_PRESETS: [(&str, &str); 10] = [
@@ -261,7 +262,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(4.0);
         let mut c = d.geometry.constrain_crop;
-        if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
+        if check(ui, "constrainCrop", &mut c, "Constrain Crop").changed() {
             let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
         }
     });
@@ -366,7 +367,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // Visualize Spots (A): a black/white high-pass view that makes dust and specks stand out
     padded(ui, |ui| {
         let mut v = app.ui.visualize_spots;
-        if ui.checkbox(&mut v, crate::i18n::tr("Visualize Spots (A)")).changed() {
+        if check(ui, "visualizeSpots", &mut v, "Visualize Spots (A)").changed() {
             app.ui.visualize_spots = v;
         }
     });
@@ -464,7 +465,7 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     padded(ui, |ui| {
         if eye.pet {
             let mut on = eye.catchlight.is_some();
-            if ui.checkbox(&mut on, crate::i18n::tr("Add Catchlight")).changed() {
+            if check(ui, "redeyeCatchlight", &mut on, "Add Catchlight").changed() {
                 let _ = app.run("redeye.catchlight", json!({"index": i, "on": on}));
             }
             ui.add_space(4.0);
