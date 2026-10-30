@@ -78,6 +78,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
+    ("truncated", "Damaged File", Kind::Bool),
     // Date
     ("captureDate", "Capture Date", Kind::Date),
     ("importDate", "Import Date", Kind::Date),
@@ -132,7 +133,7 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration", "truncated"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
@@ -969,6 +970,7 @@ impl Rule {
             "kind" => (kind_name(p.kind) == want) == (op == "is"),
             "edited" => yes(p.is_edited()),
             "hasGps" => yes(m.gps.is_some()),
+            "truncated" => yes(p.truncated),
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),

@@ -429,6 +429,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         (Some(r), _) if r == "path" => Some("In library"),
         (Some(_), _) => Some("Duplicate"),
         (None, Some(_)) => Some("Unreadable"),
+        (None, None) if c.truncated => Some("Damaged"),
         _ => None,
     };
     if let Some(b) = badge {

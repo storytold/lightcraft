@@ -2327,5 +2327,9 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Damaged file: cut short, shown from the data present": "Vahingoittunut tiedosto: katkennut, näytetään saatavilla olevista tiedoista",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "Tiedosto on katkennut, esimerkiksi keskeytyneen latauksen tai kopioinnin vuoksi. LightCraft näyttää olemassa olevat tiedot eikä muuta tiedostoa koskaan.",
+  "Damaged": "Vahingoittunut",
+  "Damaged File": "Vahingoittunut tiedosto"
 }

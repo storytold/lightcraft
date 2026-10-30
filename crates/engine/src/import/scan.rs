@@ -166,6 +166,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
+                c.truncated = info.truncated;
                 if let Some(h) = &info.content_hash {
                     match seen_hash.get(h) {
                         Some(existing) => {

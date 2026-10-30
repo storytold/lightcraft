@@ -2200,5 +2200,9 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Damaged file: cut short, shown from the data present": "文件已损坏：被截断，根据现有数据显示",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "文件被截断，例如下载或复制中断所致。LightCraft 显示现有数据，且从不修改文件。",
+  "Damaged": "已损坏",
+  "Damaged File": "损坏的文件"
 }

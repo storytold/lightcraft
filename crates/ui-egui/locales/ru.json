@@ -2349,5 +2349,9 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Damaged file: cut short, shown from the data present": "Повреждённый файл: обрезан, показан по имеющимся данным",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "Файл обрезан, например из-за прерванной загрузки или копирования. LightCraft показывает имеющиеся данные и никогда не изменяет файл.",
+  "Damaged": "Повреждён",
+  "Damaged File": "Повреждённый файл"
 }

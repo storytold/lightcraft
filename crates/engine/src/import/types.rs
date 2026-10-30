@@ -134,6 +134,9 @@ pub struct ImportCandidate {
     /// A raw variant that can't be decoded yet (why): it imports as preview only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_only: Option<String>,
+    /// A JPEG cut short (an interrupted download or copy): it imports from the data present.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -164,6 +167,9 @@ pub struct ImportReport {
     pub kept: Vec<Kept>,
     /// (path, error)
     pub failed: Vec<(String, String)>,
+    /// Imported JPEGs that were cut short (see [`ImportCandidate::truncated`]): their source paths.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub truncated: Vec<String>,
     /// Files found after expanding folders.
     pub scanned: usize,
     /// Photos whose metadata/develop settings were read from an XMP sidecar (or embedded XMP).

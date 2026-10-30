@@ -13,6 +13,10 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             ui.add_space(6.0);
         }
+        if p.truncated {
+            crate::widgets::truncated_notice(ui, "info");
+            ui.add_space(6.0);
+        }
         if let Some(name) = &p.copy_name {
             let of = p
                 .copy_of

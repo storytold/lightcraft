@@ -642,7 +642,7 @@ fn related_fields_share_a_group() {
             assert_eq!(field_group(f), Some(group), "{f}");
         }
     };
-    same(&["fileName", "extension", "filePath", "kind", "format", "duration"], "File");
+    same(&["fileName", "extension", "filePath", "kind", "format", "duration", "truncated"], "File");
     same(&["album", "virtualCopy", "copyName", "stacked"], "Source");
     same(&["longEdge", "shortEdge", "aspect", "megapixels"], "Size");
     same(&["edited", "cropped", "treatment"], "Develop");
@@ -657,6 +657,21 @@ fn related_fields_share_a_group() {
     assert_eq!(field_group("nope"), None);
     assert_eq!(field_label("filePath"), Some("File Path"));
     assert_eq!(field_label("nope"), None);
+}
+
+/// Damaged File finds the JPEGs that were cut short, and only those.
+#[test]
+fn damaged_file_rule_finds_truncated_photos() {
+    let cat = Catalog::new();
+    let mut cut = photo(1);
+    cut.truncated = true;
+    let whole = photo(2);
+    let m = |p: &Photo, op: &str| rs(json!({"rules": [{"field": "truncated", "op": op, "value": true}]})).matches(p, &cat);
+    assert!(m(&cut, "is") && !m(&whole, "is"));
+    let not = rs(json!({"rules": [{"field": "truncated", "op": "is", "value": false}]}));
+    assert!(!not.matches(&cut, &cat) && not.matches(&whole, &cat));
+    assert_eq!(field_label("truncated"), Some("Damaged File"));
+    assert!(rs(json!({"rules": [{"field": "truncated", "op": "is", "value": true}]})).check(&cat).is_empty());
 }
 
 /// The `filePath` rule exactly as it was before the in-place ASCII path: new strings per photo.

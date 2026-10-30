@@ -2429,5 +2429,9 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Damaged file: cut short, shown from the data present": "Skadad fil: avkapad, visas från de data som finns",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "Filen har kapats, till exempel av en avbruten nedladdning eller kopiering. LightCraft visar de data som finns och ändrar aldrig filen.",
+  "Damaged": "Skadad",
+  "Damaged File": "Skadad fil"
 }

@@ -2283,5 +2283,9 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Damaged file: cut short, shown from the data present": "Uszkodzony plik: ucięty, pokazany z dostępnych danych",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "Plik został ucięty, na przykład przez przerwane pobieranie lub kopiowanie. LightCraft pokazuje dostępne dane i nigdy nie zmienia pliku.",
+  "Damaged": "Uszkodzony",
+  "Damaged File": "Uszkodzony plik"
 }

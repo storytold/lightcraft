@@ -2390,5 +2390,9 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Damaged file: cut short, shown from the data present": "Fichier endommagé : tronqué, affiché à partir des données présentes",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "Le fichier a été tronqué, par exemple par un téléchargement ou une copie interrompus. LightCraft affiche les données présentes et ne modifie jamais le fichier.",
+  "Damaged": "Endommagé",
+  "Damaged File": "Fichier endommagé"
 }

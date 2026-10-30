@@ -2408,5 +2408,9 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Damaged file: cut short, shown from the data present": "Poškozený soubor: useknutý, zobrazuje se z dostupných dat",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "Soubor byl useknut, například přerušeným stahováním nebo kopírováním. LightCraft zobrazuje dostupná data a soubor nikdy nemění.",
+  "Damaged": "Poškozený",
+  "Damaged File": "Poškozený soubor"
 }

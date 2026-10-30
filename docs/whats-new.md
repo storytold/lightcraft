@@ -19,6 +19,11 @@
   photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
   Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
 
+### Damaged JPEGs are marked, and can be found
+- A JPEG that was cut short now says so. Info shows "Damaged file: cut short, shown from the data present"; the
+  import review puts a "Damaged" badge on it; the message after an import counts them ("· 2 damaged"); and a
+  smart album can collect them with the rule File → Damaged File.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
@@ -49,6 +54,14 @@
 - LightCraft now imports PSD and PSB files with EXIF and XMP image resources. Capture dates, GPS and descriptive fields
   stay available in All Metadata; PSD edit copies keep their capture date. Original exports with Remove Location Info enabled
   are refused when a PSD or PSB embeds GPS, since LightCraft cannot strip metadata from a byte-for-byte original copy.
+
+### JPEGs that were cut short now import
+- A JPEG that stops before its end (an interrupted download or copy) used to be refused as "not readable". It now
+  imports and shows what is there: a progressive JPEG from the scans that arrived (blurry, then sharper the more
+  of it came), a baseline JPEG from the rows that arrived, the rest flat grey. The original file is never changed.
+  Still refused: a file with no picture data yet, a cut JPEG of a kind only the slower decoder reads (CMYK, 12-bit,
+  lossless, separate scans per colour), arithmetic-coded JPEGs, and cut files of other formats. The catalog
+  remembers that such a photo was cut short; Reload clears that once the file is whole.
 
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the

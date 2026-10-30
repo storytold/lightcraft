@@ -239,6 +239,31 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
     reload
 }
 
+/// A panel notice for a JPEG that was cut short ([`lightcraft_catalog::Photo::truncated`]): an
+/// amber info icon and one line, with what it means on hover. Registered as `notice:truncated:{key}`.
+pub fn truncated_notice(ui: &mut Ui, key: &str) {
+    let t = Tokens::get(ui.ctx());
+    let r = egui::Frame::NONE
+        .fill(t.canvas)
+        .stroke(Stroke::new(1.0, t.caution.gamma_multiply(0.45)))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 8 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                paint(ui.painter(), ir, Icon::Info, t.caution);
+                ui.label(egui::RichText::new(crate::i18n::tr("Damaged file: cut short, shown from the data present")).size(11.5).color(t.text_label));
+            });
+        })
+        .response;
+    let r = r.on_hover_text(crate::i18n::tr(
+        "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.",
+    ));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, crate::i18n::tr("Damaged file: cut short, shown from the data present")));
+    register(ui, format!("notice:truncated:{key}"), r.rect);
+}
+
 // ------------------------------------------------------------------ colour helpers
 
 pub fn hex(s: &str) -> Color32 {

@@ -2202,5 +2202,9 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Damaged file: cut short, shown from the data present": "Arquivo danificado: cortado, exibido a partir dos dados presentes",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "O arquivo foi cortado, por exemplo por um download ou uma cópia interrompidos. O LightCraft exibe os dados presentes e nunca altera o arquivo.",
+  "Damaged": "Danificado",
+  "Damaged File": "Arquivo danificado"
 }

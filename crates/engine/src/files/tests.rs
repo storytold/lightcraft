@@ -452,7 +452,15 @@ fn image_probe_reads_headers_like_the_decode_did() {
             assert_eq!(p.format, if name == "a.jpg" { "JPEG" } else { "PNG" });
             assert_eq!(p.file_size, bytes.len() as u64);
             assert!(p.content_hash.is_some());
-            assert!(probe_bytes(name, &bytes[..bytes.len() / 2]).is_err(), "{name}: truncated file accepted");
+            assert!(!p.truncated);
+            let cut = probe_bytes(name, &bytes[..bytes.len() / 2]);
+            if name == "a.jpg" {
+                // a JPEG cut short is read from the data present, and says so
+                let cut = cut.unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert!(cut.truncated && (cut.width, cut.height) == (p.width, p.height), "{name} {o:?}");
+            } else {
+                assert!(cut.is_err(), "{name}: truncated file accepted");
+            }
         }
     }
     assert!(probe_bytes("x.jpg", b"not an image").is_err());
@@ -1455,6 +1463,222 @@ fn unsupported_raw_imports_as_preview_only_and_survives_reopen() {
     assert_eq!(s.catalog.photo(id).unwrap().preview_only, None);
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A JPEG cut short (an interrupted download) imports, marked as truncated, from the data
+/// present; the original is never touched; the mark survives a reopen and Reload clears it when
+/// the file is whole (undoably). One with nothing to show is still reported as failed.
+#[test]
+fn a_jpeg_cut_short_imports_marked_truncated_and_reload_clears_it() {
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("lc-cut-jpeg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (lib, files) = (dir.join("lib"), dir.join("files"));
+    std::fs::create_dir_all(&files).unwrap();
+    let (w, h) = (160u32, 96u32);
+    let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let whole = encode_jpeg(&EncodeImage::new(w, h, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let cut = &whole[..whole.len() * 2 / 3];
+    let (cut_path, whole_path, empty_path) = (files.join("cut.jpg"), files.join("whole.jpg"), files.join("nothing.jpg"));
+    std::fs::write(&cut_path, cut).unwrap();
+    std::fs::write(&whole_path, &whole).unwrap();
+    std::fs::write(&empty_path, &whole[..30]).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let path = |p: &std::path::Path| json!(p.to_string_lossy());
+    let r = s.execute("library.import", &json!({"paths": [path(&cut_path), path(&whole_path), path(&empty_path)]})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(2), "{r}");
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{r}");
+    assert!(r["failed"][0][0].as_str().is_some_and(|p| p.ends_with("nothing.jpg")), "{r}");
+    let by_name = |s: &crate::Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).map(|p| p.id).unwrap();
+    let (id, whole_id) = (by_name(&s, "cut.jpg"), by_name(&s, "whole.jpg"));
+    let p = s.catalog.photo(id).unwrap();
+    assert!(p.truncated && (p.width, p.height) == (w, h), "{p:?}");
+    assert!(!s.catalog.photo(whole_id).unwrap().truncated);
+    assert_eq!(std::fs::read(&cut_path).unwrap(), cut, "the original is never modified");
+    // it renders (thumbnail size and full size) from the data present
+    for edge in [48, 160] {
+        assert!(s.render_job(id, edge, edge, false, true).unwrap().run().rendered.is_ok(), "edge {edge}");
+    }
+    // agents see it
+    let q = s.execute("catalog.query", &json!({"filter": {}})).unwrap();
+    let flags: Vec<(String, bool)> = q["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["fileName"].as_str().unwrap_or_default().to_string(), p["truncated"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(flags.iter().filter(|f| f.1).count(), 1, "{flags:?}");
+    // a reopen keeps it
+    s.persist().unwrap();
+    drop(s);
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.catalog.photo(id).unwrap().truncated);
+    assert!(!s.catalog.photo(whole_id).unwrap().truncated);
+    // the download finishes: Reload clears the mark, undo brings it back
+    std::fs::write(&cut_path, &whole).unwrap();
+    let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!([id.0]), "{r}");
+    assert!(!s.catalog.photo(id).unwrap().truncated);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().truncated);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The import review marks a JPEG cut short, and the import's report lists it (its source path)
+/// next to the photos it imported; whole files are in neither.
+#[test]
+fn import_review_and_report_name_the_jpegs_cut_short() {
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("lc-cut-jpeg-review-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (lib, files) = (dir.join("lib"), dir.join("files"));
+    std::fs::create_dir_all(&files).unwrap();
+    let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let whole = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let (cut_path, whole_path) = (files.join("cut.jpg"), files.join("whole.jpg"));
+    std::fs::write(&cut_path, &whole[..whole.len() / 2]).unwrap();
+    std::fs::write(&whole_path, &whole).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = json!([cut_path.to_string_lossy(), whole_path.to_string_lossy()]);
+    let scan = s.execute("library.importPreview", &json!({"paths": paths})).unwrap();
+    let flags: Vec<(String, bool)> = scan["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["name"].as_str().unwrap().to_string(), c["truncated"].as_bool().unwrap_or(false)))
+        .collect();
+    assert!(flags.contains(&("cut.jpg".into(), true)) && flags.contains(&("whole.jpg".into(), false)), "{flags:?}");
+    assert!(scan["candidates"].as_array().unwrap().iter().all(|c| c["error"].is_null()), "{scan}");
+    let r = s.execute("library.import", &json!({"paths": paths})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(2), "{r}");
+    assert_eq!(r["truncated"], json!([cut_path.to_string_lossy()]), "{r}");
+    // a cut file first browsed in Local and then imported for real is reported too
+    let browsed = files.join("browsed.jpg");
+    std::fs::write(&browsed, &whole[..whole.len() / 2]).unwrap();
+    s.execute("library.import", &json!({"paths": [browsed.to_string_lossy()], "local": true})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [browsed.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["truncated"], json!([browsed.to_string_lossy()]), "{r}");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A raw's preview window that stops before the JPEG's end (a pointer that lies about the
+/// length) is not shown from the data present: the caller falls back to the whole file.
+#[test]
+fn a_quick_preview_window_cut_short_is_left_to_the_whole_file_fallback() {
+    let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let jpeg = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    assert!(quick_image_srgb(&[], &jpeg, false, 64).is_some());
+    assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], false, 64).is_none());
+    assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], true, 64).is_none());
+}
+
+/// A JPEG cut short is charged to the work gate for its file and its whole frame together,
+/// from before the file is read until the load is done (so the buffer is never uncounted); a
+/// whole file or a non-JPEG is charged its length alone.
+#[test]
+fn a_cut_jpeg_is_charged_for_its_file_and_its_whole_frame() {
+    let dir = std::env::temp_dir().join(format!("lc-cut-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let jpeg = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let cut = &jpeg[..jpeg.len() / 2];
+    let thumb = crate::media::SourceLevel::Thumb.max_edge();
+    let charged = |name: &str, bytes: &[u8], max_edge: usize| {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let gate = crate::memory::WorkGate::new(usize::MAX / 2);
+        let held = load_gated(&gate, false, &path.to_string_lossy(), max_edge, |b| {
+            assert_eq!(b.len(), bytes.len());
+            Ok(gate.usage().0)
+        })
+        .unwrap();
+        assert_eq!(gate.usage().0, 0, "{name}: given back");
+        held
+    };
+    assert_eq!(charged("cut.jpg", cut, thumb), cut.len() + 160 * 96 * 36, "the picture is copied into the working space and turned upright");
+    assert_eq!(charged("cut-full.jpg", cut, thumb + 1), cut.len() + 160 * 96 * 36);
+    assert_eq!(charged("whole.jpg", &jpeg, thumb), jpeg.len() * 3);
+    assert_eq!(charged("other.bin", b"not a jpeg at all", thumb), 17 * 3);
+    // a frame header after more than the first probe's worth of APP segments (extended XMP,
+    // a big ICC profile) is still found
+    let mut padded = jpeg[..2].to_vec();
+    for _ in 0..20 {
+        padded.extend([0xFF, 0xED, 0xEA, 0x62]);
+        padded.extend(std::iter::repeat_n(0u8, 0xEA60));
+    }
+    padded.extend_from_slice(&jpeg[2..jpeg.len() / 2]);
+    assert!(padded.len() - jpeg.len() / 2 > FRAME_PROBE, "the frame header is past the first probe");
+    let padded_path = dir.join("padded-cut.jpg");
+    std::fs::write(&padded_path, &padded).unwrap();
+    assert_eq!(cut_jpeg_frame_weight(&padded_path.to_string_lossy(), padded.len(), thumb), 160 * 96 * 36);
+    // a damaged frame header that claims 65535 x 65535 pixels is not charged for them
+    let mut wild = cut.to_vec();
+    let sof = wild.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    wild[sof + 5..sof + 9].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    assert_eq!(charged("wild.jpg", &wild, thumb), wild.len() * 3);
+    // a profile that may need the colour management makes the float images of the frame more: 39 bytes a pixel
+    let mut with_icc = cut[..2].to_vec();
+    let profile = b"ICC_PROFILE\0\x01\x01a profile that is no profile";
+    with_icc.extend([0xFF, 0xE2]);
+    with_icc.extend(u16::try_from(profile.len() + 2).unwrap().to_be_bytes());
+    with_icc.extend(profile);
+    with_icc.extend(&cut[2..]);
+    assert_eq!(charged("icc.jpg", &with_icc, thumb), with_icc.len() + 160 * 96 * 39);
+    // ... also one that comes after the frame header and more than the first probe's worth of segments (the codec
+    // reads every segment up to the scan)
+    let sof = cut.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    let sos = sof + cut[sof..].windows(2).position(|w| w == [0xFF, 0xDA]).unwrap();
+    let mut late_icc = cut[..sos].to_vec();
+    for _ in 0..20 {
+        late_icc.extend([0xFF, 0xED, 0xEA, 0x62]);
+        late_icc.extend(std::iter::repeat_n(0u8, 0xEA60));
+    }
+    late_icc.extend([0xFF, 0xE2]);
+    late_icc.extend(u16::try_from(profile.len() + 2).unwrap().to_be_bytes());
+    late_icc.extend(profile);
+    late_icc.extend(&cut[sos..]);
+    assert!(late_icc.len() > FRAME_PROBE, "the profile is past the first probe");
+    // (the file is large: its own 3 bytes a byte are more than its length and the frame, so the frame is asked for)
+    let late_path = dir.join("late-icc.jpg");
+    std::fs::write(&late_path, &late_icc).unwrap();
+    assert_eq!(cut_jpeg_frame_weight(&late_path.to_string_lossy(), late_icc.len(), thumb), 160 * 96 * 39);
+    // a profile after the scan began is not one (the codec stops reading segments there): the plain charge
+    let mut after_scan = cut.to_vec();
+    after_scan.extend([0xFF, 0xE2]);
+    after_scan.extend(u16::try_from(profile.len() + 2).unwrap().to_be_bytes());
+    after_scan.extend(profile);
+    assert_eq!(charged("scan-icc.jpg", &after_scan, thumb), after_scan.len() + 160 * 96 * 36);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The charge for the frame of a JPEG cut short is the peak of what its decode holds in its phases: decoding the
+/// frame (9 bytes a pixel: the output and a progressive frame's coefficients), reducing it by a whole factor of 2 or
+/// more, making the float image beside the bytes (15; 39 with an ICC profile) and, over the bound, fitting it, and
+/// copying the fitted picture into the working space and turning it upright (36 bytes a pixel of it).
+#[test]
+fn the_charge_for_a_cut_jpeg_is_the_peak_of_its_decode() {
+    // not over the bound: the last phase, three pictures
+    assert_eq!(cut_jpeg_peak(160, 96, 512, false), 160 * 96 * 36);
+    // 1000 × 1000 at a bound of 512 is not reduced (a factor of 1): the float image beside the bytes and the fit's
+    // first pass (512 × 1000 samples) and output (512 × 512), 12 bytes each, is the peak
+    assert_eq!(cut_jpeg_peak(1000, 1000, 512, false), 1000 * 1000 * 15 + 12 * (512 * 1000 + 512 * 512));
+    // an ICC profile that needs the colour management: the device samples, its output and its copy beside the bytes
+    assert_eq!(cut_jpeg_peak(1000, 1000, 512, true), 1000 * 1000 * 39 + 12 * (512 * 1000 + 512 * 512));
+    assert_eq!(cut_jpeg_peak(160, 96, 512, true), 160 * 96 * 39);
+    // one side at least twice the bound but the other under it: still a factor under 2, so the full float image
+    assert_eq!(cut_jpeg_peak(2000, 300, 512, false), 2000 * 300 * 15 + 12 * (512 * 300 + 512 * 300));
+    // 4000 × 3000 is reduced by 5 to 800 × 600: decoding the whole frame is the peak
+    assert_eq!(cut_jpeg_peak(4000, 3000, 512, false), 9 * 4000 * 3000);
+    assert!(cut_jpeg_peak(4000, 3000, 512, false) > 3 * (4000 * 3000 + 800 * 600), "more than the reduction alone");
+    // nothing overflows
+    assert!(cut_jpeg_peak(usize::MAX, usize::MAX, 512, true) > 0);
 }
 
 /// A raw whose TIFF shell holds only a small RGB image (IFD0) next to a private block, as Exif

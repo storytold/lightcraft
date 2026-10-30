@@ -2734,5 +2734,9 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Damaged file: cut short, shown from the data present": "დაზიანებული ფაილი: შეწყვეტილია, ნაჩვენებია არსებული მონაცემებიდან",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "ფაილი შეწყვეტილია, მაგალითად, შეწყვეტილი ჩამოტვირთვის ან კოპირების გამო. LightCraft აჩვენებს არსებულ მონაცემებს და ფაილს არასოდეს ცვლის.",
+  "Damaged": "დაზიანებული",
+  "Damaged File": "დაზიანებული ფაილი"
 }

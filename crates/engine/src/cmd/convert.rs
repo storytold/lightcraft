@@ -202,7 +202,8 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
-/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`], and a
+/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`] or of whether a
+/// JPEG is cut short ([`lightcraft_catalog::Photo::truncated`]), and a
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
@@ -211,6 +212,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
+        && info.truncated == ph.truncated
         && preview_checked == ph.preview_checked;
     (!same).then_some(Op::SetContent {
         id,
@@ -220,6 +222,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         content_hash: info.content_hash,
         preview_only: info.preview_only,
         preview_checked,
+        truncated: info.truncated,
     })
 }
 

@@ -2339,5 +2339,9 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Damaged file: cut short, shown from the data present": "File rusak: terpotong, ditampilkan dari data yang ada",
+  "Cut short, for example by an interrupted download or copy. LightCraft shows the data that is there and never changes the file.": "File ini terpotong, misalnya karena unduhan atau penyalinan terhenti. LightCraft menampilkan data yang ada dan tidak pernah mengubah file.",
+  "Damaged": "Rusak",
+  "Damaged File": "File rusak"
 }

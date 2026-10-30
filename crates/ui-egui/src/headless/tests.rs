@@ -2259,6 +2259,7 @@ fn preview_only_raw_shows_badge_and_notices() {
             content_hash: ph.content_hash.clone(),
             preview_only: Some("Nikon Huffman-compressed NEF (no clean-room description available)".into()),
             preview_checked: lightcraft_catalog::APP_VERSION.into(),
+            truncated: false,
         })
         .unwrap();
     h.settle(SETTLE);
@@ -2292,6 +2293,41 @@ fn preview_only_raw_shows_badge_and_notices() {
     h.app.ui.right = crate::state::RightPanel::Edit;
     h.settle(SETTLE);
     assert!(ids(&mut h, "notice:previewOnly:").is_empty());
+}
+
+/// A JPEG that was cut short says so in Info (and no other photo does).
+#[test]
+fn truncated_jpeg_shows_a_notice_in_info() {
+    let mut h = demo([1300.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let vis = h.app.session.visible_cloned();
+    let (cut, other) = (vis[0], vis[1]);
+    let ph = h.app.session.catalog.photo(cut).unwrap().clone();
+    h.app
+        .session
+        .catalog
+        .apply(lightcraft_catalog::Op::SetContent {
+            id: cut,
+            width: ph.width,
+            height: ph.height,
+            file_size: ph.file_size,
+            content_hash: ph.content_hash.clone(),
+            preview_only: None,
+            preview_checked: String::new(),
+            truncated: true,
+        })
+        .unwrap();
+    let ids = |h: &mut Headless| -> Vec<String> {
+        let w = h.request("ui.widgets", json!({"filter": "notice:truncated:"}), t);
+        w["result"].as_array().unwrap_or_else(|| panic!("{w}")).iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()
+    };
+    h.app.ui.right = crate::state::RightPanel::Info;
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [cut.0]}}), t);
+    h.settle(SETTLE);
+    assert_eq!(ids(&mut h), vec!["notice:truncated:info".to_string()]);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
+    h.settle(SETTLE);
+    assert!(ids(&mut h).is_empty());
 }
 
 #[test]
