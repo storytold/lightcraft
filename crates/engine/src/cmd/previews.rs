@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
-use crate::activity::{Cancel, TaskGuard};
+use crate::activity::{Cancel, Ending, Lane, Outcome, Request, TaskGuard};
 use crate::media::{RenderJob, THUMB_SIZES};
 use crate::{Result, Session};
 
@@ -25,6 +25,9 @@ pub struct PreviewBuild {
     /// Shared with the build's row in the activity stack (its ✕ sets it).
     pub cancel: Arc<AtomicBool>,
     pub finished: AtomicBool,
+    /// A frontend announced how it ended (the app's toast); one that ended and was not announced is kept when the next
+    /// build replaces it ([`Session::take_unreported_builds`]).
+    pub reported: AtomicBool,
     /// Damaged smart previews rebuilt (Build Smart Previews only).
     pub repaired: AtomicUsize,
     /// What is built ("" = previews; "smart previews" — Build Smart Previews runs the same way).
@@ -43,7 +46,7 @@ impl PreviewBuild {
             "total": self.total,
             "done": self.done.load(Ordering::Relaxed),
             "failed": self.failed.load(Ordering::Relaxed),
-            "running": !self.finished.load(Ordering::Relaxed),
+            "running": !self.finished.load(Ordering::Acquire),
             "cancelled": self.cancel.load(Ordering::Relaxed),
             "what": if self.what.is_empty() { "previews" } else { self.what },
             "repaired": self.repaired.load(Ordering::Relaxed),
@@ -53,6 +56,22 @@ impl PreviewBuild {
 
     pub fn error(&self) -> Option<String> {
         self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// How the build ended, for its row: it failed as a whole, was stopped, or could not make some photos' previews.
+    fn outcome(&self) -> Outcome {
+        let failed = self.failed.load(Ordering::Relaxed);
+        if let Some(why) = self.error() {
+            return Outcome { failed, ..Outcome::failed(why) };
+        }
+        let ending = if self.cancel.load(Ordering::Relaxed) {
+            Ending::Stopped
+        } else if failed > 0 {
+            Ending::Problems
+        } else {
+            Ending::Done
+        };
+        Outcome { ending, failed, ..Default::default() }
     }
 }
 
@@ -69,16 +88,106 @@ pub(crate) fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: O
     if e >= thumb { view.into_iter().chain(grid).collect() } else { grid.into_iter().chain(view).collect() }
 }
 
-/// The build's row in the activity stack (`what` as in [`PreviewBuild::what`]).
-fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
-    let (kind, label) = match state.what {
+/// The row in the activity stack of a build of `what` (as in [`PreviewBuild::what`]): its kind and its label.
+fn row_of(what: &str) -> (&'static str, &'static str) {
+    match what {
         "" => ("previews", "Building previews"),
         "smart previews" => ("smartPreviews", "Building smart previews"),
         _ => ("smartPreviews", "Discarding smart previews"),
-    };
+    }
+}
+
+/// The build's row in the activity stack.
+fn task_for(s: &Session, state: &PreviewBuild, request: Request) -> TaskGuard {
+    let (kind, label) = row_of(state.what);
     let task = s.activity.start(kind, label, Cancel::Flag(state.cancel.clone()));
     task.progress(0, state.total as u64);
+    // (a build that did not go well can be asked for again: Retry)
+    task.set_request(request);
     task
+}
+
+/// A build's state and its row, which go together. However the build ends (it finishes, its worker panics, or the
+/// worker can't be started) the state reads as finished first, and then the row goes: a build waiting in line starts
+/// when the row is gone, and is refused if the state still said a build runs. A build that did not mark itself
+/// finished did not end well: it says so, instead of reading as one that built nothing.
+struct Running {
+    state: Arc<PreviewBuild>,
+    task: TaskGuard,
+}
+
+impl Running {
+    /// The build is over: the row of how it went is kept, the build reads as finished, and only then does its running
+    /// row go (whoever waits for `finished` finds the row; whoever sees the running row go finishes the build).
+    fn end(mut self) {
+        self.task.report(self.state.outcome());
+        self.state.finished.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if !self.state.finished.load(Ordering::Relaxed) {
+            self.state
+                .error
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_or_insert_with(|| "the build stopped unexpectedly".to_string());
+        }
+        self.state.finished.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Make `state` the session's current build. A build that ended and was not announced yet ([`PreviewBuild::reported`])
+/// is kept for the frontend to announce ([`Session::take_unreported_builds`]), so that starting the next one right
+/// after it (as a build waiting in line does) does not lose its result, its failed count or its error.
+fn set_current(s: &mut Session, state: Arc<PreviewBuild>) {
+    if let Some(old) = s.preview_build.replace(state)
+        && old.finished.load(Ordering::Relaxed)
+        && !old.reported.load(Ordering::Relaxed)
+    {
+        s.keep_unreported_build(old);
+    }
+}
+
+/// What a build of `ids` was asked, as it runs later (from the line): the photos written out (the selection or the
+/// view may have changed by then), in the background (nothing waits for it then), and not queued again.
+fn request_for(command: &str, p: &Value, ids: &[lightcraft_catalog::PhotoId]) -> Request {
+    let mut params = p.as_object().cloned().unwrap_or_default();
+    for key in ["id", "queue", "wait"] {
+        params.remove(key);
+    }
+    params.insert("ids".into(), ids.iter().map(|id| id.0).collect());
+    Request { command: command.into(), params: Value::Object(params) }
+}
+
+/// The refusal of a build while another runs, unless the call asks to `queue`.
+const REFUSED: &str = "a preview build is already running";
+
+/// Builds wait in line ahead of one asked for now (not counting the line a build is being started from).
+fn line_ahead(s: &Session) -> bool {
+    !s.starting_waiting && s.activity.lane_waiting(Lane::Previews)
+}
+
+fn queue_param(p: &Value) -> bool {
+    p.get("queue").and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn build_running(s: &Session) -> bool {
+    s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed))
+}
+
+/// A build asked for with `queue`: while one runs (or others already wait) this one waits in line behind them →
+/// `{queued: id, place}`. `None`: nothing is ahead of it, so it starts now.
+fn wait_in_line(s: &Session, c: &str, p: &Value, what: &str, request: &Request) -> Option<Result<Value>> {
+    if !build_running(s) && !s.activity.lane_waiting(Lane::Previews) {
+        return None;
+    }
+    if p.get("wait").and_then(Value::as_bool) == Some(true) {
+        return Some(Err(bad(c, "a build that waits in line can't also be waited for: leave out wait")));
+    }
+    let (kind, label) = row_of(what);
+    Some(s.activity.enqueue(kind, label, request.clone()).map(|(id, place)| json!({"queued": id, "place": place})).map_err(|e| bad(c, e)))
 }
 
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
@@ -269,7 +378,6 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
         let _ = lanes;
         work();
     }
-    state.finished.store(true, Ordering::Relaxed);
 }
 
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
@@ -282,31 +390,40 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         "full" | "1:1" => None,
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
-    if s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
-        return Err(bad(C, "a preview build is already running"));
+    let queue = queue_param(p);
+    // (nor ahead of builds already waiting: the line starts them after this command, in the order asked; the build
+    // `start_waiting` is starting itself is not held back by the line it came out of)
+    if !queue && (build_running(s) || line_ahead(s)) {
+        return Err(bad(C, REFUSED));
     }
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
+    if queue && let Some(queued) = wait_in_line(s, C, p, "", &request_for(C, p, &ids)) {
+        return queued;
+    }
     let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
     #[cfg(test)]
     let state = Arc::new(PreviewBuild { total: jobs.len(), gate, ..Default::default() });
     #[cfg(not(test))]
     let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
-    s.preview_build = Some(state.clone());
-    let task = task_for(s, &state);
+    set_current(s, state.clone());
+    let run = Running { task: task_for(s, &state, request_for(C, p, &ids)), state: state.clone() };
     let lanes = lanes(jobs.len(), edge.is_none());
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
     if wait {
-        run_all(jobs, &state, &task, lanes);
+        run_all(jobs, &run.state, &run.task, lanes);
+        run.end();
         return Ok(state.json());
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         // the row stays while the worker runs (it is dropped with the closure, however that ends)
-        let st = state.clone();
         std::thread::Builder::new()
             .name("lc-build-previews".into())
-            .spawn(move || run_all(jobs, &st, &task, lanes))
+            .spawn(move || {
+                run_all(jobs, &run.state, &run.task, lanes);
+                run.end();
+            })
             .map_err(|e| bad(C, format!("could not start: {e}")))?;
     }
     Ok(state.json())
@@ -471,12 +588,17 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = s.media.smart_dir.clone().ok_or_else(|| bad(C, "smart previews need a library on disk"))?;
     let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
-    if background && s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
-        return Err(bad(C, "a preview build is already running"));
+    let queue = background && queue_param(p);
+    if background && !queue && (build_running(s) || line_ahead(s)) {
+        return Err(bad(C, REFUSED));
     }
     let ids = if p.get("ids").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
+    let what = if discard { "discarding smart previews" } else { "smart previews" };
+    if queue && let Some(queued) = wait_in_line(s, C, p, what, &request_for(C, p, &ids)) {
+        return queued;
+    }
     let mut jobs: Vec<SmartJob> = Vec::new();
-    for id in ids {
+    for &id in &ids {
         let Some(ph) = s.catalog.photo(id).cloned() else { continue };
         if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
             continue;
@@ -487,19 +609,17 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
-        let what = if discard { "discarding smart previews" } else { "smart previews" };
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
-        s.preview_build = Some(state.clone());
-        let task = task_for(s, &state);
-        let st = state.clone();
+        set_current(s, state.clone());
+        let run = Running { task: task_for(s, &state, request_for(C, p, &ids)), state: state.clone() };
         std::thread::Builder::new()
             .name("lc-smart-previews".into())
             .spawn(move || {
-                if let Err(e) = smart_run(&dir, custom, discard, jobs, Some((&st, &task))) {
+                if let Err(e) = smart_run(&dir, custom, discard, jobs, Some((&run.state, &run.task))) {
                     log::warn!("{C}: {e}");
-                    *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
+                    *run.state.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
                 }
-                st.finished.store(true, Ordering::Relaxed);
+                run.end();
             })
             .map_err(|e| bad(C, format!("could not start: {e}")))?;
         return Ok(state.json());
@@ -640,7 +760,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Smart Previews",
             [],
             None,
-            "{ids?, discard?: bool, background?: bool} — build (or discard) the smart previews of the selected photos (else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews)",
+            "{ids?, discard?: bool, background?: bool, queue?: bool} — build (or discard) the smart previews of the selected photos (else all in view): compact proxies in the library that keep photos editable and exportable (at proxy size) while their originals are offline; a damaged proxy (cut short) is rebuilt → {built, repaired, removed, failed}; with background (the app's menu) the files are read and written on a worker thread → {total, done, failed, repaired, running, what} like library.buildPreviews (progress: library.previewProgress, stop: library.cancelPreviews). A background one while a preview build runs is refused, or with queue waits in line for it, as library.buildPreviews does → {queued, place}",
             always,
             smart
         ),
@@ -667,7 +787,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
+            "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool, queue?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}. One build runs at a time (this, or Build / Discard Smart Previews in the background): while one runs another is refused, or with queue waits in line for it and starts by itself when the builds ahead of it end → {queued: its activity id, place: 1 = next}. It builds the photos chosen when it was asked; activity.list shows it waiting, activity.cancel takes it out of the line. Not with wait while one runs",
             always,
             build
         ),
@@ -715,5 +835,45 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+    // Given a build whose worker dies (or can't start), the build reads as finished and its row goes, so that a
+    // build waiting in line starts instead of being refused as "already running"
+    #[test]
+    fn a_build_whose_worker_dies_reads_as_finished_before_its_row_goes() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let s = Session::with_demo();
+        let state = Arc::new(super::PreviewBuild::default());
+        let run = super::Running {
+            task: super::task_for(&s, &state, crate::activity::Request { command: String::new(), params: serde_json::Value::Null }),
+            state: state.clone(),
+        };
+        assert!(s.activity.lane_busy(crate::activity::Lane::Previews));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _run = run;
+            panic!("synthetic worker panic");
+        }));
+        assert!(r.is_err());
+        assert!(state.finished.load(Ordering::Relaxed));
+        assert_eq!(state.error().as_deref(), Some("the build stopped unexpectedly"), "a crash is not a success that built nothing");
+        assert!(!s.activity.lane_busy(crate::activity::Lane::Previews));
+    }
+
+    // Given a build that marked itself finished, its row going leaves no error
+    #[test]
+    fn a_build_that_finished_leaves_no_error() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let s = Session::with_demo();
+        let state = Arc::new(super::PreviewBuild::default());
+        let run = super::Running {
+            task: super::task_for(&s, &state, crate::activity::Request { command: String::new(), params: serde_json::Value::Null }),
+            state: state.clone(),
+        };
+        state.finished.store(true, Ordering::Relaxed);
+        drop(run);
+        assert!(state.error().is_none());
     }
 }

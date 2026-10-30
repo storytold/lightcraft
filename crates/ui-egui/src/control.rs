@@ -148,8 +148,12 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
-        // every long-running task in flight, as the activity stack shows them (`activity.list`)
+        // every long-running task in flight and every task waiting in line (`activity.list`); the list under the bell draws them all, the waiting ones under "Waiting"
         "activity": app.session.activity.list(),
+        // the list of them under the top bar's bell is open (`view.tasks`)
+        "activityOpen": app.activity_open,
+        // the tasks that ended and left a row there (`activity.finished`)
+        "activityFinished": app.session.activity.finished(),
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
         "memory": memory(app),

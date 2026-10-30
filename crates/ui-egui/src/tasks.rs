@@ -6,16 +6,18 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
+use lightcraft_engine::activity::{Ending, Outcome, TaskGuard};
+
 use crate::LightcraftApp;
 
-/// Applies a task's result to the app (on the UI thread).
-type Finish = Box<dyn FnOnce(&mut LightcraftApp, &egui::Context) + Send>;
+/// Applies a task's result to the app (on the UI thread), and says how the task ended.
+type Finish = Box<dyn FnOnce(&mut LightcraftApp, &egui::Context) -> Outcome + Send>;
 
 struct Task {
     label: String,
     rx: Receiver<Finish>,
-    /// Its row in the activity stack (none for quiet tasks); goes with the task.
-    _guard: Option<lightcraft_engine::activity::TaskGuard>,
+    /// Its row in the activity stack (none for quiet tasks); it says how the task ended.
+    guard: Option<TaskGuard>,
 }
 
 /// The background tasks in flight.
@@ -43,13 +45,14 @@ impl Tasks {
 
 /// Run `work` on a worker thread, then `done(app, ctx, result)` on the UI thread (in the browser
 /// build, which has no threads, `work` runs at once and `done` on the next frame). With `kind`, the
-/// activity stack shows `label` meanwhile, without a count and without ✕ (the work can't be stopped).
+/// activity stack shows `label` meanwhile, without a count and without ✕ (the work can't be stopped);
+/// what `done` returns is how its row says the task ended.
 pub fn spawn<T: Send + 'static>(
     app: &mut LightcraftApp,
     label: &str,
     kind: Option<&'static str>,
     work: impl FnOnce() -> T + Send + 'static,
-    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) -> Outcome + Send + 'static,
 ) -> Result<(), String> {
     let guard = kind.map(|k| app.session.activity.start(k, label, lightcraft_engine::activity::Cancel::No));
     start(app, label, guard, work, done)
@@ -57,14 +60,14 @@ pub fn spawn<T: Send + 'static>(
 
 /// [`spawn`] for a task with progress that can stop: its row (`kind`, `label`) adopts `cancel`,
 /// the flag `work` checks, so the row's ✕ and `activity.cancel` stop it; `work` reports progress
-/// through the handle it is given.
+/// through the handle it is given; what `done` returns is how its row says the task ended.
 pub fn spawn_tracked<T: Send + 'static>(
     app: &mut LightcraftApp,
     label: &str,
     kind: &'static str,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     work: impl FnOnce(lightcraft_engine::activity::TaskHandle) -> T + Send + 'static,
-    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) -> Outcome + Send + 'static,
 ) -> Result<(), String> {
     let guard = app.session.activity.start(kind, label, lightcraft_engine::activity::Cancel::Flag(cancel));
     let handle = guard.handle();
@@ -75,15 +78,15 @@ pub fn spawn_tracked<T: Send + 'static>(
 fn start<T: Send + 'static>(
     app: &mut LightcraftApp,
     label: &str,
-    guard: Option<lightcraft_engine::activity::TaskGuard>,
+    guard: Option<TaskGuard>,
     work: impl FnOnce() -> T + Send + 'static,
-    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) -> Outcome + Send + 'static,
 ) -> Result<(), String> {
     let (tx, rx) = channel::<Finish>();
     let repaint = app.tasks.repaint.clone();
     let job = move || {
         let t = work();
-        let _ = tx.send(Box::new(move |app: &mut LightcraftApp, ctx: &egui::Context| done(app, ctx, t)));
+        let _ = tx.send(Box::new(move |app: &mut LightcraftApp, ctx: &egui::Context| done(app, ctx, t)) as Finish);
         if let Some(c) = repaint {
             c.request_repaint();
         }
@@ -92,7 +95,7 @@ fn start<T: Send + 'static>(
     std::thread::Builder::new().name(format!("lc-task-{label}")).spawn(job).map_err(|e| format!("{label}: could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
-    app.tasks.running.push(Task { label: label.to_string(), rx, _guard: guard });
+    app.tasks.running.push(Task { label: label.to_string(), rx, guard });
     Ok(())
 }
 
@@ -103,14 +106,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     while i < app.tasks.running.len() {
         match app.tasks.running[i].rx.try_recv() {
             Ok(finish) => {
-                app.tasks.running.remove(i);
-                finish(app, ctx);
+                let t = app.tasks.running.remove(i);
+                let outcome = finish(app, ctx);
+                if let Some(guard) = t.guard {
+                    guard.finish(outcome);
+                }
             }
             Err(TryRecvError::Empty) => i += 1,
             Err(TryRecvError::Disconnected) => {
                 // the worker died (a panic, already logged)
                 let t = app.tasks.running.remove(i);
                 app.toast(ctx, crate::i18n::tr_format!("{} failed", t.label));
+                if let Some(guard) = t.guard {
+                    guard.finish(Outcome::ended(Ending::Died));
+                }
             }
         }
     }

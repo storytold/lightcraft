@@ -40,12 +40,27 @@ pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
     Some(text)
 }
 
-/// The quit prompt's text while `count` cancellable tasks run (`names` lists them).
-fn tasks_message(count: usize, names: &str) -> String {
-    if count == 1 {
-        crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names)
+/// The quit prompt's text while `count` cancellable tasks run (`names` lists them) and `waiting` tasks wait in line.
+fn tasks_message(count: usize, names: &str, waiting: usize) -> String {
+    let text = match count {
+        0 => String::new(),
+        1 => crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names),
+        n => crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = n, names = names),
+    };
+    if waiting == 0 {
+        return text;
+    }
+    // (nothing waits across a quit: the files may change before the next launch)
+    let line = if waiting == 1 {
+        crate::i18n::tr("1 task waiting in line won't run.").to_string()
     } else {
-        crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = count, names = names)
+        crate::i18n::tr_format!("{n} tasks waiting in line won't run.", n = waiting)
+    };
+    // (sentences that end in a full-width stop are not followed by a space)
+    match text.chars().last() {
+        None => line,
+        Some('。') => format!("{text}{line}"),
+        Some(_) => format!("{text} {line}"),
     }
 }
 
@@ -57,17 +72,19 @@ fn unsaved_message(n: usize, e: &str) -> String {
 }
 
 /// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
-/// can be cancelled (an import, an export…) are asked about first; then changes that couldn't be
-/// written are retried — the log, then a snapshot of everything in memory.
+/// can be cancelled (an import, an export…) and tasks waiting in line (they would not run) are
+/// asked about first; then changes that couldn't be written are retried — the log, then a
+/// snapshot of everything in memory.
 pub fn may_close(app: &mut LightcraftApp) -> bool {
     if app.quit_confirmed {
         return true;
     }
     // before the library is touched: a Cancel here keeps working with it
     let running = app.session.activity.running_cancellable();
-    if !running.is_empty() {
+    let waiting = app.session.activity.waiting().len();
+    if !running.is_empty() || waiting > 0 {
         let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
-        app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(running.len(), &names)));
+        app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(running.len(), &names, waiting)));
         return false;
     }
     if app.session.unsaved().is_none() {

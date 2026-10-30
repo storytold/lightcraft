@@ -300,6 +300,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.presets",
             "panel.versions",
             "panel.activity",
+            "view.tasks",
             "panel.info",
             "panel.keywords",
             "---",
@@ -423,6 +424,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),
+        "view.tasks" => Some(app.activity_open),
         "view.fullScreenPreview" => Some(u.fullscreen),
         "view.lightsOut" => Some(u.lights_out != crate::state::LightsOut::On),
         "view.enterFullScreen" => Some(app.window_is_fullscreen),
@@ -468,21 +470,22 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
         "Previews" => {
             let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
+            // (while a build runs, the next one waits in line for it: `queue`)
             vec![
                 item(
                     "library.buildPreviews",
-                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
+                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge(), "queue": true}),
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item(
                     "library.buildPreviews",
-                    json!({"size": "full"}),
+                    json!({"size": "full", "queue": true}),
                     crate::i18n::tr_format!("Build 1:1 Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
@@ -490,18 +493,18 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 // (read and written on a worker thread: the originals may be on a slow drive)
                 item(
                     "library.smartPreviews",
-                    json!({"background": true}),
+                    json!({"background": true, "queue": true}),
                     crate::i18n::tr_format!("Build Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 item(
                     "library.smartPreviews",
-                    json!({"discard": true, "background": true}),
+                    json!({"discard": true, "background": true, "queue": true}),
                     crate::i18n::tr_format!("Discard Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 MenuNode::Separator,

@@ -25,9 +25,11 @@ pub(crate) fn show_model_folder(app: &mut LightcraftApp) -> Result<serde_json::V
             "Show in File Manager",
             Some("openModelFolder"),
             move || open_folder(&folder),
-            |app, ctx, result| {
-                if let Err(e) = result {
-                    app.toast_error(ctx, e);
+            |app, ctx, result| match result {
+                Ok(()) => lightcraft_engine::activity::Outcome::default(),
+                Err(e) => {
+                    app.toast_error(ctx, e.clone());
+                    lightcraft_engine::activity::Outcome::failed(e)
                 }
             },
         )?;

@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use lightcraft_catalog::PhotoId;
-use lightcraft_engine::activity::{Cancel, TaskGuard, Unit};
+use lightcraft_engine::activity::{Cancel, Ending, Outcome, TaskGuard, Unit};
 use lightcraft_engine::merge::{MergeJob, MergeOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -307,22 +307,26 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 } else {
                     "HDR"
                 });
-                match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
+                let (ending, said) = match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
                     Ok(v) => {
                         let message = added_message(what, &v);
                         app.merge.last_result = Some(v);
-                        app.toast(ctx, message);
+                        (Ending::Done, message)
                     }
                     Err(_) if t.cancel.load(Ordering::Relaxed) => {
                         // cancelling one merge of a batch stops the batch
                         app.merge.batch.clear();
-                        app.toast(ctx, crate::i18n::tr_format!("{what} merge cancelled", what = what))
+                        (Ending::Stopped, crate::i18n::tr_format!("{what} merge cancelled", what = what))
                     }
                     Err(e) => {
                         app.ui.status = e.to_string();
-                        app.toast(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what));
+                        (Ending::Failed, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what))
                     }
+                };
+                if let Some(guard) = t.guard {
+                    guard.finish(Outcome { ending, summary: said.clone(), ..Default::default() });
                 }
+                app.toast(ctx, said);
                 // a failed set doesn't stop the others
                 while !app.merge.batch.is_empty() {
                     match next_in_batch(app) {

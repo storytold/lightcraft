@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use lightcraft_engine::EngineError;
+use lightcraft_engine::activity::{Ending, Failure, Outcome};
 use lightcraft_engine::cmd::reload;
 use serde_json::{Value, json};
 
@@ -48,30 +49,48 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
         let total = items.len() as u64;
         task.progress(0, total);
         let results = reload::probe(probe.as_ref(), &items, &flag, &|done| task.progress(done as u64, total));
-        (items, results)
+        // the files that could not be read (a stop leaves the ones it never reached as errors: those are not failures)
+        let unread: Vec<Failure> = if flag.load(std::sync::atomic::Ordering::Relaxed) {
+            Vec::new()
+        } else {
+            items.iter().zip(&results).filter_map(|(i, r)| r.as_ref().err().map(|e| Failure { name: i.path.clone(), reason: e.clone() })).collect()
+        };
+        (items, results, unread)
     };
-    let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (items, results)| {
+    let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (items, results, unread): (_, _, Vec<Failure>)| {
+        let was_stopped = stopped.load(std::sync::atomic::Ordering::Relaxed);
+        let ending = if was_stopped {
+            Ending::Stopped
+        } else if unread.is_empty() {
+            Ending::Done
+        } else {
+            Ending::Problems
+        };
+        let outcome = Outcome { ending, failures: unread, ..Default::default() };
         if app.session.library_generation() != library {
-            return;
+            // the library was left: there is nothing to look at (a ✕ pressed before that still counts)
+            return outcome;
         }
         // as the command: one undo step, the durable save and the automatic XMP sidecar write
         if let Err(e) = app.session.execute_fn("photo.reload", |s| reload::apply(s, items, results).map(|ids| reload::to_json(&ids))) {
-            return app.toast_error(ctx, e.to_string());
+            app.toast_error(ctx, e.to_string());
+            return Outcome::failed(e.to_string());
         }
         let cleared = preview_only.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|ph| ph.preview_only.is_none())).count();
         // stopped before the files were read: they weren't tried again, so say nothing about them
         // (a raw that did decode before the stop is still reported)
-        if stopped.load(std::sync::atomic::Ordering::Relaxed) && cleared == 0 {
-            return;
+        if was_stopped && cleared == 0 {
+            return outcome;
         }
         let message = match (count, preview_only.len(), cleared) {
             (1, 1, 1) => crate::i18n::tr("This raw is now developed from its raw data").to_string(),
             (1, 1, _) => crate::i18n::tr("This raw variant still can't be decoded").to_string(),
-            (_, _, 0) => return,
+            (_, _, 0) => return outcome,
             (_, _, 1) => crate::i18n::tr("1 raw can now be developed from its raw data").to_string(),
             (_, _, n) => crate::i18n::tr_format!("{n} raws can now be developed from their raw data", n = n),
         };
         app.toast(ctx, message);
+        outcome
     };
     if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, "reload", cancel, work, done) {
         return Some(Err(e));

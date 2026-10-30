@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use lightcraft_engine::activity::{Cancel, TaskGuard};
+use lightcraft_engine::activity::{Cancel, Ending, Failure, Outcome, TaskGuard};
 use lightcraft_engine::sync::{FolderChanges, SyncChoice, SyncCommit, SyncInput, SyncJob, SyncProgress, SyncStep, scan_with};
 use serde_json::{Value, json};
 
@@ -106,6 +106,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     if task.guard.is_cancelled() {
         // ✕ on its row: a scan stopped part-way has nothing to show
+        if let Some(task) = app.sync.take() {
+            task.progress.files.cancel.store(true, Ordering::Relaxed);
+            task.guard.finish(Outcome::ended(Ending::Stopped));
+        }
         cancel(app);
         app.ui.dialog = None;
         return;
@@ -118,13 +122,24 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(c) => c,
         Err(std::sync::mpsc::TryRecvError::Empty) => return,
         Err(_) => {
-            app.sync = None;
+            // the worker died (a panic, logged)
+            if let Some(task) = app.sync.take() {
+                task.guard.finish(Outcome::ended(Ending::Died));
+            }
             app.ui.dialog = None;
             app.toast(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };
-    app.sync = None;
+    if let Some(task) = app.sync.take() {
+        task.guard.finish(if changes.offline {
+            Outcome::failed(crate::i18n::tr("This folder isn't there: it was moved or renamed, or its disk isn't connected."))
+        } else if !changes.unreadable.is_empty() {
+            unreadable_outcome(&changes)
+        } else {
+            Outcome::default()
+        });
+    }
     let c = SyncCounts {
         offline: changes.offline,
         new: changes.new.len(),
@@ -139,6 +154,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(Dialog::SynchronizeFolder { counts, .. }) = &mut app.ui.dialog {
         *counts = Some(c);
     }
+}
+
+/// The scan's end when files in the folder could not be read: the row names each one by where it is below the
+/// scanned folder, with why.
+fn unreadable_outcome(changes: &FolderChanges) -> Outcome {
+    let roots = [changes.path.clone()];
+    let failures = changes
+        .unreadable
+        .iter()
+        .map(|c| Failure { name: crate::import::failure_name(&c.path, &roots), reason: c.error.clone().unwrap_or_default() })
+        .take(lightcraft_engine::activity::MAX_FAILURES)
+        .collect();
+    let failed = changes.unreadable.len();
+    Outcome { ending: Ending::Problems, detail: crate::import::not_readable_text(failed), failed, failures, ..Default::default() }
 }
 
 /// How far the scan is: the folders and files listed while it lists the folder, else the files
@@ -275,7 +304,8 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     job();
     let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
-    app.sync_run = Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new(), guard });
+    app.sync_run =
+        Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new(), guard: Some(guard) });
     Ok(json!({"started": true}))
 }
 
@@ -292,8 +322,8 @@ pub struct SyncRun {
     commit: Option<SyncCommit>,
     /// Cancel was pressed: nothing new is started; what was readied is still committed.
     stopping: bool,
-    /// Its row in the activity stack (its ✕ is Cancel).
-    guard: TaskGuard,
+    /// Its row in the activity stack (its ✕ is Cancel); taken at the end to say how the run went.
+    guard: Option<TaskGuard>,
 }
 
 impl SyncRun {
@@ -332,7 +362,7 @@ pub(crate) fn stall_run(app: &mut LightcraftApp, name: &str) -> Box<dyn std::any
         commit: None,
         stopping: false,
         not_saved: Vec::new(),
-        guard,
+        guard: Some(guard),
     });
     Box::new(tx)
 }
@@ -342,11 +372,13 @@ pub(crate) fn stall_run(app: &mut LightcraftApp, name: &str) -> Box<dyn std::any
 pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(run) = app.sync_run.as_mut() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    if run.guard.is_cancelled() {
+    if run.guard.as_ref().is_some_and(TaskGuard::is_cancelled) {
         run.stopping = true;
     }
     let (done, total) = run.counts();
-    run.guard.progress(done as u64, total as u64);
+    if let Some(guard) = &run.guard {
+        guard.progress(done as u64, total as u64);
+    }
     let mut steps = Vec::new();
     let finished = loop {
         match run.rx.try_recv() {
@@ -372,8 +404,8 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
         run.commit = Some(commit);
         return;
     }
-    let (name, stopped, crashed, mut not_saved) =
-        (run.name.clone(), run.stopping, run.crashed.load(Ordering::Relaxed), std::mem::take(&mut run.not_saved));
+    let (name, stopped, crashed, mut not_saved, guard) =
+        (run.name.clone(), run.stopping, run.crashed.load(Ordering::Relaxed), std::mem::take(&mut run.not_saved), run.guard.take());
     app.sync_run = None;
     let mut report = None;
     if let Err(e) = app.session.execute_fn("folder.synchronize", |s| {
@@ -405,6 +437,19 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
         parts.push(format!("{}: {e}", crate::i18n::tr("Not saved")));
     }
     let text = if parts.is_empty() { crate::i18n::tr("The library is up to date with this folder.").to_string() } else { parts.join(" · ") };
+    if let Some(guard) = guard {
+        let ending = if crashed {
+            Ending::Died
+        } else if stopped {
+            Ending::Stopped
+        } else if !r.failed.is_empty() || !not_saved.is_empty() {
+            Ending::Problems
+        } else {
+            Ending::Done
+        };
+        let failures = r.failed.iter().map(|(path, e)| Failure { name: path.clone(), reason: e.clone() }).collect();
+        guard.finish(Outcome { ending, summary: format!("{name}: {text}"), failures, ..Default::default() });
+    }
     if not_saved.is_empty() && !crashed {
         app.toast(ctx, format!("{name}: {text}"));
     } else {
