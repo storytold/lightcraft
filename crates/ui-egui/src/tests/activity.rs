@@ -534,3 +534,211 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
 }
+
+/// What `services.keep_awake` was told, in order.
+type Told = std::rc::Rc<std::cell::RefCell<Vec<Option<String>>>>;
+
+fn demo_keeping_awake() -> (Headless, Told) {
+    let told = Told::default();
+    let sink = told.clone();
+    let keep_awake: crate::KeepAwakeFn = Box::new(move |reason| sink.borrow_mut().push(reason.map(str::to_owned)));
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, keep_awake: Some(keep_awake), ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    told.borrow_mut().clear();
+    (h, told)
+}
+
+#[test]
+fn a_running_job_is_told_to_the_host_once_and_its_end_too() {
+    let (mut h, told) = demo_keeping_awake();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(told.borrow().is_empty(), "nothing runs: the host hears nothing");
+
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(*told.borrow(), [Some("Exporting".to_string())], "told once, not on every frame");
+
+    drop(g);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(*told.borrow(), [Some("Exporting".to_string()), None]);
+}
+
+#[test]
+fn a_cancelled_job_is_released_before_it_stops() {
+    let (mut h, told) = demo_keeping_awake();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.app.session.activity.cancel(g.id()).unwrap();
+    h.step();
+    assert_eq!(*told.borrow(), [Some("Exporting".to_string()), None]);
+}
+
+#[test]
+fn a_window_with_no_host_service_ignores_jobs() {
+    let mut h = demo();
+    let _g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    assert_eq!(h.app.awake_told, None);
+}
+
+/// What `services.dock_badge` was told, in order.
+type Badges = std::rc::Rc<std::cell::RefCell<Vec<usize>>>;
+
+fn demo_with_dock_badge() -> (Headless, Badges) {
+    let badges = Badges::default();
+    let sink = badges.clone();
+    let dock_badge: crate::DockBadgeFn = Box::new(move |count| sink.borrow_mut().push(count));
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, dock_badge: Some(dock_badge), ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    badges.borrow_mut().clear();
+    (h, badges)
+}
+
+#[test]
+fn the_dock_badge_follows_the_number_of_running_jobs_and_clears_when_idle() {
+    let (mut h, badges) = demo_with_dock_badge();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(badges.borrow().is_empty(), "nothing runs: the host hears nothing");
+
+    let export = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    let import = h.app.session.activity.start("import", "Importing", Cancel::Yes);
+    h.step();
+    h.step();
+    assert_eq!(*badges.borrow(), [1, 2], "told on each change, not on every frame");
+
+    drop(export);
+    h.step();
+    drop(import);
+    h.step();
+    assert_eq!(*badges.borrow(), [1, 2, 1, 0]);
+}
+
+#[test]
+fn a_job_asked_to_stop_stays_in_the_dock_count_until_it_has_stopped() {
+    let (mut h, badges) = demo_with_dock_badge();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.app.session.activity.cancel(g.id()).unwrap();
+    h.step();
+    assert_eq!(*badges.borrow(), [1]);
+    drop(g);
+    h.step();
+    assert_eq!(*badges.borrow(), [1, 0]);
+}
+
+/// What `services.notify` was shown, in order.
+type Notices = std::rc::Rc<std::cell::RefCell<Vec<crate::Notice>>>;
+
+fn demo_with_notifications() -> (Headless, Notices) {
+    let shown = Notices::default();
+    let sink = shown.clone();
+    let notify: crate::NotifyFn = Box::new(move |n| sink.borrow_mut().push(n.clone()));
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, notify: Some(notify), ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    shown.borrow_mut().clear();
+    (h, shown)
+}
+
+/// A job runs in front, then another app takes the keyboard (the window reports it unfocused) and the job ends.
+fn end_in_the_background(h: &mut Headless, kind: &'static str, label: &str) {
+    let g = h.app.session.activity.start(kind, label, Cancel::Yes);
+    h.step();
+    h.step();
+    h.window_focused = false;
+    drop(g);
+    h.step();
+}
+
+#[test]
+fn a_job_that_ends_in_the_background_is_announced() {
+    let (mut h, shown) = demo_with_notifications();
+    end_in_the_background(&mut h, "export", "Exporting");
+    assert!(h.step_until(T, |_| !shown.borrow().is_empty()), "the announcement is made once the toast had its moment");
+    let shown = shown.borrow();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!((shown[0].title.as_str(), shown[0].body.as_str()), ("LightCraft", "Exporting finished"));
+}
+
+#[test]
+fn the_toast_that_reports_the_end_is_what_the_notification_says() {
+    let (mut h, shown) = demo_with_notifications();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.step();
+    h.window_focused = false;
+    drop(g);
+    h.app.toast_for(&h.view.ctx.clone(), "Exported 24 photos", 15.0);
+    assert!(h.step_until(T, |_| !shown.borrow().is_empty()));
+    assert_eq!(shown.borrow()[0].body, "Exported 24 photos");
+}
+
+#[test]
+fn a_job_that_ends_while_the_window_is_in_front_is_not_announced() {
+    let (mut h, shown) = demo_with_notifications();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.step();
+    drop(g);
+    // (the simulated clock runs well past the grace the announcement would wait for)
+    for _ in 0..120 {
+        h.step();
+    }
+    assert!(shown.borrow().is_empty(), "{:?}", shown.borrow());
+}
+
+/// Frames enough for the simulated clock to run well past the grace an announcement would wait for.
+fn past_the_grace(h: &mut Headless) {
+    for _ in 0..120 {
+        h.step();
+    }
+}
+
+#[test]
+fn a_job_that_was_asked_to_stop_makes_no_notification() {
+    let (mut h, shown) = demo_with_notifications();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    h.step();
+    h.app.session.activity.cancel(g.id()).unwrap();
+    h.step();
+    h.window_focused = false;
+    drop(g);
+    h.step();
+    past_the_grace(&mut h);
+    assert!(shown.borrow().is_empty(), "{:?}", shown.borrow());
+}
+
+#[test]
+fn work_that_starts_by_itself_makes_no_notification() {
+    let (mut h, shown) = demo_with_notifications();
+    end_in_the_background(&mut h, "cache", "Tidying the thumbnail cache");
+    past_the_grace(&mut h);
+    assert!(shown.borrow().is_empty(), "{:?}", shown.borrow());
+}
+
+#[test]
+fn with_the_setting_off_a_job_that_ends_in_the_background_makes_no_notification() {
+    let (mut h, shown) = demo_with_notifications();
+    h.app.ui.settings.notify_when_done = false;
+    end_in_the_background(&mut h, "import", "Importing");
+    past_the_grace(&mut h);
+    assert!(shown.borrow().is_empty(), "{:?}", shown.borrow());
+}
+
+#[test]
+fn notifications_are_on_for_settings_saved_before_they_existed() {
+    let old: crate::state::AppSettings = serde_json::from_value(json!({"libraryPath": "/somewhere"})).unwrap();
+    assert!(old.notify_when_done);
+    assert_eq!(serde_json::to_value(&old).unwrap()["notifyWhenDone"], true);
+}

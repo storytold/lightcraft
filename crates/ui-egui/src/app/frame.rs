@@ -40,10 +40,94 @@ impl LightcraftApp {
         }
     }
 
+    /// Tell the host what should keep the machine awake (`services.keep_awake`), when that changes. While a job
+    /// holds, a repaint is asked for every second so its end is noticed (and the hold released) even when nothing
+    /// else is drawn. Once the app is shutting down the hold is gone for good ([`LightcraftApp::release_keep_awake`]).
+    pub(super) fn sync_keep_awake(&mut self, ctx: &egui::Context) {
+        if lightcraft_engine::gpu::shutting_down() {
+            return;
+        }
+        let Some(keep_awake) = self.services.keep_awake.as_mut() else { return };
+        let reason = self.session.activity.wake_reason();
+        if reason.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        if reason != self.awake_told {
+            keep_awake(reason.as_deref());
+            self.awake_told = reason;
+        }
+    }
+
+    /// Let go of the hold the host was told about, if any (quitting).
+    pub(super) fn release_keep_awake(&mut self) {
+        if let Some(keep_awake) = self.services.keep_awake.as_mut()
+            && self.awake_told.take().is_some()
+        {
+            keep_awake(None);
+        }
+    }
+
+    /// Tell the host how many jobs are running (`services.dock_badge`), when that changes. A job still stopping counts
+    /// until it has stopped, so the count is also looked at every second while it is above zero. Once the app is
+    /// shutting down the badge is gone for good ([`LightcraftApp::release_dock_badge`]).
+    pub(super) fn sync_dock_badge(&mut self, ctx: &egui::Context) {
+        if lightcraft_engine::gpu::shutting_down() {
+            return;
+        }
+        let Some(dock_badge) = self.services.dock_badge.as_mut() else { return };
+        let running = self.session.activity.running_jobs();
+        if running > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        if running != self.badge_told {
+            dock_badge(running);
+            self.badge_told = running;
+        }
+    }
+
+    /// Tell the host, through `services.notify`, that jobs the person started have ended: when the window is in the
+    /// background (another app has the keyboard, or the window is minimized; `raw.focused` and the viewport state are
+    /// refreshed by a hidden logic tick too, unlike `i.focused`) and the setting is on.
+    /// The watch always looks, so a job that ends in front is not announced later. While one waits for its toast the
+    /// window looks again soon.
+    pub(super) fn sync_job_notices(&mut self, ctx: &egui::Context) {
+        if self.services.notify.is_none() || lightcraft_engine::gpu::shutting_down() {
+            return;
+        }
+        let jobs = self.session.activity.person_jobs();
+        let now = self.tick_now();
+        let in_background = ctx.input(|i| !i.raw.focused || i.viewport().minimized.unwrap_or(false));
+        let toast = self.ui.toast.as_ref().map(|t| (t.0.as_str(), t.1));
+        let ended = self.job_watch.update(now, &jobs, toast, in_background);
+        if self.job_watch.waiting() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        let Some(ended) = ended else { return };
+        if !self.ui.settings.notify_when_done || !ended.away {
+            return;
+        }
+        let notice = crate::job_notice::compose(&ended);
+        if let Some(notify) = self.services.notify.as_mut() {
+            notify(&notice);
+        }
+    }
+
+    /// Clear the badge the host was told about, if any (quitting).
+    pub(super) fn release_dock_badge(&mut self) {
+        if let Some(dock_badge) = self.services.dock_badge.as_mut()
+            && std::mem::take(&mut self.badge_told) != 0
+        {
+            dock_badge(0);
+        }
+    }
+
     /// Queues and timers. Each consumed queue is drained once per call; time-gated work uses the
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
+        self.sync_dock_badge(ctx);
+        self.sync_job_notices(ctx);
+        self.sync_keep_awake(ctx);
         panels::notices::logic(self);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {

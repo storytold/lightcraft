@@ -260,6 +260,8 @@ pub struct Headless {
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
     pub window_maximized: bool,
+    /// The simulated window has the keyboard (false: another app is in front, and the window reports so each frame).
+    pub window_focused: bool,
     /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`,
     /// `CursorPosition`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
@@ -307,6 +309,7 @@ impl Headless {
             control: tx,
             quit: false,
             window_maximized: false,
+            window_focused: true,
             window_commands: vec![],
             last_cursor: egui::CursorIcon::Default,
             #[cfg(test)]
@@ -346,6 +349,7 @@ impl Headless {
         (self.size, self.pixels_per_point) = bounded_viewport(self.size, self.pixels_per_point);
         let mut raw = HeadlessView::raw_input(self.size, self.pixels_per_point, self.time, std::mem::take(&mut self.events));
         raw.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.window_maximized);
+        raw.focused = self.window_focused;
         raw.max_texture_side = (self.reported_texture_side != Some(self.max_texture_side)).then_some(self.max_texture_side);
         self.reported_texture_side = Some(self.max_texture_side);
         // A headless run's timers follow its simulated clock, not the host's wall clock.

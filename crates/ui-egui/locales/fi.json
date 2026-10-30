@@ -2327,5 +2327,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Notifications": "Ilmoitukset",
+  "Notify me when a job finishes while LightCraft is in the background": "Ilmoita minulle, kun työ päättyy LightCraftin ollessa taustalla"
 }

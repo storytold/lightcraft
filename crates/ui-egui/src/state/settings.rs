@@ -132,6 +132,8 @@ pub struct AppSettings {
     /// A click on the dimmed backdrop around a dialog closes it, like Esc (off: a stray click
     /// never throws away a dialog's choices).
     pub close_dialogs_outside: bool,
+    /// A system notification when a job the person started ends while the window is in the background (macOS).
+    pub notify_when_done: bool,
     /// Photos and folders dropped on the window import at once, without the import review.
     pub import_dropped_directly: bool,
     /// GPU rendering allowed (`app.gpu`).
@@ -218,6 +220,7 @@ impl Default for AppSettings {
             confirm_delete: true,
             ask_before_move: true,
             close_dialogs_outside: false,
+            notify_when_done: true,
             import_dropped_directly: false,
             gpu: true,
             preview_limit: 0,

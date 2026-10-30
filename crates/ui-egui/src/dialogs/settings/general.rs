@@ -75,6 +75,16 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
+    // (the host that can show system notifications, macOS, says so by providing the service)
+    if app.services.notify.is_some() {
+        heading(ui, t, crate::i18n::tr("Notifications"));
+        check(
+            ui,
+            "settings.notifyWhenDone",
+            &mut app.ui.settings.notify_when_done,
+            "Notify me when a job finishes while LightCraft is in the background",
+        );
+    }
     heading(ui, t, crate::i18n::tr("External Editing"));
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
         crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
