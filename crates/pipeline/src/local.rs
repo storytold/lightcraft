@@ -338,11 +338,11 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 }
 
 /// Median radius (px) of the highlights/shadows base of `s`'s rendering process at `px_per_long`:
-/// 0 (no median) under V1, [`base_detail_radius`] from V2.
+/// 0 (no median) under V1, [`base_detail_radius`] from V2 (V3 keeps V2's base; it changes the tone map).
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 => base_detail_radius(px_per_long),
     }
 }
 

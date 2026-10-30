@@ -1975,7 +1975,7 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
     let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
     assert_eq!(ids.len(), 2);
     s.execute("develop.autoSync", &json!({"on": false})).unwrap();
-    // Keep distinct stored processes explicit: the default is now V2; no rendering claim is made.
+    // Keep distinct stored processes explicit (V1 and V2 here); no rendering claim is made.
     let mut expected = [DevelopSettings::default(), DevelopSettings { process: ProcessVersion(2), ..DevelopSettings::default() }];
     expected[0].process = ProcessVersion(1);
     expected[0].light.exposure = 0.5;

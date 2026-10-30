@@ -241,6 +241,13 @@ impl ToneMap {
         self.toe
     }
 
+    /// The same tone map with the V1/V2 rendering of a lifted toe: the LUT keeps its lift, but
+    /// the per-pixel stage scales chromaticity up as before instead of fading towards grey (V3).
+    pub(crate) fn without_toe(mut self) -> Self {
+        self.toe = 0.0;
+        self
+    }
+
     /// Chroma scale at display luminance `o` (exactly 1 everywhere unless a camera look sets it).
     #[inline]
     pub fn chroma_scale(&self, o: f32) -> f32 {
