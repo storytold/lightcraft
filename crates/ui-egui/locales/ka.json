@@ -2734,5 +2734,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Moving photos": "ფოტოების გადატანა",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "გადატანა შეცდომის გამო შეჩერდა (იხილეთ ჟურნალი). ბიბლიოთეკა მიჰყვება უკვე გადატანილ ფაილებს; XMP გვერდითი ფაილი შეიძლება ძველ ადგილას დარჩენილიყოს."
 }

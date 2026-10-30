@@ -104,7 +104,6 @@
   "Matches: {}": "დამთხვევა: {}",
   "Merging… {stage} {:.0}%": "გაერთიანება… {stage} {:.0}%",
   "Move {what} to Recently Deleted?": "გადავიდეს {what} ახლახან წაშლილებში?",
-  "Moved {} photo(s)": "გადატანილია ფოტო: {}",
   "Moved; {} photo(s) relinked": "გადატანილია; ხელახლა დაკავშირდა ფოტო: {}",
   "Named ({named_n})": "სახელიანი ({named_n})",
   "New Folder in “{name}”": "ახალი საქაღალდე „{name}“-ში",
@@ -298,12 +297,12 @@
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
   "Listing folders — folders: {folders}, files: {files}": "საქაღალდეების ჩამოთვლა — საქაღალდეები: {folders}, ფაილები: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
   "Drop to review {n} item{} for import": "ჩააგდეთ იმპორტამდე გადასახედად (ელემენტები: {n}){:.0}",
   "Drop to import {n} item{}": "ჩააგდეთ იმპორტისთვის (ელემენტები: {n}){:.0}",
   "Drop to import {n} preset{}": "ჩააგდეთ პრესეტების იმპორტისთვის: {n}{:.0}",
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "„{1}“-ში გადატანილია ფოტო: {n}{0:.0}. რედაქტირება → გაუქმება დააბრუნებს მათ."
 }

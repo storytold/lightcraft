@@ -2343,6 +2343,8 @@
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Ein Gesichtsmodell nutzt die GPU nur, wenn eine Prüfung zeigt, dass sie dieselben Ergebnisse schneller liefert.",
   "Checking the GPU for faces": "GPU für Gesichter wird geprüft",
+  "Moving photos": "Fotos werden verschoben",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "Das Verschieben wurde durch einen Fehler angehalten (siehe Protokoll). Die Bibliothek folgt den Dateien, die schon verschoben waren; eine XMP-Begleitdatei kann am alten Ort geblieben sein.",
   "Set Folder Color Label": "Ordner-Farbmarkierung festlegen",
   "Photo Below": "Foto darunter",
   "Photo Above": "Foto darüber",

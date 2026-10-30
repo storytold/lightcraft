@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use lightcraft_catalog::{MediaKind, Op, Source};
+use lightcraft_catalog::{MediaKind, Op, PhotoId, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, has_active, has_selection};
@@ -57,9 +57,32 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
     Ok(out.to_string_lossy().to_string())
 }
 
+/// Why `ph` isn't converted, if it isn't.
+fn not_convertible(ph: &lightcraft_catalog::Photo) -> Option<&'static str> {
+    if ph.kind != MediaKind::Raw {
+        Some("not a raw photo")
+    } else if ph.copy_of.is_some() {
+        Some("a virtual copy")
+    } else if ph.format.eq_ignore_ascii_case("DNG") {
+        Some("already a DNG")
+    } else {
+        None
+    }
+}
+
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.convertToDng";
     let ids = s.targets(p)?;
+    // before the first DNG is written: a raw on its way to another folder is read half-moved, and the
+    // DNG would be left next to a file that is no longer there
+    let moving: Vec<PhotoId> = ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            s.catalog.photo(*id).is_some_and(|ph| matches!(&ph.source, Source::File { path } if not_convertible(ph).is_none() && s.is_moving(path)))
+        })
+        .collect();
+    s.refuse_detaching(&moving)?;
     let mut ops = Vec::new();
     let mut converted = Vec::new();
     let mut skipped = Vec::new();
@@ -69,17 +92,8 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
             skipped.push(json!([id.0, "not a file"]));
             continue;
         };
-        if ph.kind != MediaKind::Raw || ph.format.eq_ignore_ascii_case("DNG") || ph.copy_of.is_some() {
-            skipped.push(json!([
-                id.0,
-                if ph.kind != MediaKind::Raw {
-                    "not a raw photo"
-                } else if ph.copy_of.is_some() {
-                    "a virtual copy"
-                } else {
-                    "already a DNG"
-                }
-            ]));
+        if let Some(why) = not_convertible(&ph) {
+            skipped.push(json!([id.0, why]));
             continue;
         }
         let packet = crate::sidecar::sidecar_packet(&ph, &s.catalog);

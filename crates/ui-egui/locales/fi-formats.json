@@ -130,7 +130,6 @@
   "Move {n} photo{} to “{}”?": "Siirretäänkö kuvat kohteeseen ”{1}” ({n}){0:.0}?",
   "Move {what} to Recently Deleted?": "Siirretäänkö {what} Äskettäin poistettuihin?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Siirretty kuvia kohteeseen ”{1}”: {n}{0:.0}. Muokkaa → Kumoa siirtää ne takaisin.",
-  "Moved {} photo(s)": "Siirretty kuvia: {}",
   "Moved; {} photo(s) relinked": "Siirretty; yhdistetty uudelleen kuvia: {}",
   "Named ({named_n})": "Nimetyt ({named_n})",
   "New Folder in “{name}”": "Uusi kansio kohteessa ”{name}”",

@@ -1191,6 +1191,8 @@
   "Moves every photo imported from this disk to Recently Deleted; no file is touched": "Memindahkan semua foto yang diimpor dari disk ini ke Baru dihapus; tidak ada file yang diubah",
   "Moves the files and their XMP sidecars into this folder; never overwrites": "Memindahkan file beserta file sidecar XMP-nya ke folder ini; file yang sudah ada tidak akan ditimpa",
   "Moves the photos imported from this folder to Recently Deleted; no file is touched": "Memindahkan foto yang diimpor dari folder ini ke Baru dihapus; file di disk tidak diubah",
+  "Moving photos": "Memindahkan foto",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "Pemindahan dihentikan oleh kesalahan (lihat log). Pustaka mengikuti file yang sudah dipindahkan; file sidecar XMP mungkin tertinggal di tempat lama.",
   "Multi": "Multi",
   "Muted": "Redup",
   "Muted Film": "Film Kalem",

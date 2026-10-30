@@ -248,7 +248,6 @@
   "{what} merge cancelled": "{what}-Zusammenfügung abgebrochen",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Übersprungen: {n} lokale Fotos{0:.0} – Alben enthalten Bibliotheksfotos (zuerst zu „Meine Fotos“ hinzufügen)",
   "New Folder in “{name}”": "Neuer Ordner in „{name}“",
-  "Moved {} photo(s)": "{} Foto(s) verschoben",
   "not added to Apple Photos: {e}": "nicht zu Apple Fotos hinzugefügt: {e}",
   "{n} added to Apple Photos album “{album}”": "{n} zum Apple-Fotos-Album „{album}“ hinzugefügt",
   "{n} added to Apple Photos": "{n} zu Apple Fotos hinzugefügt",

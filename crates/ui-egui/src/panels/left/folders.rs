@@ -426,7 +426,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
             let library = app.session.library_generation();
             app.ui.dialog = Some(crate::state::Dialog::MovePhotos { ids, folder: n.path.clone(), name, dont_ask: false, library });
         } else {
-            move_photos_here(app, ui.ctx(), Some(&ids), &n.path, &name);
+            move_photos_here(app, ui.ctx(), Some(&ids), &n.path);
         }
     }
 }
@@ -456,24 +456,6 @@ fn spring_open(ui: &egui::Ui, n: &FolderNode, open_id: egui::Id, open: &mut bool
     }
 }
 
-/// Move photos (`ids`, else the selection) into the folder `path` on disk (`photo.moveToFolder`).
-/// Photos that leave the view leave the selection, so nothing done next (Delete, an edit) reaches
-/// photos no longer on screen. How many moved, or why none did.
-pub(crate) fn move_photos(app: &mut LightcraftApp, ids: Option<&[u64]>, path: &str) -> Result<u64, String> {
-    let mut params = json!({"folder": path});
-    if let Some(ids) = ids {
-        params["ids"] = json!(ids);
-    }
-    let r = app.run("photo.moveToFolder", params)?;
-    let visible: std::collections::HashSet<lightcraft_catalog::PhotoId> = app.session.visible_cloned().into_iter().collect();
-    let sel = &mut app.session.selection;
-    sel.ids.retain(|id| visible.contains(id));
-    if sel.active.is_some_and(|a| !visible.contains(&a)) {
-        sel.active = sel.ids.first().copied();
-    }
-    Ok(r["moved"].as_u64().unwrap_or(0))
-}
-
 /// What a move of `n` photos into the folder `name` says: how many moved and that Undo moves them
 /// back, or that they were there already.
 pub(crate) fn moved_text(n: u64, name: &str) -> String {
@@ -484,12 +466,15 @@ pub(crate) fn moved_text(n: u64, name: &str) -> String {
     }
 }
 
-/// [`move_photos`], saying how it went in a toast.
-fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[u64]>, path: &str, name: &str) {
-    match move_photos(app, ids, path) {
-        Ok(n) => app.toast(ctx, moved_text(n, name)),
-        Err(e) => app.toast(ctx, e),
+/// Move photos (`ids`, else the selection) into the folder `path` on disk, in the background
+/// (`move_task`: a toast says how it went once it ends); a toast says why when it can't begin.
+fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[u64]>, path: &str) {
+    let mut params = json!({"folder": path});
+    if let Some(ids) = ids {
+        params["ids"] = json!(ids);
     }
+    // (a refusal is told in a toast by `start`)
+    let _ = crate::move_task::start(app, ctx, &params);
 }
 
 /// The context menu of a Folders row: a folder's own, a disk's (remove it), none for the
@@ -637,7 +622,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
                 .on_hover_text(crate::i18n::tr("Moves the files and their XMP sidecars into this folder; never overwrites"))
                 .clicked()
         {
-            move_photos_here(app, ui.ctx(), None, path, &name);
+            move_photos_here(app, ui.ctx(), None, path);
             ui.close();
         }
         if app.services.reveal.is_some()
