@@ -8,6 +8,11 @@ CPU fast guided-filter allocation measurements and reproduction commands are doc
 [guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
 and does not change the GPU's coefficient buffers.
 
+Process V3's camera-look Contrast and Blacks share the CPU's generated lookup tables and
+ProPhoto matrices. `finish.wgsl::light_ops` applies them after V2's Whites tone curve and
+before the colour stage. Full frames and render windows use the same pointwise operators;
+see [calibrated Light operators](light-v3.md) for HDR rules and limits.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask

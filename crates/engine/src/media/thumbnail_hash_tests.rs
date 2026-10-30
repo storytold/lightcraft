@@ -6,6 +6,77 @@ fn session() -> crate::Session {
     s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     s
 }
+/// Settings saved by a newer LightCraft (a process number this build doesn't know) render with
+/// this build's latest process, and a build that resolved the number to an older process
+/// cached other pixels under the same settings hash: the persistent keys (thumbnails, the
+/// loupe's view render, variants) name the process the settings render with, so those are
+/// never served (review of 5a7016c8: a catalog saved with a newer process kept main's V2 thumbnails).
+#[test]
+fn persistent_keys_name_the_process_the_settings_render_with() {
+    use lightcraft_develop::ProcessVersion;
+    let mut s = session();
+    let newer = DevelopSettings { process: ProcessVersion(ProcessVersion::LATEST.0 + 1), ..DevelopSettings::default() };
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(newer.clone()), label: "newer".into(), edited: None }).unwrap();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let unnamed = |kind: Option<&str>, size: u64| {
+        let mut h = Hasher128::new();
+        h.str(&content_key(&p));
+        if let Some(k) = kind {
+            h.str(k);
+        }
+        h.u64(newer.hash64()).u64(size).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key()).finish()
+    };
+    let named = |kind: Option<&str>, size: u64, process: u64| {
+        let mut h = Hasher128::new();
+        h.str(&content_key(&p));
+        if let Some(k) = kind {
+            h.str(k);
+        }
+        h.u64(newer.hash64()).u64(size).u64(RENDER_CACHE_VERSION).u64(process).u64(crate::camera_profiles::cache_key()).finish()
+    };
+    let resolved = u64::from(lightcraft_develop::Process::LATEST.version().0);
+    let keys = [
+        (s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1, None, 256),
+        (crate::Session::view_key(&p, true), Some("view"), 1),
+        (crate::Session::variant_key(&p, &newer, 256), Some("variant"), 256),
+    ];
+    for (key, kind, size) in keys {
+        assert_ne!(key, unnamed(kind, size), "old builds did not name their resolved process");
+        assert_eq!(key, named(kind, size, resolved), "the key names the process used for rendering");
+        assert_ne!(key, named(kind, size, u64::from(newer.process.0)), "the saved future number is not the resolved process");
+    }
+}
+
+/// Photos on V1 and V2 keep the persistent keys builds before process V3 gave them (no process
+/// in them), so their cached thumbnails, view renders and variants stay valid after upgrading
+/// (review of 26cd2df1: every V1/V2 photo rendered again, and offline ones without smart
+/// previews lost their thumbnails); V3 and later name their process.
+#[test]
+fn v1_and_v2_photos_keep_the_render_cache_keys_they_had() {
+    use lightcraft_develop::Process;
+    let mut s = session();
+    for process in [Process::V1, Process::V2, Process::V3] {
+        let settings = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(settings.clone()), label: "p".into(), edited: None }).unwrap();
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        let before_v3 = |kind: Option<&str>, size: u64| {
+            let mut h = Hasher128::new();
+            h.str(&content_key(&p));
+            if let Some(k) = kind {
+                h.str(k);
+            }
+            h.u64(settings.hash64()).u64(size).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key()).finish()
+        };
+        let keys = [
+            s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1 == before_v3(None, 256),
+            crate::Session::view_key(&p, true) == before_v3(Some("view"), 1),
+            crate::Session::variant_key(&p, &settings, 256) == before_v3(Some("variant"), 256),
+        ];
+        let old = process <= Process::V2;
+        assert_eq!(keys, [old; 3], "{process:?}: thumbnail, view and variant keys");
+    }
+}
+
 #[test]
 fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_before() {
     let mut s = session();
@@ -21,6 +92,7 @@ fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_befor
             .u64(settings)
             .u64(b as u64)
             .u64(RENDER_CACHE_VERSION)
+            .u64(u64::from(p.develop.process.process().version().0))
             .u64(crate::camera_profiles::cache_key())
             .finish();
         let job = s.thumb_job(p.id, edge).unwrap();

@@ -1,5 +1,6 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
+use super::settings_hash::with_process;
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
@@ -58,7 +59,8 @@ impl crate::Session {
             ^ salt;
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
+            with_process(&mut k, &settings).u64(crate::camera_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -98,14 +100,9 @@ impl crate::Session {
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
-            .str("variant")
-            .u64(settings.hash64())
-            .u64(edge as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+        let mut h = Hasher128::new();
+        h.str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut h, settings).u64(crate::camera_profiles::cache_key()).finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -213,15 +210,10 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
-            .str("view")
-            .u64(p.develop.hash64())
-            .u64(apply_crop as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+    pub(super) fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
+        let mut h = Hasher128::new();
+        h.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut h, &p.develop).u64(crate::camera_profiles::cache_key()).finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the

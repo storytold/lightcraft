@@ -1,0 +1,3 @@
+# Python packages for tools/light_v3_constants.py (crates/pipeline/src/light_v3_params.rs, docs/light-v3.md).
+#   python3 -m venv .venv-light-v3 && .venv-light-v3/bin/pip install -r tools/requirements-light-v3.txt
+numpy==2.4.6

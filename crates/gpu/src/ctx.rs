@@ -251,7 +251,15 @@ fn constants() -> String {
     use lightcraft_pipeline::tone::{CHROMA_N, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
     let mut s = String::new();
     let [to_lms, from_lms, to_lab, from_lab] = lightcraft_color::perceptual::oklab_matrices();
-    for (name, m) in [("OK_TO_LMS", to_lms), ("OK_FROM_LMS", from_lms), ("OK_TO_LAB", to_lab), ("OK_FROM_LAB", from_lab)] {
+    let (to_pro, from_pro) = lightcraft_pipeline::light_v3::prophoto_matrices();
+    for (name, m) in [
+        ("OK_TO_LMS", to_lms),
+        ("OK_FROM_LMS", from_lms),
+        ("OK_TO_LAB", to_lab),
+        ("OK_FROM_LAB", from_lab),
+        ("PRO_FROM_2020", to_pro),
+        ("PRO_TO_2020", from_pro),
+    ] {
         let rows: Vec<String> = m.iter().map(|r| format!("vec3<f32>({:?}, {:?}, {:?})", r[0], r[1], r[2])).collect();
         s += &format!("const {name} = array<vec3<f32>, 3>({});\n", rows.join(", "));
     }
@@ -266,6 +274,8 @@ fn constants() -> String {
         crate::params::CURVE_N
     );
     s += &format!("const POINT_WORDS: u32 = {}u;\n", lightcraft_pipeline::colorops::POINT_WORDS);
+    let y = lightcraft_pipeline::light_v3::PRO_Y;
+    s += &format!("const PRO_Y = vec3<f32>({:?}, {:?}, {:?});\nconst LIGHT_N: u32 = {}u;\n", y[0], y[1], y[2], lightcraft_pipeline::light_v3::LUT_N);
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
