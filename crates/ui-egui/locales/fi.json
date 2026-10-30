@@ -2327,5 +2327,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Recently Added always shows the newest imports first.": "Äskettäin lisätyt näyttää aina uusimmat tuonnit ensin.",
+  "Recently Deleted shows no date groups.": "Äskettäin poistetut ei näytä päivämääräryhmiä.",
+  "Previous Shuffle": "Edellinen sekoitus"
 }

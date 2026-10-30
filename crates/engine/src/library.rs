@@ -488,6 +488,8 @@ impl Session {
         self.selection = Selection::default();
         self.source = LibrarySource::All;
         self.library_folder = None;
+        // (the orders of the last library's shuffles don't exist in this one)
+        self.shuffle_history.clear();
         if report.created && seed_demo {
             crate::demo::load(self);
             journal.snapshot(&self.catalog)?;

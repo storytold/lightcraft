@@ -557,6 +557,10 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         up_down_key(app, ctx, f);
         return;
     }
+    // the Sort menus' rule for these two rows holds for the keys too (a native menu enforces it for its own keys)
+    if sort_row_off(app, f) {
+        return;
+    }
     // an export that can't start (e.g. no folder) says why instead of doing nothing
     if let Err(e) = app.run(f, json!({}))
         && matches!(f, "app.export" | "app.exportPrevious")
@@ -570,6 +574,16 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
         "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
         _ => {}
+    }
+}
+
+/// Reshuffle and Previous Shuffle where the Sort menus turn them off.
+fn sort_row_off(app: &LightcraftApp, f: &str) -> bool {
+    let menu = crate::menus::sort_menu::SortMenu::of(&app.session);
+    match f {
+        "library.shuffle" => !menu.reshuffle_enabled(),
+        "library.previousShuffle" => !menu.previous_enabled(),
+        _ => false,
     }
 }
 

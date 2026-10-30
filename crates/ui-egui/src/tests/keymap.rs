@@ -304,6 +304,28 @@ fn opening_numeric_release_keeps_keys_in_the_editor() {
     }
 }
 
+/// ⌘⌥⇧R / ⌘⌥⇧P reshuffle and go back, but only where the Sort menus offer those rows: a key press goes straight to the
+/// command on Windows and Linux, so it follows the same rule (not under a date sort, not in Recently Added).
+#[test]
+fn the_shuffle_keys_follow_the_sort_menus_rules() {
+    let mut h = demo();
+    let seed = |h: &Headless| h.app.session.sort.seed;
+    let chord = |h: &mut Headless, key: &str| press(h, key, &["cmd", "alt", "shift"]);
+    chord(&mut h, "R");
+    assert_ne!(h.app.session.sort.key, lightcraft_catalog::SortKey::Random, "Reshuffle is off under a date sort");
+    h.app.run("library.sort", json!({"key": "random", "seed": 9})).unwrap();
+    chord(&mut h, "R");
+    assert_ne!(seed(&h), 9, "Reshuffle works under Random");
+    chord(&mut h, "P");
+    assert_eq!(seed(&h), 9, "Previous Shuffle goes back");
+    h.app.run("library.shuffle", json!({})).unwrap();
+    let now = seed(&h);
+    h.app.run("library.source", json!({"kind": "recentlyAdded"})).unwrap();
+    chord(&mut h, "P");
+    chord(&mut h, "R");
+    assert_eq!(seed(&h), now, "both are off in Recently Added, where the sort is not used");
+}
+
 /// Press `key` with the named modifiers held (`cmd`, `shift`, `alt`, `ctrl`).
 fn press(h: &mut Headless, key: &str, mods: &[&str]) {
     let mut p = json!({ "key": key });

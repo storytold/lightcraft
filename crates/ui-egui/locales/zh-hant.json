@@ -2157,5 +2157,8 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Recently Added always shows the newest imports first.": "「最近加入」一律先顯示最新匯入的相片。",
+  "Recently Deleted shows no date groups.": "「最近刪除」不顯示日期群組。",
+  "Previous Shuffle": "上一次隨機排序"
 }

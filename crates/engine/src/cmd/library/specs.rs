@@ -21,12 +21,51 @@ fn seed_param(p: &Value, cmd: &str, default: u64) -> Result<u64> {
     }
 }
 
-/// The seed after `prev` at time `now`: a mix of `prev` and the clock text, so repeated reshuffles
+/// The seed after `prev` at time `now`, with `count` shuffles made before: a mix of the three, so repeated reshuffles
 /// within one clock tick still differ (barring a 2^-53 collision). Kept below 2^53 so JSON
 /// clients that read numbers as doubles (web, MCP agents) get the same seed back.
-fn next_seed(prev: u64, now: &str) -> u64 {
-    let t = now.bytes().fold(0u64, |h, b| lightcraft_catalog::mix64(h ^ u64::from(b)));
+fn next_seed(prev: u64, now: &str, count: u64) -> u64 {
+    let t = now.bytes().fold(count, |h, b| lightcraft_catalog::mix64(h ^ u64::from(b)));
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
+}
+
+/// How many replaced shuffles `library.previousShuffle` can step back through.
+const MAX_SHUFFLE_HISTORY: usize = 32;
+
+/// Change the sort. While shuffling, a different seed replaces the order shown, so the seed it replaces is kept for
+/// `library.previousShuffle` (the oldest is dropped past [`MAX_SHUFFLE_HISTORY`]); leaving Random forgets them all, as
+/// they would restore an order nobody sees any more.
+fn set_sort(s: &mut crate::Session, new: Sort) {
+    let old = s.sort;
+    if new.key == SortKey::Random && old.key == SortKey::Random {
+        if new.seed != old.seed {
+            if s.shuffle_history.len() >= MAX_SHUFFLE_HISTORY {
+                s.shuffle_history.remove(0);
+            }
+            s.shuffle_history.push(old.seed);
+        }
+    } else {
+        s.shuffle_history.clear();
+    }
+    s.sort = new;
+}
+
+/// `library.previousShuffle` is on while sorting at random with a replaced shuffle to go back to.
+fn can_go_back(s: &crate::Session) -> std::result::Result<(), String> {
+    if s.sort.key != SortKey::Random {
+        Err("the view is not sorted at random".into())
+    } else if s.shuffle_history.is_empty() {
+        Err("no earlier shuffle".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// A new shuffle after `prev`. The clock only ticks in seconds, and Previous Shuffle can return to a seed whose successor
+/// was already made, so the count of shuffles made this session goes in too: a Reshuffle is never the order just left.
+fn fresh_seed(s: &mut crate::Session, prev: u64) -> u64 {
+    s.shuffle_count += 1;
+    next_seed(prev, &(s.clock)(), s.shuffle_count)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -233,7 +272,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)} — the sort is kept as asked in every view, but Recently Added is always newest import first whatever it says (its menus turn the keys and the direction off; it still groups by import date, at the chosen grouping). Elsewhere only the date keys (captureDate, importDate, editDate) draw date headers, so `group` is kept but unused for the other keys, and Recently Deleted draws none",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -248,9 +287,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let explicit = p.get("seed").is_some_and(|v| !v.is_null());
                 if key == SortKey::Random && s.sort.key != SortKey::Random && !explicit {
                     // switching to Random is a fresh shuffle, not whatever seed was left behind
-                    seed = next_seed(seed, &(s.clock)());
+                    seed = fresh_seed(s, seed);
                 }
-                s.sort = Sort { key, ascending: bool_or(p, "ascending", s.sort.ascending), group, seed };
+                let sort = Sort { key, ascending: bool_or(p, "ascending", s.sort.ascending), group, seed };
+                set_sort(s, sort);
                 ok()
             }
         ),
@@ -296,17 +336,31 @@ pub fn specs() -> Vec<CommandSpec> {
             "library.shuffle",
             "Reshuffle",
             ["View", "Sort"],
-            None,
-            "{seed?: 0..2^53-1} — sort at random; without `seed` a new shuffle each time",
+            Some("Cmd+Alt+Shift+R"),
+            "{seed?: 0..2^53-1} — sort at random; without `seed` a new shuffle each time (the one it replaces can come back with `library.previousShuffle`). Recently Added ignores the sort and stays newest import first, so a reshuffle there only switches the stored sort to Random with a new seed and changes no order on screen (it still ends a held view, like any sort change; the menus keep Reshuffle off in that view)",
             always,
             |s, p| {
                 let seed = match seed_param(p, "library.shuffle", s.sort.seed)? {
                     given if p.get("seed").is_some_and(|v| !v.is_null()) => given,
                     // derived from the previous seed and the session clock: reproducible under a test
                     // clock, and no RNG needed
-                    prev => next_seed(prev, &(s.clock)()),
+                    prev => fresh_seed(s, prev),
                 };
-                s.sort = Sort { key: SortKey::Random, seed, ..s.sort };
+                let sort = Sort { key: SortKey::Random, seed, ..s.sort };
+                set_sort(s, sort);
+                ok()
+            }
+        ),
+        cmd!(
+            "library.previousShuffle",
+            "Previous Shuffle",
+            ["View", "Sort"],
+            Some("Cmd+Alt+Shift+P"),
+            "{} — go back to the shuffle a Reshuffle (or a new `seed` given while sorting at random) replaced: the same seed, so the exact earlier order. Steps back through up to 32 of them, newest first; going back is not itself kept, so a Reshuffle after it is a new shuffle. Only while sorting at random with an earlier shuffle; the list lives in the session only (never saved with the view) and is forgotten when the sort leaves Random or another library opens",
+            can_go_back,
+            |s, _| {
+                let seed = s.shuffle_history.pop().ok_or_else(|| bad("library.previousShuffle", "no earlier shuffle"))?;
+                s.sort = Sort { seed, ..s.sort };
                 ok()
             }
         ),

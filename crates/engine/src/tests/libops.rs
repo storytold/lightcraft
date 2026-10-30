@@ -502,6 +502,96 @@ fn random_sort_is_stable_until_reshuffled() {
     assert_eq!(s.visible_cloned(), a);
 }
 
+// ---- Previous Shuffle: Given a reshuffle that replaced a good order, When the user asks for the previous shuffle, Then that exact order is back
+
+fn previous_shuffle_enabled(s: &Session) -> bool {
+    crate::cmd::find_command("library.previousShuffle").expect("the command exists").info(s).enabled
+}
+
+#[test]
+fn previous_shuffle_restores_the_exact_earlier_order_one_reshuffle_at_a_time() {
+    let mut s = Session::with_demo();
+    s.execute("library.sort", &json!({"key": "random", "seed": 11})).unwrap();
+    let first = s.visible_cloned();
+    assert!(!previous_shuffle_enabled(&s), "no reshuffle has replaced anything yet");
+    s.execute("library.shuffle", &json!({})).unwrap();
+    let second = s.visible_cloned();
+    s.execute("library.shuffle", &json!({})).unwrap();
+    let third = s.visible_cloned();
+    assert!(first != second && second != third, "each reshuffle is a new order");
+    assert!(previous_shuffle_enabled(&s));
+    s.execute("library.previousShuffle", &json!({})).unwrap();
+    assert_eq!(s.visible_cloned(), second, "the order the last reshuffle replaced");
+    s.execute("library.previousShuffle", &json!({})).unwrap();
+    assert_eq!((s.visible_cloned(), s.sort.seed), (first, 11), "and the one before it, by its seed");
+    assert!(!previous_shuffle_enabled(&s), "nothing earlier is left");
+    assert!(matches!(s.execute("library.previousShuffle", &json!({})), Err(crate::EngineError::Disabled(..))));
+    // going back is not a reshuffle: a new reshuffle after it is again a new order, and goes back to the one it replaced
+    s.execute("library.shuffle", &json!({})).unwrap();
+    assert!(previous_shuffle_enabled(&s));
+    assert_ne!(s.visible_cloned(), second, "the clock may not have moved, yet it is a new order, not the one just left");
+    assert_ne!(s.visible_cloned(), third, "nor the one before that");
+    s.execute("library.previousShuffle", &json!({})).unwrap();
+    assert_eq!(s.sort.seed, 11);
+}
+
+#[test]
+fn opening_a_library_forgets_the_earlier_shuffles() {
+    let dir = std::env::temp_dir().join(format!("lc-prev-shuffle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("one"), false).unwrap();
+    s.execute("library.sort", &json!({"key": "random", "seed": 3})).unwrap();
+    s.execute("library.shuffle", &json!({})).unwrap();
+    assert!(previous_shuffle_enabled(&s));
+    s.open_library(dir.join("two"), false).unwrap();
+    assert!(!previous_shuffle_enabled(&s), "the other library never showed those orders");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn previous_shuffle_keeps_a_bounded_history_of_seeds() {
+    let mut s = Session::with_demo();
+    s.execute("library.sort", &json!({"key": "random", "seed": 100})).unwrap();
+    for seed in 1..=40u64 {
+        s.execute("library.shuffle", &json!({"seed": seed})).unwrap();
+    }
+    // 40 replaced seeds (100, 1 … 39), the oldest 8 forgotten
+    let mut back = Vec::new();
+    for _ in 0..64 {
+        if !previous_shuffle_enabled(&s) {
+            break;
+        }
+        s.execute("library.previousShuffle", &json!({})).unwrap();
+        back.push(s.sort.seed);
+    }
+    assert_eq!(back.len(), 32, "a bounded history");
+    assert_eq!((back.first(), back.last()), (Some(&39), Some(&8)), "newest first, the oldest dropped");
+}
+
+#[test]
+fn previous_shuffle_is_off_unless_sorting_at_random_with_an_earlier_shuffle() {
+    let mut s = Session::with_demo();
+    assert!(!previous_shuffle_enabled(&s), "a date sort");
+    s.execute("library.sort", &json!({"key": "random", "seed": 5})).unwrap();
+    s.execute("library.shuffle", &json!({})).unwrap();
+    assert!(previous_shuffle_enabled(&s));
+    // leaving Random forgets the shuffles of that stay: they would restore an order nobody sees any more
+    s.execute("library.sort", &json!({"key": "fileName"})).unwrap();
+    assert!(!previous_shuffle_enabled(&s));
+    s.execute("library.sort", &json!({"key": "random"})).unwrap();
+    assert!(!previous_shuffle_enabled(&s), "coming back starts a new shuffle with nothing before it");
+    // an explicit seed given while shuffling replaces the order shown, a repeat of the seed in force does not
+    let seed = s.sort.seed;
+    s.execute("library.sort", &json!({"seed": seed})).unwrap();
+    s.execute("library.shuffle", &json!({"seed": seed})).unwrap();
+    assert!(!previous_shuffle_enabled(&s), "the same order again replaced nothing");
+    s.execute("library.sort", &json!({"seed": 77})).unwrap();
+    s.execute("library.previousShuffle", &json!({})).unwrap();
+    assert_eq!(s.sort.seed, seed);
+}
+
 #[test]
 fn random_sort_rejects_bad_params() {
     let mut s = Session::with_demo();

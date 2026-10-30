@@ -2734,5 +2734,8 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Recently Added always shows the newest imports first.": "„ბოლოს დამატებული“ ყოველთვის ჯერ უახლეს იმპორტებს აჩვენებს.",
+  "Recently Deleted shows no date groups.": "„ახლახან წაშლილი“ თარიღის მიხედვით დაჯგუფებას არ აჩვენებს.",
+  "Previous Shuffle": "წინა არევა"
 }

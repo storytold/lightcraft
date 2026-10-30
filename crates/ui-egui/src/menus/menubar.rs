@@ -343,6 +343,7 @@ const HIDDEN: &[&str] = &[
     "photo.label",
     "library.sort",
     "library.shuffle",
+    "library.previousShuffle",
     "album.addPhotos",
     "album.create",
     "library.import",
@@ -649,40 +650,36 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             .map(|(k, label)| item("view.gridInfo", json!({"info": k}), label, None, true, Some(app.ui.grid_info == k)))
             .collect(),
         "Sort" => {
+            use crate::menus::sort_menu::SortMenu;
             use lightcraft_catalog::SortKey::*;
-            let cur = app.session.sort;
-            let mut v: Vec<MenuNode> = [
-                ("Capture Date", CaptureDate, "captureDate"),
-                ("Import Date", ImportDate, "importDate"),
-                ("Modified Date", EditDate, "editDate"),
-                ("File Name", FileName, "fileName"),
-                ("Rating", Rating, "rating"),
-                ("File Size", FileSize, "fileSize"),
-                ("Random", Random, "random"),
-            ]
-            .into_iter()
-            .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))
-            .collect();
-            v.push(item("library.shuffle", json!({}), "Reshuffle", None, cur.key == Random, None));
+            // what is on, checked and why not comes from one model shared with the bottom bar's popup
+            let m = SortMenu::of(&app.session);
+            let note = |n: Option<crate::menus::sort_menu::SortNote>| n.map(|n| item("library.sort", Value::Null, n.text(), None, false, None));
+            let mut v: Vec<MenuNode> = note(m.keys_note()).into_iter().collect();
+            v.extend(
+                [
+                    ("Capture Date", CaptureDate, "captureDate"),
+                    ("Import Date", ImportDate, "importDate"),
+                    ("Modified Date", EditDate, "editDate"),
+                    ("File Name", FileName, "fileName"),
+                    ("Rating", Rating, "rating"),
+                    ("File Size", FileSize, "fileSize"),
+                    ("Random", Random, "random"),
+                ]
+                .into_iter()
+                .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, m.keys_enabled(), Some(m.key_checked(key)))),
+            );
             v.push(MenuNode::Separator);
-            // a shuffle has no direction worth choosing
-            v.push(item(
-                "library.sort",
-                json!({"ascending": true}),
-                "Ascending",
-                None,
-                cur.key != Random,
-                (cur.key != Random).then_some(cur.ascending),
-            ));
-            v.push(item(
-                "library.sort",
-                json!({"ascending": false}),
-                "Descending",
-                None,
-                cur.key != Random,
-                (cur.key != Random).then_some(!cur.ascending),
-            ));
+            let keys = &app.ui.settings.keymap;
+            let shuffle = crate::shortcuts::shortcut_of(keys, "library.shuffle");
+            v.push(item("library.shuffle", json!({}), "Reshuffle", shuffle, m.reshuffle_enabled(), None));
+            let previous = crate::shortcuts::shortcut_of(keys, "library.previousShuffle");
+            v.push(item("library.previousShuffle", Value::Null, "Previous Shuffle", previous, m.previous_enabled(), None));
             v.push(MenuNode::Separator);
+            v.push(item("library.sort", json!({"ascending": true}), "Ascending", None, m.direction_enabled(), m.direction_checked(true)));
+            v.push(item("library.sort", json!({"ascending": false}), "Descending", None, m.direction_enabled(), m.direction_checked(false)));
+            v.push(MenuNode::Separator);
+            v.extend(note(m.groups_note()));
             use lightcraft_catalog::GroupBy;
             let groups = [
                 ("Group by Date: Automatic", GroupBy::Auto, "auto"),
@@ -691,7 +688,11 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 ("Group by Year", GroupBy::Year, "year"),
                 ("No Date Groups", GroupBy::None, "none"),
             ];
-            v.extend(groups.into_iter().map(|(label, g, k)| item("library.sort", json!({"group": k}), label, None, true, Some(cur.group == g))));
+            v.extend(
+                groups
+                    .into_iter()
+                    .map(|(label, g, k)| item("library.sort", json!({"group": k}), label, None, m.groups_enabled(), Some(m.group_checked(g)))),
+            );
             v
         }
         "Open Recent Library" => {

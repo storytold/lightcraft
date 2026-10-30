@@ -2200,5 +2200,8 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Recently Added always shows the newest imports first.": "“最近添加”始终先显示最新导入的照片。",
+  "Recently Deleted shows no date groups.": "“最近删除”不显示日期分组。",
+  "Previous Shuffle": "上一次随机排序"
 }

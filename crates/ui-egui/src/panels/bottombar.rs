@@ -6,6 +6,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menus::sort_menu::{SortMenu, SortNote};
 use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
@@ -268,11 +269,38 @@ fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// One row of the Sort popup, registered as `sortMenu:{id}`: a check row where `checked` is `Some`, a plain
+/// button (with its key, when it has one) where it is `None`; a row that is off can't be clicked.
+fn sort_row(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, checked: Option<bool>, hint: Option<String>) -> bool {
+    let r = ui
+        .add_enabled_ui(enabled, |ui| match checked {
+            Some(on) => ui.selectable_label(on, crate::i18n::tr(label)),
+            None => ui.add(egui::Button::new(crate::i18n::tr(label)).shortcut_text(hint.unwrap_or_default())),
+        })
+        .inner;
+    register(ui, format!("sortMenu:{id}"), r.rect);
+    r.clicked()
+}
+
+/// The dim line saying why part of the menu is off.
+fn sort_note(ui: &mut egui::Ui, note: Option<SortNote>) {
+    let Some(note) = note else { return };
+    let r = ui
+        .scope(|ui| {
+            ui.set_max_width(200.0);
+            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(note.text())).weak().small()).wrap())
+        })
+        .inner;
+    register(ui, "sortMenu:note", r.rect);
+}
+
 fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use lightcraft_catalog::GroupBy;
     use lightcraft_catalog::SortKey::*;
-    let cur = app.session.sort;
+    // what is on, checked and why not comes from one model shared with View ▸ Sort
+    let m = SortMenu::of(&app.session);
     ui.label(egui::RichText::new(crate::i18n::tr("Sort by")).weak());
+    sort_note(ui, m.keys_note());
     for (label, key, k) in [
         ("Capture Date", CaptureDate, "captureDate"),
         ("Import Date", ImportDate, "importDate"),
@@ -282,12 +310,19 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("File Size", FileSize, "fileSize"),
         ("Random", Random, "random"),
     ] {
-        if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {
+        if sort_row(ui, &format!("key:{k}"), label, m.keys_enabled(), Some(m.key_checked(key)), None) {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
-    if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
+    ui.separator();
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let hint = |id: &str| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, id).map(|sc| crate::menubar::shortcut_text(sc, mac));
+    let (shuffle_hint, previous_hint) = (hint("library.shuffle"), hint("library.previousShuffle"));
+    if sort_row(ui, "reshuffle", "Reshuffle", m.reshuffle_enabled(), None, shuffle_hint) {
         let _ = app.run("library.shuffle", json!({}));
+    }
+    if sort_row(ui, "previous", "Previous Shuffle", m.previous_enabled(), None, previous_hint) {
+        let _ = app.run("library.previousShuffle", json!({}));
     }
     // a view that holds its photos shows what matches now when asked to
     if app.session.hold_view {
@@ -298,17 +333,15 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     ui.separator();
-    // a shuffle has no direction worth choosing
-    ui.add_enabled_ui(cur.key != Random, |ui| {
-        if ui.selectable_label(cur.key != Random && cur.ascending, crate::i18n::tr("Ascending")).clicked() {
-            let _ = app.run("library.sort", json!({"ascending": true}));
+    for (label, id, ascending) in [("Ascending", "ascending", true), ("Descending", "descending", false)] {
+        let checked = m.direction_checked(ascending).unwrap_or(false);
+        if sort_row(ui, id, label, m.direction_enabled(), Some(checked), None) {
+            let _ = app.run("library.sort", json!({"ascending": ascending}));
         }
-        if ui.selectable_label(cur.key != Random && !cur.ascending, crate::i18n::tr("Descending")).clicked() {
-            let _ = app.run("library.sort", json!({"ascending": false}));
-        }
-    });
+    }
     ui.separator();
     ui.label(egui::RichText::new(crate::i18n::tr("Group by date")).weak());
+    sort_note(ui, m.groups_note());
     for (label, g, k) in [
         ("Automatic", GroupBy::Auto, "auto"),
         ("Day", GroupBy::Day, "day"),
@@ -316,7 +349,7 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("Year", GroupBy::Year, "year"),
         ("None", GroupBy::None, "none"),
     ] {
-        if ui.selectable_label(cur.group == g, crate::i18n::tr(label)).clicked() {
+        if sort_row(ui, &format!("group:{k}"), label, m.groups_enabled(), Some(m.group_checked(g)), None) {
             let _ = app.run("library.sort", json!({"group": k}));
         }
     }

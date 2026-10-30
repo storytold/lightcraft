@@ -176,6 +176,147 @@ fn sort_menu_lists_reshuffle_once_and_only_enables_it_for_random() {
     assert!(dir_checked(&sort_children(&menu_bar(&a))).iter().all(Option::is_some), "checks come back for other keys");
 }
 
+fn sort_submenu(a: &LightcraftApp) -> Vec<MenuNode> {
+    let bar = menu_bar(a);
+    let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
+    view.iter()
+        .find_map(|n| match n {
+            MenuNode::Submenu { label, children } if label == "Sort" => Some(children.clone()),
+            _ => None,
+        })
+        .expect("Sort submenu")
+}
+
+/// (enabled, checked) of the Sort row with this label.
+fn sort_row(kids: &[MenuNode], label: &str) -> (bool, Option<bool>) {
+    kids.iter()
+        .find_map(|n| match n {
+            MenuNode::Item { label: l, enabled, checked, .. } if l == label => Some((*enabled, *checked)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {label} row in {kids:?}"))
+}
+
+const SORT_KEYS: [&str; 7] = ["Capture Date", "Import Date", "Modified Date", "File Name", "Rating", "File Size", "Random"];
+const GROUPS: [&str; 5] = ["Group by Date: Automatic", "Group by Day", "Group by Month", "Group by Year", "No Date Groups"];
+
+/// Recently Added is always newest import first: the keys, the direction and Reshuffle are off and
+/// nothing is checked as the order shown; a dim line says why. Its date groups still apply.
+#[test]
+fn recently_added_sort_menu_offers_only_what_the_view_uses() {
+    let mut a = app();
+    a.session.execute("library.sort", &json!({"key": "random"})).expect("sort at random");
+    a.session.execute("library.source", &json!({"kind": "recentlyAdded"})).expect("Recently Added");
+    let kids = sort_submenu(&a);
+    for label in SORT_KEYS {
+        assert_eq!(sort_row(&kids, label), (false, Some(false)), "{label}: off, and not checked as the order shown");
+    }
+    for label in ["Ascending", "Descending"] {
+        assert_eq!(sort_row(&kids, label), (false, None), "{label}");
+    }
+    assert!(!sort_row(&kids, "Reshuffle").0, "a reshuffle changes nothing here");
+    let note = "Recently Added always shows the newest imports first.";
+    assert_eq!(sort_row(&kids, note), (false, None), "a dim line says why");
+    // the grid still groups by import date there, whatever the key: the groups stay choosable
+    for label in GROUPS {
+        assert!(sort_row(&kids, label).0, "{label}");
+    }
+    assert_eq!(sort_row(&kids, "Group by Date: Automatic").1, Some(true));
+    // another source offers the keys again, and no note
+    a.session.execute("library.source", &json!({"kind": "all"})).expect("All Photos");
+    let kids = sort_submenu(&a);
+    assert_eq!(sort_row(&kids, "Random"), (true, Some(true)));
+    assert!(!kids.iter().any(|n| matches!(n, MenuNode::Item { label, .. } if label == note)));
+    // a date sort leaves the direction on, except in Recently Added, which is newest import first whatever it says
+    a.session.execute("library.sort", &json!({"key": "captureDate"})).expect("sort by date");
+    assert!(sort_row(&sort_submenu(&a), "Descending").0);
+    a.session.execute("library.source", &json!({"kind": "recentlyAdded"})).expect("Recently Added");
+    assert_eq!(sort_row(&sort_submenu(&a), "Descending"), (false, None));
+}
+
+/// Recently Deleted lists photos without date headers whatever the group choice: it says so.
+#[test]
+fn recently_deleted_sort_menu_turns_the_date_groups_off() {
+    let mut a = app();
+    a.session.execute("library.source", &json!({"kind": "recentlyDeleted"})).expect("Recently Deleted");
+    let kids = sort_submenu(&a);
+    for label in GROUPS {
+        assert_eq!(sort_row(&kids, label), (false, Some(false)), "{label}");
+    }
+    for label in SORT_KEYS {
+        assert!(sort_row(&kids, label).0, "the sort still orders Recently Deleted: {label}");
+    }
+    assert_eq!(sort_row(&kids, "Recently Deleted shows no date groups."), (false, None));
+}
+
+/// A shuffle has no date headers (the grid draws none), so the group choice is off and unchecked,
+/// like the direction; the stored choice comes back with the next key.
+#[test]
+fn random_sort_turns_the_date_groups_off_and_keeps_the_choice() {
+    let mut a = app();
+    a.session.execute("library.sort", &json!({"group": "month"})).expect("group by month");
+    a.session.execute("library.sort", &json!({"key": "random"})).expect("sort at random");
+    let kids = sort_submenu(&a);
+    for label in GROUPS {
+        assert_eq!(sort_row(&kids, label), (false, Some(false)), "{label}");
+    }
+    a.session.execute("library.sort", &json!({"key": "captureDate"})).expect("sort by date");
+    assert_eq!(sort_row(&sort_submenu(&a), "Group by Month"), (true, Some(true)), "kept for when Random is left");
+}
+
+/// File Name, Rating and File Size draw no date headers either (only the date keys do): the group rows are off
+/// there too, and on for each date key.
+#[test]
+fn only_the_date_keys_offer_date_groups() {
+    let mut a = app();
+    for (key, on) in [("fileName", false), ("rating", false), ("fileSize", false), ("captureDate", true), ("importDate", true), ("editDate", true)] {
+        a.session.execute("library.sort", &json!({"key": key})).expect("sort");
+        let kids = sort_submenu(&a);
+        for label in GROUPS {
+            assert_eq!(sort_row(&kids, label).0, on, "{label} under {key}");
+        }
+    }
+}
+
+/// Reshuffle sits below its own separator, under the key list, not inside it; it is always listed.
+#[test]
+fn reshuffle_follows_a_separator_below_the_sort_keys() {
+    let a = app();
+    let kids = sort_submenu(&a);
+    let at = kids.iter().position(|n| matches!(n, MenuNode::Item { id, .. } if id == "library.shuffle")).expect("Reshuffle is always listed");
+    let random = kids.iter().position(|n| matches!(n, MenuNode::Item { label, .. } if label == "Random")).expect("Random");
+    assert_eq!(kids[random + 1], MenuNode::Separator, "the key list ends at Random");
+    assert_eq!(kids[at - 1], MenuNode::Separator, "Reshuffle starts its own section");
+    assert!(at > random);
+}
+
+/// Previous Shuffle sits right under Reshuffle, is on only while a reshuffle has replaced an order under Random (not in
+/// Recently Added, where the sort is not used), and both rows show their keys.
+#[test]
+fn previous_shuffle_follows_reshuffle_and_both_show_their_shortcuts() {
+    let mut a = app();
+    let kids = sort_submenu(&a);
+    let at = kids.iter().position(|n| matches!(n, MenuNode::Item { id, .. } if id == "library.shuffle")).expect("Reshuffle");
+    assert!(matches!(&kids[at + 1], MenuNode::Item { id, label, .. } if id == "library.previousShuffle" && label == "Previous Shuffle"));
+    let shortcut = |id: &str| match find(&sort_submenu(&a), id) {
+        Some(MenuNode::Item { shortcut, .. }) => shortcut.clone(),
+        other => panic!("{id}: {other:?}"),
+    };
+    assert_eq!(shortcut("library.shuffle").as_deref(), Some("Cmd+Alt+Shift+R"));
+    assert_eq!(shortcut("library.previousShuffle").as_deref(), Some("Cmd+Alt+Shift+P"));
+    let previous = |a: &LightcraftApp| sort_row(&sort_submenu(a), "Previous Shuffle");
+    assert_eq!(previous(&a), (false, None), "a date sort");
+    a.session.execute("library.sort", &json!({"key": "random"})).expect("sort at random");
+    assert!(!previous(&a).0, "nothing replaced yet");
+    run_item(&mut a, "library.shuffle", Value::Null).expect("reshuffle");
+    assert!(previous(&a).0, "a reshuffle replaced an order");
+    a.session.execute("library.source", &json!({"kind": "recentlyAdded"})).expect("Recently Added");
+    assert!(!previous(&a).0, "the sort is not used there");
+    a.session.execute("library.source", &json!({"kind": "all"})).expect("All Photos");
+    run_item(&mut a, "library.previousShuffle", Value::Null).expect("previous shuffle");
+    assert!(!previous(&a).0, "nothing earlier is left");
+}
+
 /// File opens with the import entry points, worded as importing (not as adding a sidebar
 /// folder): Import Photos… (⇧⌘I), Import from Folder…, Import from Device ▸.
 #[test]

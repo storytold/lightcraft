@@ -235,6 +235,11 @@ pub struct Session {
     /// The filter `library.toggleFilters` put aside (Library > Enable Filters off); not persisted.
     pub(crate) shelved_filter: Option<Filter>,
     pub sort: Sort,
+    /// The seeds Reshuffle replaced during this stay in Random, newest last (`library.previousShuffle`). Session-only:
+    /// never saved with the view. Empty unless the sort is Random.
+    pub(crate) shuffle_history: Vec<u64>,
+    /// New shuffles made this session; mixed into each new seed so two in the same clock second differ.
+    pub(crate) shuffle_count: u64,
     pub selection: Selection,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
@@ -453,6 +458,8 @@ impl Session {
             filter: Filter::default(),
             shelved_filter: None,
             sort: Sort::default(),
+            shuffle_history: Vec::new(),
+            shuffle_count: 0,
             selection: Selection::default(),
             visible: Vec::new().into(),
             visible_key: None,
@@ -1211,6 +1218,11 @@ impl Session {
             f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
         }
         f
+    }
+
+    /// Whether `library.previousShuffle` has a replaced shuffle to go back to (only while the sort is Random).
+    pub fn has_previous_shuffle(&self) -> bool {
+        self.sort.key == lightcraft_catalog::SortKey::Random && !self.shuffle_history.is_empty()
     }
 
     /// Let go of what a held view kept: the view shows what matches now ([`Session::hold_view`]).
