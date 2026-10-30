@@ -2213,6 +2213,7 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "The photos are imported once it ends": "As fotos serão importadas depois",
+  "A folder is already being chosen for an import": "Uma pasta já está sendo escolhida para uma importação",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
   "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
   "Camera preview": "Prévia da câmera",

@@ -820,7 +820,8 @@ fn import_here_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
     let r = ui
         .add_enabled(crate::import::can_open(app) && !picking, egui::Button::new(crate::i18n::tr("Import to This Folder…")))
         .on_hover_text(crate::i18n::tr("Copies the photos of a folder you choose into this folder; the review lets you change that"));
-    let r = if picking && crate::import::can_open(app) { r } else { r.on_disabled_hover_text(crate::i18n::tr("An import is running")) };
+    let reason = if crate::import::can_open(app) { "A folder is already being chosen for an import" } else { "An import is running" };
+    let r = r.on_disabled_hover_text(crate::i18n::tr(reason));
     register(ui, "folderImportHere", r.rect);
     if r.clicked() {
         // the folder picker, then the Import review copying into this folder

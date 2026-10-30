@@ -2352,6 +2352,7 @@
   "Photo Counts": "Kuvamäärät",
   "An import is running": "Tuonti on käynnissä",
   "The photos are imported once it ends": "Kuvat tuodaan sen jälkeen",
+  "A folder is already being chosen for an import": "Tuontia varten valitaan jo kansiota",
   "An import is running. Drop photos when it has finished": "Tuonti on käynnissä. Pudota kuvat, kun se on valmis",
   "Close the open dialog to drop files here": "Sulje avoin valintaikkuna pudottaaksesi tiedostot tähän",
   "Close the open dialog, then drop the files again": "Sulje avoin valintaikkuna ja pudota tiedostot sitten uudelleen",

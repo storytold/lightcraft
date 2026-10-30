@@ -2763,6 +2763,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "The photos are imported once it ends": "ფოტოები ამის შემდეგ შემოიტანება",
+  "A folder is already being chosen for an import": "იმპორტისთვის საქაღალდე უკვე ირჩევა",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
   "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
   "Profile: from the file (the camera's own correction)": "პროფილი: ფაილიდან (კამერის საკუთარი კორექცია)",

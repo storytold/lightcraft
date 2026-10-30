@@ -2575,6 +2575,7 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "The photos are imported once it ends": "Фото будут импортированы после этого",
+  "A folder is already being chosen for an import": "Папка для импорта уже выбирается",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
   "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
   "Camera preview": "Превью камеры",

@@ -2364,6 +2364,7 @@
   "Import dropped files without review": "Importer les fichiers déposés sans vérification",
   "An import is running": "Une importation est en cours",
   "The photos are imported once it ends": "Les photos seront importées ensuite",
+  "A folder is already being chosen for an import": "Un dossier est déjà en cours de choix pour une importation",
   "An import is running. Drop photos when it has finished": "Une importation est en cours. Déposez les photos quand elle sera terminée",
   "Finish Lightroom catalog import before adding photos": "Terminez l'importation du catalogue Lightroom avant d'ajouter des photos",
   "The library is empty: the catalog's photos, collections and edits become its first.": "La bibliothèque est vide : les photos, collections et retouches du catalogue seront les premières.",

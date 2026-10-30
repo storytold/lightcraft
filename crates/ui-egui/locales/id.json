@@ -2365,6 +2365,7 @@
   "Photo Counts": "Jumlah foto",
   "An import is running": "Impor sedang berjalan",
   "The photos are imported once it ends": "Foto diimpor setelah selesai",
+  "A folder is already being chosen for an import": "Folder untuk impor sedang dipilih",
   "An import is running. Drop photos when it has finished": "Impor sedang berjalan. Jatuhkan foto setelah selesai",
   "Close the open dialog to drop files here": "Tutup dialog yang terbuka untuk menjatuhkan file di sini",
   "Close the open dialog, then drop the files again": "Tutup dialog yang terbuka, lalu jatuhkan file lagi",

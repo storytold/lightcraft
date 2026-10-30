@@ -639,3 +639,36 @@ fn the_import_rows_are_grayed_out_while_a_scan_runs() {
     assert!(h.app.ui.dialog.is_none() && h.app.ui.toast.is_none(), "{:?} {}", h.app.ui.dialog, toast(&h));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// While a folder picker for an earlier request is up, Import to This Folder… is grayed out (a
+/// second request would be dropped with its destination) and says why when the pointer rests on it.
+#[test]
+fn import_to_this_folder_says_why_while_a_folder_picker_is_open() {
+    let (root, trip, home) = folders("menu-import-picking");
+    // the host keeps the dialog "open": its answer never arrives
+    let held = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = held.clone();
+    let services = Services {
+        png: None,
+        pick_folder: Some(Box::new(|| None)),
+        picker: Some(Box::new(move |_| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            keep.lock().unwrap().push(tx);
+            Ok(rx)
+        })),
+        ..Default::default()
+    };
+    let mut h = app_with(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)], services);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    h.app.run("file.addFolder", json!({})).unwrap();
+    assert!(crate::import::add_folder_picker_pending(&h.app), "the picker is up");
+    let t = std::time::Duration::from_secs(10);
+    let at = widget(&h, &format!("source:libfolder:{}", folder_key(&trip))).unwrap().center();
+    assert_eq!(h.request("ui.click", json!({"x": at.x, "y": at.y, "button": "right"}), t)["ok"], true);
+    h.step();
+    h.step();
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "folderImportHere"}), t)["ok"], true);
+    let reason = crate::i18n::tr("A folder is already being chosen for an import");
+    assert!(h.step_until(t, |h| h.painted_text().iter().any(|s| s == reason)), "the grayed-out row says why: {:?}", h.painted_text());
+    let _ = std::fs::remove_dir_all(&root);
+}
