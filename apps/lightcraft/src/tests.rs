@@ -462,3 +462,33 @@ fn on_exit_ends_the_process_on_macos() {
     assert!(stdout.contains("calling on_exit"), "the child didn't run the test: {stdout}");
     assert_eq!(stdout.contains("on_exit returned"), !cfg!(target_os = "macos"), "{stdout}");
 }
+
+fn parsed(args: &[&str]) -> LaunchArgs {
+    match parse_args(args.iter().map(|a| a.to_string()), None) {
+        Parsed::Run(a) => a,
+        other => panic!("expected a launch, got {other:?}"),
+    }
+}
+
+/// `--no-update-check` (throwaway test copies must not call GitHub at start) turns the startup
+/// update check off and nothing else; without it the check stays on.
+#[test]
+fn no_update_check_turns_the_startup_update_check_off() {
+    assert!(parsed(&[]).startup_update_check, "the default is to check");
+    assert!(parsed(&["--memory", "--control", "7981", "Trip"]).startup_update_check, "other options leave it on");
+    let off = parsed(&["--memory", "--no-update-check", "Trip"]);
+    assert!(!off.startup_update_check);
+    // the flag is only that: the other options and the files still read the same
+    assert_eq!(LaunchArgs { startup_update_check: true, ..off }, parsed(&["--memory", "Trip"]));
+    // a value of --library is that folder, never the flag
+    let lib = parsed(&["--library", "--no-update-check"]);
+    assert!(lib.startup_update_check);
+    assert_eq!(lib.library_dir, Some(std::path::PathBuf::from("--no-update-check")));
+}
+
+/// The flag is a known option (an unknown one exits with a usage error) and `--help` lists it.
+#[test]
+fn no_update_check_is_a_known_option_and_listed_in_the_help() {
+    assert_eq!(parse_args(["--no-update-chek".to_string()], None), Parsed::Unknown("--no-update-chek".into()));
+    assert!(HELP.contains("--no-update-check"));
+}

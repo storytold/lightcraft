@@ -51,6 +51,9 @@ empty value disables the settings directory, while the emergency panic log retai
 Explicit model-directory environment variables still take precedence over their defaults.
 Also pass `--library DIR` with a separate scratch library: the configuration override does not change
 the default photo-library location. Do not use `--memory` or `LIGHTCRAFT_NO_PREFS` when testing persistence.
+Pass `--no-update-check` as well: the startup check for a newer release (a request to GitHub) is skipped, so a
+throwaway run makes no network request at start, and a newer release can't open the update prompt, which takes the
+keyboard. Help ▸ Check for Updates… (`app.checkForUpdates`) still checks when asked.
 
 A native acceptance run must reject the stderr message `rendering headlessly`: `ui.screenshot`
 automatically uses the CPU fallback after two seconds without a presented frame. That fallback is useful

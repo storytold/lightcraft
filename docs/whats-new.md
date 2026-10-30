@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### `--no-update-check` for throwaway copies
+- Starting LightCraft with `--no-update-check` skips the look for a newer release at start, so a throwaway copy (a test
+  or scripted run) makes no request to GitHub and never opens the update prompt. Help ▸ Check for Updates… still
+  checks when you ask; without the option nothing changes.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

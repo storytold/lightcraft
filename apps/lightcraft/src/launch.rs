@@ -13,6 +13,8 @@ OPTIONS:
   --memory         throwaway in-memory session (alias --demo); nothing is saved
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)
+  --no-update-check
+                   don't look for a newer release at start (Help > Check for Updates… still works)
   --version, --help
 
 ENVIRONMENT:
@@ -27,6 +29,50 @@ ENVIRONMENT:
                    from other crates); else RUST_LOG=<env_logger directives>. Records go to stderr and to
                    <settings folder>/logs/lightcraft.log (previous runs: lightcraft.1.log, lightcraft.2.log)
 ";
+
+/// What the command line asks for (see [`parse_args`]).
+#[derive(Debug, PartialEq)]
+pub(crate) struct LaunchArgs {
+    pub control_port: Option<u16>,
+    /// Files and folders to import, as written (see [`launch_imports`]).
+    pub files: Vec<String>,
+    pub seed_demo: bool,
+    pub in_memory: bool,
+    pub library_dir: Option<std::path::PathBuf>,
+    /// Whether the window looks for a newer release once it is up; `--no-update-check` turns it off.
+    pub startup_update_check: bool,
+}
+
+/// How the command line was read.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Parsed {
+    Run(LaunchArgs),
+    Version,
+    Help,
+    /// An option that doesn't exist.
+    Unknown(String),
+}
+
+/// Reads the command line (without the program name); `control_port` is the one from
+/// `LIGHTCRAFT_CONTROL_PORT`, which `--control` replaces.
+pub(crate) fn parse_args(args: impl IntoIterator<Item = String>, control_port: Option<u16>) -> Parsed {
+    let mut parsed = LaunchArgs { control_port, files: Vec::new(), seed_demo: true, in_memory: false, library_dir: None, startup_update_check: true };
+    let mut args = args.into_iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--control" => parsed.control_port = control_port_from("--control", Some(args.next().unwrap_or_default())),
+            "--library" => parsed.library_dir = args.next().map(std::path::PathBuf::from),
+            "--no-demo" => parsed.seed_demo = false,
+            "--memory" | "--demo" => parsed.in_memory = true,
+            "--no-update-check" => parsed.startup_update_check = false,
+            "--version" => return Parsed::Version,
+            "-h" | "--help" => return Parsed::Help,
+            o if o.starts_with("--") => return Parsed::Unknown(a),
+            _ => parsed.files.push(a),
+        }
+    }
+    Parsed::Run(parsed)
+}
 
 /// The launch arguments' files and folders to import (absolute), and a notice for each one that
 /// is not imported (see [`lightcraft_engine::import::launch_path`]; issue #374).
