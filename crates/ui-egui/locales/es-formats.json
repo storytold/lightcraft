@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "No se pudo leer {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} añadida{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "¿Dónde debe ir el catálogo de Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})",
+  "{} selected photos": "{} fotos seleccionadas",
+  "Showing the target photo: at most {} selected photos can be compared": "Se muestra la foto de destino: se pueden comparar como máximo {} fotos seleccionadas",
+  "Not compared, could not be read: {}": "No comparadas, no se pudieron leer: {}"
 }

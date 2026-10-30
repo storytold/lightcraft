@@ -305,5 +305,8 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "{} selected photos": "Zaznaczone zdjęcia: {}",
+  "Showing the target photo: at most {} selected photos can be compared": "Wyświetlane jest zdjęcie docelowe: porównać można najwyżej {} zaznaczonych zdjęć",
+  "Not compared, could not be read: {}": "Nie porównano, nie można odczytać: {}"
 }

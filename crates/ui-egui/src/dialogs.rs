@@ -658,35 +658,63 @@ fn system_info_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     }
 }
 
+/// One All Metadata row: the field's name and value, or `None` for a field the photos shown
+/// don't share (`photo.allMetadata`'s `mixed`), which reads Mixed as in the Info panel.
+type MetadataRow = (String, Option<String>);
+
+/// An All Metadata row from `photo.allMetadata`'s JSON.
+fn metadata_row(row: &serde_json::Value) -> MetadataRow {
+    let name = row["name"].as_str().unwrap_or("").to_string();
+    let mixed = row["mixed"].as_bool().unwrap_or(false);
+    (name, (!mixed).then(|| row["value"].as_str().unwrap_or("").to_string()))
+}
+
+/// What All Metadata says about the selected photos whose files could not be read
+/// (`photo.allMetadata`'s `unreadable`): the first three by name, then how many more ("(+2)").
+fn unreadable_note(unreadable: &serde_json::Value) -> Option<String> {
+    let names: Vec<&str> = unreadable.as_array()?.iter().filter_map(|u| u["fileName"].as_str()).collect();
+    let (shown, more) = (names.get(..3).unwrap_or(&names), names.len().saturating_sub(3));
+    let mut list = shown.join(", ");
+    if more > 0 {
+        list.push_str(&format!(" (+{more})"));
+    }
+    (!names.is_empty()).then(|| crate::i18n::tr_format!("Not compared, could not be read: {}", list))
+}
+
 /// The body of the AllMetadata dialog.
 fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::AllMetadata { title, rows, search } = dlg else { return };
     ui.label(egui::RichText::new(title.as_str()).color(t.text_label));
+    if let Some(limit) = rows["limit"].as_u64() {
+        // the selection is bigger than one comparison reads: the target photo stands in
+        let note = crate::i18n::tr_format!("Showing the target photo: at most {} selected photos can be compared", limit);
+        ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
+    }
+    if let Some(note) = unreadable_note(&rows["unreadable"]) {
+        ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
+    }
     let r = crate::widgets::named(
         ui.add(egui::TextEdit::singleline(search).hint_text(crate::i18n::tr("Filter fields")).desired_width(f32::INFINITY)),
         crate::i18n::tr("Filter fields"),
     );
     crate::widgets::register(ui, "field:metadataSearch", r.rect);
     let q = search.trim().to_lowercase();
-    let keep = |n: &str, v: &str| q.is_empty() || n.to_lowercase().contains(&q) || v.to_lowercase().contains(&q);
-    let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mixed_label = crate::i18n::tr("Mixed");
+    let keep =
+        |(n, v): &MetadataRow| q.is_empty() || n.to_lowercase().contains(&q) || v.as_deref().unwrap_or(mixed_label).to_lowercase().contains(&q);
+    let mut groups: Vec<(String, Vec<MetadataRow>)> = Vec::new();
     for row in rows["exif"].as_array().into_iter().flatten() {
-        let (g, n, v) = (row["group"].as_str().unwrap_or(""), row["name"].as_str().unwrap_or(""), row["value"].as_str().unwrap_or(""));
-        if !keep(n, v) {
+        let g = row["group"].as_str().unwrap_or("");
+        let item = metadata_row(row);
+        if !keep(&item) {
             continue;
         }
         match groups.iter_mut().find(|(x, _)| x == g) {
-            Some((_, list)) => list.push((n.into(), v.into())),
-            None => groups.push((g.into(), vec![(n.into(), v.into())])),
+            Some((_, list)) => list.push(item),
+            None => groups.push((g.into(), vec![item])),
         }
     }
-    let xmp: Vec<(String, String)> = rows["xmp"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|r| (r["name"].as_str().unwrap_or("").to_string(), r["value"].as_str().unwrap_or("").to_string()))
-        .filter(|(n, v)| keep(n, v))
-        .collect();
+    let xmp: Vec<MetadataRow> = rows["xmp"].as_array().into_iter().flatten().map(metadata_row).filter(|r| keep(r)).collect();
     if !xmp.is_empty() {
         groups.push(("XMP".into(), xmp));
     }
@@ -700,7 +728,11 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
-                    ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
+                    let value = match v {
+                        Some(v) => egui::RichText::new(v).color(t.text_label),
+                        None => egui::RichText::new(mixed_label).italics().color(t.text_dim),
+                    };
+                    ui.add(egui::Label::new(value).wrap());
                     ui.end_row();
                 }
             });

@@ -887,6 +887,92 @@ fn all_metadata_lists_exif_and_xmp() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A small JPEG on disk with the camera make and ISO in its EXIF.
+fn tagged_jpeg(path: &Path, make: &str, iso: u32) {
+    let img = lightcraft_raster::Rgba8 { width: 16, height: 8, data: vec![[90, 120, 200, 255]; 128] };
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { make: Some(make.into()), iso: Some(iso), ..Default::default() });
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let jpg = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    std::fs::write(path, jpg).unwrap();
+}
+
+/// All Metadata with several photos (gap 30): a field they share keeps its value, one whose
+/// values differ or that one of them lacks says mixed with no value.
+#[test]
+fn all_metadata_of_several_photos_marks_mixed_fields() {
+    let dir = temp_dir("allmeta-several");
+    let (a, b) = (dir.join("a.jpg"), dir.join("b.jpg"));
+    tagged_jpeg(&a, "Maker", 800);
+    tagged_jpeg(&b, "Maker", 1600);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy(), b.to_string_lossy()]})).unwrap();
+    // a.jpg first, whatever order the view sorts them in
+    let mut ids: Vec<u64> = s.visible().iter().map(|p| p.0).collect();
+    ids.sort_by_key(|&id| s.catalog.photo(PhotoId(id)).map(|p| p.file_name.clone()));
+    assert_eq!(ids.len(), 2);
+    // only the first photo gets a title in its sidecar
+    s.execute("photo.setMeta", &json!({"id": ids[0], "title": "Only A"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [ids[0]]})).unwrap();
+
+    let r = s.execute("photo.allMetadata", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["photos"], 2, "{r}");
+    let exif = r["exif"].as_array().unwrap();
+    let make = exif.iter().find(|e| e["name"] == "Make").unwrap();
+    assert_eq!(make["value"], "Maker", "a shared value is shown: {make}");
+    assert!(make.get("mixed").is_none(), "{make}");
+    let iso = exif.iter().find(|e| e["name"] == "ISO Speed").unwrap();
+    assert_eq!((iso["value"].as_str(), iso["mixed"].as_bool()), (Some(""), Some(true)), "differing values are mixed: {iso}");
+    let title = r["xmp"].as_array().unwrap().iter().find(|x| x["name"] == "dc:title").unwrap();
+    assert_eq!(title["mixed"], true, "a field one photo lacks is mixed: {title}");
+    // each field once, even though both photos have it
+    assert_eq!(exif.iter().filter(|e| e["name"] == "Make").count(), 1);
+
+    // one photo by `ids`, or a photo named twice, is that photo's own rows
+    let one = s.execute("photo.allMetadata", &json!({"ids": [ids[1], ids[1]]})).unwrap();
+    assert_eq!(one["photos"], 1);
+    assert!(one["exif"].as_array().unwrap().iter().any(|e| e["name"] == "ISO Speed" && e["value"] == "1600"), "{one}");
+    assert!(!one.to_string().contains("mixed"), "{one}");
+
+    // the worker's job: progress after each photo, and a cancel stops it
+    let job = s.all_metadata_job(&[PhotoId(ids[0]), PhotoId(ids[1])]).unwrap();
+    let seen = std::sync::Mutex::new(Vec::new());
+    job.run(&std::sync::atomic::AtomicBool::new(false), &|done, total| seen.lock().unwrap().push((done, total))).unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec![(0, 2), (1, 2), (2, 2)]);
+    let cancelled = job.run(&std::sync::atomic::AtomicBool::new(true), &|_, _| {});
+    assert!(matches!(cancelled, Err(crate::EngineError::Cancelled(_))), "a cancelled read is a cancel, not a failure: {cancelled:?}");
+
+    // a file that went away is left out and named; alone it is an error, as before
+    std::fs::remove_file(&b).unwrap();
+    let r = s.execute("photo.allMetadata", &json!({"ids": ids})).unwrap();
+    assert_eq!(r["photos"], 1, "{r}");
+    assert_eq!(r["unreadable"][0]["fileName"], "b.jpg", "{r}");
+    assert!(r["exif"].as_array().unwrap().iter().any(|e| e["name"] == "ISO Speed" && e["value"] == "800"), "a.jpg's own rows: {r}");
+    assert!(s.execute("photo.allMetadata", &json!({"ids": [ids[1]]})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `photo.allMetadata`'s `ids` is refused when it isn't a list of library photos, is empty or
+/// is longer than the limit, never answered with the active photo instead.
+#[test]
+fn all_metadata_refuses_bad_ids() {
+    let mut s = Session::with_demo();
+    let id = s.visible()[0].0;
+    for (ids, want) in [
+        (json!("1"), "must be photo ids"),
+        (json!([id, "x"]), "must be photo ids"),
+        (json!([id, 999_999]), "no such photo 999999"),
+        (json!([]), "no photo"),
+        (json!(vec![id; 101]), "at most 100 photos"),
+    ] {
+        let e = s.execute("photo.allMetadata", &json!({"ids": ids})).unwrap_err().to_string();
+        assert!(e.contains(want), "{ids}: {e}");
+    }
+    // demo photos have no file, also several of them
+    let ids: Vec<u64> = s.visible().iter().take(3).map(|p| p.0).collect();
+    let r = s.execute("photo.allMetadata", &json!({"ids": ids})).unwrap();
+    assert_eq!((r["photos"].as_u64(), r["note"].is_string()), (Some(3), true), "{r}");
+}
+
 /// Convert to DNG: a corpus raw (skipped without the corpus) becomes a DNG next to it with the
 /// photo relinked and its edits kept; undo goes back to the original; non-raws are skipped.
 #[test]

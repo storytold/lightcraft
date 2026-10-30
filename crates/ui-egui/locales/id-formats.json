@@ -305,5 +305,8 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "{} selected photos": "{} foto yang dipilih",
+  "Showing the target photo: at most {} selected photos can be compared": "Menampilkan foto target: paling banyak {} foto yang dipilih dapat dibandingkan",
+  "Not compared, could not be read: {}": "Tidak dibandingkan, tidak dapat dibaca: {}"
 }

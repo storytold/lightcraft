@@ -1067,15 +1067,7 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::AutoStack { gap: p.get("gap").and_then(Value::as_f64).unwrap_or(60.0) as f32 });
             Ok(Value::Null)
         }
-        "dialog.allMetadata" => {
-            let r = match app.session.execute("photo.allMetadata", p) {
-                Ok(r) => r,
-                Err(e) => return Some(Err(e.to_string())),
-            };
-            let title = app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| p.file_name.clone()).unwrap_or_default();
-            app.ui.dialog = Some(Dialog::AllMetadata { title, rows: r, search: String::new() });
-            Ok(Value::Null)
-        }
+        "dialog.allMetadata" => open_all_metadata(app, p),
         "dialog.smartAlbum" => dialog_smart_album_command(app, id, p),
         "dialog.newSmartAlbum" => {
             app.ui.dialog = Some(Dialog::NewSmartAlbum { name: p.get("name").and_then(Value::as_str).unwrap_or("").into(), parent: parent_param(p) });
@@ -1084,6 +1076,87 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         _ => return None,
     };
     Some(r)
+}
+
+/// The photos All Metadata… shows when the call names none: with several photos selected and
+/// the Info panel's Show Metadata For set to Selected Photos, the selected photos (what they
+/// share, the rest Mixed, as the Info panel shows them) while there are no more of them than
+/// one comparison reads; else the active photo. The `bool` says the selection was too big.
+fn all_metadata_targets(app: &LightcraftApp) -> (Vec<lightcraft_catalog::PhotoId>, bool) {
+    let selected = app.session.selected();
+    if selected.len() > 1 && app.ui.settings.info_selected_photos {
+        if selected.len() <= lightcraft_engine::all_metadata::MAX_PHOTOS {
+            return (selected, false);
+        }
+        return (app.session.active().into_iter().collect(), true);
+    }
+    (app.session.active().into_iter().collect(), false)
+}
+
+/// The activity row of All Metadata reading several photos' files.
+const ALL_METADATA_LABEL: &str = "Reading metadata";
+
+/// dialog.allMetadata: the All Metadata dialog for the call's `id` / `ids`, else for
+/// [`all_metadata_targets`]. One photo is read at once, as before; several are read on a worker
+/// thread with a row in the activity stack (they can be raws on a slow drive), and the dialog
+/// opens when they are read.
+fn open_all_metadata(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let named = ["id", "ids"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    let (params, too_many) = if named {
+        (p.clone(), false)
+    } else {
+        let (ids, too_many) = all_metadata_targets(app);
+        let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+        (if ids.is_empty() { p.clone() } else { serde_json::json!({"ids": ids}) }, too_many)
+    };
+    // several valid photo ids go to the worker; anything else (one photo, a bad `ids`) is
+    // answered by the command at once, errors included
+    let several: Option<Vec<lightcraft_catalog::PhotoId>> = params
+        .get("ids")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() > 1)
+        .and_then(|a| a.iter().map(|v| v.as_u64().map(lightcraft_catalog::PhotoId)).collect());
+    let Some(ids) = several else {
+        let rows = app.session.execute("photo.allMetadata", &params).map_err(|e| e.to_string())?;
+        show_all_metadata(app, rows, too_many);
+        return Ok(Value::Null);
+    };
+    if app.tasks.is_running(ALL_METADATA_LABEL) {
+        return Err("All Metadata is already reading the selected photos".into());
+    }
+    let job = app.session.all_metadata_job(&ids).map_err(|e| e.to_string())?;
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = cancel.clone();
+    let work = move |handle: lightcraft_engine::activity::TaskHandle| {
+        let r = job.run(&flag, &|done, total| handle.progress(done, total));
+        (r.map_err(|e| e.to_string()), flag.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (r, cancelled): (Result<Value, String>, bool)| match r {
+        Ok(rows) => show_all_metadata(app, rows, too_many),
+        Err(_) if cancelled => {}
+        Err(e) => app.toast(ctx, e),
+    };
+    crate::tasks::spawn_tracked(app, ALL_METADATA_LABEL, "metadata", cancel, work, done)?;
+    Ok(serde_json::json!({"background": true}))
+}
+
+/// Open the All Metadata dialog on `photo.allMetadata`'s `rows`; `too_many`: the selection was
+/// bigger than one comparison reads, so the dialog says the target photo stands in.
+fn show_all_metadata(app: &mut LightcraftApp, mut rows: Value, too_many: bool) {
+    let photos = rows["photos"].as_u64().unwrap_or(1);
+    let title = if photos > 1 {
+        crate::i18n::tr_format!("{} selected photos", photos)
+    } else {
+        rows["fileName"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| p.file_name.clone()))
+            .unwrap_or_default()
+    };
+    if too_many {
+        rows["limit"] = serde_json::json!(lightcraft_engine::all_metadata::MAX_PHOTOS);
+    }
+    app.ui.dialog = Some(Dialog::AllMetadata { title, rows, search: String::new() });
 }
 
 /// Part 9 of 12 of the UI commands; `None` means the id is not one of this part's.

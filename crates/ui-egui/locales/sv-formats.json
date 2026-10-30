@@ -305,5 +305,8 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "{} selected photos": "{} markerade foton",
+  "Showing the target photo: at most {} selected photos can be compared": "Målfotot visas: högst {} markerade foton kan jämföras",
+  "Not compared, could not be read: {}": "Inte jämförda, kunde inte läsas: {}"
 }

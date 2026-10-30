@@ -71,6 +71,26 @@ fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
     }
 }
 
+/// `photo.allMetadata`'s `ids`: photo ids, each once (in the order given), at most
+/// [`crate::all_metadata::MAX_PHOTOS`] of them; whether they are in the library is checked by
+/// [`Session::all_metadata_job`].
+fn all_metadata_ids(p: &Value) -> crate::Result<Vec<PhotoId>> {
+    const C: &str = "photo.allMetadata";
+    let list = p.get("ids").and_then(Value::as_array).ok_or_else(|| bad(C, "`ids` must be photo ids (whole numbers)"))?;
+    let max = crate::all_metadata::MAX_PHOTOS;
+    if list.len() > max {
+        return Err(bad(C, format!("compares at most {max} photos ({} given)", list.len())));
+    }
+    let mut ids: Vec<PhotoId> = Vec::with_capacity(list.len());
+    for v in list {
+        let id = v.as_u64().map(PhotoId).ok_or_else(|| bad(C, "`ids` must be photo ids (whole numbers)"))?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
 // Catalog queries also run in the 32-bit web build. A narrowing cast wraps
 // an out-of-range offset to zero, returning the first page instead of no photos.
 fn pagination_usize(value: u64) -> usize {
@@ -126,31 +146,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 "clipboard": s.clipboard.is_some(),
             }))
         }),
-        cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?} → {exif: [{group, tag, name, value}], xmp: [{name, value}]} — every EXIF / TIFF / GPS tag of the file and its XMP properties", always, |s, p| {
-            let id = photo_arg(s, p, "photo.allMetadata")?;
-            let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.allMetadata", "no such photo"))?.clone();
-            let lightcraft_catalog::Source::File { path } = &ph.source else {
-                return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
+        cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?, ids?} → {exif: [{group, tag, name, value, mixed?}], xmp: [{name, value, mixed?}], photos, fileName?} — every EXIF / TIFF / GPS tag of the file and its XMP properties; with `ids` (up to 100 photos) the fields they share, and `mixed: true` (value empty) where their values differ or some of them lack the field; among several, a file that can't be read is left out and named in `unreadable: [{fileName, error}]`", always, |s, p| {
+            let ids = match p.get("ids") {
+                None | Some(Value::Null) => vec![photo_arg(s, p, "photo.allMetadata")?],
+                Some(_) => all_metadata_ids(p)?,
             };
-            let bytes = match &s.media.file_bytes {
-                Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
-            }
-            .map_err(|e| super::bad("photo.allMetadata", e))?;
-            let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
-                .into_iter()
-                .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
-                .collect();
-            // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
-            let packet = match crate::sidecar::find_sidecar(path, s.sidecar_naming(ph.id)) {
-                Some(sc) => std::fs::read_to_string(sc).ok(),
-                None => lightcraft_meta::embedded(&bytes).xmp,
-            };
-            let xmp: Vec<Value> = packet
-                .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
-                .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
-                .unwrap_or_default();
-            Ok(json!({"exif": exif, "xmp": xmp}))
+            s.all_metadata_job(&ids)?.run(&std::sync::atomic::AtomicBool::new(false), &|_, _| {})
         }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();
