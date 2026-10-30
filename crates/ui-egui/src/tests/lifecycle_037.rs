@@ -116,6 +116,41 @@ fn bundled_faces_include_monochrome_emoji() {
     assert!(ctx.fonts_mut(|f| f.has_glyph(&font, '\u{1F44D}')), "👍 must be paintable from the bundled faces");
 }
 
+/// The clusters a font provider is asked for, with the real UI faces (Inter, craft-fonts, egui's
+/// bundled faces) installed and `text` laid out.
+fn clusters_asked_of_a_provider(text: &str) -> Vec<String> {
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = asked.clone();
+    let ctx = egui::Context::default();
+    ctx.add_font_provider(Arc::new(move |request: &egui::FallbackRequest<'_>| -> Option<egui::FontInsert> {
+        recorder.lock().expect("provider log").push(request.cluster.to_owned());
+        None
+    }));
+    crate::theme::install_fonts(&ctx);
+    frame(&ctx, raw(egui::vec2(240.0, 120.0)), |ui| {
+        ui.label(text);
+    });
+    asked.lock().expect("provider log").clone()
+}
+
+#[test]
+fn a_font_provider_is_asked_for_clusters_with_emoji_presentation_before_the_ui_faces() {
+    // Inter and craft-fonts' symbol faces have outlines for U+2764, U+26A0 and U+1F44D, which would
+    // win over the system's color emoji face. With U+FE0F (or for an emoji that defaults to emoji
+    // presentation) the provider comes first, so macOS gets Apple Color Emoji.
+    let asked = clusters_asked_of_a_provider("\u{2764}\u{FE0F} \u{26A0}\u{FE0F} \u{1F44D} \u{1F440}");
+    for cluster in ["\u{2764}\u{FE0F}", "\u{26A0}\u{FE0F}", "\u{1F44D}", "\u{1F440}"] {
+        assert!(asked.iter().any(|asked| asked == cluster), "{cluster:?} was never asked of the provider: {asked:?}");
+    }
+}
+
+#[test]
+fn symbols_with_text_presentation_keep_the_ui_faces() {
+    // ★ ✓ ▶ have no emoji form; ❤ and ⚠ without U+FE0F, and with U+FE0E, ask for text style.
+    let asked = clusters_asked_of_a_provider("\u{2605} \u{2713} \u{25B6} \u{2764} \u{26A0} \u{2764}\u{FE0E} \u{1F44D}\u{FE0E}");
+    assert!(asked.is_empty(), "text symbols must come from the installed faces: {asked:?}");
+}
+
 #[test]
 fn resizable_side_stores_panel_state_under_the_parent_salted_key() {
     let ctx = egui::Context::default();

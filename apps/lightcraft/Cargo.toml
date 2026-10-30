@@ -47,6 +47,10 @@ rfd = { workspace = true }
 zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The system font provider: Apple Color Emoji for emoji in text fields (egui draws a cluster with
+# emoji presentation, like 👍 or ❤️ with U+FE0F, from a face a provider offers before the bundled
+# monochrome faces) and the system's face for any script no craft-fonts face covers.
+eframe = { workspace = true, features = ["system_fonts"] }
 muda = { workspace = true }
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }

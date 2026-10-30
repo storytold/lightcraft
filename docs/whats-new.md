@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Emoji are in color on macOS
+- Emoji anywhere LightCraft shows text, whether typed into a field (for example with Edit ▸ Emoji & Symbols) or shown in a name, look like they do in other Mac apps: 👀 has its eyes, 🔥 is a flame, and ❤️ and ⚠️ (with the emoji selector that Emoji & Symbols adds) and 👍 are in color. Before, LightCraft drew them with its own flat black-and-white emoji, and ❤️ and ⚠️ as plain outlines. A symbol that is text unless the selector asks for emoji, such as ★, ✓, ▶ or ❤ on its own, stays text, like in other apps. A character in a script LightCraft doesn't bundle a font for now draws with a macOS font instead of a box. Other systems and the web version still use the bundled flat emoji.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

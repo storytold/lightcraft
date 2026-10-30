@@ -181,18 +181,18 @@ miniz_oxide = { opt-level = 3 }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+emath = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+epaint = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+epaint_default_fonts = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui-winit = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui-wgpu = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui_glow = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui_extras = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui_kittest = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui_system_font_provider = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+eframe = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui_demo_lib = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
+egui_inspection = { git = "https://github.com/nledford/egui.git", rev = "679ef9b8f11cb5456be5f339f541d4bdc319a69e" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
