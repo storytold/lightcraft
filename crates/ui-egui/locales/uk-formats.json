@@ -66,6 +66,7 @@
   "Imported {n} preset{}": "Імпортовано наборів налаштувань: {n}{:.0}",
   "Imported {n} preset{}, {f} file{} not readable": "Імпортовано наборів налаштувань: {n}{:.0}, файлів не читається: {f}{:.0}",
   "Imported {profiles} profile{} (Profile browser ▸ their groups)": "Імпортовано профілів: {profiles}{:.0} (Оглядач профілів → їхні групи)",
+  "Remove SAM 3 ({size})": "Видалити SAM 3 ({size})",
   "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.": "Не вдалося записати XMP-файли {n} фото (папка недоступна?). LightCraft продовжує спроби.",
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "Профіль XMP «{profile}» не застосовано до {path}; кольори можуть відрізнятися від Lightroom.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Геометрію Lightroom для {path} не збережено; режим {mode} буде перераховано.",

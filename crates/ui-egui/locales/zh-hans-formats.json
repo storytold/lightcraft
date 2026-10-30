@@ -58,6 +58,7 @@
   "Reading Lightroom catalog… {done} of {total}": "正在读取 Lightroom 目录… {done} / {total}",
   "Reading photos… {done} of {total}": "正在读取照片… {total} 张中的 {done} 张",
   "Redo {}": "重做：{0}",
+  "Remove SAM 3 ({size})": "删除 SAM 3（{size}）",
   "Remove “{}” from Favorites": "从收藏夹中移除“{0}”",
   "Removed from {}": "已从 {} 移除",
   "Rename {n} Photos…": "重命名 {n} 张照片…",

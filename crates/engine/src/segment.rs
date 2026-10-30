@@ -35,6 +35,9 @@ pub const MODEL_BYTES: u64 = 3_439_938_512;
 /// The model's licence (not LightCraft's): shown before downloading.
 pub const LICENSE_NAME: &str = "SAM License (Meta)";
 pub const LICENSE_URL: &str = "https://github.com/facebookresearch/sam3/blob/main/LICENSE";
+/// The files a download puts in the model folder (`facebook/sam3`; a download in progress is `<name>.part`). Named here
+/// so builds without `sam` can still report and remove a downloaded model.
+pub const MODEL_FILES: [&str; 3] = ["model.safetensors", "vocab.json", "merges.txt"];
 /// How errors about a missing model start (frontends decide on [`crate::ErrorKind::ModelMissing`], not on this text).
 pub const NOT_INSTALLED: &str = "The SAM 3 model is not installed";
 /// Longest a waiting command (CLI, MCP) waits for the model (loading on a CPU can take minutes).
@@ -174,6 +177,60 @@ impl Segmenter {
             return lightcraft_segment::is_model_dir(dir);
         }
         false
+    }
+
+    /// Bytes the model's files and partial downloads take in the model folder (0 when there is no folder or nothing in it).
+    pub fn disk_bytes(&self) -> u64 {
+        let Some(dir) = &self.dir else { return 0 };
+        MODEL_FILES
+            .iter()
+            .flat_map(|n| [dir.join(n), dir.join(format!("{n}.part"))])
+            .filter_map(|p| std::fs::symlink_metadata(p).ok())
+            // (the scope of remove_files: a file or a link, counted by its own size and never followed; a folder is left alone)
+            .filter(|m| !m.is_dir())
+            .fold(0u64, |sum, m| sum.saturating_add(m.len()))
+    }
+
+    /// Delete the model's files and partial downloads from the model folder, nothing else (`segment.model.remove`):
+    /// `(paths removed, bytes removed)`. Refused while the model downloads or computes a mask. A file that cannot be
+    /// deleted (another program holds it open) is an error that names it; the others are gone by then. An idle worker
+    /// still holds the loaded model's files open, so it is unloaded first (LightCraft's worker no longer holds them);
+    /// when that cannot be confirmed in a few seconds nothing is deleted. This removes the folder's entries only: a
+    /// link's target stays, and another program that has a file open can keep its space.
+    /// While a stop that timed out is still running, new requests are refused (see `Worker::submit`).
+    pub fn remove_files(&mut self) -> Result<(Vec<String>, u64), String> {
+        if self.busy() || self.detail_busy() || self.download_status().running {
+            return Err(
+                "the SAM 3 model is in use (a download or an AI mask is running); wait for it to finish (or stop the download), then remove it"
+                    .into(),
+            );
+        }
+        #[cfg(feature = "sam")]
+        self.worker.unload(std::time::Duration::from_secs(5))?;
+        let dir = self.dir.as_ref().ok_or("no folder is set for the SAM 3 model")?;
+        let (mut removed, mut bytes, mut failed) = (Vec::new(), 0u64, Vec::new());
+        for name in MODEL_FILES.iter().flat_map(|n| [n.to_string(), format!("{n}.part")]) {
+            let path = dir.join(&name);
+            // (a link is removed itself, never what it points to; a folder of that name is left alone)
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => continue,
+                Ok(meta) => meta,
+                // (not there: nothing to remove; any other error means we cannot tell, so it is reported)
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    failed.push(format!("{}: {e}", path.display()));
+                    continue;
+                }
+            };
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    removed.push(path.display().to_string());
+                    bytes = bytes.saturating_add(meta.len());
+                }
+                Err(e) => failed.push(format!("{}: {e}", path.display())),
+            }
+        }
+        if failed.is_empty() { Ok((removed, bytes)) } else { Err(format!("could not remove {}", failed.join("; "))) }
     }
 
     /// Whether requests are queued or running (loading, analyzing the photo, a click…).
@@ -727,6 +784,65 @@ mod tests {
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");
+    }
+
+    /// A zoomed-in detail pass reads the model's files like any other request: removing them while one is queued or
+    /// running is refused, and `segment.model.status` says so (the Settings button follows it).
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_running_detail_pass_keeps_the_model_files() {
+        use std::sync::atomic::Ordering;
+        let dir = std::env::temp_dir().join(format!("lc-sam3-detail-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        let mut s = Session::with_demo();
+        s.segmenter.dir = Some(dir.clone());
+        // (a detail pass is counted apart from other requests: only `detail` is raised)
+        s.segmenter.worker.shared.detail.store(1, Ordering::SeqCst);
+        assert!(s.segmenter.detail_busy() && !s.segmenter.busy());
+        let st = s.execute("segment.model.status", &serde_json::json!({})).unwrap();
+        assert_eq!(st["detailBusy"], true, "{st}");
+        let e = s.execute("segment.model.remove", &serde_json::json!({"id": "sam3"})).unwrap_err().to_string();
+        assert!(e.contains("in use"), "{e}");
+        assert!(dir.join("vocab.json").is_file(), "a refused call removes nothing");
+        s.segmenter.worker.shared.detail.store(0, Ordering::SeqCst);
+        let r = s.execute("segment.model.remove", &serde_json::json!({"id": "sam3"})).unwrap();
+        assert_eq!(r["removed"].as_array().map(Vec::len), Some(1), "{r}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A worker that is idle still holds the model it loaded (it unloads after ten minutes): Remove ends the worker
+    /// first, so the worker no longer holds the files when they are deleted.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn remove_unloads_an_idle_worker_before_deleting_the_weights() {
+        let dir = std::env::temp_dir().join(format!("lc-sam3-remove-idle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        let mut s = Session::with_demo();
+        s.segmenter.dir = Some(dir.clone());
+        // (the token stands for the model: the worker keeps it until it unloads)
+        let token = std::sync::Arc::new(());
+        let job = worker::Job {
+            dir: dir.clone(),
+            key: 1,
+            render: None,
+            missing: None,
+            kind: worker::Kind::Hold(token.clone()),
+            tag: Tag::Prepare,
+            reply: s.segmenter.results.0.clone(),
+        };
+        s.segmenter.worker.submit(job).unwrap();
+        s.segmenter.results.1.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert!(!s.segmenter.busy() && !s.segmenter.detail_busy());
+        assert_eq!(std::sync::Arc::strong_count(&token), 2, "the idle worker still holds it");
+        let r = s.execute("segment.model.remove", &serde_json::json!({"id": "sam3"})).unwrap();
+        assert_eq!(std::sync::Arc::strong_count(&token), 1, "the worker let go before the files were deleted: {r}");
+        assert_eq!(r["bytes"], 2, "{r}");
+        assert!(!dir.join("vocab.json").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {

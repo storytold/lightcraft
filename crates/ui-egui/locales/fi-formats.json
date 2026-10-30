@@ -152,6 +152,7 @@
   "Reading photos… {done} of {total}": "Luetaan kuvia… {done} / {total}",
   "Reading photos… {} of {}": "Luetaan kuvia… {} / {}",
   "Redo {}": "Tee uudelleen {}",
+  "Remove SAM 3 ({size})": "Poista SAM 3 ({size})",
   "Remove “{name}”": "Poista ”{name}”",
   "Remove “{name}” and its {count} photo{} from the library?": "Poistetaanko ”{name}” ja sen kuvat ({count}{:.0}) kirjastosta?",
   "Remove “{}” from Favorites": "Poista ”{}” suosikeista",

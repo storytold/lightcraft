@@ -5,6 +5,11 @@
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
 
+## 2026-10-26
+
+### Remove the AI mask model from Settings
+- The SAM 3 model behind Object and Describe masks takes up to 3.4 GB. Settings ▸ AI Denoise now has an AI masks section with a Remove SAM 3 button that shows the size of the files it removes; `segment.model.remove` does the same for scripts. Only the model's files and its partial downloads go; masks already made stay, and the next new selection offers the download again.
+
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box

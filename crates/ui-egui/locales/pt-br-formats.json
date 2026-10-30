@@ -77,6 +77,7 @@
   "Reading photos… {done} of {total}": "Lendo fotos… {done} de {total}",
   "Reading photos… {} of {}": "Lendo fotos… {} de {}",
   "Redo {}": "Refazer {}",
+  "Remove SAM 3 ({size})": "Remover SAM 3 ({size})",
   "Remove “{name}” and its {count} photo{} from the library?": "Remover “{name}” e {count} foto{} da biblioteca?",
   "Remove “{}” from Favorites": "Remover “{}” dos favoritos",
   "Removed from {}": "Removido de {}",

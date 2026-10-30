@@ -58,6 +58,7 @@
   "Reading Lightroom catalog… {done} of {total}": "Lightroom カタログを読み取り中… {done} / {total}",
   "Reading photos… {done} of {total}": "写真を読み込み中：{total}枚中{done}枚",
   "Redo {}": "やり直す：{}",
+  "Remove SAM 3 ({size})": "SAM 3を削除（{size}）",
   "Remove “{}” from Favorites": "「{}」をお気に入りから削除",
   "Removed from {}": "{} から削除しました",
   "Rename {n} Photos…": "{n}枚の写真の名前を変更…",

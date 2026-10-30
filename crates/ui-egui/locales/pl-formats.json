@@ -96,6 +96,7 @@
   "Reading photos… {done} of {total}": "Odczytywanie zdjęć… {done} z {total}",
   "Reading photos… {} of {}": "Odczytywanie zdjęć… {} z {}",
   "Redo {}": "Ponów {}",
+  "Remove SAM 3 ({size})": "Usuń SAM 3 ({size})",
   "Remove “{name}” and its {count} photo{} from the library?": "Usunąć „{name}” i jego zdjęcia ({count}){:.0} z biblioteki?",
   "Remove “{}” from Favorites": "Usuń „{}” z ulubionych",
   "Removed from {}": "Usunięto z {}",

@@ -62,6 +62,7 @@
   "Import cancelled · {} photo{} added": "Import abgebrochen · {} Foto{} hinzugefügt",
   "Import failed: {e}": "Import fehlgeschlagen: {e}",
   "Import warnings ({n}):\n{warnings}": "Importwarnungen ({n}):\n{warnings}",
+  "Remove SAM 3 ({size})": "SAM 3 entfernen ({size})",
   "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.": "Die XMP-Begleitdateien von {n} Fotos konnten nicht geschrieben werden (ist ihr Ordner offline?). LightCraft versucht es weiter.",
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "XMP-Profil „{profile}“ wurde für {path} nicht angewendet; Farben können von Lightroom abweichen.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Lightroom-Geometrie wurde für {path} nicht beibehalten; {mode} wird neu berechnet.",

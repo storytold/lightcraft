@@ -56,6 +56,12 @@ pub enum Kind {
     FailOnGpu {
         panic: bool,
     },
+    /// Keeps the token in the worker's state, like the model it holds open (tests of [`Worker::unload`]).
+    #[cfg(test)]
+    Hold(Arc<()>),
+    /// Keeps the worker busy until the sender of the channel sends or is dropped (tests of a stop in progress).
+    #[cfg(test)]
+    Gate(Arc<std::sync::Mutex<mpsc::Receiver<()>>>),
 }
 
 /// One request.
@@ -218,13 +224,41 @@ impl Worker {
         !self.dead() && self.shared.loaded.load(Ordering::SeqCst)
     }
 
+    /// Stop the (idle) worker thread and wait, up to `wait`, until it has ended: it drops the model
+    /// when it does, so the model's files are no longer held open (the system keeps a deleted
+    /// file's space while a program has it open). The next request starts a new thread.
+    pub fn unload(&mut self, wait: Duration) -> Result<(), String> {
+        // (the thread sees the channel close, finishes what it has queued and returns)
+        self.tx = None;
+        let Some(thread) = self.thread.take() else { return Ok(()) };
+        let t = web_time::Instant::now();
+        while !thread.is_finished() {
+            if t.elapsed() >= wait {
+                self.thread = Some(thread);
+                return Err("the SAM 3 model is still in use (it did not unload in time); try again in a moment".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // (a worker that panicked has dropped its model all the same)
+        let _ = thread.join();
+        self.shared.loaded.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Queue `job`; returns at once.
     pub fn submit(&mut self, job: Job) -> Result<(), String> {
         if self.dead() {
             // a thread that ended took its counters' meaning with it
             self.tx = None;
-            self.thread = None;
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
             self.shared = Arc::new(Shared::default());
+        }
+        if self.tx.is_none() && self.thread.is_some() {
+            // a stop that timed out: that thread is still running and may hold the model's files open, so a
+            // second one must not start beside it (a later unload would only wait for the new one)
+            return Err("the SAM 3 model is still unloading; try again in a moment".into());
         }
         self.counter(&job).fetch_add(1, Ordering::SeqCst);
         let job = match &self.tx {
@@ -257,6 +291,8 @@ struct State {
     model: Option<(PathBuf, Sam3)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<remote::Client>,
+    #[cfg(test)]
+    held: Option<Arc<()>>,
 }
 
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
@@ -443,7 +479,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
             }
         }
         #[cfg(test)]
-        Kind::Panic | Kind::FailOnGpu { .. } => return Err("test panic request".into()),
+        Kind::Panic | Kind::FailOnGpu { .. } | Kind::Hold(_) | Kind::Gate(_) => return Err("test panic request".into()),
     };
     let input = if region.is_some() || client.key != Some(job.key) { render(job)? } else { Input { rgb: Vec::new(), w: 0, h: 0 } };
     let request = Request { width: input.w, height: input.h, temporary: region.is_some(), operation };
@@ -490,6 +526,16 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             Placement::Gpu => Err(Failure::Model("a test error on the GPU".into())),
             Placement::Cpu => Ok(None),
         },
+        #[cfg(test)]
+        Kind::Hold(token) => {
+            state.held = Some(token);
+            Ok(None)
+        }
+        #[cfg(test)]
+        Kind::Gate(gate) => {
+            let _ = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv_timeout(Duration::from_secs(60));
+            Ok(None)
+        }
         Kind::Detail { prompt, region } => {
             let input = render(job)?;
             let m = model(state, shared, &job.dir, placement)?;
@@ -547,6 +593,28 @@ mod tests {
         }
         assert_eq!(w.pending(), 0);
         assert!(!w.encoding() && !w.loaded());
+    }
+
+    #[test]
+    fn a_submit_while_a_timed_out_unload_still_runs_is_refused_and_starts_no_second_worker() {
+        let mut w = Worker::default();
+        let (tx, rx) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let mut j = job(Tag::Wait, &tx);
+        j.kind = Kind::Gate(Arc::new(std::sync::Mutex::new(gate)));
+        w.submit(j).unwrap();
+        // the worker is stuck on the job: the stop times out
+        assert!(w.unload(Duration::from_millis(20)).is_err());
+        assert_eq!(w.pending(), 1);
+        let e = w.submit(job(Tag::Wait, &tx)).unwrap_err();
+        assert!(e.contains("still unloading"), "{e}");
+        assert_eq!(w.pending(), 1, "the refused job was not counted");
+        // let the old worker go: the stop completes and the worker starts again on the next request
+        release.send(()).unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(30)).unwrap().result.is_ok());
+        w.unload(Duration::from_secs(30)).unwrap();
+        w.submit(job(Tag::Wait, &tx)).unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(30)).unwrap().result.unwrap_err().contains("not found"));
     }
 
     #[test]

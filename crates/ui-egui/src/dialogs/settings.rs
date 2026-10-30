@@ -57,6 +57,30 @@ pub const TABS: &[(&str, &str)] = &[
     ("denoise", "AI Denoise"),
 ];
 
+/// Settings ▸ AI Denoise, below its models: the model behind Object and Describe masks (SAM 3) takes up to 3.4 GB, and its
+/// Remove gives the room back (`segment.model.remove`, as a face or denoise model's Remove does). Nothing shows while
+/// no file of it is on disk.
+fn ai_mask_model(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let st = app.session.execute("segment.model.status", &json!({})).unwrap_or(Value::Null);
+    let bytes = st["diskBytes"].as_u64().unwrap_or(0);
+    if st["available"] != true || bytes == 0 {
+        return;
+    }
+    heading(ui, t, "AI masks");
+    hint(
+        ui,
+        t,
+        "Object and Describe masks use the SAM 3 model. Removing it frees the room it takes: masks already made stay, and the next new selection offers the download again.",
+    );
+    let in_use = st["busy"] == true || st["detailBusy"] == true || st["download"]["running"] == true;
+    let label = crate::i18n::tr_format!("Remove SAM 3 ({size})", size = crate::panels::denoise::mb(Some(bytes)));
+    let r = ui.add_enabled(!in_use, egui::Button::new(label));
+    register(ui, "settings:sam3Remove", r.rect);
+    if r.clicked() {
+        let _ = app.run("segment.model.remove", json!({"id": "sam3"}));
+    }
+}
+
 /// Thumbnail cache sizes offered (MB).
 const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
 
@@ -72,7 +96,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "interface" => interface_tab(app, ui, &t),
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
-        "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
+        "denoise" => {
+            crate::panels::denoise::settings_tab(app, ui, &t);
+            ai_mask_model(app, ui, &t);
+        }
         _ => general_tab(app, ui, &t),
     }
 }

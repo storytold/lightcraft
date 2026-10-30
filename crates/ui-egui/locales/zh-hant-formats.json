@@ -74,6 +74,7 @@
   "Reading photos… {done} of {total}": "正在讀取照片… {done}／{total}",
   "Reading photos… {} of {}": "正在讀取照片… {}／{}",
   "Redo {}": "重做 {}",
+  "Remove SAM 3 ({size})": "移除 SAM 3（{size}）",
   "Remove “{}” from Favorites": "將「{}」從喜好項目移除",
   "Removed from {}": "已從 {} 移除",
   "Rename {n} Photos…": "重新命名 {n} 張照片…",

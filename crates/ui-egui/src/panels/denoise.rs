@@ -655,7 +655,7 @@ fn pace_for(focused: bool, minimized: bool, worked: f64, moved: f64, watching: b
     }
 }
 
-pub(super) fn mb(bytes: Option<u64>) -> String {
+pub(crate) fn mb(bytes: Option<u64>) -> String {
     match bytes {
         Some(b) if b >= 10_000_000 => tr_format!("{} MB", (b as f64 / 1e6).round() as u64),
         Some(b) if b >= 1_000_000 => tr_format!("{:.1} MB", b as f64 / 1e6),

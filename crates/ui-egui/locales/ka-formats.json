@@ -126,6 +126,7 @@
   "Reading photos… {done} of {total}": "იკითხება ფოტოები… {done} / {total}",
   "Reading photos… {} of {}": "იკითხება ფოტოები… {} / {}",
   "Redo {}": "{}-ის გამეორება",
+  "Remove SAM 3 ({size})": "SAM 3-ის წაშლა ({size})",
   "Remove “{name}”": "„{name}“-ის მოშორება",
   "Remove “{name}” and its {count} photo{} from the library?": "მოშორდეს „{name}“ და მისი ფოტოები ({count}){:.0} ბიბლიოთეკიდან?",
   "Remove “{}” from Favorites": "„{}“ რჩეულებიდან ამოშლა",

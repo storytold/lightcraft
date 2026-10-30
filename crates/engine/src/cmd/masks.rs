@@ -551,7 +551,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AI Mask Model Status",
             [],
             None,
-            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, and the download's progress → {available, installed, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
+            "{} — whether this build has AI masks, whether the SAM 3 model is installed (and where), loaded, busy, and the download's progress → {available, installed, dir, loaded, busy, detailBusy (a zoomed-in detail pass is queued or running), analyzing, sizeBytes, diskBytes (what the model's files and partial downloads take now), license, licenseUrl, mirrors, download: {running, done, total, file, error, finished}}",
             super::always,
             |s, _| {
                 let g = &s.segmenter;
@@ -562,8 +562,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     "remote": g.remote_endpoint(),
                     "loaded": g.loaded(),
                     "busy": g.busy(),
+                    "detailBusy": g.detail_busy(),
                     "analyzing": g.analyzing(),
                     "sizeBytes": crate::segment::MODEL_BYTES,
+                    "diskBytes": g.disk_bytes(),
                     "license": crate::segment::LICENSE_NAME,
                     "licenseUrl": crate::segment::LICENSE_URL,
                     "mirrors": g.mirrors().len(),
@@ -603,6 +605,22 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} — stop the SAM 3 download (what has arrived is kept, and a new download resumes from it) → {cancelled}",
             super::always,
             |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
+        ),
+        cmd!(
+            query "segment.model.remove",
+            "Remove AI Mask Model",
+            [],
+            None,
+            "{id: \"sam3\"} — delete the SAM 3 model's files and partial downloads from the model folder, nothing else; refused while it downloads or computes a mask; masks already made stay, and the next Object or Describe selection offers the download again → {removed: [paths], bytes}",
+            super::always,
+            |s, p| {
+                let c = "segment.model.remove";
+                if p.get("id").and_then(Value::as_str) != Some("sam3") {
+                    return Err(bad(c, "needs `id`: \"sam3\" (the only mask model); nothing was removed"));
+                }
+                let (removed, bytes) = s.segmenter.remove_files().map_err(|e| bad(c, e))?;
+                Ok(json!({"removed": removed, "bytes": bytes}))
+            }
         ),
         cmd!(
             "mask.refine",

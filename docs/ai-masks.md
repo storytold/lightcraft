@@ -104,7 +104,11 @@ dialog says why and LightCraft carries on without the model.
 Agents and scripts use the same commands (control channel, `lightcraft-cli mcp --connect`):
 `segment.model.status`, `segment.model.download {"acknowledged": true}` (refused without the
 explicit `acknowledged`: pass it only after the user agreed to the download and the licence),
-`segment.model.cancel`.
+`segment.model.cancel`, `segment.model.remove {"id": "sam3"}` (deletes the model's files and partial downloads
+from the model folder, nothing else (a link is removed, not what it points to); a model that is loaded but idle is
+unloaded first, so LightCraft's worker no longer holds its files open, and if it does not unload within a few seconds
+nothing is deleted. Another program that has a file open can still keep its space; Settings ▸ AI Denoise ▸ AI masks has it as a button that
+names the size).
 
 ### Download locations
 
@@ -190,9 +194,10 @@ Therefore:
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
 | `segment.prepare` | `{}` | load the model and analyze the active photo → `{busy}` |
-| `segment.model.status` | `{}` | `{available, installed, remote, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download}` |
+| `segment.model.status` | `{}` | `{available, installed, remote, dir, loaded, busy, detailBusy, analyzing, sizeBytes, diskBytes, license, licenseUrl, mirrors, download}` |
 | `segment.model.download` | `{acknowledged: true}` | start the download in the background → `{started}` |
 | `segment.model.cancel` | `{}` | stop it (it resumes next time) → `{cancelled}` |
+| `segment.model.remove` | `{id: "sam3"}` | delete the model's files and partial downloads from the model folder, nothing else; refused while it downloads or computes a mask (a zoomed-in detail pass counts); a loaded but idle model is unloaded first, and if that cannot be confirmed within a few seconds nothing is deleted → `{removed, bytes}`. Removal is not atomic: a file that cannot be deleted (e.g. another program holds it open) makes the command fail with an error naming it, after the other files are already deleted, and no `{removed, bytes}` is returned; check `segment.model.status` (`installed`, `diskBytes`) for what is left |
 
 `remote` reports the configured endpoint, not its health. `installed` describes local weights only.
 `download` is `{running, done, total, file, error, cancelled, finished}`: `cancelled` is true when the last

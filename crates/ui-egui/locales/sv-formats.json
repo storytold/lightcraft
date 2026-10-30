@@ -127,6 +127,7 @@
   "Moved; {} photo(s) relinked": "Flyttat; {} foto(n) har länkats om",
   "Named ({named_n})": "Namngivna ({named_n})",
   "New Folder in “{name}”": "Ny mapp i ”{name}”",
+  "Remove SAM 3 ({size})": "Ta bort SAM 3 ({size})",
   "new, inside {parent}": "ny, inuti {parent}",
   "none (CPU rendering): {why}": "ingen (CPU-rendering): {why}",
   "not added to Apple Photos: {e}": "inte tillagt i Apple Photos: {e}",

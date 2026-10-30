@@ -61,6 +61,7 @@
   "Import cancelled · {} photo{} added": "Importazione annullata · foto aggiunte: {}{:.0}",
   "Import failed: {e}": "Importazione non riuscita: {e}",
   "Import warnings ({n}):\n{warnings}": "Avvisi di importazione ({n}):\n{warnings}",
+  "Remove SAM 3 ({size})": "Rimuovi SAM 3 ({size})",
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "Il profilo XMP \"{profile}\" non è stato applicato a {path}; i colori possono differire da Lightroom.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "La geometria di Lightroom non è stata conservata per {path}; {mode} verrà ricalcolato.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "La geometria di Lightroom per {path} non è stata conservata; la trasformazione salvata viene ignorata perché il raddrizzamento è disattivato.",
