@@ -288,6 +288,37 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.sidebar = Default::default();
             Ok(json!({"sidebar": app.ui.sidebar}))
         }
+        "view.sidebarKeys" => {
+            // {on?}: the arrow keys, Enter, typing and F2 go to the left sidebar (shown if it was
+            // not); Esc, a click elsewhere or this command again gives them back
+            let on = match bool_param(id, p, "on") {
+                Ok(on) => on.unwrap_or(!app.ui.sidebar_keys),
+                Err(e) => return Some(Err(e)),
+            };
+            if on && app.ui.fullscreen {
+                return Some(Err(format!("{id}: the sidebar is not on screen in full screen; leave full screen first")));
+            }
+            // (coming in starts at the row shown, not where the keys were left last time; and a field that
+            // still has the focus lets it go, as `side_keys::begin` ends the mode for a focused field. A dialog's
+            // field is not let go: the dialog has the keys meanwhile, and a field that saves on blur would save half a value)
+            if on && !app.ui.sidebar_keys {
+                app.ui.sidebar_cursor = None;
+                if app.ui.dialog.is_none() {
+                    ctx.memory_mut(|m| {
+                        if let Some(focused) = m.focused() {
+                            m.surrender_focus(focused);
+                        }
+                    });
+                }
+            }
+            app.ui.sidebar_keys = on;
+            if on {
+                app.ui.left_panel = true;
+                app.ui.sidebar_cursor_moved = true;
+                app.ui.sidebar_keys_grace = 4;
+            }
+            Ok(json!({"on": on, "cursor": app.ui.sidebar_cursor.as_ref().filter(|_| on)}))
+        }
         "view.appearance" => appearance_command(app, p),
         "view.theme" => theme_command(app, p),
         "library.selectOnlyActive" => {

@@ -1896,7 +1896,13 @@ fn removing_a_disk_from_the_library_asks_first() {
 /// `size` big, with every level but the last opened. (Every level holds a photo, so it has a row
 /// of its own and starts closed, whether or not the sidebar passes over folders that only lead on.)
 fn deep_folders_app(deep: &str, size: [f32; 2]) -> Headless {
+    deep_folders_app_with(deep, size, 0)
+}
+
+/// [`deep_folders_app`] with `siblings` more folders (`s00`, `s01`…) beside `x` and `y`, so there are rows below them.
+pub(crate) fn deep_folders_app_with(deep: &str, size: [f32; 2], siblings: usize) -> Headless {
     let mut paths = vec![format!("{deep}/x/1.jpg"), format!("{deep}/y/2.jpg")];
+    paths.extend((0..siblings).map(|i| format!("{deep}/s{i:02}/3.jpg")));
     let mut levels = Vec::new();
     let mut level = String::new();
     for name in deep.split('/').filter(|n| !n.is_empty()) {

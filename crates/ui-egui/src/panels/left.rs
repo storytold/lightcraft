@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::panels::side_keys;
 use crate::sidebar::SidebarSection;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
@@ -32,10 +33,10 @@ use local::{local_now, local_rows};
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
 use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
 pub(crate) use rows::{content_width, indent_step, step_for};
-pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;
+pub(crate) use sections::{PlacedSection, SECTION_HEADER};
 use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sections_menu};
 
 /// Draw the My Photos sidebar: title and open-library name, the scrollable sources, albums,
@@ -45,6 +46,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
+        super::side_keys::begin(app, ui, ui.max_rect());
         // the title offers the sections' menu too: where hidden sections come back from
         let (hr, title) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
         crate::widgets::announce(&title, crate::i18n::tr("My Photos"));
@@ -90,27 +92,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("recentlyAdded", Icon::Clock, "Recently Added", None, LibrarySource::RecentlyAdded),
                 ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
             ] {
-                if Row::new(id, icon, label).count(count).selected(src == s).show(app, ui).clicked() {
+                let resp = Row::new(id, icon, label).count(count).selected(src == s).show(app, ui);
+                if super::side_keys::chosen(ui, &resp) {
                     let _ = app.run("library.source", json!({"kind": id}));
                 }
             }
             // photos whose files can't be found (checked every few seconds, not every frame)
             let missing = missing_count(app, ui);
-            if (missing > 0 || src == LibrarySource::Missing)
-                && Row::new("missing", Icon::Folder, "Missing Photos")
-                    .count(Some(missing))
-                    .selected(src == LibrarySource::Missing)
-                    .show(app, ui)
-                    .clicked()
-            {
+            if (missing > 0 || src == LibrarySource::Missing) && {
+                let resp =
+                    Row::new("missing", Icon::Folder, "Missing Photos").count(Some(missing)).selected(src == LibrarySource::Missing).show(app, ui);
+                super::side_keys::chosen(ui, &resp)
+            } {
                 let _ = app.run("library.source", json!({"kind": "missing"}));
             }
-            if Row::new("recentlyDeleted", Icon::Trash, "Recently Deleted")
+            let resp = Row::new("recentlyDeleted", Icon::Trash, "Recently Deleted")
                 .count(Some(deleted))
                 .selected(src == LibrarySource::RecentlyDeleted)
-                .show(app, ui)
-                .clicked()
-            {
+                .show(app, ui);
+            if super::side_keys::chosen(ui, &resp) {
                 let _ = app.run("library.source", json!({"kind": "recentlyDeleted"}));
             }
             // the album just made: the folders down to it open, once (also when the section is shut)

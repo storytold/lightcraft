@@ -147,6 +147,7 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
     register(ui, format!("source:{id}"), r);
     let mark_w = if mark.is_some() { MARK_W } else { 0.0 };
     let said = spoken.unwrap_or(label);
+    let keys = super::side_keys::note_row(app, ui, id, said, indent, false, None, selected, &resp);
     let name = match count {
         Some(n) => crate::i18n::tr_format!("{label}, {n} photos", label = said, n = n),
         None => said.to_string(),
@@ -162,6 +163,9 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
         register(ui, format!("highlight:{id}"), inner);
     } else if resp.hovered() {
         ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
+    }
+    if keys.cursor {
+        super::side_keys::ring(ui, inner);
     }
     paint(
         ui.painter(),
@@ -204,9 +208,22 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
 /// rows scroll by), and the caller skips it. A library can have thousands of keywords or folders,
 /// and drawing them all every frame slows the whole app down (issue #1011). A row the sidebar is
 /// asked to scroll to is drawn. `label`, `count` and `mark` as for [`row_sensed`].
-pub(super) fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, count: Option<usize>, indent: f32, mark: bool) -> bool {
+/// `selected` too, asked only when the keys in the sidebar list the row. With them the row is
+/// still one of theirs (the arrows pass over it), and it is drawn when the cursor is on it or a
+/// key asked something of it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn out_of_sight(
+    app: &LightcraftApp,
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    count: Option<usize>,
+    indent: f32,
+    mark: bool,
+    selected: impl FnOnce() -> bool,
+) -> bool {
     let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), ROW_HEIGHT));
-    if ui.is_rect_visible(r) || scroll_asked(ui, id) {
+    if ui.is_rect_visible(r) || scroll_asked(ui, id) || super::side_keys::note_unseen(app, ui, id, label, indent_x(ui.ctx(), indent), selected) {
         return false;
     }
     ui.allocate_space(r.size());
@@ -261,7 +278,8 @@ pub(super) fn set_tree_open(ui: &egui::Ui, key: egui::Id, open: bool) {
 /// (it sits on the row and takes its clicks, so a row's context menu is attached to it too).
 pub(super) fn tree_toggle(ui: &mut egui::Ui, row: &egui::Response, indent: f32, key: egui::Id, open: &mut bool, widget: String) -> egui::Response {
     let tri = disclosure_chevron(ui, row, indent, *open, key.with("triangle"), widget);
-    if tri.clicked() {
+    // Left / Right on the row, with the keys in the sidebar, is a click on its chevron
+    if tri.clicked() != super::side_keys::note_open(ui, *open) {
         *open = !*open;
         set_tree_open(ui, key, *open);
     }

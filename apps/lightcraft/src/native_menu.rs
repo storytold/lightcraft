@@ -126,8 +126,8 @@ fn settled(had: Option<Accelerator>, want: Option<Accelerator>, native_call_work
 
 /// Whether the per-frame accelerator sync has to run: the focus or recording state changed, or an
 /// earlier sync left an item whose native accelerator is not the wanted one (a failed swap).
-fn sync_needed(focus: bool, capturing: bool, synced_focus: bool, synced_capturing: bool, pending: bool) -> bool {
-    focus != synced_focus || capturing != synced_capturing || pending
+fn sync_needed(focus: bool, capturing: bool, sidebar: bool, synced_focus: bool, synced_capturing: bool, synced_sidebar: bool, pending: bool) -> bool {
+    focus != synced_focus || capturing != synced_capturing || sidebar != synced_sidebar || pending
 }
 
 /// The three submenu calls a swap needs, so the failure paths can be tested without a main-thread
@@ -166,10 +166,10 @@ fn swap_item<T: SwapTarget + ?Sized>(target: &T, old: &T::Row, new: &T::Row, pos
     false
 }
 
-/// The accelerator a native item has: none while a shortcut is being recorded, and none for the
-/// keys a focused text field needs.
-fn wanted_accelerator(accel: Option<Accelerator>, sc: &str, text_focus: bool, capturing: bool) -> Option<Accelerator> {
-    if capturing || (text_focus && yields_to_text(sc)) { None } else { accel }
+/// The accelerator a native item has: none while a shortcut is being recorded, none for the keys a
+/// focused text field needs, and none for the keys the sidebar has taken (Keyboard in Sidebar).
+fn wanted_accelerator(accel: Option<Accelerator>, sc: &str, text_focus: bool, sidebar_keys: bool, capturing: bool) -> Option<Accelerator> {
+    if capturing || (text_focus && yields_to_text(sc)) || (sidebar_keys && yields_to_sidebar(sc)) { None } else { accel }
 }
 
 pub struct NativeMenu {
@@ -184,6 +184,8 @@ pub struct NativeMenu {
     /// Structure of the installed menu (ids, kinds, submenu names); a change rebuilds it.
     structure: String,
     text_focus: bool,
+    /// Keyboard in Sidebar is on: the keys without Cmd, Ctrl or Alt are the sidebar's.
+    sidebar_keys: bool,
     /// The keyboard shortcuts editor is recording a key: every accelerator is off so the key
     /// press reaches it.
     capturing: bool,
@@ -285,9 +287,18 @@ fn yields_to_text(sc: &str) -> bool {
     !sc.contains("Cmd") && !sc.contains("Ctrl") || TEXT_EDIT.contains(&sc)
 }
 
+/// Accelerators that must step aside while the sidebar has the keys (Keyboard in Sidebar): the ones
+/// without Cmd, Ctrl or Alt, such as F2 (Rename), which the sidebar takes for a row's rename.
+fn yields_to_sidebar(sc: &str) -> bool {
+    !sc.contains("Cmd") && !sc.contains("Ctrl") && !sc.contains("Alt")
+}
+
 /// The shortcuts the menu bar runs itself, for `LightcraftApp::native_shortcuts`.
-fn owned_by_menu<'a>(installed: impl Iterator<Item = &'a str>, text_focus: bool) -> HashSet<String> {
-    installed.filter(|sc| menu_delivers(sc) && !(text_focus && yields_to_text(sc))).map(str::to_string).collect()
+fn owned_by_menu<'a>(installed: impl Iterator<Item = &'a str>, text_focus: bool, sidebar_keys: bool) -> HashSet<String> {
+    installed
+        .filter(|sc| menu_delivers(sc) && !(text_focus && yields_to_text(sc)) && !(sidebar_keys && yields_to_sidebar(sc)))
+        .map(str::to_string)
+        .collect()
 }
 
 /// `&` marks a mnemonic in muda labels.
@@ -319,6 +330,7 @@ impl NativeMenu {
             rx,
             structure: String::new(),
             text_focus: false,
+            sidebar_keys: false,
             capturing: false,
             accelerators_pending: false,
         };
@@ -411,6 +423,7 @@ impl NativeMenu {
         }
         self.menu.init_for_nsapp();
         self.text_focus = false;
+        self.sidebar_keys = false;
         self.capturing = false;
         self.accelerators_pending = false;
         self.publish_shortcuts(app);
@@ -473,7 +486,7 @@ impl NativeMenu {
     fn publish_shortcuts(&self, app: &mut LightcraftApp) {
         let installed = self.items.values().filter(|i| i.accel.is_some()).filter_map(|i| i.shortcut.as_deref());
         // (none while the keymap editor records a shortcut: every key goes to it)
-        app.native_shortcuts = if self.capturing { HashSet::new() } else { owned_by_menu(installed, self.text_focus) };
+        app.native_shortcuts = if self.capturing { HashSet::new() } else { owned_by_menu(installed, self.text_focus, self.sidebar_keys) };
         app.native_shortcuts.insert(SETTINGS_KEY.to_string());
     }
 
@@ -505,7 +518,7 @@ impl NativeMenu {
         let bar = menu_bar(app);
         if structure_of(&bar, &app.ui.settings.keymap) != self.structure {
             // (no early return: a rebuild installs every accelerator and resets the state they were synced
-            // to, so the sync below runs in this same frame and no key reaches the menu in between)
+            // to, so the sync below runs in this same frame: F2 must not reach the menu while the sidebar has the keys)
             self.rebuild(app);
         }
         /// Synchronize live labels and states; accelerator ownership changes already triggered a rebuild.
@@ -546,16 +559,18 @@ impl NativeMenu {
 
         let focus = ctx.egui_wants_keyboard_input();
         let capturing = app.recording_shortcut.is_some();
-        if sync_needed(focus, capturing, self.text_focus, self.capturing, self.accelerators_pending) {
+        let sidebar = app.ui.sidebar_keys;
+        if sync_needed(focus, capturing, sidebar, self.text_focus, self.capturing, self.sidebar_keys, self.accelerators_pending) {
             self.text_focus = focus;
             self.capturing = capturing;
+            self.sidebar_keys = sidebar;
             let mut pending = false;
             for it in self.items.values_mut().chain(self.app_items.iter_mut()) {
                 let Some(sc) = it.shortcut.as_deref() else { continue };
                 if it.accel.is_none() {
                     continue;
                 }
-                let want = wanted_accelerator(it.accel, sc, focus, capturing);
+                let want = wanted_accelerator(it.accel, sc, focus, sidebar, capturing);
                 it.set_accelerator(want);
                 pending |= it.current != want;
             }
@@ -591,19 +606,23 @@ mod tests {
     fn accelerators_yield_to_text_focus_and_shortcut_recording() {
         let g = accelerator("G");
         let cmd_s = accelerator("Cmd+S");
-        assert_eq!(wanted_accelerator(g, "G", false, false), g);
-        assert_eq!(wanted_accelerator(g, "G", true, false), None, "typing a G in a field");
-        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, false), cmd_s, "⌘S still saves while typing");
-        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", false, true), None, "the editor records the key");
-        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, true), None, "recording wins over typing");
+        assert_eq!(wanted_accelerator(g, "G", false, false, false), g);
+        assert_eq!(wanted_accelerator(g, "G", true, false, false), None, "typing a G in a field");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, false, false), cmd_s, "⌘S still saves while typing");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", false, false, true), None, "the editor records the key");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", true, false, true), None, "recording wins over typing");
         // the application menu's Settings… and Quit are tracked like the other items
         for sc in [SETTINGS_KEY, "Cmd+Q"] {
             let a = accelerator(sc);
             assert!(a.is_some());
-            assert_eq!(wanted_accelerator(a, sc, true, false), a, "{sc} stays while typing");
-            assert_eq!(wanted_accelerator(a, sc, false, true), None, "{sc} goes while recording");
+            assert_eq!(wanted_accelerator(a, sc, true, false, false), a, "{sc} stays while typing");
+            assert_eq!(wanted_accelerator(a, sc, false, false, true), None, "{sc} goes while recording");
         }
-        assert_eq!(wanted_accelerator(None, "Escape", false, false), None, "no accelerator stays none");
+        assert_eq!(wanted_accelerator(None, "Escape", false, false, false), None, "no accelerator stays none");
+        let f2 = accelerator("F2");
+        assert_eq!(wanted_accelerator(f2, "F2", false, true, false), None, "the sidebar has F2 (Rename)");
+        assert_eq!(wanted_accelerator(cmd_s, "Cmd+S", false, true, false), cmd_s, "⌘S still saves with the sidebar active");
+        assert_eq!(wanted_accelerator(f2, "F2", false, false, false), f2, "F2 is the menu's again once the sidebar lets go");
     }
 
     /// A submenu of numbers whose calls can be made to fail, to run `swap_item`'s failure paths.
@@ -672,10 +691,11 @@ mod tests {
         assert_eq!(settled(g, None, true), None, "the swap worked");
         assert_eq!(settled(g, None, false), g, "it failed: the native item still has its key");
         assert_eq!(settled(None, g, false), None, "restoring a key failed");
-        assert!(!sync_needed(true, false, true, false, false), "nothing changed");
-        assert!(sync_needed(true, false, false, false, false), "focus changed");
-        assert!(sync_needed(false, true, false, false, false), "recording changed");
-        assert!(sync_needed(true, false, true, false, true), "a swap failed last time: try again with the state unchanged");
+        assert!(!sync_needed(true, false, false, true, false, false, false), "nothing changed");
+        assert!(sync_needed(true, false, false, false, false, false, false), "focus changed");
+        assert!(sync_needed(false, true, false, false, false, false, false), "recording changed");
+        assert!(sync_needed(false, false, true, false, false, false, false), "the sidebar took the keys");
+        assert!(sync_needed(true, false, false, true, false, false, true), "a swap failed last time: try again with the state unchanged");
     }
 
     #[test]
@@ -729,7 +749,7 @@ mod tests {
         for sc in ["E", "C", "Shift+P", "Cmd+Shift+H", "F2"] {
             assert!(installed.iter().any(|s| s == sc), "{sc} is in the menu bar");
         }
-        let owned = owned_by_menu(installed.iter().map(String::as_str), false);
+        let owned = owned_by_menu(installed.iter().map(String::as_str), false, false);
         for sc in ["E", "C", "Shift+P", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "P", "U"] {
             assert!(installed.iter().any(|s| s == sc), "{sc} is displayed in the menu");
             assert!(!owned.contains(sc), "{sc} must be left to egui");
@@ -738,6 +758,9 @@ mod tests {
             assert!(owned.contains(sc), "{sc} is run by the menu bar");
         }
         // while typing, the menu bar gives up F2 too (the text field has it)
-        assert!(!owned_by_menu(installed.iter().map(String::as_str), true).contains("F2"));
+        assert!(!owned_by_menu(installed.iter().map(String::as_str), true, false).contains("F2"));
+        // …and while the sidebar has the keys, F2 is the sidebar's (a row's rename), but a Cmd shortcut stays the menu's
+        let in_sidebar = owned_by_menu(installed.iter().map(String::as_str), false, true);
+        assert!(!in_sidebar.contains("F2") && in_sidebar.contains("Cmd+Shift+H"));
     }
 }

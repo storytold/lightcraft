@@ -28,7 +28,7 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
     if key.len() < 10 {
         tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));
     }
-    if resp.clicked() {
+    if super::side_keys::chosen(ui, &resp) {
         let v = if sel { serde_json::Value::Null } else { json!(key) };
         browse_all_photos(app, !sel);
         let _ = app.run("library.filter", json!({"date": v}));

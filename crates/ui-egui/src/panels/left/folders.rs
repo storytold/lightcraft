@@ -36,13 +36,13 @@ pub(super) fn folder_tree(
             ui.data_mut(|d| d.insert_temp(revealed_id, target));
         }
     }
-    if !out_of_sight(app, ui, &format!("local:{path}"), name, None, indent, false) {
+    if !out_of_sight(app, ui, &format!("local:{path}"), name, None, indent, false, || sel) {
         // at the tree's own indent, as in Albums and Folders: the triangle sits in the gutter and the
         // icon lines up with the rows above
         let resp = Row::new(&format!("local:{path}"), Icon::Folder, name).selected(sel).indent(indent).show(app, ui).on_hover_text(path);
         let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"));
         if !tr.clicked()
-            && resp.clicked()
+            && super::side_keys::chosen(ui, &resp)
             && let Err(e) = app.run("library.browse", json!({"path": path}))
         {
             app.toast(ui.ctx(), e);
@@ -320,8 +320,15 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
         // a row whose path would cover other disks' photos too only opens and closes
         let name = if n.selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
         let id = format!("libfolder:{}", n.path);
-        if !out_of_sight(app, ui, &id, &name, Some(n.count), indent, n.label.is_some()) {
-            folder_row(app, ui, n, &id, &name, indent, open_id, &mut open);
+        // (worked out for a row that is drawn, or listed for the keys: not for every row out of sight)
+        let sel_of = |app: &LightcraftApp| {
+            n.selectable
+                && app.session.source == LibrarySource::LibraryFolder
+                && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path))
+        };
+        if !out_of_sight(app, ui, &id, &name, Some(n.count), indent, n.label.is_some(), || sel_of(app)) {
+            let sel = sel_of(app);
+            folder_row(app, ui, n, &id, &name, indent, open_id, &mut open, sel);
         }
         if open && !n.children.is_empty() {
             folder_rows(app, ui, &n.children, indent + INDENT_STEP);
@@ -331,10 +338,17 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
 
 /// One drawn row of [`folder_rows`], shown as `name`; `open_id` and `open` are its triangle's.
 #[allow(clippy::too_many_arguments)]
-fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &str, name: &str, indent: f32, open_id: egui::Id, open: &mut bool) {
-    let sel = n.selectable
-        && app.session.source == LibrarySource::LibraryFolder
-        && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path));
+fn folder_row(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    n: &FolderNode,
+    id: &str,
+    name: &str,
+    indent: f32,
+    open_id: egui::Id,
+    open: &mut bool,
+    sel: bool,
+) {
     // the label is said with the name, as it is shown beside it
     let spoken = match n.label {
         Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
@@ -352,7 +366,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
     }
     let tip = if n.children.is_empty() { n.path.clone() } else { format!("{} ({})", n.path, crate::i18n::tr("includes the folders inside it")) };
     let resp = resp.on_hover_text(tip);
-    if resp.clicked() && !toggled {
+    if super::side_keys::chosen(ui, &resp) && !toggled {
         if n.selectable {
             // a source like an album or a Local folder: it replaces what the grid showed
             let _ = app.run("library.source", json!({"kind": "libraryFolder", "path": n.path}));

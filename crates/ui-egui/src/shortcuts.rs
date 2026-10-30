@@ -363,6 +363,14 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     })
 }
 
+/// Whether the shortcut of Keyboard in Sidebar itself was pressed. The default (Cmd+Alt+B) is never the sidebar's;
+/// one remapped to a key without Cmd / Ctrl / Alt would be, and stays a shortcut here so the key that starts the
+/// mode also ends it (any other key of that frame is a shortcut too).
+fn sidebar_keys_pressed(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    let default = bindable().iter().find(|b| b.id == "view.sidebarKeys").and_then(|b| b.default);
+    binding(&app.ui.settings.keymap, "view.sidebarKeys", default).and_then(parse).is_some_and(|(m, k)| ctx.input(|i| matches(i, m, k)))
+}
+
 /// Dispatch the global shortcut pass. It yields while a dialog, prompt, blocking library window,
 /// text field, name edit or shortcut recording owns input, then fires saved command bindings,
 /// aliases and fixed photo keys, respecting native menu ownership and open popups.
@@ -379,11 +387,17 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.ui.dialog.is_some() || crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_dialog_input(app) {
         return;
     }
-    if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
+    // (with Keyboard in Sidebar on, an unmodified A is a letter typed in it: handle_bulk_key reads only that)
+    let typing_in_sidebar = app.ui.sidebar_keys;
+    if !typing_in_sidebar && app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
         return;
     }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
+        return;
+    }
+    // Keyboard in Sidebar: keys without Cmd / Ctrl / Alt are the sidebar's, bar the key that ends it
+    if crate::panels::side_keys::owns_keys(app, ctx) && !sidebar_keys_pressed(app, ctx) {
         return;
     }
     let (fire, aliased) = pressed_commands(app, ctx);

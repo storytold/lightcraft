@@ -53,7 +53,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 folder_menu(app, &tri, a);
             }
             // one click, one toggle: the triangle's is not the row's as well
-            if resp.clicked() && !toggled {
+            if super::side_keys::chosen(ui, &resp) && !toggled {
                 set_tree_open(ui, open_id, !open);
             }
             folder_menu(app, &resp, a);
@@ -102,7 +102,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 }
                 resp = resp.on_hover_text(tip);
             }
-            if resp.clicked() {
+            if super::side_keys::chosen(ui, &resp) {
                 let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
             }
             folder_menu(app, &resp, a);
