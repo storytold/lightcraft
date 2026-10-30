@@ -215,6 +215,8 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     // every read is held: frames go on, and the import's row shows (after 0.5 s) with its ✕
     frames_while_asleep(&mut h, &nas, 20, "import");
     assert!(h.app.import.is_some(), "importing");
+    // (the row is in the list under the bell)
+    h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), Duration::from_secs(10));
     let id = h.app.session.activity.list().first().map(|t| t.id).expect("an import row");
     let cross = format!("activity:cancel:{id}");
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
@@ -231,7 +233,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert!(h.app.import.is_some(), "still importing");
     let status = h.app.import.as_ref().map(crate::import::ImportTask::status).unwrap_or_default();
     assert!(status["imported"].as_u64().unwrap_or(0) >= 8 && status["total"].as_u64().unwrap_or(0) >= 8, "{status}");
-    // Cancel (the ✕ of its row in the activity stack): the files being read finish, nothing new starts
+    // Cancel (the ✕ of its row in the list under the bell): the files being read finish, nothing new starts
     let r = h.request("ui.clickWidget", json!({"id": cross}), Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
     nas.wake();

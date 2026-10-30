@@ -524,6 +524,18 @@ fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.navigator = !app.ui.navigator;
             Ok(json!({"navigator": app.ui.navigator}))
         }
+        "view.tasks" => {
+            // the list of running tasks under the top bar's bell: `show` opens or closes it, without it the list toggles
+            // (a request not yet taken by the bell counts: two toggles in one frame end where they began)
+            let current = app.activity_set.unwrap_or(app.activity_open);
+            let show = p.get("show").and_then(Value::as_bool).unwrap_or(!current);
+            if let Some(why) = crate::panels::activity::blocked(app).filter(|_| show) {
+                return Some(Err(format!("view.tasks: the list of tasks can't be shown now: {why}")));
+            }
+            app.activity_set = Some(show);
+            ctx.request_repaint();
+            Ok(json!({"tasks": show}))
+        }
         _ => return None,
     };
     Some(r)
@@ -1677,8 +1689,13 @@ fn find_missing_timeout(p: &Value) -> Result<std::time::Duration, String> {
     std::time::Duration::try_from_secs_f64(s).map_err(|_| "file.findMissing: `timeout` is too large".to_string())
 }
 
-/// The toast for a finished search, and the result it leaves for a caller that waits.
-fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>) {
+/// The toast for a finished search, and the result it leaves for a caller that waits; how it ended, for the activity
+/// stack.
+fn find_missing_done(
+    app: &mut LightcraftApp,
+    ctx: &egui::Context,
+    plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>,
+) -> lightcraft_engine::activity::Outcome {
     // relinked under the session as it is now: photos relinked meanwhile and files
     // now in use are skipped
     let r = plan.and_then(|plan| app.run("library.findMissing", plan.to_json()));
@@ -1692,22 +1709,22 @@ fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<
             } else {
                 String::new()
             };
-            app.toast(
-                ctx,
-                crate::i18n::tr_format!(
-                    "Found {n} missing photo{}; {left} still missing{unsure}",
-                    if n == 1 { "" } else { "s" },
-                    left = left,
-                    n = n,
-                    unsure = unsure
-                ),
+            let said = crate::i18n::tr_format!(
+                "Found {n} missing photo{}; {left} still missing{unsure}",
+                if n == 1 { "" } else { "s" },
+                left = left,
+                n = n,
+                unsure = unsure
             );
+            app.toast(ctx, said.clone());
             app.ui.last_find_missing = Some(v.clone());
             app.ui.last_find_missing_result = Some(Ok(v));
+            lightcraft_engine::activity::Outcome { summary: said, ..Default::default() }
         }
         Err(e) => {
             app.toast(ctx, e.clone());
-            app.ui.last_find_missing_result = Some(Err(e));
+            app.ui.last_find_missing_result = Some(Err(e.clone()));
+            lightcraft_engine::activity::Outcome::failed(e)
         }
     }
 }

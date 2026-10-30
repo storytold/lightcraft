@@ -91,8 +91,9 @@ impl LightcraftApp {
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
+                let watched = folder.clone();
                 let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
-                let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
+                let done = move |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
                     let listing = match listing {
                         Ok(l) => l,
                         Err(e) => return log::debug!("auto import: {e}"),
@@ -106,9 +107,13 @@ impl LightcraftApp {
                         o.remove("paths");
                     }
                     let undo0 = app.session.undo.len();
-                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
+                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).named_below(vec![watched]).auto());
                 };
-                // listed every few seconds: quiet, no row in the activity stack
+                // listed every few seconds: quiet, no row in the activity stack (so nothing to say of how it ended)
+                let done = move |app: &mut LightcraftApp, ctx: &egui::Context, listing| {
+                    done(app, ctx, listing);
+                    lightcraft_engine::activity::Outcome::default()
+                };
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");
                 }
@@ -377,7 +382,10 @@ impl LightcraftApp {
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         if self.ui.fullscreen {
-            // full-screen preview: the photo alone on black
+            // full-screen preview: the photo alone on black (no top bar: the list of tasks under its bell is closed,
+            // and a request to open it is not kept for later)
+            self.activity_open = false;
+            self.activity_set = None;
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
@@ -425,7 +433,6 @@ impl LightcraftApp {
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
-        panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);

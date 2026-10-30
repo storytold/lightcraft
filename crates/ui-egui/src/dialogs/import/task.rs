@@ -6,6 +6,42 @@ use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, L
 #[cfg(target_arch = "wasm32")]
 const BATCH: usize = 8;
 
+/// The worker's loop: ready `files` batch by batch with `prepare` and send each to `tx`. `ended` is set when the loop
+/// ends by itself (every file, a stop, or an import that was dropped); a panic in `prepare` (logged) stops the loop
+/// and leaves it unset, so the receiving side can tell a worker that died from one that finished.
+#[cfg(not(target_arch = "wasm32"))]
+fn feed_batches(
+    files: Vec<String>,
+    batch: usize,
+    cancel: &std::sync::atomic::AtomicBool,
+    tx: &std::sync::mpsc::Sender<lightcraft_engine::import::Prepared>,
+    ctx: &egui::Context,
+    ended: &std::sync::atomic::AtomicBool,
+    mut prepare: impl FnMut(Vec<String>) -> lightcraft_engine::import::Prepared,
+) {
+    for chunk in files.chunks(batch.max(1)) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let prepared = match lightcraft_engine::guard::catch("import", || prepare(chunk.to_vec())) {
+            Ok(p) => p,
+            Err(_) => {
+                // logged; the files readied so far are added, and the import ends as one that died
+                ctx.request_repaint();
+                return;
+            }
+        };
+        if let Err(unsent) = tx.send(prepared) {
+            // the import was dropped: nothing will add these, so take back what a Move placed
+            unsent.0.rollback();
+            break;
+        }
+        ctx.request_repaint();
+    }
+    ended.store(true, Ordering::Release);
+    ctx.request_repaint();
+}
+
 /// A running import (see the module docs). The file-system work — expanding folders, probing,
 /// reading sidecars, copying or placing files — runs on a worker thread
 /// ([`lightcraft_engine::import::ImportJob`]); each batch it readies is added to the catalog on the
@@ -14,6 +50,8 @@ const BATCH: usize = 8;
 pub struct ImportTask {
     /// Files and folders to import (handed to the worker when the task starts).
     queue: Vec<String>,
+    /// The files and folders the import was asked for: what the names of unreadable files are relative to.
+    roots: Vec<String>,
     pub total: usize,
     pub done: usize,
     params: Value,
@@ -24,6 +62,9 @@ pub struct ImportTask {
     /// The library photos the skipped duplicates match (shown when nothing new was added).
     existing: Vec<u64>,
     pub failed: usize,
+    /// The files that could not be read, as (path, reason) the engine reported them: the first
+    /// [`lightcraft_engine::activity::MAX_FAILURES`] (`failed` counts them all).
+    failures: Vec<(String, String)>,
     /// Move: originals moved, and sources left in place (reported by the engine with a reason).
     pub moved: usize,
     pub kept: usize,
@@ -36,6 +77,8 @@ pub struct ImportTask {
     pub(super) browse: bool,
     /// Cancel was pressed: no further files are started; batches already readied are added.
     pub cancelled: bool,
+    /// The worker that readies the files died (a panic, logged) before it got to the last one.
+    died: bool,
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
     auto: bool,
     /// Auto Import: the selection to keep.
@@ -56,6 +99,13 @@ impl ImportTask {
         ImportTask { total: paths.len(), queue: paths, params, undo0, browse, ..Default::default() }
     }
 
+    /// Name the files this import cannot read by where they are below `folders` (the sources the files were
+    /// found in, or the files and folders it was given), rather than by their file name alone.
+    pub fn named_below(mut self, folders: Vec<String>) -> Self {
+        self.roots = folders;
+        self
+    }
+
     /// An Auto Import (see [`ImportTask::auto`]).
     pub fn auto(mut self) -> Self {
         self.auto = true;
@@ -71,10 +121,25 @@ impl ImportTask {
 /// Where an import's batches are readied: a worker thread, or (browser build: no threads, and no
 /// slow drives) inline, one batch per frame.
 enum Runner {
+    /// The batches the worker readies, and whether it came to its end by itself (a stop, a dropped import or the
+    /// last file) rather than by a panic: a channel that closes without it was a worker that died.
     #[cfg(not(target_arch = "wasm32"))]
-    Thread(std::sync::mpsc::Receiver<lightcraft_engine::import::Prepared>),
+    Thread(std::sync::mpsc::Receiver<lightcraft_engine::import::Prepared>, std::sync::Arc<std::sync::atomic::AtomicBool>),
     #[cfg(target_arch = "wasm32")]
     Inline { job: Box<lightcraft_engine::import::ImportJob>, queue: Vec<String>, files: Option<std::collections::VecDeque<String>> },
+}
+
+impl Runner {
+    /// The worker stopped without coming to its end: a panic (logged), so the files it did not get to were not
+    /// read. Only meaningful once [`ImportRun::next_batches`] has said it is done.
+    fn died(&self) -> bool {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Runner::Thread(_, ended) => !ended.load(Ordering::Acquire),
+            #[cfg(target_arch = "wasm32")]
+            Runner::Inline { .. } => false,
+        }
+    }
 }
 
 struct ImportRun {
@@ -124,27 +189,20 @@ impl ImportRun {
         ctx: &egui::Context,
     ) -> Result<Runner, String> {
         let (tx, rx) = std::sync::mpsc::channel();
+        let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_ended = ended.clone();
         let ctx = ctx.clone();
         let work = move || {
             let files = job.expand(&queue);
-            for chunk in files.chunks(lightcraft_engine::import::batch_size()) {
-                if cancel.load(Ordering::Relaxed) {
-                    break;
-                }
-                let prepared = match lightcraft_engine::guard::catch("import", || job.prepare_files(chunk.to_vec(), &cancel)) {
-                    Ok(p) => p,
-                    Err(_) => break, // logged; the files readied so far are added
-                };
-                if let Err(unsent) = tx.send(prepared) {
-                    // the import was dropped: nothing will add these, so take back what a Move placed
-                    unsent.0.rollback();
-                    break;
-                }
-                ctx.request_repaint();
-            }
-            ctx.request_repaint();
+            feed_batches(files, lightcraft_engine::import::batch_size(), &cancel, &tx, &ctx, &worker_ended, |chunk| {
+                job.prepare_files(chunk, &cancel)
+            });
         };
-        std::thread::Builder::new().name("lc-import".into()).spawn(work).map(|_| Runner::Thread(rx)).map_err(|e| format!("could not start: {e}"))
+        std::thread::Builder::new()
+            .name("lc-import".into())
+            .spawn(work)
+            .map(|_| Runner::Thread(rx, ended))
+            .map_err(|e| format!("could not start: {e}"))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -161,7 +219,7 @@ impl ImportRun {
     fn next_batches(&mut self) -> Option<Vec<lightcraft_engine::import::Prepared>> {
         match &mut self.runner {
             #[cfg(not(target_arch = "wasm32"))]
-            Runner::Thread(rx) => {
+            Runner::Thread(rx, _) => {
                 let mut out = Vec::new();
                 while out.len() < 4 {
                     match rx.try_recv() {
@@ -248,7 +306,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         }
     }
     let total = queue.len();
-    app.import = Some(ImportTask::new(queue, params, undo0, false));
+    app.import = Some(ImportTask::new(queue, params, undo0, false).named_below(d.sources.clone()));
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))
 }
@@ -261,7 +319,7 @@ pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value,
     }
     let undo0 = app.session.undo.len();
     let total = paths.len();
-    app.import = Some(ImportTask::new(paths, json!({"mode": "add"}), undo0, false));
+    app.import = Some(ImportTask::new(paths.clone(), json!({"mode": "add"}), undo0, false).named_below(paths));
     Ok(json!({"importing": total}))
 }
 
@@ -296,6 +354,9 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(run) = task.run.as_mut() else { return };
     let batches = run.next_batches();
     let finished = batches.is_none();
+    if finished {
+        task.died = run.runner.died();
+    }
     if task.left.as_ref().is_some_and(|(sel, source)| *sel != app.session.selection || *source != app.session.source) {
         task.moved_on = true;
     }
@@ -350,6 +411,15 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             task.duplicates += len("duplicates");
             task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
             task.failed += len("failed");
+            let room = lightcraft_engine::activity::MAX_FAILURES.saturating_sub(task.failures.len());
+            task.failures.extend(
+                v["failed"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(room)
+                    .filter_map(|f| Some((f.get(0)?.as_str()?.to_string(), f.get(1)?.as_str()?.to_string()))),
+            );
             task.moved += len("moved");
             task.kept += len("kept");
             task.warnings.extend(v["warnings"].as_array().into_iter().flatten().filter_map(|warning| serde_json::from_value(warning.clone()).ok()));
@@ -435,11 +505,11 @@ fn undo_label(task: &ImportTask) -> String {
 
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
-fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
+fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     app.session.merge_undo(steps, &undo_label(&task));
     if task.auto || task.browse {
-        quiet_finish(app, ctx, &task);
+        quiet_finish(app, ctx, &mut task);
         return;
     }
     if let Some(f) = task.first.filter(|_| !task.moved_on) {
@@ -452,16 +522,18 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     // nothing new, only files the library already has: show where they are (Recently Deleted is
     // easy to miss, and the side panel that lists it starts collapsed)
-    if task.imported == 0
+    // (still reported to the activity stack below: the toast is the only part this takes the place of)
+    let existing_shown = task.imported == 0
         && task.restored == 0
         && task.failed == 0
         && task.warnings.is_empty()
         && !task.cancelled
-        && show_existing(app, ctx, &task.existing)
-    {
+        && show_existing(app, ctx, &task.existing);
+    let (mut msg, summary, detail) = import_summary(app, &task);
+    report(&mut task, summary, detail);
+    if existing_shown {
         return;
     }
-    let mut msg = import_summary(app, &task);
     if task.warnings.is_empty() {
         app.toast(ctx, msg);
     } else {
@@ -472,7 +544,15 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
 }
 
 /// The end of an automatic import or of one that only browses: a toast only when there is something to warn about.
-fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask) {
+fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &mut ImportTask) {
+    // (a browse has no summary: its row is worded from its name, "Reading folder", and says how many files could not be read)
+    let summary = if task.auto {
+        crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, crate::i18n::plural_s(task.imported))
+    } else {
+        String::new()
+    };
+    let detail = with_warnings(not_readable_text(task.failed), task);
+    report(task, summary, detail);
     if !task.warnings.is_empty() {
         app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
     } else if task.auto && task.imported > 0 {
@@ -482,8 +562,8 @@ fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask)
     }
 }
 
-/// What an import did, in a sentence.
-fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
+/// What an import did, in a sentence, with its first part (the row's summary) and the rest (the row's detail).
+fn import_summary(app: &LightcraftApp, task: &ImportTask) -> (String, String, String) {
     let mut msg = if task.cancelled {
         crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, crate::i18n::plural_s(task.imported))
     } else if task.imported == 0 && task.restored > 0 {
@@ -491,6 +571,7 @@ fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
     } else {
         crate::i18n::tr_format!("Imported {} photo{}", task.imported, crate::i18n::plural_s(task.imported))
     };
+    let summary = msg.clone();
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
@@ -510,7 +591,66 @@ fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
     }
-    msg
+    // what was done is the first line of the row the import leaves; the rest is what needs reading under it
+    let detail = msg.get(summary.len()..).unwrap_or_default().trim_start_matches(" · ").to_string();
+    (msg, summary, with_warnings(detail, task))
+}
+
+/// How an import ended: stopped, failed to read every file, with problems, or well.
+fn ending_of(task: &ImportTask) -> lightcraft_engine::activity::Ending {
+    use lightcraft_engine::activity::Ending;
+    if task.cancelled {
+        Ending::Stopped
+    } else if task.died {
+        Ending::Died
+    } else if task.failed > 0 && task.imported == 0 && task.restored == 0 {
+        Ending::Failed
+    } else if task.failed > 0 || !task.warnings.is_empty() {
+        Ending::Problems
+    } else {
+        Ending::Done
+    }
+}
+
+/// The unreadable files, as the second line of an import's row (nothing when all could be read).
+pub(crate) fn not_readable_text(failed: usize) -> String {
+    if failed == 0 { String::new() } else { crate::i18n::tr_format!("{} photo{} not readable", failed, crate::i18n::plural_s(failed)) }
+}
+
+/// `detail` with how many XMP warnings the import met (the toast that spells them out passes; the row stays).
+fn with_warnings(mut detail: String, task: &ImportTask) -> String {
+    let n = task.warnings.len();
+    if n > 0 {
+        if !detail.is_empty() {
+            detail.push_str(" · ");
+        }
+        detail.push_str(&crate::i18n::tr_format!("{} import warning{}", n, crate::i18n::plural_s(n)));
+    }
+    detail
+}
+
+/// How a failed file is named in the import's row: by where it is below the folder it was found in (two subfolders
+/// can hold the same name), else by its own name.
+pub(crate) fn failure_name(path: &str, roots: &[String]) -> String {
+    let p = std::path::Path::new(path);
+    roots
+        .iter()
+        .filter_map(|root| p.strip_prefix(root).ok())
+        .find(|rel| !rel.as_os_str().is_empty())
+        .or_else(|| p.file_name().map(std::path::Path::new))
+        .map_or_else(|| path.to_string(), |rel| rel.to_string_lossy().into_owned())
+}
+
+/// The import says how it ended to the activity stack, on every way out of [`finish`] (a task dropped without
+/// saying is no row at all): one that ran long, was stopped or could not read every file stays in
+/// `activity.finished`, naming the files it could not read and why.
+fn report(task: &mut ImportTask, summary: String, detail: String) {
+    use lightcraft_engine::activity::{Failure, Outcome};
+    let ending = ending_of(task);
+    let failures = task.failures.iter().map(|(path, reason)| Failure { name: failure_name(path, &task.roots), reason: reason.clone() }).collect();
+    if let Some(guard) = task.guard.take() {
+        guard.finish(Outcome { ending, summary, detail, failed: task.failed, failures, ..Default::default() });
+    }
 }
 
 /// The photos among `ids` that are in Recently Deleted (each once).
@@ -548,4 +688,106 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     };
     app.toast_for(ctx, msg, 6.0);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The worker's end is told from its death: a channel that closes after every batch was sent is a finished
+    /// import, one that closes after a panic in readying a batch is an import that died (and ends as `Died`).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_worker_that_panics_is_told_from_one_that_finished() {
+        let ctx = egui::Context::default();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        for (panics, died) in [(false, false), (true, true)] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let files: Vec<String> = (0..3).map(|i| format!("f{i}")).collect();
+            let mut seen = 0;
+            feed_batches(files, 1, &cancel, &tx, &ctx, &ended, |_| {
+                seen += 1;
+                if panics && seen == 2 {
+                    panic!("a bug in readying a batch");
+                }
+                lightcraft_engine::import::Prepared::default()
+            });
+            drop(tx);
+            let sent = rx.try_iter().count();
+            assert_eq!(sent, if panics { 1 } else { 3 }, "batches readied before the end");
+            assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)), "the channel closed");
+            let runner = Runner::Thread(rx, ended);
+            assert_eq!(runner.died(), died, "panics: {panics}");
+        }
+    }
+
+    #[test]
+    fn an_import_whose_worker_died_ends_as_died() {
+        use lightcraft_engine::activity::Ending;
+        let mut task = ImportTask::new(vec!["a".into()], json!({}), 0, false);
+        task.imported = 2;
+        assert_eq!(ending_of(&task), Ending::Done);
+        task.died = true;
+        assert_eq!(ending_of(&task), Ending::Died);
+        task.cancelled = true;
+        assert_eq!(ending_of(&task), Ending::Stopped, "a stop the person asked for stays a stop");
+    }
+
+    /// Every way out of `finish` tells the activity stack how the import ended (a guard dropped without
+    /// saying leaves no row): an Auto Import and a folder read that met unreadable files, and an import that
+    /// only found duplicates it showed.
+    #[test]
+    fn every_way_an_import_ends_leaves_its_row_when_it_needs_one() {
+        use lightcraft_engine::activity::{Cancel, Ending};
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.app.session.activity.keep_after(0);
+        let ctx = egui::Context::default();
+        let started = |h: &mut crate::headless::Headless| h.app.session.activity.start("import", "Importing", Cancel::Yes);
+        // an Auto Import that could not read a file, though it was short
+        let mut auto = ImportTask::new(vec![], json!({}), 0, false).auto();
+        auto.failed = 1;
+        auto.imported = 2;
+        auto.guard = Some(started(&mut h));
+        finish(&mut h.app, &ctx, auto);
+        // a folder read for the Local view that could read none
+        let mut browse = ImportTask::new(vec![], json!({}), 0, true);
+        browse.failed = 3;
+        browse.guard = Some(started(&mut h));
+        finish(&mut h.app, &ctx, browse);
+        // one that found only photos the library has, which it shows (and says so in a toast, as ever)
+        let existing: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+        let mut quiet = ImportTask::new(vec![], json!({}), 0, false);
+        quiet.existing = existing;
+        quiet.guard = Some(started(&mut h));
+        finish(&mut h.app, &ctx, quiet);
+        let rows = h.app.session.activity.finished();
+        assert!(h.app.session.activity.list().is_empty());
+        let endings: Vec<(Ending, usize)> = rows.iter().rev().map(|r| (r.ending, r.failed)).collect();
+        assert_eq!(endings, vec![(Ending::Problems, 1), (Ending::Failed, 3), (Ending::Done, 0)], "{rows:?}");
+    }
+
+    /// An import that met XMP warnings says so in its row, not only in the toast that passes.
+    #[test]
+    fn an_import_with_xmp_warnings_says_so_in_its_row() {
+        use lightcraft_engine::activity::Cancel;
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.app.session.activity.keep_after(0);
+        let ctx = egui::Context::default();
+        let warning =
+            || ImportWarning { path: "a.jpg".into(), code: ImportWarningCode::UnmappedXmp, profile: None, mode: None, fields: vec!["x".into()] };
+        for (auto, browse) in [(true, false), (false, true), (false, false)] {
+            let mut task = ImportTask::new(vec![], json!({}), 0, browse);
+            task.auto = auto;
+            task.imported = 1;
+            task.warnings = vec![warning()];
+            task.guard = Some(h.app.session.activity.start("import", "Importing", Cancel::Yes));
+            finish(&mut h.app, &ctx, task);
+        }
+        let rows = h.app.session.activity.finished();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(rows.iter().all(|r| r.detail.contains("1 import warning")), "{rows:?}");
+    }
 }

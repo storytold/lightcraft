@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use crate::activity::{Activity, Cancel, TaskHandle, Unit};
+use crate::activity::{Activity, Cancel, Ending, Outcome, TaskHandle, Unit};
 
 use lightcraft_faces::known::Download;
 
@@ -91,15 +91,16 @@ impl Downloads {
         let shared = Arc::new(Shared { state: Mutex::new(State::Running { bytes: 0, total }), cancel, task: Some(task.handle()) });
         let worker = shared.clone();
         let id = spec.id.clone();
+        let name = name.to_string();
         std::thread::Builder::new()
             .name("face-model-download".into())
             .spawn(move || {
-                // the row goes when the thread ends, however it ends
-                let _task = task;
+                // the row says how it ended when the thread ends, however it ends
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&spec, spec.base(), &staging, &worker)));
                 if outcome.is_err() {
                     worker.set(State::Failed("the download stopped unexpectedly".into()));
                 }
+                task.finish(if outcome.is_err() { Outcome::ended(Ending::Died) } else { ended(&worker.get()) }.about(&name));
             })
             .map_err(|e| format!("could not start the download: {e}"))?;
         self.jobs.insert(id, shared);
@@ -220,6 +221,17 @@ fn fetch(spec: &Download, mirror: &str, staging: &Path, shared: &Shared) -> Resu
 #[cfg(target_arch = "wasm32")]
 fn fetch(_: &Download, _: &str, _: &Path, _: &Shared) -> Result<(), String> {
     Err("the web build downloads no models".into())
+}
+
+/// How a download that ran ended, for its row.
+fn ended(state: &State) -> Outcome {
+    match state {
+        State::Done { .. } | State::Installed => Outcome::default(),
+        State::Failed(why) => Outcome::failed(why.clone()),
+        State::Cancelled => Outcome::ended(Ending::Stopped),
+        // (the thread ended without saying how)
+        State::Running { .. } => Outcome::ended(Ending::Died),
+    }
 }
 
 /// The whole job: reuse a verified earlier copy, else fetch, check and stage. Always ends in a final [`State`].
@@ -355,6 +367,29 @@ mod tests {
         wait("the download never stopped", || !d.running());
         assert_eq!(d.jobs["test-model"].get(), State::Cancelled);
         wait("the row stayed", || activity.list().is_empty());
+        let row = activity.finished().remove(0);
+        assert_eq!(row.ending, crate::activity::Ending::Stopped, "a stopped download says so");
+        assert_eq!(row.detail, "Test Model", "the row names the model");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_that_failed_leaves_a_row_with_the_reason() {
+        use crate::activity::{Activity, Ending};
+        let dir = scratch("failed-row");
+        let activity = Activity::default();
+        let mut d = Downloads::default();
+        let mut spec = spec_for(b"abc");
+        spec.url = format!("{}/{}", serve("404 Not Found", b"not found".to_vec()), spec.file_name);
+        d.start(spec, &dir, &activity, "Test Model").unwrap();
+        wait("the failed download's row never ended", || activity.list().is_empty() && !activity.finished().is_empty());
+        let row = activity.finished().remove(0);
+        assert_eq!((row.kind, row.ending), ("download", Ending::Failed));
+        assert!(
+            row.detail.starts_with("Test Model: ") && row.detail.len() > "Test Model: ".len(),
+            "the model and the reason are kept: {}",
+            row.detail
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
