@@ -2,6 +2,22 @@
 
 ## 2026-10-24
 
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved by an earlier version upgrades it, and earlier versions can't open it afterwards. The library
+  as it was is now kept beside it (`catalog.snap.v<format>-<seq>`, `catalog.log.v<format>-<seq>`), and LightCraft says
+  where once: to go back, see `docs/catalog-persistence.md`. A library that can't be kept is not upgraded.
+
+### Importing a folder from a network share waits less
+- After the import review, the import used to check that each photo was still as the review had seen it by asking the
+  disk about one photo after another, so on a network share every photo waited for a round trip to the server. It now
+  asks about up to 16 photos at a time, the same wait for every 16 instead of for each one. Reading the photos in the review
+  is unchanged.
+- Looking for each photo's `.xmp` sidecar, which asks the disk several names for every photo, also goes up to 16
+  photos at a time.
+
+### A refused move no longer switches the Move Photos question off
+- Ticking Don't ask again in the question that appears when you drop photos on a Folders row used to be remembered even when the move was then refused (for example because a file of the same name is already in that folder). The choice is now kept only once the move has started, so a refused move leaves the question on.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
@@ -49,6 +65,12 @@
 - LightCraft now imports PSD and PSB files with EXIF and XMP image resources. Capture dates, GPS and descriptive fields
   stay available in All Metadata; PSD edit copies keep their capture date. Original exports with Remove Location Info enabled
   are refused when a PSD or PSB embeds GPS, since LightCraft cannot strip metadata from a byte-for-byte original copy.
+
+### Quitting on macOS leaves no lock note
+- Quitting LightCraft on macOS no longer leaves `catalog.lock.owner` in the library folder. The note, which names the
+  program that has the library open, stayed behind after Quit and the window's close button, pointing at a process
+  that no longer existed. The library's lock is now released as soon as everything is saved, as it already was on
+  the other systems.
 
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
@@ -156,6 +178,21 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Importing into a large library keeps the window responsive
+- While an import or Synchronize Folder adds photos to a large library, the sidebar's counts (Folders, By Date,
+  Keywords, All Photos, Picks, Recently Deleted) take in each batch as it lands instead of counting every photo of
+  the library again, which made the window slow and at times unresponsive for as long as the import ran. A change
+  too large to follow, such as opening a library, is counted in the background while the sidebar keeps its counts.
+
+### Find photos whose file is in the library twice
+- Smart albums and the library filter have a new rule, File ▸ Same Content as Another Photo. It finds the photos
+  whose file has the same content as another photo's, under another name or in another folder, such as a copy made
+  with Photo ▸ Duplicate. Virtual copies don't count, and neither do photos in Recently Deleted or only browsed in
+  Local. An album with the rule keeps its count up to date as copies are deleted, restored or removed.
+- The rule needs the library to have recorded each file's content. Photos added by an import have it; photos taken
+  over from a Lightroom catalog don't until you run Photo ▸ Reload from Disk on them, so they match nothing until
+  then, even when their files are identical.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

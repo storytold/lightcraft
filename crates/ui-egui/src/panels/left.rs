@@ -67,7 +67,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 title.on_hover_text(l.dir.display().to_string());
             }
         }
-        let counts = app.caches.counts(&app.session.catalog);
+        let library = app.session.library_generation();
+        let counts = app.caches.counts(&app.session.catalog, library);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
         egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             drag_auto_scroll(app, ui);
@@ -157,18 +158,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         section(app, ui, s, local.places.places.len(), |app, ui| local_rows(app, ui, local))
                     }
                     SidebarSection::ByDate => {
-                        let rows = app.caches.date_groups(&app.session.catalog).len();
+                        let rows = app.caches.date_groups(&app.session.catalog, library).len();
                         section(app, ui, s, rows, date_rows)
                     }
                     SidebarSection::Folders => {
-                        let tree = app.caches.folder_tree(&app.session.catalog);
+                        let tree = app.caches.folder_tree(&app.session.catalog, library);
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
                             folder_rows(app, ui, &tree, 0.0);
                         })
                     }
                     SidebarSection::Keywords => {
-                        let tree = app.caches.keyword_tree(&app.session.catalog);
+                        let tree = app.caches.keyword_tree(&app.session.catalog, library);
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
                     }
                 };

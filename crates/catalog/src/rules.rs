@@ -78,6 +78,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
+    ("sameContent", "Same Content as Another Photo", Kind::Bool),
     // Date
     ("captureDate", "Capture Date", Kind::Date),
     ("importDate", "Import Date", Kind::Date),
@@ -132,7 +133,7 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration", "sameContent"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
@@ -972,6 +973,7 @@ impl Rule {
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),
+            "sameContent" => yes(cat.has_same_content(p)),
             "cropped" => yes(p.is_cropped()),
             "treatment" => {
                 let t = if p.develop.treatment == lightcraft_develop::Treatment::Bw { "monochrome" } else { "color" };
@@ -1066,6 +1068,14 @@ impl RuleSet {
         self.rules.iter().any(|r| match r {
             Rule::Group { group } => group.depends_on_now(),
             Rule::Field { op, .. } => op == "inLast" || op == "notInLast",
+        })
+    }
+
+    /// Whether a rule (nested groups included) tests `field`.
+    pub fn reads(&self, field: &str) -> bool {
+        self.rules.iter().any(|r| match r {
+            Rule::Group { group } => group.reads(field),
+            Rule::Field { field: f, .. } => f == field,
         })
     }
 

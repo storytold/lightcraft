@@ -36,6 +36,7 @@ mod commit;
 mod defaults;
 mod files;
 mod job;
+mod reads;
 mod scan;
 mod types;
 
@@ -48,6 +49,7 @@ pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
 use job::PreparedItem;
 pub use job::{ImportJob, Prepared, import, import_with};
+pub use reads::{MAX_SKIPPED, MAX_STUCK_READERS, ReadWatch, STALL_AFTER, StalledRead, StuckReaders};
 pub(crate) use scan::scan_files;
 pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
 #[cfg(test)]
@@ -60,3 +62,7 @@ pub use types::{
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
 mod tests_known;
+
+#[cfg(test)]
+#[path = "import/tests_pool.rs"]
+mod tests_pool;

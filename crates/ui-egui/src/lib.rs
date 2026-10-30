@@ -19,6 +19,7 @@ mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+pub mod library_work;
 pub mod lightroom_import;
 pub mod links;
 pub mod menus;
@@ -78,7 +79,7 @@ mod services;
 #[cfg(test)]
 use app::{import_tick_allowed, sam_download_ended, shot_ready};
 pub(crate) use caches::key_of;
-pub use caches::{FilterValues, LibraryCounts, RulesView};
+pub use caches::{FilterValues, RulesView};
 use clock::AppClock;
 pub use clock::{monotonic_ms, now_ms};
 #[cfg(target_os = "linux")]
@@ -548,7 +549,11 @@ pub fn split_presets(dropped: Vec<String>) -> (Vec<String>, Vec<String>) {
 /// Results recomputed only when the catalog (or their inputs) change.
 #[derive(Default)]
 pub struct Caches {
-    keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    /// The library's tally (folders, dates, keywords, counts): followed edit by edit,
+    /// counted whole off the UI thread ([`library_work::LibraryWork`]).
+    pub library: library_work::LibraryWork,
+    /// The trees built from it: (the tally's stamp, catalog revision, tree).
+    keyword_tree: Option<(u64, u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
     /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
     /// revision, selection and view.
     keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
@@ -561,13 +566,12 @@ pub struct Caches {
     keyword_groups: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Group>>)>,
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
-    folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
+    folder_tree: Option<(u64, u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
     people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
     completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
-    counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
     /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[cfg(not(target_arch = "wasm32"))]
 use super::commit::workers;
 #[cfg(test)]
@@ -238,6 +240,112 @@ pub(crate) fn probe_all(
         .collect()
 }
 
+/// What the disk says about a file ([`stat_all`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Seen {
+    /// Not asked about: `cancel` was set first.
+    Unchecked,
+    /// Not there, or not readable.
+    Gone,
+    At {
+        is_file: bool,
+        len: u64,
+    },
+}
+
+/// [`Seen`] of `path` from the file system.
+fn stat_file(path: &str) -> Seen {
+    match std::fs::metadata(path) {
+        Ok(m) => Seen::At { is_file: m.is_file(), len: m.len() },
+        Err(_) => Seen::Gone,
+    }
+}
+
+/// Files asked about at once: a question to a network share (a stat, a name looked up) is a round
+/// trip (50 ms and more under load) that waits for nothing but the server, so a few more than the
+/// readers' threads.
+#[cfg(not(target_arch = "wasm32"))]
+const AT_ONCE: usize = 16;
+
+/// Run `ask` on each of `items`, several at once (one at a time, a folder of thousands of photos on
+/// a network share waited minutes for its questions alone). The answers come in the order of
+/// `items`; `None` for an item not reached once `cancel` is set (or whose asker died).
+fn at_once<T: Sync, R: Send>(items: &[T], cancel: &std::sync::atomic::AtomicBool, ask: impl Fn(&T) -> R + Sync) -> Vec<Option<R>> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut answers: Vec<Option<R>> = items.iter().map(|_| None).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let n = AT_ONCE.min(items.len());
+        if n > 1 {
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let mine: Vec<Vec<(usize, R)>> = std::thread::scope(|sc| {
+                let askers: Vec<_> = (0..n)
+                    .map(|_| {
+                        sc.spawn(|| {
+                            let mut mine = Vec::new();
+                            loop {
+                                let i = next.fetch_add(1, Relaxed);
+                                let Some(item) = items.get(i) else { break };
+                                if cancel.load(Relaxed) {
+                                    break;
+                                }
+                                mine.push((i, ask(item)));
+                            }
+                            mine
+                        })
+                    })
+                    .collect();
+                askers.into_iter().map(|a| a.join().unwrap_or_default()).collect()
+            });
+            for (i, r) in mine.into_iter().flatten() {
+                if let Some(slot) = answers.get_mut(i) {
+                    *slot = Some(r);
+                }
+            }
+            return answers;
+        }
+    }
+    for (slot, item) in answers.iter_mut().zip(items) {
+        if cancel.load(Relaxed) {
+            break;
+        }
+        *slot = Some(ask(item));
+    }
+    answers
+}
+
+/// Ask `stat` about each of `paths`, several at once ([`at_once`]); the ones not reached once
+/// `cancel` is set are [`Seen::Unchecked`].
+pub(crate) fn stat_all(paths: &[&str], cancel: &std::sync::atomic::AtomicBool, stat: impl Fn(&str) -> Seen + Sync) -> Vec<Seen> {
+    at_once(paths, cancel, |p| stat(p)).into_iter().map(|s| s.unwrap_or(Seen::Unchecked)).collect()
+}
+
+/// The sidecar of each of `files` (`find` says which: a few names looked up on the disk for each,
+/// a round trip apiece on a network share), several files at once ([`at_once`]); `None` for a
+/// file with no sidecar or not reached once `cancel` is set.
+pub(super) fn sidecars_of(
+    files: &[&str],
+    cancel: &std::sync::atomic::AtomicBool,
+    find: impl Fn(&str) -> Option<PathBuf> + Sync,
+) -> Vec<Option<PathBuf>> {
+    at_once(files, cancel, |f| find(f)).into_iter().map(Option::flatten).collect()
+}
+
+/// The probes in `cache` of `files` that are still true: the file is looked at ([`stat_all`]) and
+/// `ok` says it is as it was probed. `None` for a file with no probe in `cache`, one that changed,
+/// and one not looked at because `cancel` was set.
+pub(super) fn reusable_probes(
+    files: &[String],
+    cache: &mut HashMap<String, ProbeInfo>,
+    cancel: &std::sync::atomic::AtomicBool,
+    ok: impl Fn(Seen, &ProbeInfo) -> bool,
+) -> Vec<Option<ProbeInfo>> {
+    let held: Vec<Option<ProbeInfo>> = files.iter().map(|f| cache.remove(f)).collect();
+    let asked: Vec<&str> = files.iter().zip(&held).filter(|(_, h)| h.is_some()).map(|(f, _)| f.as_str()).collect();
+    let mut seen = stat_all(&asked, cancel, stat_file).into_iter();
+    held.into_iter().map(|h| h.filter(|info| seen.next().is_some_and(|s| s != Seen::Unchecked && ok(s, info)))).collect()
+}
+
 /// Copy `src` into `dir` as `name` (default: its own name), made unique with -1, -2…; returns the
 /// new path. The copy is verified ([`crate::import_move::copy_new`]: a new file, synced and
 /// checked against `probe_hash`, the content hash the probe computed — or compared byte for byte
@@ -369,5 +477,146 @@ mod prepared_tests {
         // at most the files the (up to 8) readers had already started
         assert!(seen.load(Relaxed) <= 8, "read {} files after cancel", seen.load(Relaxed));
         assert!(prepared.items.is_empty());
+    }
+
+    /// Given files on a network share, when an import checks the probes a scan left, then it asks
+    /// the disk about several files at once: one at a time, 5,990 photos spent 300 s on stats alone
+    /// (99 % of the import's time), each a round trip to the server.
+    #[test]
+    fn stats_are_asked_for_several_files_at_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        let (active, together) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let names: Vec<String> = (0..6).map(|i| format!("file-{i}")).collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        let seen = stat_all(&paths, &std::sync::atomic::AtomicBool::new(false), |p| {
+            active.fetch_add(1, Relaxed);
+            // waits (at most a second) for another file to be asked about while this one is
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while active.load(Relaxed) < 2 && std::time::Instant::now() < end {
+                std::thread::yield_now();
+            }
+            together.fetch_max(active.load(Relaxed), Relaxed);
+            active.fetch_sub(1, Relaxed);
+            Seen::At { is_file: true, len: p.trim_start_matches("file-").parse().unwrap_or(u64::MAX) }
+        });
+        assert!(together.load(Relaxed) >= 2, "the files were asked about one at a time");
+        let lens: Vec<Seen> = (0..6).map(|len| Seen::At { is_file: true, len }).collect();
+        assert_eq!(seen, lens, "the answers keep the order of the files");
+    }
+
+    /// ✕ while the stats run: the files not asked about yet stay unchecked, and no more are asked.
+    #[test]
+    fn stats_stop_when_cancelled() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+        let (cancel, asked) = (AtomicBool::new(false), AtomicUsize::new(0));
+        let names: Vec<String> = (0..400).map(|i| format!("file-{i}")).collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        let seen = stat_all(&paths, &cancel, |_| {
+            asked.fetch_add(1, Relaxed);
+            cancel.store(true, Relaxed);
+            Seen::Gone
+        });
+        assert_eq!(seen.len(), 400);
+        // at most the files the (up to 16) readers had already started
+        assert!(asked.load(Relaxed) <= 16, "asked about {} files after cancel", asked.load(Relaxed));
+        assert_eq!(seen.iter().filter(|s| **s == Seen::Gone).count(), asked.load(Relaxed));
+        assert!(seen.iter().all(|s| matches!(s, Seen::Gone | Seen::Unchecked)));
+    }
+
+    /// A probe a scan left is used again for a file that is as it was, and only for it: a file that
+    /// changed size, one that is gone and one with no probe are read.
+    #[test]
+    fn a_scans_probe_is_reused_only_for_a_file_as_it_was() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let dir = std::env::temp_dir().join(format!("lightcraft-reuse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut files = Vec::new();
+        for (name, bytes) in [("same.jpg", 10usize), ("grown.jpg", 10), ("fresh.jpg", 10)] {
+            let p = dir.join(name);
+            std::fs::write(&p, vec![0u8; bytes]).unwrap();
+            files.push(p.to_string_lossy().to_string());
+        }
+        let gone = dir.join("gone.jpg").to_string_lossy().to_string();
+        files.push(gone.clone());
+        let mut s = Session::new();
+        let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
+        let probed = |size: u64| ProbeInfo { format: "JPEG".into(), file_size: size, ..ProbeInfo::default() };
+        job.cache.insert(files[0].clone(), probed(10));
+        job.cache.insert(files[1].clone(), probed(5));
+        job.cache.insert(gone.clone(), probed(10));
+        let read = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let read_in_probe = read.clone();
+        job.probe = Some(std::sync::Arc::new(move |p: &str| {
+            read_in_probe.lock().unwrap().push(p.to_string());
+            Ok(probed(10))
+        }));
+        let prepared = job.prepare_files(files.clone(), &std::sync::atomic::AtomicBool::new(false));
+        let mut read = read.lock().unwrap().clone();
+        read.sort();
+        let mut expect = vec![files[1].clone(), files[2].clone(), gone];
+        expect.sort();
+        assert_eq!(read, expect, "only what was not as the scan saw it is read");
+        assert_eq!(job.read_total.load(Relaxed), 3);
+        assert_eq!(prepared.items.len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Given photos on a network share, when an import looks for their sidecars, then it asks about
+    /// several photos at once: one photo after another, nine names each, they were 77 % of the
+    /// import's preparation (95 % where a folder listing could not vouch for the names).
+    #[test]
+    fn sidecars_are_looked_up_for_several_photos_at_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        let (active, together) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let names: Vec<String> = (0..6).map(|i| format!("photo-{i}.jpg")).collect();
+        let files: Vec<&str> = names.iter().map(String::as_str).collect();
+        let found = sidecars_of(&files, &std::sync::atomic::AtomicBool::new(false), |f| {
+            active.fetch_add(1, Relaxed);
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while active.load(Relaxed) < 2 && std::time::Instant::now() < end {
+                std::thread::yield_now();
+            }
+            together.fetch_max(active.load(Relaxed), Relaxed);
+            active.fetch_sub(1, Relaxed);
+            f.ends_with("-3.jpg").then(|| PathBuf::from(f).with_extension("xmp"))
+        });
+        assert!(together.load(Relaxed) >= 2, "the photos were looked up one at a time");
+        let expect: Vec<Option<PathBuf>> = (0..6).map(|i| (i == 3).then(|| PathBuf::from("photo-3.xmp"))).collect();
+        assert_eq!(found, expect, "each sidecar stays with its photo");
+    }
+
+    /// The sidecars found for a batch go to the photos they belong to, whichever have one, and a
+    /// photo that failed to probe takes none of the others'.
+    #[test]
+    fn a_batchs_sidecars_go_to_their_own_photos() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecars-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#;
+        let files: Vec<String> = ["a.jpg", "broken.jpg", "c.jpg", "d.jpg"].iter().map(|n| dir.join(n).to_string_lossy().to_string()).collect();
+        for f in &files {
+            std::fs::write(f, b"x").unwrap();
+        }
+        std::fs::write(dir.join("c.xmp"), xmp).unwrap();
+        let mut s = Session::new();
+        let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
+        job.probe = Some(std::sync::Arc::new(|p: &str| {
+            if p.ends_with("broken.jpg") {
+                Err("unreadable".into())
+            } else {
+                Ok(ProbeInfo { format: "JPEG".into(), file_size: 1, ..ProbeInfo::default() })
+            }
+        }));
+        let prepared = job.prepare_files(files, &std::sync::atomic::AtomicBool::new(false));
+        let rating = |name: &str| {
+            prepared.items.iter().find_map(|i| match i {
+                PreparedItem::Ready(r) if r.path.ends_with(name) => Some(r.sidecar.as_ref().and_then(|sc| sc.rating)),
+                _ => None,
+            })
+        };
+        assert_eq!((rating("a.jpg"), rating("c.jpg"), rating("d.jpg")), (Some(None), Some(Some(4)), Some(None)));
+        assert!(prepared.items.iter().any(|i| matches!(i, PreparedItem::Failed(p, _) if p.ends_with("broken.jpg"))));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

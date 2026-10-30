@@ -41,6 +41,7 @@ mod keywording;
 mod labels;
 mod launch_library;
 mod layout_image;
+mod library_counts;
 mod library_problem;
 mod lifecycle_037;
 mod lightroom_destination;
