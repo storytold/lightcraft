@@ -15,7 +15,7 @@ pub(super) fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     let (w, h) = if aspect >= 1.0 { (NAV_W, NAV_W / aspect) } else { (NAV_W * aspect, NAV_W) };
     let frame = Rect::from_min_size(pos2(canvas.right() - w - 16.0, canvas.bottom() - h - 16.0), vec2(w, h));
     let p = ui.painter_at(canvas);
-    p.rect_filled(frame.expand(5.0), 4.0, Color32::from_black_alpha(190));
+    p.rect_filled(frame.expand(5.0), 4.0, crate::transparency::hud(ui.ctx(), 190));
     match tex {
         Some(t) => p.image(t.tex.id(), frame, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE),
         None => p.rect_filled(frame, 0.0, Tokens::get(ui.ctx()).skeleton),
@@ -154,7 +154,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     crate::widgets::announce(&badge, crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" }));
                     register(ui, format!("filmstack:{}", id.0), br);
                     let p = ui.painter();
-                    let fill = if badge.hovered() { Color32::from_black_alpha(230) } else { Color32::from_black_alpha(170) };
+                    let fill = crate::transparency::hud(ui.ctx(), if badge.hovered() { 230 } else { 170 });
                     p.rect_filled(br, 7.5, fill);
                     crate::icons::paint(p, Rect::from_min_size(br.min + vec2(4.0, 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Stack, Color32::WHITE);
                     p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
@@ -212,7 +212,7 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
         return;
     }
     let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
+    p.rect_filled(bar, 0.0, crate::transparency::hud(p.ctx(), 130));
     let y = bar.center().y;
     let mut x = bar.left() + 3.0;
     x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;

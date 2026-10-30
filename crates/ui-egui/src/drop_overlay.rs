@@ -1,7 +1,7 @@
 //! What dropping the files dragged over the window will do: the same sorting the drop applies,
 //! shown on a veil over the whole window while the drag lasts.
 
-use egui::{Align2, Color32, Context, Order, Rect, Stroke, StrokeKind, vec2};
+use egui::{Align2, Context, Order, Rect, Stroke, StrokeKind, vec2};
 
 use crate::LightcraftApp;
 use crate::theme::Tokens;
@@ -89,7 +89,7 @@ pub fn show(app: &LightcraftApp, ctx: &Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::unique("drop-overlay")));
-    painter.rect_filled(screen, 0.0, Color32::from_black_alpha(150));
+    painter.rect_filled(screen, 0.0, crate::transparency::scrim(ctx, 150));
     painter.rect_stroke(screen.shrink(10.0), 12.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     let galleys: Vec<_> = lines.into_iter().map(|l| painter.layout(l, t.semibold(18.0), t.text, (screen.width() - 120.0).max(200.0))).collect();
     let (w, h) = galleys.iter().fold((0.0f32, 0.0f32), |(w, h), g| (w.max(g.size().x), h + g.size().y + 8.0));

@@ -2429,5 +2429,18 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Reduce Motion": "Minska rörelse",
+  "Reduce motion": "Minska rörelse",
+  "Turns off zoom and spinner animations. Fades stay.": "Stänger av zoom- och snurranimationer. Toningar finns kvar.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Stänger av zoom- och snurranimationer. Toningar finns kvar. Följer systemets Minska rörelse tills du ändrar det här.",
+  "Increase Contrast": "Öka kontrasten",
+  "Increase contrast": "Öka kontrasten",
+  "Makes borders, separators and text stand out more in every theme.": "Får kanter, avgränsare och text att framträda tydligare i alla teman.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Får kanter, avgränsare och text att framträda tydligare i alla teman. Följer systemets Öka kontrasten tills du ändrar det här.",
+  "Reduce Transparency": "Minska transparens",
+  "Reduce transparency": "Minska transparens",
+  "Makes the see-through badges, labels and backdrops solid.": "Visar genomskinliga märken, etiketter och bakgrunder som täckande.",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "Visar genomskinliga märken, etiketter och bakgrunder som täckande. Följer systemets Minska transparens tills du ändrar det här.",
+  "Use the system setting": "Använd systeminställningen"
 }

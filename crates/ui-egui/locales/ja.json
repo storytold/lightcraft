@@ -2356,5 +2356,18 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Reduce Motion": "動きを減らす",
+  "Reduce motion": "動きを減らす",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。",
+  "Increase Contrast": "コントラストを上げる",
+  "Increase contrast": "コントラストを上げる",
+  "Makes borders, separators and text stand out more in every theme.": "すべてのテーマで、境界線、区切り線、テキストをより際立たせます。",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "すべてのテーマで、境界線、区切り線、テキストをより際立たせます。ここで変更するまで、システムの「コントラストを上げる」設定に従います。",
+  "Reduce Transparency": "透明度を下げる",
+  "Reduce transparency": "透明度を下げる",
+  "Makes the see-through badges, labels and backdrops solid.": "透けているマーク、ラベル、背景を不透明にします。",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "透けているマーク、ラベル、背景を不透明にします。ここで変更するまで、システムの「透明度を下げる」設定に従います。",
+  "Use the system setting": "システム設定に従う",
+  "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。"
 }

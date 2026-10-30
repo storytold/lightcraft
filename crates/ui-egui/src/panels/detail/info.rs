@@ -189,7 +189,7 @@ pub(super) fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     let resp = ui.interact(r, egui::Id::unique("loupe-filter-pill"), Sense::click());
     crate::widgets::announce(&resp, crate::i18n::tr("Filters"));
     register(ui, "loupe:filters", r);
-    p.rect_filled(r, 10.0, Color32::from_black_alpha(if resp.hovered() { 225 } else { 185 }));
+    p.rect_filled(r, 10.0, crate::transparency::hud(p.ctx(), if resp.hovered() { 225 } else { 185 }));
     let text_clip = Rect::from_min_max(r.min, pos2(r.right() - 24.0, r.max.y));
     p.with_clip_rect(text_clip).galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, Color32::from_gray(225));
     let (c, m) = (pos2(r.right() - 13.0, r.center().y), 3.0);
@@ -210,7 +210,7 @@ pub(super) fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
     let g = p.layout_no_wrap(text, t.font(12.0), Color32::WHITE);
     let size = vec2(g.size().x + 40.0, 26.0);
     let r = Rect::from_min_size(pos2(canvas.center().x - size.x / 2.0, canvas.top() + 12.0), size);
-    p.rect_filled(r, 13.0, Color32::from_black_alpha(185));
+    p.rect_filled(r, 13.0, crate::transparency::hud(p.ctx(), 185));
     crate::icons::paint(&p, Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(15.0, 15.0)), crate::icons::Icon::Info, t.caution);
     p.galley(pos2(r.left() + 29.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
     register(ui, "notice:previewOnly:loupe", r);
@@ -296,7 +296,7 @@ pub(crate) fn loupe_pill(ui: &egui::Ui, canvas: Rect, over: Rect, navigator: Opt
     if let Some(nav) = navigator.filter(|n| n.expand(8.0).intersects(r)) {
         r = Rect::from_min_size(pos2(nav.right() - size.x, nav.top() - 8.0 - size.y), size);
     }
-    p.rect_filled(r, 10.0, Color32::from_black_alpha(185));
+    p.rect_filled(r, 10.0, crate::transparency::hud(p.ctx(), 185));
     if caution {
         crate::icons::paint(&p, Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(13.0, 13.0)), crate::icons::Icon::Info, t.caution);
     }

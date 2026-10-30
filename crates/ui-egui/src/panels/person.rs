@@ -336,16 +336,16 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     if more && hovered {
         // a check at the bottom right says a click confirms; × hides and ↑ names all above this score
         let badge = Rect::from_min_size(pos2(r.right() - 28.0, r.bottom() - 28.0), vec2(24.0, 24.0));
-        p.circle_filled(badge.center(), 12.0, Color32::from_rgba_unmultiplied(30, 30, 30, 220));
+        p.circle_filled(badge.center(), 12.0, crate::transparency::solid(p.ctx(), Color32::from_rgba_unmultiplied(30, 30, 30, 220)));
         let c = badge.center();
         let check = [pos2(c.x - 5.0, c.y), pos2(c.x - 1.5, c.y + 4.0), pos2(c.x + 5.5, c.y - 4.0)];
         p.line_segment([check[0], check[1]], Stroke::new(2.0, Color32::WHITE));
         p.line_segment([check[1], check[2]], Stroke::new(2.0, Color32::WHITE));
-        p.circle_filled(x_rect.center(), 10.0, Color32::from_rgba_unmultiplied(30, 30, 30, 220));
+        p.circle_filled(x_rect.center(), 10.0, crate::transparency::solid(p.ctx(), Color32::from_rgba_unmultiplied(30, 30, 30, 220)));
         let xc: Pos2 = x_rect.center();
         p.line_segment([pos2(xc.x - 3.5, xc.y - 3.5), pos2(xc.x + 3.5, xc.y + 3.5)], Stroke::new(1.6, Color32::WHITE));
         p.line_segment([pos2(xc.x - 3.5, xc.y + 3.5), pos2(xc.x + 3.5, xc.y - 3.5)], Stroke::new(1.6, Color32::WHITE));
-        p.rect_filled(above_rect, 4.0, Color32::from_rgba_unmultiplied(30, 30, 30, 220));
+        p.rect_filled(above_rect, 4.0, crate::transparency::solid(p.ctx(), Color32::from_rgba_unmultiplied(30, 30, 30, 220)));
         let ac = above_rect.center();
         let arrow = Stroke::new(2.0, Color32::WHITE);
         p.line_segment([pos2(ac.x, ac.y + 5.0), pos2(ac.x, ac.y - 5.0)], arrow);

@@ -133,6 +133,11 @@ The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
 (on by default) makes `view.zoomToggle` zoom in centred on it, replying `{focus: [x, y]}` (the `pan` it set).
+`view.reduceMotion {on?, follow?}` (follows macOS Reduce Motion until set; `{on}` sets it, `{follow: true}` goes back to the system (refused, changing nothing, where the host has no system setting to read, or its reader has not answered yet), no params toggles what is in effect, and `{follow: false}` is the same as no params; replies `{on, followsSystem}`) is Settings ▸ Interface ▸ Reduce motion: the
+click-zoom and `view.zoomToggle` land at once, egui's widget easing and every spinner (a busy button's too) stop, scrolling to a photo jumps instead of gliding, and every indeterminate progress bar's sweep
+stands still; fades (toasts, the slideshow) stay.
+`view.increaseContrast {on?, follow?}` (follows macOS Increase Contrast until set; the same parameters, refusal and reply `{on, followsSystem}` as `view.reduceMotion`) is Settings ▸ Interface ▸ Increase contrast: text, icons, borders, separators and the Develop sliders' plain tracks and thumbs stand out more in every theme, and the outlines of the standard controls and windows are drawn 1.5 pt.
+`view.reduceTransparency {on?, follow?}` (follows macOS Reduce Transparency until set; the same parameters, refusal and reply `{on, followsSystem}` as `view.reduceMotion`) is Settings ▸ Interface ▸ Reduce transparency: the see-through badges, labels, pills and dialog backdrops are drawn solid.
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each
 file, on a background job (activity kind `focus`); `wait: true` returns the run's counts when done. The app calls
 `focus.pump {pace}` every frame to drive it.

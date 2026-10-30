@@ -396,7 +396,7 @@ fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, now: f64) 
     // fade out over the last half second
     let alpha = (left / 0.5).clamp(0.0, 1.0) as f32;
     let p = ui.painter_at(canvas);
-    p.rect_filled(bar, 10.0, Color32::from_black_alpha((200.0 * alpha) as u8));
+    p.rect_filled(bar, 10.0, crate::transparency::hud(ui.ctx(), 200).gamma_multiply(alpha));
     let mut child =
         ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.set_opacity(alpha);

@@ -2734,5 +2734,18 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Reduce Motion": "მოძრაობის შემცირება",
+  "Reduce motion": "მოძრაობის შემცირება",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება. სანამ აქ არ შეცვლით, სისტემის „მოძრაობის შემცირების“ პარამეტრს მისდევს.",
+  "Increase Contrast": "კონტრასტის გაზრდა",
+  "Increase contrast": "კონტრასტის გაზრდა",
+  "Makes borders, separators and text stand out more in every theme.": "ყველა თემაში უფრო გამოკვეთს საზღვრებს, გამყოფებს და ტექსტს.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "ყველა თემაში უფრო გამოკვეთს საზღვრებს, გამყოფებს და ტექსტს. სანამ აქ არ შეცვლით, სისტემის „კონტრასტის გაზრდის“ პარამეტრს მისდევს.",
+  "Reduce Transparency": "გამჭვირვალობის შემცირება",
+  "Reduce transparency": "გამჭვირვალობის შემცირება",
+  "Makes the see-through badges, labels and backdrops solid.": "გამჭვირვალე ნიშნებს, წარწერებსა და ფონებს გაუმჭვირვალედ აჩვენებს.",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "გამჭვირვალე ნიშნებს, წარწერებსა და ფონებს გაუმჭვირვალედ აჩვენებს. სანამ აქ არ შეცვლით, სისტემის „გამჭვირვალობის შემცირების“ პარამეტრს მისდევს.",
+  "Use the system setting": "სისტემის პარამეტრის გამოყენება",
+  "Turns off zoom and spinner animations. Fades stay.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება."
 }

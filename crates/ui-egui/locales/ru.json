@@ -2349,5 +2349,18 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Reduce Motion": "Уменьшить движение",
+  "Reduce motion": "Уменьшить движение",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются. Пока вы не измените это здесь, действует системная настройка «Уменьшение движения».",
+  "Increase Contrast": "Увеличить контрастность",
+  "Increase contrast": "Увеличить контрастность",
+  "Makes borders, separators and text stand out more in every theme.": "Делает границы, разделители и текст заметнее во всех темах.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Делает границы, разделители и текст заметнее во всех темах. Пока вы не измените это здесь, действует системная настройка «Увеличить контрастность».",
+  "Reduce Transparency": "Уменьшить прозрачность",
+  "Reduce transparency": "Уменьшить прозрачность",
+  "Makes the see-through badges, labels and backdrops solid.": "Показывает полупрозрачные значки, подписи и фоны сплошными.",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "Показывает полупрозрачные значки, подписи и фоны сплошными. Пока вы не измените это здесь, действует системная настройка «Уменьшить прозрачность».",
+  "Use the system setting": "Использовать настройку системы",
+  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются."
 }

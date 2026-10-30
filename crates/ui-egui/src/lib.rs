@@ -19,10 +19,12 @@ mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+pub mod increase_contrast;
 pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+pub mod motion;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -36,6 +38,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+pub mod transparency;
 pub mod widgets;
 pub mod window_place;
 
@@ -85,7 +88,7 @@ pub use clock::{monotonic_ms, now_ms};
 pub use services::OpenModelFolderFn;
 pub use services::{
     CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    SharedWrite, SystemIncreaseContrastFn, SystemReduceMotionFn, SystemReduceTransparencyFn, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 
@@ -333,6 +336,15 @@ pub struct LightcraftApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// The last answer of `services.system_reduce_motion` and when it was read.
+    pub(crate) system_reduce_motion: Option<bool>,
+    pub(crate) system_reduce_motion_read: Option<f64>,
+    /// The last answer of `services.system_increase_contrast` and when it was read.
+    pub(crate) system_increase_contrast: Option<bool>,
+    pub(crate) system_increase_contrast_read: Option<f64>,
+    /// The last answer of `services.system_reduce_transparency` and when it was read.
+    pub(crate) system_reduce_transparency: Option<bool>,
+    pub(crate) system_reduce_transparency_read: Option<f64>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,

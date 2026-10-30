@@ -272,7 +272,7 @@ fn top_painter(ui: &egui::Ui, name: &'static str) -> egui::Painter {
 fn rotate_cursor(ui: &egui::Ui, at: Pos2, turn: f32) {
     let p = top_painter(ui, "crop-rotate-cursor");
     let r = Rect::from_center_size(at, vec2(22.0, 22.0));
-    p.circle_filled(at, 12.0, Color32::from_black_alpha(150));
+    p.circle_filled(at, 12.0, crate::transparency::hud(ui.ctx(), 150));
     crate::icons::paint_turned(&p, r.shrink(2.0), crate::icons::Icon::RotateDrag, Color32::WHITE, turn);
     register(ui, "cropRotateCursor", r);
 }
@@ -306,7 +306,7 @@ fn angle_readout(ui: &egui::Ui, at: Pos2, angle: f64, bounds: Rect) {
     let p = top_painter(ui, "crop-angle-readout");
     let galley = p.layout_no_wrap(crop_angle_label(angle), t.font(12.5), Color32::WHITE);
     let rect = readout_rect(at, galley.size() + vec2(12.0, 6.0), bounds);
-    p.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
+    p.rect_filled(rect, 4.0, crate::transparency::hud(ui.ctx(), 170));
     p.galley(rect.min + vec2(6.0, 3.0), galley, Color32::WHITE);
     register(ui, "cropAngleReadout", rect);
 }

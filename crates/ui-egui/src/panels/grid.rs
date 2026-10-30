@@ -886,12 +886,12 @@ fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: 
     if !square && photo.label.is_some() {
         // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
-        p.rect_filled(badge_bar, 0.0, crate::theme::label_background(t.cell, photo.label, selected).gamma_multiply(0.7));
+        p.rect_filled(badge_bar, 0.0, crate::transparency::fade(p.ctx(), crate::theme::label_background(t.cell, photo.label, selected), 0.7));
     }
     if show_badges {
         let bar = badge_bar;
         if (hovered || selected) && (square || photo.label.is_none()) {
-            p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
+            p.rect_filled(bar, 0.0, crate::transparency::hud(p.ctx(), 120));
         }
         let mut x = bar.left() + 6.0;
         x += crate::rating::paint_rating(p, pos2(x, bar.center().y), photo.rating, crate::rating::RatingSize::Medium, t.star) + 4.0;
@@ -916,7 +916,7 @@ fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, squ
     let g = p.layout_no_wrap(name.to_string(), t.semibold(10.5), Color32::WHITE);
     let tr = if square { img_rect.right_top() + vec2(-6.0, 6.0) } else { img_rect.right_top() + vec2(-5.0, 5.0) };
     let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + 20.0));
-    p.rect_filled(br, 10.0, Color32::from_black_alpha(165));
+    p.rect_filled(br, 10.0, crate::transparency::hud(p.ctx(), 165));
     let c = pos2(br.left() + 13.0, br.center().y);
     let s = 5.0;
     p.add(egui::Shape::convex_polygon(
@@ -935,7 +935,7 @@ fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId,
     let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
     let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
     let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
-    p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
+    p.rect_filled(br, 8.0, crate::transparency::hud(ui.ctx(), 170));
     paint(p, Rect::from_center_size(pos2(br.left() + 9.0, br.center().y), vec2(12.0, 12.0)), Icon::Info, t.caution);
     p.galley(pos2(br.left() + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
     register(ui, format!("badge:previewOnly:{}", id.0), br);
@@ -1235,7 +1235,7 @@ pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid:
     });
     crate::widgets::announce(&resp, crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" }));
     register(ui, format!("stack:{}", id.0), br);
-    let fill = if resp.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(165) };
+    let fill = crate::transparency::hud(ui.ctx(), if resp.hovered() { 220 } else { 165 });
     p.rect_filled(br, 10.0, fill);
     if pos == 0 && !collapsed {
         p.rect_stroke(br, 10.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);

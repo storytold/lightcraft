@@ -78,6 +78,66 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
+    let mut reduce = app.reduce_motion();
+    let has_system = app.system_reduce_motion_available();
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(&mut reduce, crate::i18n::tr("Reduce motion"));
+        register(ui, "check:settings.reduceMotion".to_string(), r.rect);
+        if r.changed() {
+            app.ui.settings.reduce_motion = Some(reduce);
+        }
+        r.on_hover_text(crate::i18n::tr(if has_system {
+            "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here."
+        } else {
+            "Turns off zoom and spinner animations. Fades stay."
+        }));
+        if has_system
+            && app.ui.settings.reduce_motion.is_some()
+            && crate::widgets::text_button(ui, "settings.reduceMotionFollow", "Use the system setting", false).clicked()
+        {
+            app.ui.settings.reduce_motion = None;
+        }
+    });
+    let mut increase = app.increase_contrast();
+    let has_system = app.system_increase_contrast_available();
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(&mut increase, crate::i18n::tr("Increase contrast"));
+        register(ui, "check:settings.increaseContrast".to_string(), r.rect);
+        if r.changed() {
+            app.ui.settings.increase_contrast = Some(increase);
+        }
+        r.on_hover_text(crate::i18n::tr(if has_system {
+            "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here."
+        } else {
+            "Makes borders, separators and text stand out more in every theme."
+        }));
+        if has_system
+            && app.ui.settings.increase_contrast.is_some()
+            && crate::widgets::text_button(ui, "settings.increaseContrastFollow", "Use the system setting", false).clicked()
+        {
+            app.ui.settings.increase_contrast = None;
+        }
+    });
+    let mut solid = app.reduce_transparency();
+    let has_system = app.system_reduce_transparency_available();
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(&mut solid, crate::i18n::tr("Reduce transparency"));
+        register(ui, "check:settings.reduceTransparency".to_string(), r.rect);
+        if r.changed() {
+            app.ui.settings.reduce_transparency = Some(solid);
+        }
+        r.on_hover_text(crate::i18n::tr(if has_system {
+            "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here."
+        } else {
+            "Makes the see-through badges, labels and backdrops solid."
+        }));
+        if has_system
+            && app.ui.settings.reduce_transparency.is_some()
+            && crate::widgets::text_button(ui, "settings.reduceTransparencyFollow", "Use the system setting", false).clicked()
+        {
+            app.ui.settings.reduce_transparency = None;
+        }
+    });
     heading(ui, t, crate::i18n::tr("Filmstrip"));
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");

@@ -82,7 +82,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {
     let (r, _) = ui.allocate_exact_size(vec2(t.strip_w - 16.0, 1.0), egui::Sense::hover());
-    ui.painter().rect_filled(r, 0.0, t.button_border.gamma_multiply(0.7));
+    ui.painter().rect_filled(r, 0.0, crate::transparency::fade(ui.ctx(), t.button_border, 0.7));
 }
 
 #[cfg(test)]

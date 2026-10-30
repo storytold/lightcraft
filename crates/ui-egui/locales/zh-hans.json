@@ -2200,5 +2200,18 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Reduce Motion": "减少动态效果",
+  "Reduce motion": "减少动态效果",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "关闭缩放和旋转指示器的动画。淡入淡出效果保留。在你于此处更改之前，跟随系统的“减弱动态效果”设置。",
+  "Increase Contrast": "增强对比度",
+  "Increase contrast": "增强对比度",
+  "Makes borders, separators and text stand out more in every theme.": "让所有主题中的边框、分隔线和文字更醒目。",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "让所有主题中的边框、分隔线和文字更醒目。在你于此处更改之前，跟随系统的“增强对比度”设置。",
+  "Reduce Transparency": "降低透明度",
+  "Reduce transparency": "降低透明度",
+  "Makes the see-through badges, labels and backdrops solid.": "将半透明的标记、标签和背景显示为不透明。",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "将半透明的标记、标签和背景显示为不透明。在你于此处更改之前，跟随系统的“降低透明度”设置。",
+  "Use the system setting": "使用系统设置",
+  "Turns off zoom and spinner animations. Fades stay.": "关闭缩放和旋转指示器的动画。淡入淡出效果保留。"
 }

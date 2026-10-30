@@ -2361,5 +2361,18 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Reduce Motion": "Riduci movimento",
+  "Reduce motion": "Riduci movimento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Disattiva le animazioni dello zoom e degli indicatori di attività. Le dissolvenze restano. Segue l’impostazione Riduci movimento del sistema finché non la cambi qui.",
+  "Increase Contrast": "Aumenta contrasto",
+  "Increase contrast": "Aumenta contrasto",
+  "Makes borders, separators and text stand out more in every theme.": "Fa risaltare di più bordi, separatori e testo in ogni tema.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Fa risaltare di più bordi, separatori e testo in ogni tema. Segue l’impostazione Aumenta contrasto del sistema finché non la cambi qui.",
+  "Reduce Transparency": "Riduci trasparenza",
+  "Reduce transparency": "Riduci trasparenza",
+  "Makes the see-through badges, labels and backdrops solid.": "Mostra in tinta unita gli indicatori, le etichette e gli sfondi semitrasparenti.",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "Mostra in tinta unita gli indicatori, le etichette e gli sfondi semitrasparenti. Segue l’impostazione Riduci trasparenza del sistema finché non la cambi qui.",
+  "Use the system setting": "Usa l’impostazione del sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Disattiva le animazioni dello zoom e degli indicatori di attività. Le dissolvenze restano."
 }

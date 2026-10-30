@@ -117,7 +117,7 @@ pub(super) fn region_overlay(
             let resp = ui.interact(xr, egui::Id::unique(("region-x", index)), Sense::click());
             crate::widgets::announce(&resp, crate::i18n::tr("Remove region"));
             register(ui, format!("regionRemove:{index}"), xr);
-            let fill = Color32::from_black_alpha(if resp.hovered() { 235 } else { 190 });
+            let fill = crate::transparency::hud(ui.ctx(), if resp.hovered() { 235 } else { 190 });
             p.rect_filled(xr, 2.0, fill);
             p.rect_stroke(xr, 2.0, Stroke::new(1.0, Color32::from_white_alpha(120)), StrokeKind::Inside);
             let (c, m) = (xr.center(), 3.5);
@@ -156,7 +156,7 @@ pub(super) fn region_overlay(
         if invitation && !(hovered || editing_this || pointer.is_some_and(|h| rect.union(label).expand(3.0).contains(h))) {
             continue;
         }
-        let fill = Color32::from_rgba_unmultiplied(56, 56, 56, fill_alpha);
+        let fill = crate::transparency::solid(ui.ctx(), Color32::from_rgba_unmultiplied(56, 56, 56, fill_alpha));
         p.rect_filled(label, 3.0, fill);
         p.rect_stroke(label, 3.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Inside);
         let cx = rect.center().x.clamp(label.left() + caret + 4.0, label.right() - caret - 4.0);

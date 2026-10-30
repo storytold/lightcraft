@@ -181,7 +181,7 @@ fn cell_ui(
     register(ui, format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
     if fav || resp.hovered() {
-        painter.circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
+        painter.circle_filled(star.center(), 10.0, crate::transparency::hud(painter.ctx(), 110));
         crate::rating::paint_star(painter, star.shrink(4.0), fav, if fav || over_star { t.star } else { Color32::WHITE });
     }
     if resp.hovered() && !applied && !over_star {

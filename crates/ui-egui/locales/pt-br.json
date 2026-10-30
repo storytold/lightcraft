@@ -2202,5 +2202,18 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Reduce Motion": "Reduzir movimento",
+  "Reduce motion": "Reduzir movimento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam. Segue o ajuste Reduzir movimento do sistema até você alterá-lo aqui.",
+  "Increase Contrast": "Aumentar contraste",
+  "Increase contrast": "Aumentar contraste",
+  "Makes borders, separators and text stand out more in every theme.": "Faz as bordas, os separadores e o texto se destacarem mais em todos os temas.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Faz as bordas, os separadores e o texto se destacarem mais em todos os temas. Segue o ajuste Aumentar contraste do sistema até você alterá-lo aqui.",
+  "Reduce Transparency": "Reduzir transparência",
+  "Reduce transparency": "Reduzir transparência",
+  "Makes the see-through badges, labels and backdrops solid.": "Mostra sólidos os indicadores, as etiquetas e os fundos translúcidos.",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "Mostra sólidos os indicadores, as etiquetas e os fundos translúcidos. Segue o ajuste Reduzir transparência do sistema até você alterá-lo aqui.",
+  "Use the system setting": "Usar o ajuste do sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam."
 }

@@ -3440,5 +3440,18 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "Reduce Motion": "Bewegung reduzieren",
+  "Reduce motion": "Bewegung reduzieren",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Schaltet Zoom- und Ladeanimationen ab. Überblendungen bleiben erhalten. Folgt der Systemeinstellung „Bewegung reduzieren“, bis Sie sie hier ändern.",
+  "Increase Contrast": "Kontrast erhöhen",
+  "Increase contrast": "Kontrast erhöhen",
+  "Makes borders, separators and text stand out more in every theme.": "Hebt Rahmen, Trennlinien und Text in jedem Design stärker hervor.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Hebt Rahmen, Trennlinien und Text in jedem Design stärker hervor. Folgt der Systemeinstellung „Kontrast erhöhen“, bis du sie hier änderst.",
+  "Reduce Transparency": "Transparenz reduzieren",
+  "Reduce transparency": "Transparenz reduzieren",
+  "Makes the see-through badges, labels and backdrops solid.": "Zeigt durchscheinende Symbole, Beschriftungen und Hintergründe deckend an.",
+  "Makes the see-through badges, labels and backdrops solid. Follows the system's Reduce Transparency until you change it here.": "Zeigt durchscheinende Symbole, Beschriftungen und Hintergründe deckend an. Folgt der Systemeinstellung „Transparenz reduzieren“, bis du sie hier änderst.",
+  "Use the system setting": "Systemeinstellung verwenden",
+  "Turns off zoom and spinner animations. Fades stay.": "Schaltet Zoom- und Ladeanimationen ab. Überblendungen bleiben erhalten."
 }

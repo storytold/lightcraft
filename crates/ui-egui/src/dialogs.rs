@@ -95,7 +95,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // The backdrop is an area below the dialog window (a bare `Middle` layer painter would be
     // painted after every area — i.e. over the dialog too).
     egui::Area::new(egui::Id::unique("dialog-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(140));
+        ui.painter().rect_filled(screen, 0.0, crate::transparency::scrim(ui.ctx(), 140));
     });
     let mut close = false;
     let mut confirm = false;

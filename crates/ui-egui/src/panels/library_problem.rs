@@ -981,7 +981,7 @@ fn dim(ctx: &egui::Context) {
     let dim = egui::Area::new(egui::Id::unique(DIM_ID)).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(true).show(ctx, |ui| {
         // swallows clicks: nothing behind the window can be used meanwhile
         ui.allocate_rect(screen, egui::Sense::click_and_drag());
-        ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+        ui.painter().rect_filled(screen, 0.0, crate::transparency::scrim(ui.ctx(), 160));
     });
     // A bare interactable Area does not become the modal layer by itself. Without this, a
     // Settings dialog opened before the library window can keep the modal layer and receive a

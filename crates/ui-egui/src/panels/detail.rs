@@ -802,7 +802,7 @@ fn draw_hover(p: &egui::Painter, t: &Tokens, tex: &crate::render::Tex, label: &s
 
 /// A label on a dark pill.
 fn paint_badge(p: &egui::Painter, bg: Rect, g: std::sync::Arc<egui::Galley>) {
-    p.rect_filled(bg, 4.0, Color32::from_black_alpha(160));
+    p.rect_filled(bg, 4.0, crate::transparency::hud(p.ctx(), 160));
     p.galley(bg.min + vec2(8.0, 4.0), g, Color32::WHITE);
 }
 
