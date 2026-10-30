@@ -55,12 +55,18 @@ gzip size (5.25 MB). `wasm-opt -Oz`, when installed, shrinks it further.
 **Fonts.** The browser has no system fonts to fall back on, so CJK text comes from
 [craft-fonts](https://github.com/storytold/craft-fonts), the optional `CRAFT_FONTS_DIR` build
 input (`CRAFT_FONTS_DIR=../craft-fonts cargo xtask web`; release builds always set it). On wasm32
-`crates/engine/build.rs` embeds BIZ UDPGothic Regular (UI and watermark fallback) and Noto Sans
-Thai Regular (~214 KiB, for Thai file and folder names in every UI language). The web
+`crates/engine/build.rs` embeds BIZ UDPGothic Regular (UI and watermark fallback), Noto Sans
+Thai Regular (~214 KiB, for Thai file and folder names in every UI language), Noto Sans Georgian
+Regular, and NanumGothic Regular (~2 MB, for Korean). The web
 bundle also ships Noto Sans CJK SC Regular as `lightcraft_zh_hans.otf` and loads it before the UI
-starts. Keeping the 16 MB Chinese face separate leaves the module under Cloudflare's 25 MiB
-per-file limit (the older Japanese-only module measured 21.8 MB). Without `CRAFT_FONTS_DIR`, the
-web build still works, but Chinese and Japanese text lack glyphs.
+starts. Keeping the 16 MB Chinese face separate reduces the module size relative to Cloudflare's
+25 MiB per-file limit (the older Japanese-only module measured 21.8 MB; the current Korean-enabled
+bundle must be measured separately). Without `CRAFT_FONTS_DIR`, the
+web build still works, but Chinese, Japanese and Korean text lack glyphs. The direct
+`web-site/` output includes the unmodified copyright and OFL licence texts for Inter and these
+embedded faces, plus the separate Chinese face's licence. Keep the `OFL-*.txt` files with the
+site when deploying it. An embedded face with a missing or empty licence fails the build;
+`CRAFT_FONTS_REQUIRED=1` also refuses to omit a required embedded face's notice.
 
 ## Deploying: headers
 

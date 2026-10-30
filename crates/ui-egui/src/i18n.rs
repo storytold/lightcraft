@@ -123,6 +123,7 @@ language_table! {
     ZhHans, "zh-hans", "简体中文", "Hans", include_str!("../locales/zh-hans.json");
     ZhHant, "zh-hant", "繁體中文（台灣）", "Hant", include_str!("../locales/zh-hant.json");
     Ja, "ja", "日本語", "Jpan", include_str!("../locales/ja.json");
+    Ko, "ko", "한국어", "Kore", include_str!("../locales/ko.json");
     PtBr, "pt-br", "Português (Brasil)", "Latn", include_str!("../locales/pt-br.json");
     Es, "es", "Español", "Latn", include_str!("../locales/es.json");
     De, "de", "Deutsch", "Latn", include_str!("../locales/de.json");

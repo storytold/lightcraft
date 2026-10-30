@@ -1,12 +1,12 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-24 · **Change:** minor (German: interface strings and formats messages reviewed, terms fixed in localization-de.md; German form of address: *du*; Indonesian and Finnish interface catalogs added; Italian: every interface string translated, native-speaker corrections; Vietnamese shipped; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-28 · **Change:** minor (German: interface strings and formats messages reviewed, terms fixed in localization-de.md; German form of address: *du*; Indonesian and Finnish interface catalogs added; Italian: every interface string translated, native-speaker corrections; Vietnamese shipped; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How far each interface language is from `full`. How to add or maintain a language is in
 [localization.md](localization.md); per-language notes are in `localization-<code>.md`
 ([zh-hans](localization-zh-hans.md), [zh-hant](localization-zh-hant.md), [ja](localization-ja.md),
 [pt-br](localization-pt-br.md), [es](localization-es.md), [de](localization-de.md),
-[ru](localization-ru.md), [fi](localization-fi.md), [ka](localization-ka.md), [id](localization-id.md), [vi](localization-vi.md), [pl](localization-pl.md)).
+[ru](localization-ru.md), [fi](localization-fi.md), [ka](localization-ka.md), [id](localization-id.md), [vi](localization-vi.md), [pl](localization-pl.md), [ko](localization-ko.md)).
 
 ## The target
 
@@ -33,7 +33,7 @@ go beyond the target.
   `apps/`; command, control, menu and preset labels reach the catalogs through `display_label`.
 
 Script support is checked against the code: `language_table!` in `crates/ui-egui/src/i18n.rs` lists
-scripts `Latn`, `Cyrl`, `Hans`, `Hant`, `Jpan` only. The UI is egui, which has no bidirectional layout
+scripts including `Latn`, `Cyrl`, `Hans`, `Hant`, `Jpan`, `Geor` and `Kore`. The UI is egui, which has no bidirectional layout
 and no complex-script shaping, so Arabic (RTL, joining) and Devanagari (conjuncts, reordering) cannot
 render correctly today.
 
@@ -59,7 +59,7 @@ string follows that.
 | 8 | Indonesian | `id` | 2,555 / 2,555 (100%; 2026-10-19: every plain and formats message any catalog has, plus 69 command labels; What's New left in English) | as zh-hans | Latin (Inter covers it) | no (written with an agent; native-speaker pass pending) | partial (target: not shipped) | 2–4 h (native review, lower-layer errors) |
 | 9 | Japanese | `ja` | 2,383 / 2,398 (99%; 2026-10-12) | as zh-hans; vertical export watermarks | Jpan via craft-fonts (BIZ UDPGothic / UDMincho); IME through winit | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
 | 10 | German | `de` | 3,644 / 3,754 (97%; 2026-10-16: every interface message and every What's New line except 59: the distinct What's New lines whose English text has a ▸ menu path have no German entry yet and wait for #2016; the rest are words spelled the same) | as zh-hans; What's New translated line by line | Latin | partly (2026-10-24: every interface string and formats message, reviewed with an agent and spot-checked by a native speaker; What's New lines not reviewed) | partial | 1–2 h (What's New review, lower-layer errors) |
-| 11 | Korean | `ko` | 0 (0%) | none | **no Korean (Hangul) face**: needs a non-Adobe OFL face in craft-fonts (Noto CJK is allowed only for Chinese) | no | none | 14–22 h |
+| 11 | Korean | `ko` | current UI catalogs; exact counts and intentional English documented in [localization-ko](localization-ko.md) | menus, panels, dialogs, import/export, AI Denoise, dates and counters; Korean README | Kore via craft-fonts NanumGothic Regular (native and wasm) | pending (AI-assisted revision of @sksdl’s catalog by @FriOct) | partial: human review, lower-layer errors and release notes remain | not re-estimated |
 | 12 | Vietnamese | `vi` | 2,471 / 2,471 (100% key coverage of current union; intentional English like `ISO`/`OK` kept) | menus, panels, dialogs, presets, profiles, dates, formats; lower-layer errors English | Latin with stacked diacritics (Inter) | no (community contribution) | partial (catalog complete; lower-layer errors English) | 1–3 h |
 
 ## Other languages LightCraft ships (7)
@@ -74,7 +74,7 @@ string follows that.
 | Finnish | `fi` | 2,610 / 3,308 (79%, measured 2026-10-17: 2,313 plain + 297 formats; the rest is What's New) | Latin (Inter) | yes (written with an agent; native-speaker review by @roopeg) | partial (lower-layer errors English) | 3–5 h |
 | Polish | `pl` | 2,159 messages + 291 formats; every format message translated (2026-10-15) | Latin (Inter) | no (AI-drafted; follow-up by a native speaker) | partial (lower-layer errors English) | 2–4 h (full native review) |
 
-Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
+Target languages LightCraft lacks: Dutch, Norwegian Bokmål, Thai
 (Thai needs shaping and line breaking without spaces). Each Latin-script one is ~10–16 h; Thai
 ~20–35 h on top of the shaping work.
 
@@ -99,6 +99,7 @@ Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Korean selection, natural UI terminology, NanumGothic rendering and README added; full native review pending |
 | 2026-10-19 | minor | Indonesian interface catalog (`id`): every plain and formats message any catalog has, plus 69 command labels; What's New left in English |
 | 2026-10-17 | minor | Finnish interface catalog (`fi`): 2,610 of 3,308 messages (2,313 plain + 297 formats), What's New left in English |
 | 2026-10-15 | minor | Polish row added: the format messages still in English translated, counts made right for every number, dates day.month.year ([localization-pl.md](localization-pl.md)) |

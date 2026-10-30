@@ -1401,7 +1401,8 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             }
             let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
-                app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
+                let suffix = if v["count"] == 1 { "" } else { "s" };
+                app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], suffix));
             }
             r
         }

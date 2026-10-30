@@ -6,7 +6,8 @@ use super::*;
 #[test]
 fn languages_switch_persist_and_keep_user_values() {
     use crate::control::{ControlRequest, Outcome};
-    let languages: [(Locale, &str, &[&str], &str); 8] = [
+    let languages: [(Locale, &str, &[&str], &str); 9] = [
+        (Locale::Ko, "korean", &["ko", "ko-KR", "ko_KR.UTF-8", "ko-Kore-KR"], ""),
         (Locale::Cs, "czech", &["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"], "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“"),
         (Locale::Id, "indonesian", &["id", "id-ID", "id_ID.UTF-8", "id-Latn-ID"], ""),
         (Locale::Sv, "swedish", &["sv", "sv-SE", "sv_SE.UTF-8", "sv-FI"], "åäöÅÄÖé”’"),
@@ -350,6 +351,7 @@ fn language_commands_cover_every_language() {
         ("app.language.english", Locale::En),
         ("app.language.simplifiedChinese", Locale::ZhHans),
         ("app.language.japanese", Locale::Ja),
+        ("app.language.korean", Locale::Ko),
         ("app.language.portuguese", Locale::PtBr),
         ("app.language.french", Locale::Fr),
         ("app.language.spanish", Locale::Es),
@@ -373,6 +375,30 @@ fn language_commands_cover_every_language() {
     }
     assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
     assert_eq!(crate::menus::language_from_command("view.detail"), None);
+}
+
+/// Korean uses familiar photography terms and counters without translating product names,
+/// identifiers or user-entered album names. Dates follow Korean year-month-day order.
+#[test]
+fn korean_photography_terms_counts_and_dates() {
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    app.run("app.language.korean", serde_json::json!({})).unwrap();
+    assert_eq!(tr("Exposure"), "노출");
+    assert_eq!(tr("Preset"), "프리셋");
+    assert_eq!(tr("White Balance"), "화이트 밸런스");
+    assert_eq!(tr("AI Denoise"), "AI Denoise");
+    assert_eq!(tr("ISO"), "ISO");
+    assert_eq!(tr("sRGB"), "sRGB");
+    assert_eq!(date_group_label("2026-09-20", false), "2026년 9월 20일 일요일");
+    assert_eq!(date_group_label("2026-09", false), "2026년 9월");
+    for n in [0, 1, 2, 5, 21] {
+        let suffix = plural_s(n);
+        assert_eq!(tr_format!("Imported {} photo{}", n, suffix), format!("사진 {n}장을 가져왔습니다"));
+    }
+    assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", "서울 RAW 2026", n = 3), "“서울 RAW 2026”에 3장을 추가했습니다");
+    assert_eq!(tr_format!("Preset: {name}", name = "Golden Hour"), "프리셋: Golden Hour");
+    set_language(Locale::En);
+    assert_eq!(tr("Exposure"), "Exposure");
 }
 
 #[test]
@@ -759,7 +785,7 @@ fn fonts_ctx(craft: &'static [lightcraft_engine::CraftFont]) -> egui::Context {
 /// family, Monospace included.
 #[test]
 fn craft_fonts_render_cjk_in_the_ui() {
-    let samples = [(Locale::Ja, "日本語の文字"), (Locale::ZhHans, "简体中文字"), (Locale::ZhHant, "繁體中文字")];
+    let samples = [(Locale::Ja, "日本語の文字"), (Locale::ZhHans, "简体中文字"), (Locale::ZhHant, "繁體中文字"), (Locale::Ko, "한국어사진편집")];
     for (language, sample) in samples {
         if !lightcraft_engine::CRAFT_FONTS.iter().any(|font| font.serves(language.script())) {
             lightcraft_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
@@ -1145,7 +1171,8 @@ fn assert_polish_counts() {
             ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
             ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
         ] {
-            assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
+            let label = tr(if n == 1 { one } else { many });
+            assert_eq!(tr_format!("{n} {noun}", n = n, noun = label), format!("{noun}: {n}"));
         }
         assert_eq!(tr_format!("Delete {n} Photos", n = n), format!("Usuń zdjęcia ({n})"));
         assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("Ustawienia: {n}"));

@@ -15,3 +15,6 @@ sha2 = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
 flate2 = "1"
 brotli = { version = "9", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

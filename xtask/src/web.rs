@@ -23,6 +23,16 @@ const SITE_DIR: &str = "web-site";
 const CHINESE_FONT_FILE: &str = "lightcraft_zh_hans.otf";
 const CHINESE_FONT_LICENSE_FILE: &str = "OFL-noto-sans-cjk-sc.txt";
 
+/// The faces embedded by `crates/engine/build.rs` on wasm32. Keep their notices beside the
+/// module even when the site is served directly, without `packaging/web/package.sh`.
+/// The last field matches the build script's required-face checks; Georgian is optional.
+const EMBEDDED_FONT_LICENCES: &[(&str, &str, bool)] = &[
+    ("BIZ UDPGothic", "OFL-biz-ud-pgothic.txt", true),
+    ("Noto Sans Thai", "OFL-noto-sans-thai.txt", true),
+    ("Noto Sans Georgian", "OFL-noto-sans-georgian.txt", false),
+    ("NanumGothic", "OFL-nanum-gothic.txt", true),
+];
+
 /// Files copied from `apps/lightcraft-web/` into the bundle as they are.
 const STATIC_FILES: [&str; 2] = ["index.html", "worker.js"];
 
@@ -72,6 +82,64 @@ fn copy_chinese_font(out: &Path) -> Result<bool, String> {
     std::fs::copy(&source, &target).map_err(|e| format!("{} → {}: {e}", source.display(), target.display()))?;
     println!("web Chinese font: {} → {}", source.display(), target.display());
     Ok(true)
+}
+
+fn embedded_font_licence<'a>(manifest: &'a str, family: &str) -> Result<Option<&'a str>, String> {
+    for line in manifest.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')) {
+        let fields: Vec<_> = line.split('|').map(str::trim).collect();
+        let [found_family, style, ..] = fields.as_slice() else { continue };
+        if *found_family != family || *style != "Regular" {
+            continue;
+        }
+        let [_, _, _, _, licence, file, ..] = fields.as_slice() else {
+            return Err(format!("{family} Regular has no licence entry in fonts/manifest.txt"));
+        };
+        if *licence != "OFL-1.1" || file.is_empty() {
+            return Err(format!("{family} Regular needs an OFL-1.1 licence file in fonts/manifest.txt"));
+        }
+        return Ok(Some(file));
+    }
+    Ok(None)
+}
+
+/// Read first, then write: a missing notice must fail the build, not quietly reuse an old
+/// notice from a previous bundle. Copy the bytes verbatim, including the copyright notice.
+fn copy_embedded_font_licences(out: &Path, repo: &Path, craft: Option<&Path>, required: bool) -> Result<(), String> {
+    let inter = repo.join("assets/fonts/OFL-Inter.txt");
+    let inter_bytes = std::fs::read(&inter).map_err(|e| format!("{}: {e}", inter.display()))?;
+    if inter_bytes.is_empty() {
+        return Err(format!("{}: font licence is empty", inter.display()));
+    }
+    let mut notices = vec![("OFL-Inter.txt", inter_bytes)];
+    if let Some(craft) = craft {
+        let craft = craft.canonicalize().map_err(|e| format!("{}: {e}", craft.display()))?;
+        let manifest_path = craft.join("fonts/manifest.txt");
+        let manifest = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        for &(family, name, mandatory) in EMBEDDED_FONT_LICENCES {
+            let Some(file) = embedded_font_licence(&manifest, family)? else {
+                if required && mandatory {
+                    return Err(format!("required web font {family} Regular is missing from {}", manifest_path.display()));
+                }
+                continue;
+            };
+            let source = craft.join(file).canonicalize().map_err(|e| format!("{family} licence {file}: {e}"))?;
+            if !source.starts_with(&craft) {
+                return Err(format!("{family} licence {file} is outside CRAFT_FONTS_DIR"));
+            }
+            let bytes = std::fs::read(&source).map_err(|e| format!("{}: {e}", source.display()))?;
+            if bytes.is_empty() {
+                return Err(format!("{}: font licence is empty", source.display()));
+            }
+            notices.push((name, bytes));
+        }
+    } else if required {
+        return Err("CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing".into());
+    }
+    for (name, bytes) in notices {
+        let target = out.join(name);
+        std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
+    }
+    Ok(())
 }
 
 /// The `wasm-bindgen` version pinned in Cargo.lock (the CLI must match it exactly).
@@ -138,6 +206,8 @@ pub fn run(args: &[&str]) -> Result<(), String> {
     for f in STATIC_FILES {
         std::fs::copy(root().join("apps/lightcraft-web").join(f), out.join(f)).map_err(|e| format!("copy {f}: {e}"))?;
     }
+    let craft = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from).map(|dir| if dir.is_absolute() { dir } else { root().join(dir) });
+    copy_embedded_font_licences(&out, &root(), craft.as_deref(), std::env::var_os("CRAFT_FONTS_REQUIRED").is_some())?;
     let chinese_font = copy_chinese_font(&out)?;
 
     // precompressed copies (skipped for --dev: they'd only slow the edit loop down)
@@ -324,6 +394,103 @@ mod tests {
             Noto Sans CJK SC | Regular | fonts/noto/NotoSansCJKsc-Regular.otf | Hans,Latn | OFL-1.1 | fonts/noto/OFL.txt\n";
         assert_eq!(chinese_font_in_manifest(manifest), Some(("fonts/noto/NotoSansCJKsc-Regular.otf", "fonts/noto/OFL.txt")));
         assert_eq!(chinese_font_in_manifest("BIZ UDPGothic | Regular | fonts/biz.ttf | Jpan,Latn | OFL-1.1 | fonts/biz/OFL.txt"), None);
+    }
+
+    fn font_notice_fixture(name: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, String) {
+        let dir = tempfile::Builder::new().prefix(&format!("lightcraft-web-font-notice-{name}-")).tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let craft = dir.path().join("craft");
+        let out = dir.path().join("site");
+        std::fs::create_dir_all(repo.join("assets/fonts")).unwrap();
+        std::fs::create_dir_all(craft.join("fonts")).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(repo.join("assets/fonts/OFL-Inter.txt"), b"Inter copyright\r\nOFL text\r\n").unwrap();
+        let manifest = EMBEDDED_FONT_LICENCES
+            .iter()
+            .map(|(family, name, _)| format!("{family} | Regular | unused.ttf | Kore | OFL-1.1 | fonts/{name}\n"))
+            .collect::<String>();
+        std::fs::write(craft.join("fonts/manifest.txt"), &manifest).unwrap();
+        (dir, repo, craft, out, manifest)
+    }
+
+    #[test]
+    fn font_notice_fixtures_do_not_inherit_inputs_or_outputs() {
+        let (old_dir, _, old_craft, old_out, _) = font_notice_fixture("isolation");
+        std::fs::write(old_craft.join("fonts/OFL-nanum-gothic.txt"), b"previous source notice").unwrap();
+        std::fs::write(old_out.join("OFL-Inter.txt"), b"previous bundle notice").unwrap();
+
+        let (fresh_dir, _, fresh_craft, fresh_out, _) = font_notice_fixture("isolation");
+        assert_ne!(old_dir.path(), fresh_dir.path());
+        assert!(!fresh_craft.join("fonts/OFL-nanum-gothic.txt").exists(), "a fresh fixture must not inherit source notices");
+        assert!(!fresh_out.join("OFL-Inter.txt").exists(), "a fresh fixture must not inherit bundle output");
+
+        let old_path = old_dir.path().to_path_buf();
+        let fresh_path = fresh_dir.path().to_path_buf();
+        drop(old_dir);
+        assert!(!old_path.exists(), "the guard cleans up its own fixture");
+        assert!(fresh_path.is_dir(), "another live fixture must remain intact");
+        drop(fresh_dir);
+        assert!(!fresh_path.exists(), "a fixture must not persist after its guard is dropped");
+    }
+
+    #[test]
+    fn web_bundle_keeps_embedded_font_copyright_and_licence_bytes() {
+        let (_dir, repo, craft, out, _) = font_notice_fixture("verbatim");
+        for &(family, name, _) in EMBEDDED_FONT_LICENCES {
+            let bytes = format!("Copyright {family}\r\nSIL OFL 1.1\r\nReserved names remain unchanged.\r\n");
+            std::fs::write(craft.join("fonts").join(name), bytes).unwrap();
+        }
+        copy_embedded_font_licences(&out, &repo, Some(&craft), true).unwrap();
+        assert_eq!(std::fs::read(out.join("OFL-Inter.txt")).unwrap(), std::fs::read(repo.join("assets/fonts/OFL-Inter.txt")).unwrap());
+        for &(_, name, _) in EMBEDDED_FONT_LICENCES {
+            assert_eq!(std::fs::read(out.join(name)).unwrap(), std::fs::read(craft.join("fonts").join(name)).unwrap(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_missing_korean_notice_fails_instead_of_reusing_the_previous_bundles_notice() {
+        let (_dir, repo, craft, out, _) = font_notice_fixture("missing-korean");
+        for &(family, name, _) in EMBEDDED_FONT_LICENCES {
+            if family != "NanumGothic" {
+                std::fs::write(craft.join("fonts").join(name), b"copyright and licence").unwrap();
+            }
+        }
+        std::fs::write(out.join("OFL-nanum-gothic.txt"), b"old bundle notice").unwrap();
+        // A selected font needs its notice even in an optional-font build.
+        for required in [false, true] {
+            let error = copy_embedded_font_licences(&out, &repo, Some(&craft), required).unwrap_err();
+            assert!(error.contains("NanumGothic licence"), "{error}");
+        }
+        std::fs::write(craft.join("fonts/OFL-nanum-gothic.txt"), b"").unwrap();
+        assert!(copy_embedded_font_licences(&out, &repo, Some(&craft), true).unwrap_err().contains("font licence is empty"));
+        assert_eq!(std::fs::read(out.join("OFL-nanum-gothic.txt")).unwrap(), b"old bundle notice");
+        assert!(!out.join("OFL-Inter.txt").exists(), "validation happens before notices are published");
+    }
+
+    #[test]
+    fn required_font_notices_cannot_be_silently_omitted() {
+        let (_dir, repo, craft, out, manifest) = font_notice_fixture("required");
+        let without_korean = manifest.lines().filter(|line| !line.starts_with("NanumGothic | ")).collect::<Vec<_>>().join("\n");
+        std::fs::write(craft.join("fonts/manifest.txt"), without_korean).unwrap();
+        for &(family, name, _) in EMBEDDED_FONT_LICENCES {
+            if family != "NanumGothic" {
+                std::fs::write(craft.join("fonts").join(name), b"copyright and licence").unwrap();
+            }
+        }
+        let error = copy_embedded_font_licences(&out, &repo, Some(&craft), true).unwrap_err();
+        assert!(error.contains("required web font NanumGothic Regular is missing"), "{error}");
+        assert!(copy_embedded_font_licences(&out, &repo, None, true).unwrap_err().contains("CRAFT_FONTS_DIR is missing"));
+        copy_embedded_font_licences(&out, &repo, None, false).unwrap();
+        assert!(out.join("OFL-Inter.txt").is_file(), "font-free bundles still embed Inter");
+        for line in ["NanumGothic | Regular | font.ttf | Kore", "NanumGothic | Regular | font.ttf | Kore | OFL-1.1 | "] {
+            assert!(embedded_font_licence(line, "NanumGothic").is_err(), "{line}");
+        }
+        // Keep the engine build script's existing optional Georgian-face behavior.
+        let without_georgian = manifest.lines().filter(|line| !line.starts_with("Noto Sans Georgian | ")).collect::<Vec<_>>().join("\n");
+        std::fs::write(craft.join("fonts/manifest.txt"), without_georgian).unwrap();
+        std::fs::write(craft.join("fonts/OFL-nanum-gothic.txt"), b"Korean copyright and licence").unwrap();
+        copy_embedded_font_licences(&out, &repo, Some(&craft), true).unwrap();
+        assert!(out.join("OFL-nanum-gothic.txt").is_file());
     }
 
     #[test]

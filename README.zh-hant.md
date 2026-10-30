@@ -14,6 +14,7 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
+  <a href="README.ko.md">한국어</a> ·
   <a href="README.zh-hans.md">简体中文</a> ·
   <a href="README.zh-hant.md">繁體中文</a>
 </p>

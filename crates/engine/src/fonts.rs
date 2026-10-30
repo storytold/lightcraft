@@ -1,7 +1,7 @@
 //! Fonts from the optional craft-fonts build input (storytold/craft-fonts).
 //!
 //! Built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`, [`CRAFT_FONTS`] holds every font in its
-//! manifest (today: the Japanese and Simplified-Chinese UI and document fonts); otherwise it is
+//! manifest (including Japanese, Chinese and Korean UI and document fonts); otherwise it is
 //! empty and LightCraft uses only its own bundled fonts (Inter). Both the egui UI and the export
 //! watermark renderer read it from here. See craftrules `standards/fonts.md`.
 
@@ -105,7 +105,8 @@ mod tests {
         assert!(japanese(CRAFT_FONTS).next().is_some(), "craft-fonts carries Japanese faces");
         // Every script face that ships is a UI fallback, and has the glyphs of its script (#736).
         use ab_glyph::Font;
-        for (script, text) in [("Thai", "ภาพถ่ายสวัสดี๑๒๓"), ("Arab", "صورة"), ("Geor", "ფოტო")] {
+        for (script, text) in [("Thai", "ภาพถ่ายสวัสดี๑๒๓"), ("Arab", "صورة"), ("Geor", "ფოტო"), ("Kore", "한국어 사진 가져오기 내보내기 ㄱㄴㅏㅓ")]
+        {
             let Some(face) = ui_fallback(CRAFT_FONTS, "Latn", "Regular").into_iter().find(|f| f.covers(script)) else { continue };
             let font = ab_glyph::FontRef::try_from_slice(face.bytes).expect("parses");
             assert!(text.chars().all(|c| font.glyph_id(c).0 != 0), "{} draws {script}", face.family);
@@ -120,14 +121,16 @@ mod tests {
             CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan", "Latn"], bytes: &[] },
             CraftFont { family: "Noto Sans CJK SC", style: "Regular", scripts: &["Hans", "Latn"], bytes: &[] },
             CraftFont { family: "BIZ UDMincho", style: "Regular", scripts: &["Jpan", "Latn"], bytes: &[] },
+            CraftFont { family: "NanumGothic", style: "Regular", scripts: &["Hang", "Kore"], bytes: &[] },
         ];
         let first = |script: &str| cjk_fallback(FACES, script, "Regular").first().map(|f| f.family);
         assert_eq!(first("Hans"), Some("Noto Sans CJK SC"));
         assert_eq!(first("Jpan"), Some("BIZ UDPGothic"));
+        assert_eq!(first("Kore"), Some("NanumGothic"));
         // No Traditional Chinese face yet: the Chinese face stands in before the Japanese ones.
         assert_eq!(first("Hant"), Some("Noto Sans CJK SC"));
         // Every CJK face is still offered to every language.
-        assert_eq!(cjk_fallback(FACES, "Hans", "Regular").len(), 3);
+        assert_eq!(cjk_fallback(FACES, "Hans", "Regular").len(), 4);
         assert_eq!(cjk_fallback(&[], "Hans", "Regular").len(), 0);
     }
 

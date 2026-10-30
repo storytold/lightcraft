@@ -7826,6 +7826,7 @@ dependencies = [
  "flate2",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

@@ -57,6 +57,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 rayon = "1"
 winapi-util = "0.1" # lightcraft-catalog reads a file's volume serial number and file index with it on Windows
 proptest = "1"
+tempfile = "3.27" # dev-only: isolated, scoped test fixtures (MIT OR Apache-2.0)
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
