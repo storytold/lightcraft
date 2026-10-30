@@ -1390,6 +1390,7 @@
   "Set name": "Name des Satzes",
   "Set the mix from the photo's colours": "Mischung anhand der Farben des Fotos festlegen",
   "Settings": "Einstellungen",
+  "Settings sections": "Einstellungsbereiche",
   "Settings file problem": "Problem mit Einstellungsdatei",
   "Settings files are never quietly reset (issue #103): a damaged `prefs.json`, `presets.json` or `view.json` is kept": "Einstellungsdateien werden nie still zurückgesetzt (Issue #103): Beschädigte `prefs.json`, `presets.json` oder `view.json` bleiben",
   "Settings new raw photos start from. Changing them doesn't touch photos already in the library.": "Einstellungen für neue RAW-Fotos. Änderungen wirken sich nicht auf Fotos aus, die bereits in der Bibliothek sind.",

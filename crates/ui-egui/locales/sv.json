@@ -1952,6 +1952,7 @@
   "Set Top of Stack": "Ange överst i stapeln",
   "Set up AI Denoise…": "Konfigurera AI-brusreducering…",
   "Settings": "Inställningar",
+  "Settings sections": "Inställningsavsnitt",
   "Settings file problem": "Problem med inställningsfil",
   "Settings files are never quietly reset (issue #103): a damaged `prefs.json`, `presets.json` or `view.json` is kept": "Inställningsfiler återställs aldrig i tysthet (ärende #103): en skadad `prefs.json`, `presets.json` eller `view.json` behålls",
   "Settings new raw photos start from. Changing them doesn't touch photos already in the library.": "Inställningar som nya raw-foton utgår från. Att ändra dem påverkar inte foton som redan finns i biblioteket.",

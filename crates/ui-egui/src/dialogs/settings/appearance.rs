@@ -71,10 +71,14 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
                     ui.horizontal(|ui| {
                         let r = ui.radio_value(value, *v, crate::i18n::tr(kind.label()));
                         register(ui, format!("radio:theme-{}", kind.id()), r.rect);
+                        // (ringed round the whole of it while it has the focus, as a checkbox is)
+                        crate::widgets::focus_ring(ui, t, &r, r.rect.expand2(egui::vec2(3.0, 1.0)));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let favorite = favorites.iter().any(|id| id == kind.id());
+                            // (always there, so that Tab reaches it; drawn while it is a
+                            // favourite, under the mouse or has the focus)
                             let r = ui
-                                .add_visible(favorite || hovered, egui::Button::new("").min_size(egui::vec2(24.0, 24.0)).frame(false))
+                                .add(egui::Button::new("").min_size(egui::vec2(24.0, 24.0)).frame(false))
                                 .on_hover_text(crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }));
                             r.widget_info(|| {
                                 egui::WidgetInfo::labeled(
@@ -88,7 +92,8 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
                                 )
                             });
                             register(ui, format!("button:themeFavorite-{}", kind.id()), r.rect);
-                            if favorite || hovered {
+                            crate::widgets::focus_ring(ui, t, &r, r.rect);
+                            if favorite || hovered || r.has_focus() {
                                 crate::rating::paint_star(ui.painter(), r.rect.shrink(4.0), favorite, if favorite { t.accent } else { t.text_dim });
                             }
                             if r.clicked() {

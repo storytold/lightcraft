@@ -1655,6 +1655,7 @@
   "Set the mix from the photo's colours": "Đặt hỗn hợp từ màu của ảnh",
   "Set up AI Denoise…": "Thiết lập AI Khử nhiễu…",
   "Settings": "Cài đặt",
+  "Settings sections": "Các mục cài đặt",
   "Settings file problem": "Lỗi tệp thiết lập",
   "Settings files are never quietly reset (issue #103): a damaged `prefs.json`, `presets.json` or `view.json` is kept": "Tệp cài đặt không bao giờ im lặng đặt lại (issue #103): `prefs.json`, `presets.json` hoặc `view.json` hỏng được giữ",
   "Settings new raw photos start from. Changing them doesn't touch photos already in the library.": "Cài đặt ảnh raw mới bắt đầu từ. Đổi chúng không ảnh hưởng ảnh đã có trong thư viện.",

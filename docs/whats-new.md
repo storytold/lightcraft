@@ -13,6 +13,20 @@
 
 ## 2026-10-24
 
+### Settings tabs look like tabs, and the keyboard focus shows
+- The tabs of Settings look like tabs: names on the window with a line under the open one, no longer the same
+  buttons as the choices under them (on General the languages read as a second row of tabs). In Settings a chosen
+  option is outlined as well as filled, so it stands out in every theme. Screen readers are told a choice in
+  Settings is a radio button, and the tab bar is a list of tabs, each a tab that says whether it is the open one
+  and that opens the page under it.
+- Settings by keyboard is a short way. Tab stops once at the tab bar (at the open tab) and once at each row of
+  choices (at the one that holds), and the arrow keys move inside: → ↓ to the next, ← ↑ to the one before, Home and
+  End to the ends, Space or Return to open or choose. An arrow held with ⌘, ⇧, ⌥ or ⌃ is left alone.
+- Whatever has the keyboard focus is ringed 2 pt in the text colour: tabs, choices, checkboxes, buttons, closed
+  lists, radio buttons and text boxes. A click leaves no ring. Every text button in LightCraft shows the same ring
+  when Tab reaches it, the Edit panel's Auto, B&W, HDR and Reset among them. The star
+  that makes a theme a favourite is a Tab stop for every theme, not only for one that is a favourite already.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

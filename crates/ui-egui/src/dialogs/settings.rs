@@ -38,6 +38,7 @@ pub(crate) use libraries::{can_switch_library, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
 use performance::performance_tab;
 use slideshow::slideshow_tab;
+use widgets::focus_style;
 pub(crate) use widgets::{check, choices, heading, hint, row};
 
 pub mod slide_layout;
@@ -106,57 +107,91 @@ const PREVIEW_CHROME: f32 = 82.0;
 pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_height: f32) {
     ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x));
     let top = ui.cursor().top();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-        for (id, label) in TABS {
-            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, tab == id).clicked() {
-                *tab = id.to_string();
+    let t = Tokens::get(ui.ctx());
+    focus_style(ui, &t);
+    // Each line of tabs stands on a line of its own the width of the window, so the open tab's
+    // line always has the bar's under it: in a narrow window, or a language with long names, the
+    // tabs take two lines or more.
+    let mut lines: Vec<f32> = Vec::new();
+    // (the bar is one stop for Tab, at the open tab; the arrow keys go along it)
+    let mut bar = crate::widgets::Roving::new(ui, "settingsTabs", TABS.iter().position(|(id, _)| *id == tab.as_str()));
+    // (the page of the open tab: its tab tells a screen reader that it controls this)
+    let panel = ui.scope_id().with("settings-tab-panel");
+    let sections = crate::i18n::tr("Settings sections");
+    crate::widgets::tab_list(ui, sections, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 5.0);
+            for (id, label) in TABS {
+                let r = crate::widgets::tab_button_in(ui, &mut bar, &format!("settingsTab-{id}"), label, tab == id);
+                if tab == id {
+                    crate::widgets::tab_controls(&r, panel);
+                }
+                let bottom = egui::emath::GuiRounding::round_to_pixels(r.rect.bottom(), ui.pixels_per_point());
+                if !lines.iter().any(|line| (line - bottom).abs() < 0.5) {
+                    lines.push(bottom);
+                }
+                if r.clicked() {
+                    *tab = id.to_string();
+                }
             }
-        }
+        })
     });
-    ui.separator();
+    bar.end(ui);
+    let divider = t.divider;
+    for bottom in lines {
+        let line = egui::Rect::from_min_max(egui::pos2(ui.min_rect().left(), bottom), egui::pos2(ui.min_rect().right(), bottom + 1.0));
+        ui.painter().rect_filled(line, egui::CornerRadius::ZERO, divider);
+    }
+    ui.add_space(1.0);
     // (a point less than the room left, so rounding never makes the dialog's own scroll area scroll)
     let room = max_height - (ui.cursor().top() - top) - 1.0;
     if room < PAGE_MIN_HEIGHT {
-        body(app, ui, tab.as_str());
-        register(ui, "settings:page", ui.min_rect());
+        let name = TABS.iter().find(|(id, _)| *id == tab.as_str()).map_or("", |(_, label)| crate::i18n::tr(label));
+        crate::widgets::tab_panel(ui, panel, name, |ui| {
+            body(app, ui, tab.as_str());
+            register(ui, "settings:page", ui.min_rect());
+        });
         return;
     }
     let mut height = room.min(PAGE_SIZE.y);
-    // The slide preview stays above the page on Slideshow: hovering a template in the Template
-    // Browser previews it there, so it has to stay in view however far down the templates are
-    // scrolled to. With its heading and choice it takes [`PINNED_PREVIEW_SHARE`] of the room
-    // (at least the least tall slide); where that leaves less than [`PAGE_MIN_HEIGHT`] for the
-    // page, it scrolls with the page instead (as in the short window above).
-    let mut pinned = false;
-    if tab == "slideshow" {
-        let slide_h = (height * PINNED_PREVIEW_SHARE - PREVIEW_CHROME).max(crate::panels::slide_layout::PREVIEW_MIN_H);
-        if height - (slide_h + PREVIEW_CHROME) >= PAGE_MIN_HEIGHT {
-            let before = ui.cursor().top();
-            crate::panels::slide_layout::preview(app, ui, &Tokens::get(ui.ctx()), slide_h);
-            ui.add_space(2.0);
-            ui.separator();
-            height = (height - (ui.cursor().top() - before)).max(PAGE_MIN_HEIGHT);
-            pinned = true;
-        }
-    }
     // A page that goes on below shows its scroll handle all the time: without it, a page a line
     // or two too long looks cut off, not scrollable.
     ui.spacing_mut().scroll.dormant_handle_opacity = 0.6;
-    let page = egui::ScrollArea::vertical()
-        .id_salt(("settings-page", tab.as_str()))
-        .max_height(height)
-        .min_scrolled_height(height)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.add_space(2.0);
-            if pinned {
-                slideshow_tab(app, ui, &Tokens::get(ui.ctx()), false);
-            } else {
-                body(app, ui, tab.as_str());
+    // (the pinned preview below is part of the page the open tab controls: in the tab panel with it)
+    let name = TABS.iter().find(|(id, _)| *id == tab.as_str()).map_or("", |(_, label)| crate::i18n::tr(label));
+    let page = crate::widgets::tab_panel(ui, panel, name, |ui| {
+        // The slide preview stays above the page on Slideshow: hovering a template in the Template
+        // Browser previews it there, so it has to stay in view however far down the templates are
+        // scrolled to. With its heading and choice it takes [`PINNED_PREVIEW_SHARE`] of the room
+        // (at least the least tall slide); where that leaves less than [`PAGE_MIN_HEIGHT`] for the
+        // page, it scrolls with the page instead (as in the short window above).
+        let mut pinned = false;
+        if tab == "slideshow" {
+            let slide_h = (height * PINNED_PREVIEW_SHARE - PREVIEW_CHROME).max(crate::panels::slide_layout::PREVIEW_MIN_H);
+            if height - (slide_h + PREVIEW_CHROME) >= PAGE_MIN_HEIGHT {
+                let before = ui.cursor().top();
+                crate::panels::slide_layout::preview(app, ui, &Tokens::get(ui.ctx()), slide_h);
+                ui.add_space(2.0);
+                ui.separator();
+                height = (height - (ui.cursor().top() - before)).max(PAGE_MIN_HEIGHT);
+                pinned = true;
             }
-            // (what the page took: wider than the room for it would mean a control is cut off)
-            register(ui, "settings:page", ui.min_rect());
-        });
+        }
+        egui::ScrollArea::vertical()
+            .id_salt(("settings-page", tab.as_str()))
+            .max_height(height)
+            .min_scrolled_height(height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(2.0);
+                if pinned {
+                    slideshow_tab(app, ui, &Tokens::get(ui.ctx()), false);
+                } else {
+                    body(app, ui, tab.as_str());
+                }
+                // (what the page took: wider than the room for it would mean a control is cut off)
+                register(ui, "settings:page", ui.min_rect());
+            })
+    });
     register(ui, "settings:pageRoom", page.inner_rect);
 }

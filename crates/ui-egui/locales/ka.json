@@ -1876,6 +1876,7 @@
   "Set up AI Denoise…": "AI ხმაურის მოცილების გამართვა…",
   "Setting or clearing a colour label shows a brief bottom confirmation, like rating a photo; custom label names appear in the message too.": "ფერადი იარლიყის დაყენება ან მოხსნა ქვემოთ მოკლე დადასტურებას აჩვენებს, როგორც ფოტოს შეფასება; შეტყობინებაში იარლიყების მორგებული სახელებიც ჩანს.",
   "Settings": "პარამეტრები",
+  "Settings sections": "პარამეტრების განყოფილებები",
   "Settings file problem": "პარამეტრების ფაილის პრობლემა",
   "Settings files are never quietly reset (issue #103): a damaged `prefs.json`, `presets.json` or `view.json` is kept": "პარამეტრების ფაილები აღარასოდეს ჩამოიყრება შეუმჩნევლად (ხარვეზი #103): დაზიანებული `prefs.json`, `presets.json` ან `view.json` ინახება",
   "Settings new raw photos start from. Changing them doesn't touch photos already in the library.": "პარამეტრები, რომლებითაც ახალი RAW ფოტოები იწყება. მათი შეცვლა ბიბლიოთეკაში უკვე არსებულ ფოტოებს არ ეხება.",

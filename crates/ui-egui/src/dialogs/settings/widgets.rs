@@ -49,6 +49,17 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     label_width(ui, text, egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
+/// One look for "the focus is here", whatever the control, for everything drawn in `ui` from here
+/// on: a line 2 pt wide in the text colour round it, as round a tab or a choice
+/// ([`crate::widgets::focus_ring`]). egui draws a button, checkbox, radio button or list that has
+/// the focus (or is being pressed) with its "active" outline, and a text box in use with the
+/// selection's.
+pub(super) fn focus_style(ui: &mut egui::Ui, t: &Tokens) {
+    let visuals = ui.visuals_mut();
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, t.text);
+    visuals.selection.stroke = egui::Stroke::new(2.0, t.text);
+}
+
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
     ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
@@ -81,6 +92,8 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
     let r = ui.checkbox(value, crate::i18n::tr(label));
     register(ui, format!("check:{id}"), r.rect);
+    // (ringed round the whole of it while it has the focus, as a choice or a tab is)
+    crate::widgets::focus_ring(ui, &Tokens::get(ui.ctx()), &r, r.rect.expand2(egui::vec2(3.0, 1.0)));
     r.changed()
 }
 
@@ -88,12 +101,15 @@ pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) 
 pub(crate) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options: &[(V, &str)], value: &mut V) -> bool {
     let mut changed = false;
     ui.spacing_mut().item_spacing.x = 4.0;
+    // (the row is one stop for Tab, at the choice that holds; the arrow keys go along it)
+    let mut group = crate::widgets::Roving::new(ui, id, options.iter().position(|(v, _)| *v == *value));
     for (i, (v, l)) in options.iter().enumerate() {
-        if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() && *value != *v {
+        if crate::widgets::choice_button_in(ui, &mut group, &format!("{id}-{i}"), l, *value == *v).clicked() && *value != *v {
             *value = *v;
             changed = true;
         }
     }
+    group.end(ui);
     changed
 }
 
