@@ -2349,5 +2349,20 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Open in Compare": "Открыть в режиме «Сравнение»",
+  "Open in Survey": "Открыть в режиме «Обзор»",
+  "Edit Settings": "Правки",
+  "Rotate & Flip": "Поворот и отражение",
+  "Copy File Path": "Копировать путь к файлу",
+  "Copied the file path": "Путь к файлу скопирован",
+  "The selected photos have no file on disk": "У выбранных фото нет файла на диске",
+  "Select 2 or more photos": "Выберите 2 или больше фото",
+  "Copy edit settings first": "Сначала скопируйте правки",
+  "Copy metadata first": "Сначала скопируйте метаданные",
+  "This version of LightCraft can't open the file manager": "Эта версия LightCraft не может открыть файловый менеджер",
+  "This photo has no file on disk": "У этого фото нет файла на диске",
+  "This photo is not in a folder of the library": "Это фото не находится в папке библиотеки",
+  "Opening other programs needs the desktop app": "Открывать другие программы можно только в настольном приложении",
+  "Only a photo file LightCraft reads can be opened this way": "Так можно открыть только файл фото, который читает LightCraft"
 }

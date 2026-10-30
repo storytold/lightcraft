@@ -2390,5 +2390,20 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Open in Compare": "Ouvrir dans Comparer",
+  "Open in Survey": "Ouvrir dans Vue multiple",
+  "Edit Settings": "Réglages de retouche",
+  "Rotate & Flip": "Pivoter et retourner",
+  "Copy File Path": "Copier le chemin du fichier",
+  "Copied the file path": "Chemin du fichier copié",
+  "The selected photos have no file on disk": "Les photos sélectionnées n’ont pas de fichier sur le disque",
+  "Select 2 or more photos": "Sélectionnez 2 photos ou plus",
+  "Copy edit settings first": "Copiez d’abord des réglages de retouche",
+  "Copy metadata first": "Copiez d’abord des métadonnées",
+  "This version of LightCraft can't open the file manager": "Cette version de LightCraft ne peut pas ouvrir le gestionnaire de fichiers",
+  "This photo has no file on disk": "Cette photo n’a pas de fichier sur le disque",
+  "This photo is not in a folder of the library": "Cette photo n’est dans aucun dossier de la bibliothèque",
+  "Opening other programs needs the desktop app": "Ouvrir d’autres programmes nécessite l’application de bureau",
+  "Only a photo file LightCraft reads can be opened this way": "Seul un fichier photo que LightCraft sait lire peut être ouvert ainsi"
 }

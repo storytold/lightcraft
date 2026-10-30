@@ -1736,6 +1736,13 @@ fn show_in_folders_reveals_the_photo_asked_for_and_follows_to_its_folder() {
     assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/home"));
     assert_eq!(h.app.session.active(), Some(c), "the view of that folder shows the photo asked for");
     assert!(crate::menus::show_in_folders_enabled(&h.app, Some(c)));
+    // a mistyped id is refused (read loosely, it would quietly mean the active photo and
+    // succeed); an unknown one says so
+    let e = h.app.run("app.showInFolders", json!({"id": a.0.to_string()})).unwrap_err();
+    assert!(e.contains("must be a photo id"), "{e}");
+    let e = h.app.run("app.showInFolders", json!({"id": u64::MAX})).unwrap_err();
+    assert!(e.contains("no photo"), "{e}");
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/home"), "still the folder asked for");
 }
 
 /// A folder deeper than the tree goes has no row: the entry is disabled rather than failing.

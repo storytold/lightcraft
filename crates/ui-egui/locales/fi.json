@@ -2327,5 +2327,20 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Open in Compare": "Avaa Vertaa-näkymässä",
+  "Open in Survey": "Avaa Vertailu-näkymässä",
+  "Edit Settings": "Muokkausasetukset",
+  "Rotate & Flip": "Kierrä ja käännä",
+  "Copy File Path": "Kopioi tiedostopolku",
+  "Copied the file path": "Tiedostopolku kopioitu",
+  "The selected photos have no file on disk": "Valituilla kuvilla ei ole tiedostoa levyllä",
+  "Select 2 or more photos": "Valitse vähintään 2 kuvaa",
+  "Copy edit settings first": "Kopioi ensin muokkausasetukset",
+  "Copy metadata first": "Kopioi ensin metatiedot",
+  "This version of LightCraft can't open the file manager": "Tämä LightCraftin versio ei voi avata tiedostonhallintaa",
+  "This photo has no file on disk": "Tällä kuvalla ei ole tiedostoa levyllä",
+  "This photo is not in a folder of the library": "Tämä kuva ei ole kirjaston kansiossa",
+  "Opening other programs needs the desktop app": "Muiden ohjelmien avaaminen vaatii työpöytäsovelluksen",
+  "Only a photo file LightCraft reads can be opened this way": "Näin voi avata vain kuvatiedoston, jonka LightCraft lukee"
 }

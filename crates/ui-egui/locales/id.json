@@ -2339,5 +2339,20 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Open in Compare": "Buka di Bandingkan",
+  "Open in Survey": "Buka di Survei",
+  "Edit Settings": "Pengaturan edit",
+  "Rotate & Flip": "Putar dan balik",
+  "Copy File Path": "Salin jalur file",
+  "Copied the file path": "Jalur file disalin",
+  "The selected photos have no file on disk": "Foto yang dipilih tidak memiliki file di disk",
+  "Select 2 or more photos": "Pilih 2 foto atau lebih",
+  "Copy edit settings first": "Salin pengaturan edit terlebih dahulu",
+  "Copy metadata first": "Salin metadata terlebih dahulu",
+  "This version of LightCraft can't open the file manager": "Versi LightCraft ini tidak dapat membuka pengelola file",
+  "This photo has no file on disk": "Foto ini tidak memiliki file di disk",
+  "This photo is not in a folder of the library": "Foto ini tidak berada di folder pustaka",
+  "Opening other programs needs the desktop app": "Membuka program lain memerlukan aplikasi desktop",
+  "Only a photo file LightCraft reads can be opened this way": "Hanya file foto yang dibaca LightCraft yang dapat dibuka dengan cara ini"
 }

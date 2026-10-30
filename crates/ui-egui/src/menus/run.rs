@@ -1,4 +1,4 @@
-use super::files::{edit_in, open_log_folder, open_original_in, show_in_finder, show_in_folders};
+use super::files::{copy_file_paths, edit_in, open_log_folder, open_original_in, photo_param, show_in_finder, show_in_folders};
 use super::ui_commands::{UI_COMMANDS, language_from_command};
 use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
@@ -1416,8 +1416,9 @@ fn ui_commands_12(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
     let r: Result<Value, String> = match id {
         "file.exportCurvePresets" => file_export_curve_presets_command(app, ctx, id, p),
         "app.export" => crate::control::export_active(app, p),
-        "app.showInFinder" => show_in_finder(app),
-        "app.showInFolders" => show_in_folders(app, p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId)),
+        "app.showInFinder" => photo_param(p, id).and_then(|photo| show_in_finder(app, photo)),
+        "app.showInFolders" => photo_param(p, id).and_then(|photo| show_in_folders(app, photo)),
+        "photo.copyPath" => copy_file_paths(app, ctx),
         "app.openLogFolder" => open_log_folder(app),
         "app.discord" | "app.website" | "app.github" | "app.artcraft" | "app.help" | "app.feedback" => {
             let url = crate::links::url_of(id).unwrap_or(crate::links::WEBSITE);
@@ -1714,7 +1715,11 @@ fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<
 
 /// The `photo.locate` command.
 fn photo_locate_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
-    let Some(id) = app.session.active() else { return Err("no photo selected".into()) };
+    // `id`: the photo whose file is missing (a photo's menu names it), else the active one
+    let Some(id) = photo_param(p, "photo.locate")?.or(app.session.active()) else { return Err("no photo selected".into()) };
+    if app.session.catalog.photo(id).is_none() {
+        return Err(format!("photo.locate: no photo {}", id.0));
+    }
     let path = match p.get("path").and_then(Value::as_str) {
         Some(x) => Some(x.to_string()),
         None => {

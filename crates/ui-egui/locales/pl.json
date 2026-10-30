@@ -2283,5 +2283,20 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Open in Compare": "Otwórz w widoku porównania",
+  "Open in Survey": "Otwórz w widoku przeglądu",
+  "Edit Settings": "Ustawienia edycji",
+  "Rotate & Flip": "Obróć i odbij",
+  "Copy File Path": "Kopiuj ścieżkę pliku",
+  "Copied the file path": "Skopiowano ścieżkę pliku",
+  "The selected photos have no file on disk": "Wybrane zdjęcia nie mają pliku na dysku",
+  "Select 2 or more photos": "Wybierz co najmniej 2 zdjęcia",
+  "Copy edit settings first": "Najpierw skopiuj ustawienia edycji",
+  "Copy metadata first": "Najpierw skopiuj metadane",
+  "This version of LightCraft can't open the file manager": "Ta wersja LightCraft nie może otworzyć menedżera plików",
+  "This photo has no file on disk": "To zdjęcie nie ma pliku na dysku",
+  "This photo is not in a folder of the library": "To zdjęcie nie jest w folderze biblioteki",
+  "Opening other programs needs the desktop app": "Otwieranie innych programów wymaga aplikacji na komputer",
+  "Only a photo file LightCraft reads can be opened this way": "W ten sposób można otworzyć tylko plik zdjęcia, który LightCraft odczytuje"
 }

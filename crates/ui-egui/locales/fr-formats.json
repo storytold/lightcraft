@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Copied {n} file paths": "{n} chemins de fichier copiés"
 }

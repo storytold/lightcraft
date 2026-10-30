@@ -2157,5 +2157,20 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Open in Compare": "在比較檢視中開啟",
+  "Open in Survey": "在總覽中開啟",
+  "Edit Settings": "編輯設定",
+  "Rotate & Flip": "旋轉與翻轉",
+  "Copy File Path": "複製檔案路徑",
+  "Copied the file path": "已複製檔案路徑",
+  "The selected photos have no file on disk": "所選照片在磁碟上沒有檔案",
+  "Select 2 or more photos": "請選取 2 張或更多照片",
+  "Copy edit settings first": "請先複製編輯設定",
+  "Copy metadata first": "請先複製中繼資料",
+  "This version of LightCraft can't open the file manager": "此版本的 LightCraft 無法開啟檔案管理員",
+  "This photo has no file on disk": "這張照片在磁碟上沒有檔案",
+  "This photo is not in a folder of the library": "這張照片不在照片庫的資料夾中",
+  "Opening other programs needs the desktop app": "開啟其他程式需要桌面版 App",
+  "Only a photo file LightCraft reads can be opened this way": "只有 LightCraft 能讀取的照片檔案才能這樣開啟"
 }

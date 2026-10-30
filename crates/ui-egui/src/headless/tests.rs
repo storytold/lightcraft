@@ -349,7 +349,7 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     let t = Duration::from_secs(10);
     h.settle(SETTLE);
     let thumbs: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).collect();
-    let (Some(a), Some(b)) = (thumbs.first().cloned(), thumbs.get(1).cloned()) else { panic!("two grid photos: {thumbs:?}") };
+    let Some(a) = thumbs.first().cloned() else { panic!("a grid photo: {thumbs:?}") };
     let popup = |w: &str| {
         let id: u64 = w.trim_start_matches("thumb:").parse().expect("a photo id");
         egui::Id::unique(("cell", id)).with("popup")
@@ -361,8 +361,27 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "the first photo's menu is open");
     // A real click: the press and the release reach the UI on different frames, with the
     // pointer resting on the photo in between (`ui.clickWidget` sends both on one frame).
-    let rect = h.app.widgets.iter().find(|(w, _)| *w == b).map(|(_, r)| *r).expect("the second photo on screen");
-    let at = egui::pos2(rect.left() + rect.width() * 0.9, rect.center().y);
+    // The clicks land on the photo where no open menu covers it: a click on a menu is a click
+    // on the menu, not on the photo under it, and a menu's size follows its rows, so no fixed
+    // spot on a photo is safe.
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
+    // (the menu's left edge follows the pointer: a spot at least 8 pt from where it is now,
+    // so "it moved" can't pass with the menu standing still, and with room for the menu to
+    // its right, so egui doesn't push it back left at the window's edge)
+    let uncovered = |r: egui::Rect, menu: egui::Rect| {
+        (1..10)
+            .flat_map(|y| (1..10).rev().map(move |x| (x, y)))
+            .map(|(x, y)| r.lerp_inside(egui::vec2(x as f32 / 10.0, y as f32 / 10.0)))
+            .find(|p| window.contains(*p) && !menu.contains(*p) && (p.x - menu.left()).abs() >= 8.0 && p.x + menu.width() <= window.right())
+    };
+    let menu = h.view.ctx.read_response(popup(&a)).map(|r| r.rect).expect("the first menu's area");
+    let (b, rect, at) = h
+        .app
+        .widgets
+        .iter()
+        .filter(|(w, _)| w.starts_with("thumb:") && *w != a)
+        .find_map(|(w, r)| uncovered(*r, menu).map(|p| (w.clone(), *r, p)))
+        .expect("a second photo on screen that the first menu doesn't cover");
     let button = egui::PointerButton::Secondary;
     let modifiers = egui::Modifiers::NONE;
     h.app.synthetic.push(egui::Event::PointerMoved(at));
@@ -385,7 +404,7 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     // The same photo again, elsewhere on it (the menu that is open belongs to this very
     // widget): the menu moves to the pointer and stays.
     let before = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
-    let at = egui::pos2(rect.left() + rect.width() * 0.2, rect.center().y);
+    let at = uncovered(rect, before).expect("a spot on the photo that its menu doesn't cover");
     h.app.synthetic.push(egui::Event::PointerMoved(at));
     h.step();
     h.step();

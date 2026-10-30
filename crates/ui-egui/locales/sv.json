@@ -2429,5 +2429,20 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Open in Compare": "Öppna i Jämför",
+  "Open in Survey": "Öppna i Översikt",
+  "Edit Settings": "Redigeringsinställningar",
+  "Rotate & Flip": "Rotera och vänd",
+  "Copy File Path": "Kopiera filsökväg",
+  "Copied the file path": "Filsökvägen har kopierats",
+  "The selected photos have no file on disk": "De valda fotona har ingen fil på disken",
+  "Select 2 or more photos": "Välj 2 eller fler foton",
+  "Copy edit settings first": "Kopiera redigeringsinställningar först",
+  "Copy metadata first": "Kopiera metadata först",
+  "This version of LightCraft can't open the file manager": "Den här versionen av LightCraft kan inte öppna filhanteraren",
+  "This photo has no file on disk": "Det här fotot har ingen fil på disken",
+  "This photo is not in a folder of the library": "Det här fotot ligger inte i en mapp i biblioteket",
+  "Opening other programs needs the desktop app": "Att öppna andra program kräver skrivbordsappen",
+  "Only a photo file LightCraft reads can be opened this way": "Bara en fotofil som LightCraft läser kan öppnas så här"
 }

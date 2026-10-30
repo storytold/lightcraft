@@ -45,7 +45,7 @@ impl MenuNode {
 
 /// User-defined names in parameterized menus are data, not message keys.
 pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a str {
-    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet")
+    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet" | "preset.apply")
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
         || (id == "app.recentLibraries" && params.get("remove").is_some())
@@ -379,7 +379,7 @@ pub(crate) fn in_normal_album(app: &LightcraftApp) -> bool {
     }
 }
 
-fn item(id: &str, params: Value, label: impl Into<String>, shortcut: Option<&str>, enabled: bool, checked: Option<bool>) -> MenuNode {
+pub(crate) fn item(id: &str, params: Value, label: impl Into<String>, shortcut: Option<&str>, enabled: bool, checked: Option<bool>) -> MenuNode {
     MenuNode::Item { id: id.into(), params, label: label.into(), shortcut: shortcut.map(str::to_string), enabled, checked }
 }
 
@@ -809,7 +809,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
 }
 
 /// Resolve a live menu row, including contextual keys and borrowed grid-cycle hints.
-fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
+pub(crate) fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     // Shift+P picks and advances in Library; don't advertise it on Presets in those views.
     let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
     // in an album the Delete key removes from the album (issue #1805): the menu says so
@@ -824,7 +824,7 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
 }
 
 /// Drop leading, trailing and doubled separators (also inside submenus) and empty submenus.
-fn tidy(v: Vec<MenuNode>) -> Vec<MenuNode> {
+pub(crate) fn tidy(v: Vec<MenuNode>) -> Vec<MenuNode> {
     let mut out: Vec<MenuNode> = Vec::with_capacity(v.len());
     for n in v {
         let n = match n {
@@ -913,7 +913,8 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
 }
 
 /// Run a menu item. Rating, flag and label items behave like their keys (the active photo only in
-/// Compare/Survey; Auto Advance moves on).
+/// Compare/Survey; Auto Advance moves on), except that one aimed by `ids` at a single photo other
+/// than the active one leaves the active photo where it is.
 pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Value, String> {
     let mut params = if params.is_null() { json!({}) } else { params };
     let culling_cmd = matches!(
@@ -935,8 +936,12 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         return Ok(Value::Null);
     }
     let was = app.session.active();
+    // a row aimed at one other photo (a script's `ids`, or the photo menu's in Compare or Survey
+    // for a filmstrip photo the panes or tiles don't show) leaves the active one
+    let elsewhere =
+        params.get("ids").and_then(Value::as_array).is_some_and(|ids| ids.len() == 1 && ids.first().and_then(Value::as_u64) != was.map(|p| p.0));
     let r = app.run(id, params);
-    if culling_cmd && r.is_ok() && app.ui.auto_advance {
+    if culling_cmd && r.is_ok() && app.ui.auto_advance && !elsewhere {
         crate::panels::compare::advance(app, was);
     }
     r
@@ -1071,7 +1076,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             egui::Popup::menu(r)
                 .close_behavior(close)
                 .open_memory(None)
-                .show(|ui| crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom)));
+                .show(|ui| crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom, &BAR_ROWS)));
         }
         ui.spacing_mut().item_spacing.x = saved;
     } else {
@@ -1080,7 +1085,9 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         egui::Popup::menu(&r).show(|ui| {
             crate::menu_level::level(ui, 1, bar_bottom, |ui| {
                 for (title, items) in &bar {
-                    submenu(ui, title, crate::i18n::tr(title).to_string(), 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 2, bar_bottom));
+                    submenu(ui, title, crate::i18n::tr(title).to_string(), 1, bar_bottom, &BAR_ROWS, None, |ui| {
+                        nodes_ui(ui, items, mac, &mut clicked, 2, bar_bottom, &BAR_ROWS)
+                    });
                 }
             });
         });
@@ -1139,38 +1146,156 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
     confirmed
 }
 
+/// How a menu's rows are named for the control channel and tests, and what more a row says.
+pub(crate) struct Rows<'a> {
+    /// Item rows are registered as `<item>:<command id>` (`<item>:<id|params>` when `keyed`) …
+    pub item: &'static str,
+    /// … and submenu rows as `<sub>:<untranslated label>` (a preset group's: as shown, since its
+    /// name is the user's or already in the UI language).
+    pub sub: &'static str,
+    pub keyed: bool,
+    /// A row's second id (older names kept for scripts), and why it is off when it is.
+    pub extra: Option<&'a dyn Fn(&MenuNode) -> (Option<String>, Option<String>)>,
+    /// The rows of a submenu kept elsewhere (borrowed, not copied every frame), asked with the
+    /// submenu: the photo menu's Apply Preset, which can hold 10 000+ presets.
+    pub children: Option<&'a dyn Fn(&MenuNode) -> Option<&'a [MenuNode]>>,
+    /// Which build of the borrowed rows this is (the photo menu's preset cache numbers each
+    /// one): what is measured from a long list is kept per build.
+    pub epoch: u64,
+}
+
+/// The menu bar's rows: `menuitem:<id>` and `menusub:<label>`.
+const BAR_ROWS: Rows<'static> = Rows { item: "menuitem", sub: "menusub", keyed: false, extra: None, children: None, epoch: 0 };
+
 /// A submenu row showing `text` at `depth`, whose rows `children` draws one level deeper,
-/// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
-/// label), and while its submenu is open it is the anchor the next frame's room is measured from.
-fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
+/// bounded like every level. The row is registered as `<rows.sub>:<label>` (the untranslated
+/// label) and as `alias`, and while its submenu is open it is the anchor the next frame's room
+/// is measured from.
+#[allow(clippy::too_many_arguments)]
+fn submenu(
+    ui: &mut egui::Ui,
+    label: &str,
+    text: String,
+    depth: usize,
+    bar_bottom: Option<f32>,
+    rows: &Rows,
+    alias: Option<String>,
+    children: impl FnOnce(&mut egui::Ui),
+) {
     let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
-    crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
+    crate::widgets::register(ui, format!("{}:{label}", rows.sub), r.response.rect);
+    if let Some(alias) = alias {
+        crate::widgets::register(ui, alias, r.response.rect);
+    }
     if r.inner.is_some() {
         crate::menu_level::set_anchor(ui.ctx(), depth + 1, r.response.rect);
     }
 }
 
+/// The rows of a menu opened elsewhere (a context menu), drawn like the menu bar's: a bounded
+/// level that scrolls when it doesn't fit, submenus, check marks and shortcuts. Returns the item
+/// clicked.
+pub(crate) fn show_rows(ui: &mut egui::Ui, nodes: &[MenuNode], rows: &Rows) -> Option<(String, Value)> {
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let mut clicked = None;
+    crate::menu_level::level(ui, 1, None, |ui| nodes_ui(ui, nodes, mac, &mut clicked, 1, None, rows));
+    clicked
+}
+
 /// `depth` is 1 for a top-level menu's rows; `bar_bottom` is where the menu bar ends.
-fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Option<(String, Value)>, depth: usize, bar_bottom: Option<f32>) {
+fn nodes_ui(
+    ui: &mut egui::Ui,
+    nodes: &[MenuNode],
+    mac: bool,
+    clicked: &mut Option<(String, Value)>,
+    depth: usize,
+    bar_bottom: Option<f32>,
+    rows: &Rows,
+) {
     ui.set_min_width(220.0);
+    // A long list of rows (a preset group can hold thousands) draws only the rows in view; the
+    // rest only take their place, measured from the first row. Its rows stay on one line, so
+    // every row has that height, and the menu is as wide as its widest row from the start. That
+    // width is measured once per list: a long list is borrowed from storage that stays put
+    // (`rows.children`), and its rows have no shortcut or color swatch (the width leaves them
+    // out); a list built anew each frame would be measured each frame.
+    let long = nodes.len() > 100 && nodes.iter().all(|n| matches!(n, MenuNode::Item { .. }));
+    if long {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        // (keyed by the build of the rows and the list within it, not by the menu it opens in:
+        // the same group opened from another photo's menu keeps its width)
+        let key = egui::Id::unique(("menu-long-rows", rows.epoch, nodes.as_ptr() as usize, nodes.len()));
+        let widest = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| {
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let w = nodes
+                .iter()
+                .filter_map(|n| match n {
+                    MenuNode::Item { id, params, label, .. } => Some(display_item_label(id, params, label)),
+                    _ => None,
+                })
+                .map(|t| ui.painter().layout_no_wrap(format!("      {t}"), font.clone(), egui::Color32::WHITE).size().x)
+                .fold(0.0_f32, f32::max);
+            let w = w + 2.0 * ui.spacing().button_padding.x;
+            ui.data_mut(|d| d.insert_temp(key, w));
+            w
+        });
+        ui.set_min_width(widest);
+    }
+    let mut row_h: Option<f32> = None;
     for n in nodes {
+        let top = ui.cursor().top();
+        if long && let Some(h) = row_h {
+            let clip = ui.clip_rect();
+            if top + h < clip.top() || top > clip.bottom() {
+                // the row's place, and its one auto id, so the rows after it keep theirs
+                ui.add_space(h);
+                ui.skip_ahead_auto_ids(1);
+                continue;
+            }
+        }
+        let (alias, reason) = rows.extra.map(|f| f(n)).unwrap_or_default();
         match n {
             MenuNode::Separator => {
                 ui.separator();
             }
             MenuNode::Submenu { label, children } => {
-                submenu(ui, label, format!("      {}", crate::i18n::tr(label)), depth, bar_bottom, |ui| {
-                    nodes_ui(ui, children, mac, clicked, depth + 1, bar_bottom)
+                let children: &[MenuNode] = rows.children.and_then(|f| f(n)).unwrap_or(children);
+                // a preset group's name is already in the UI language, or the user's own
+                let text = if matches!(children.first(), Some(MenuNode::Item { id, .. }) if id == "preset.apply") {
+                    label.as_str()
+                } else {
+                    crate::i18n::tr(label)
+                };
+                submenu(ui, label, format!("      {text}"), depth, bar_bottom, rows, alias, |ui| {
+                    nodes_ui(ui, children, mac, clicked, depth + 1, bar_bottom, rows)
                 });
             }
             MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
-                // a gutter for check marks, like native menus
-                let mut b = egui::Button::new(format!("      {}", display_item_label(id, params, label)));
+                // a gutter for check marks, like native menus; a colour label's row also shows its colour
+                let swatch = if id == "photo.label" { params["label"].as_str().and_then(lightcraft_catalog::ColorLabel::parse) } else { None };
+                const GUTTER: &str = "      ";
+                const SWATCH: &str = "     ";
+                let text = display_item_label(id, params, label);
+                let mut b = egui::Button::new(if swatch.is_some() { format!("{GUTTER}{SWATCH}{text}") } else { format!("{GUTTER}{text}") });
                 if let Some(sc) = shortcut {
                     b = b.shortcut_text(shortcut_text(sc, mac));
                 }
-                let r = ui.add_enabled(*enabled, b);
-                crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
+                let mut r = ui.add_enabled(*enabled, b);
+                if let Some(l) = swatch {
+                    let font = egui::TextStyle::Button.resolve(ui.style());
+                    let width = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE).size().x;
+                    let x = r.rect.left() + ui.spacing().button_padding.x + width(GUTTER) + width(SWATCH) / 2.0;
+                    let color = crate::theme::label_color(l);
+                    ui.painter().circle_filled(egui::pos2(x, r.rect.center().y), 5.0, if *enabled { color } else { color.gamma_multiply(0.4) });
+                }
+                let key = if rows.keyed { MenuNode::key(id, params) } else { id.clone() };
+                crate::widgets::register(ui, format!("{}:{key}", rows.item), r.rect);
+                if let Some(alias) = alias {
+                    crate::widgets::register(ui, alias, r.rect);
+                }
+                if let Some(why) = reason.filter(|_| !*enabled) {
+                    r = r.on_disabled_hover_text(why);
+                }
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
@@ -1179,6 +1304,9 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                 if r.clicked() {
                     *clicked = Some((id.clone(), params.clone()));
                     ui.close();
+                }
+                if long && row_h.is_none() {
+                    row_h = Some(ui.cursor().top() - top);
                 }
             }
         }

@@ -1,5 +1,29 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### A photo's right-click menu offers what the Photo menu does, grouped by task
+- Right-clicking a photo in the grid, the filmstrip, the loupe, Compare or Survey opens one menu, built like the menu
+  bar's Photo menu: the same names ("Delete 3 Photos"), keyboard shortcuts, check marks on the photo's rating, flag and
+  color label (with the label's color), and the same rows grayed out. Its rows are grouped by what they do: open the
+  photo; rate, flag, label and describe it (Add Keywords, and a Metadata submenu with Copy / Paste Metadata, metadata
+  presets, Edit Capture Time…, Fill Location from GPS, Save / Read Metadata and more); organize it (Add to Target Album,
+  Add to Album, Stack, Find Similar Photos); edit it (an Edit Settings submenu with copy, paste, Sync Settings, Auto
+  Settings and Apply Preset by group, then virtual copy, version, Photo Merge and a Rotate & Flip submenu); its file
+  (Rename Photos…, Move to Folder…, Duplicate, Convert to DNG, Reload from Disk); where it is (Locate Missing File… for
+  an original that is gone, Show in Finder / Folders and a new Copy File Path); export; and Delete on its own at the
+  end.
+- Rows that don't apply where the menu opened are left out: there is no Open in Detail in Detail, Open in Compare and
+  Open in Survey appear only once several photos are chosen, and Remove from Album and Set as Album Cover only inside an
+  album. Right-clicking one of several selected photos makes it the active photo and keeps the selection, so the rows
+  that act on one photo (Open in Detail, Copy Edit Settings, Create Version…) act on the photo right-clicked; in Compare
+  and Survey a filmstrip photo that the panes or tiles don't show stays as it is, so the active photo stays on screen.
+  The loupe's Zoom rows and Compare's Swap Compare Photos and Make Candidate the Select sit at the top of the same menu.
+  A grayed-out row says why when the pointer rests on it ("Select 2 or more photos"), and a row whose action can't run
+  says why instead of doing nothing. Rating, flagging or labeling from it moves on to the next photo when Auto Advance
+  is on, as the keys do. A preset applied from it gets the Presets panel's mark and Amount slider, as after a click
+  there.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

@@ -187,7 +187,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 }
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
-            crate::widgets::context_menu(&resp, |ui| crate::panels::grid::context_menu(app, ui, *id));
+            crate::widgets::context_menu(&resp, |ui| crate::photo_menu::show(app, ui, *id, crate::photo_menu::Lead::None));
         }
     });
 }
