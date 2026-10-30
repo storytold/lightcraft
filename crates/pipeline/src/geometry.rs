@@ -77,15 +77,32 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
         };
-        if apply_crop && s.geometry.constrain_crop {
-            f.constrain_to_image();
+        if apply_crop {
+            f.constrain_to_image(s.geometry.constrain_crop);
         }
         f
     }
 
-    /// "Constrain Crop": shrink the crop about its centre until it contains no area outside the warped source.
-    fn constrain_to_image(&mut self) {
-        let Some(wp) = self.warp.as_ref().filter(|w| w.moves_pixels()) else { return };
+    /// Shrink the crop about its centre until it contains no area outside the warped source. Lens
+    /// corrections (profile, embedded camera warp, manual distortion, lateral CA) always do this, as
+    /// a corrected lens never shows the blank past the photo's edge (issue #2361); perspective only
+    /// with "Constrain Crop" (`with_persp`), so a keystone fix can keep its corners.
+    pub(crate) fn constrain_to_image(&mut self, with_persp: bool) {
+        let Some(full) = self.warp.as_ref().filter(|w| w.moves_pixels()) else { return };
+        let optics;
+        let wp = if with_persp || full.persp == Homography::IDENTITY {
+            full
+        } else {
+            let mut o = full.clone();
+            o.persp = Homography::IDENTITY;
+            o.persp_inv = Homography::IDENTITY;
+            optics = o;
+            &optics
+        };
+        if !wp.moves_pixels() {
+            return;
+        }
+        let planes: &[usize] = if wp.per_channel() { &[0, 1, 2] } else { &[1] };
         let a = self.crop.output_to_source(self.ow, self.oh, 1.0, 1.0);
         let (w, h) = (self.ow, self.oh);
         let fits = |t: f64| {
@@ -93,8 +110,10 @@ impl Frame {
                 let u = i as f64 / 48.0;
                 [(u, 0.0), (u, 1.0), (0.0, u), (1.0, u)].iter().all(|&(x, y)| {
                     let p = Point::new(0.5 + t * (x - 0.5), 0.5 + t * (y - 0.5));
-                    let s = wp.to_source(a.apply(p), 1);
-                    s.x >= -1e-6 * w && s.y >= -1e-6 * h && s.x <= w * (1.0 + 1e-6) && s.y <= h * (1.0 + 1e-6)
+                    planes.iter().all(|&ch| {
+                        let s = wp.to_source(a.apply(p), ch);
+                        s.x >= -1e-6 * w && s.y >= -1e-6 * h && s.x <= w * (1.0 + 1e-6) && s.y <= h * (1.0 + 1e-6)
+                    })
                 })
             })
         };
