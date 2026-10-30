@@ -28,8 +28,22 @@ pub struct CrateRoot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Violation {
-    MissingForbid { name: String, path: PathBuf },
-    MissingDeny { name: String, path: PathBuf },
+    MissingForbid {
+        name: String,
+        path: PathBuf,
+    },
+    MissingDeny {
+        name: String,
+        path: PathBuf,
+    },
+    /// A crate-root `allow`/`expect`/`warn` names a required lint: rustc applies the later
+    /// attribute over the deny list, so the lint is not denied after all.
+    OverriddenDeny {
+        name: String,
+        path: PathBuf,
+        attribute: String,
+        lint: String,
+    },
 }
 
 impl std::fmt::Display for Violation {
@@ -40,6 +54,9 @@ impl std::fmt::Display for Violation {
             }
             Violation::MissingDeny { name, path } => {
                 write!(f, "{name}: missing `#![deny(...)]` with all six clippy lints in {}", path.display())
+            }
+            Violation::OverriddenDeny { name, path, attribute, lint } => {
+                write!(f, "{name}: the crate-root `#![{{{attribute}}}({{{lint}}})]` overrides the required deny list in {}", path.display())
             }
         }
     }
@@ -53,12 +70,34 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
         // the inner attributes before the first item, however long the doc header above them is
         let attrs = inner_attrs(&r.src);
         let has_forbid = attrs.iter().any(|a| a == "#![forbid(unsafe_code)]");
-        let has_deny = attrs.iter().any(|a| deny_lints(a).is_some_and(|names| DENY_LINTS.iter().all(|lint| names.contains(lint))));
+        let has_deny =
+            attrs.iter().any(|a| lint_list(a).is_some_and(|(verb, names)| verb == "deny" && DENY_LINTS.iter().all(|lint| names.contains(lint))));
+        // a later crate-root `allow`/`expect`/`warn` naming a required lint applies over the deny
+        // list (rustc takes the later attribute), so the policy silently stops holding
+        let mut overridden: Option<(&str, &str)> = None;
+        for a in &attrs {
+            let Some((verb, names)) = lint_list(a) else { continue };
+            if !matches!(verb, "allow" | "expect" | "warn") {
+                continue;
+            }
+            if let Some(lint) = names.iter().find(|n| DENY_LINTS.contains(n)) {
+                overridden = Some((verb, lint));
+                break;
+            }
+        }
         if !has_forbid && !is_unsafe_exception {
             out.push(Violation::MissingForbid { name: r.name.clone(), path: r.root.clone() });
         }
         if !has_deny {
             out.push(Violation::MissingDeny { name: r.name.clone(), path: r.root.clone() });
+        }
+        if let Some((attribute, lint)) = overridden {
+            out.push(Violation::OverriddenDeny {
+                name: r.name.clone(),
+                path: r.root.clone(),
+                attribute: attribute.to_string(),
+                lint: lint.to_string(),
+            });
         }
     }
     out.sort_by_key(|v| v.to_string());
@@ -66,11 +105,12 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
     out
 }
 
-/// The lint names listed by a `#![deny(...)]` attribute (whitespace removed), or `None` for any other
-/// attribute. Names are compared whole, so a longer name that starts with a listed name does not count.
-fn deny_lints(attr: &str) -> Option<Vec<&str>> {
-    let list = attr.strip_prefix("#![deny(")?.strip_suffix(")]")?;
-    Some(list.split(',').collect())
+/// The verb and the lint names of a root `#![verb(...)]` attribute, or `None` for anything else.
+/// Names are compared whole, so a longer name that starts with a listed name does not count.
+fn lint_list(attr: &str) -> Option<(&str, Vec<&str>)> {
+    let body = attr.strip_prefix("#![")?.strip_suffix(")]")?;
+    let (verb, names) = body.split_once('(')?;
+    Some((verb, names.split(',').map(str::trim).filter(|n| !n.is_empty()).collect()))
 }
 
 /// The inner attributes (`#![...]`) at the top of a crate root, each with its whitespace removed.
@@ -290,6 +330,30 @@ mod tests {
     fn deny_must_contain_all_six_lints() {
         let v = check(&[root("lightcraft-foo", "#![forbid(unsafe_code)]\n#![deny(clippy::unwrap_used, clippy::expect_used)]\nfn f() {}\n")]);
         assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
+    }
+
+    #[test]
+    fn a_root_allow_overriding_a_required_lint_is_reported() {
+        // rustc applies the later attribute, so the deny list above it no longer denies
+        let src = format!("#![forbid(unsafe_code)]\n#![deny({DENY})]\n#![allow(clippy::panic)]\nfn f() {{}}\n");
+        let v = check(&[root("lightcraft-foo", &src)]);
+        assert!(matches!(&v[..], [Violation::OverriddenDeny { lint, .. }] if lint == "clippy::panic"), "{v:?}");
+    }
+
+    #[test]
+    fn a_root_expect_overriding_a_required_lint_is_reported() {
+        let src = format!("#![forbid(unsafe_code)]\n#![deny({DENY})]\n#![expect(clippy::unwrap_used)]\nfn f() {{}}\n");
+        let v = check(&[root("lightcraft-foo", &src)]);
+        assert!(matches!(&v[..], [Violation::OverriddenDeny { lint, .. }] if lint == "clippy::unwrap_used"), "{v:?}");
+    }
+
+    #[test]
+    fn an_item_level_allow_inside_a_function_is_not_an_override() {
+        // the documented guarded-expect form: the crate-level deny list stays intact
+        let src = format!(
+            "#![forbid(unsafe_code)]\n#![deny({DENY})]\nfn f() {{\n    #[allow(clippy::expect_used)] // invariant\n    let x: u8 = None.expect(\"checked above\");\n}}\n"
+        );
+        assert!(check(&[root("lightcraft-foo", &src)]).is_empty());
     }
 
     #[test]
