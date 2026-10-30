@@ -2390,5 +2390,9 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Matching": "Correspondance",
+  "(default)": "(par défaut)",
+  "Faces per person in a match": "Visages par personne pour une correspondance",
+  "A face is matched to a person by the mean of that many of their faces that look most like it. More faces: fewer wrong suggestions for people with many photos, fewer suggestions for people with few.": "Un visage est rapproché d'une personne par la moyenne de ce nombre de ses visages qui lui ressemblent le plus. Plus de visages : moins de propositions fausses pour les personnes qui ont beaucoup de photos, moins de propositions pour celles qui en ont peu."
 }

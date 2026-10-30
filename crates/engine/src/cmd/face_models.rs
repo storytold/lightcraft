@@ -30,6 +30,22 @@ pub(super) struct FaceSettings {
     /// Keep every face model on the CPU, even when the GPU would be faster.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(super) cpu_only: bool,
+    /// How many of a person's best matching faces a match is based on (`None`: [`lightcraft_faces::matching::TOP_FACES`]).
+    #[serde(deserialize_with = "lenient_count", skip_serializing_if = "Option::is_none")]
+    pub(super) top_faces: Option<usize>,
+}
+
+/// A saved count that is not a whole number (a hand-edited `-1`, `"3"`) is read as no choice: the file is not taken for a
+/// damaged one, which would drop every other face setting with it (recognition switched off, the model forgotten).
+fn lenient_count<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<usize>, D::Error> {
+    Ok(Value::deserialize(d)?.as_u64().and_then(|n| usize::try_from(n).ok()))
+}
+
+impl FaceSettings {
+    /// How many of a person's best matching faces a match is based on, within what matching accepts.
+    pub(super) fn top_faces(&self) -> usize {
+        self.top_faces.unwrap_or(lightcraft_faces::matching::TOP_FACES).clamp(1, lightcraft_faces::matching::MAX_TOP_FACES)
+    }
 }
 
 fn fail(what: &str, e: impl std::fmt::Display) -> EngineError {
@@ -65,6 +81,32 @@ pub(super) fn set_cpu_only(dir: &Path, on: bool) -> Result<()> {
     let mut st = read_settings(dir);
     st.cpu_only = on;
     write_settings(dir, &st)
+}
+
+/// `faces.matching`: how many of a person's best matching faces a match is based on (Settings ▸ Faces).
+fn matching(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.matching";
+    let dir = models_dir(s, C)?;
+    let mut st = read_settings(&dir);
+    if let Some(v) = p.get("topFaces") {
+        let max = lightcraft_faces::matching::MAX_TOP_FACES;
+        st.top_faces = match v {
+            Value::Null => None,
+            v => Some(
+                v.as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| (1..=max).contains(n))
+                    .ok_or_else(|| bad(C, format!("`topFaces` is a whole number from 1 to {max}, or null for the default")))?,
+            ),
+        };
+        write_settings(&dir, &st)?;
+        // suggestions and a person's "More" faces follow at once, not within the second the last look is trusted
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            s.faces.top_seen = None;
+        }
+    }
+    Ok(json!({"topFaces": st.top_faces(), "default": lightcraft_faces::matching::TOP_FACES, "max": lightcraft_faces::matching::MAX_TOP_FACES}))
 }
 
 fn write_settings(dir: &Path, st: &FaceSettings) -> Result<()> {
@@ -205,6 +247,10 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         "dir": dir.as_ref().map(|d| d.display().to_string()),
         "enabled": settings.enabled,
         "embedder": settings.embedder,
+        // how many of a person's best matching faces a match is based on (`faces.matching`)
+        "topFaces": settings.top_faces(),
+        "topFacesDefault": lightcraft_faces::matching::TOP_FACES,
+        "topFacesMax": lightcraft_faces::matching::MAX_TOP_FACES,
         // where the models run: {cpuOnly, detection, recognition} as `faces.gpu` gives it
         "gpu": super::face_detect::gpu_json(s),
         // Native builds always have the pure-Rust runner; model files/background scanning remain native-only.
@@ -535,5 +581,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),
+        cmd!(query "faces.matching", "Face Matching", [], None, "{topFaces?: 1..8 | null} → {topFaces, default, max} — how many of a person's best matching faces a suggestion's score is the mean of (Settings ▸ Faces; null goes back to the default). More faces make two odd photos of someone (blurred, in profile) less able to carry a stranger, at the cost of fewer suggestions for people with few photos", always, matching),
     ]
 }
