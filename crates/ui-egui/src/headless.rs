@@ -394,7 +394,7 @@ impl Headless {
     /// What is still in progress, as `(what, how many)` with 0 for idle: renders, file-system
     /// checks the sidebar waits for, background work, queued input. [`Self::busy`] and
     /// [`Self::busy_description`] both read it, so they can't drift apart.
-    fn busy_counts(&self) -> [(&'static str, usize); 14] {
+    fn busy_counts(&self) -> [(&'static str, usize); 15] {
         [
             ("renders in flight", self.app.renderer.in_flight()),
             ("file-system checks", crate::panels::left::fs_cached_running(&self.view.ctx)),
@@ -407,6 +407,7 @@ impl Headless {
             ("AI denoise", usize::from(self.app.session.denoise_busy())),
             ("survey tiles moving", usize::from(self.app.survey_motion.moving(self.time))),
             ("background tasks", usize::from(!self.app.tasks.is_empty())),
+            ("Lightroom catalog task", usize::from(self.app.lightroom.is_some())),
             ("synthetic input events", self.app.synthetic.len()),
             ("pending gestures", self.app.pending_gestures.len()),
             ("queued input events", self.events.len()),
@@ -460,7 +461,7 @@ impl Headless {
     }
 
     /// [`Self::settle`], for tests: a timeout fails the test there and then, saying what it waited
-    /// for (`what`), where (the caller's line) and what was still busy, instead of carrying on with
+    /// for (`what`), where (the caller's line) and what was busy at the limit, instead of carrying on with
     /// an unsettled app and failing later at an unrelated assertion (issue #3063).
     ///
     /// It waits at least [`SETTLED_FLOOR`] (120 s), whatever `timeout` says. Tests passed short
@@ -479,7 +480,8 @@ impl Headless {
     #[track_caller]
     fn settled_within(&mut self, timeout: Duration, what: &str) {
         if !self.settle(timeout) {
-            panic!("did not settle within {timeout:?} ({what}); still busy: {}", self.busy_description());
+            // `nothing` here: the work ended in the last few frames, before the quiet frames a settle needs
+            panic!("did not settle within {timeout:?} ({what}); busy at the limit: {}", self.busy_description());
         }
     }
 
