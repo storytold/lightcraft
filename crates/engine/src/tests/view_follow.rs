@@ -233,6 +233,33 @@ fn relative_clock_direct_and_nested_smart_album_sources_expire() {
     }
 }
 
+/// A folder of albums is a source too: a smart album inside it (at any depth) whose rules are relative to now
+/// ("in the last day") makes the folder's view and count change when the minute passes, as it does for the smart album itself.
+#[test]
+fn relative_clock_folder_of_albums_source_expires() {
+    for deeper in [false, true] {
+        let (mut s, now, ids) = relative_clock_session(&["2026-10-23T12:00:30"]);
+        let id_of = |r: Value| r["id"].as_u64().unwrap();
+        let folder = id_of(s.execute("album.create", &json!({"name": "Outer", "folder": true})).unwrap());
+        let parent =
+            if deeper { id_of(s.execute("album.create", &json!({"name": "Inner", "folder": true, "parent": folder})).unwrap()) } else { folder };
+        s.execute(
+            "album.createSmart",
+            &json!({"name": "Recent", "parent": parent, "rules": {"ruleSet": {"rules": [{"field": "captureDate", "op": "inLast", "value": 1}]}}}),
+        )
+        .unwrap();
+        s.execute("library.source", &json!({"kind": "album", "id": folder})).unwrap();
+        assert_eq!(s.visible_cloned(), ids, "deeper={deeper}");
+        assert_eq!(s.source_total(), Some(1), "deeper={deeper}");
+        let revision = s.catalog.revision;
+
+        *now.lock().unwrap() = "2026-10-24T12:01:00".to_string();
+        assert!(s.visible_cloned().is_empty(), "deeper={deeper}");
+        assert_eq!(s.source_total(), Some(0), "deeper={deeper}");
+        assert_eq!(s.catalog.revision, revision, "deeper={deeper}");
+    }
+}
+
 #[test]
 fn relative_clock_source_total_expires_before_or_after_visible_refresh() {
     for refresh_visible in [false, true] {
@@ -360,6 +387,35 @@ fn an_edit_to_many_photos_or_to_more_than_photos_is_worked_out_whole() {
     assert_eq!((s.view_followed, s.view_worked_out), (followed + 1, whole + 2));
 }
 
+/// A keyword created in the keyword list, inside another and given to the selected photo at once, changes no photo
+/// but that one: the view and the albums' counts follow it from that photo instead of asking every photo again.
+#[test]
+fn a_keyword_created_inside_another_and_given_to_a_photo_is_followed_from_that_photo() {
+    use lightcraft_catalog::{AlbumId, tally::AlbumTally};
+    let (mut s, ids, _, smart) = library(600);
+    let _ = s.visible_cloned();
+    let mut tally = AlbumTally::of(&s.catalog);
+    let (followed, whole) = (s.view_followed, s.view_worked_out);
+    // (the second photo has no keywords: it is in the smart album of those)
+    let bare = ids[1];
+    assert!(s.catalog.photo(bare).is_some_and(|p| p.meta.keywords.is_empty()));
+    let unkeyworded = tally.counts()[&AlbumId(smart)];
+    s.execute("library.select", &json!({"ids": [bare.0]})).unwrap();
+    s.execute("keyword.create", &json!({"name": "Rome", "parent": "travel", "addToSelected": true})).unwrap();
+    let _ = s.visible_cloned();
+    assert_eq!((s.view_followed, s.view_worked_out), (followed + 1, whole), "followed, not worked out whole");
+    assert!(tally.update(&s.catalog), "the counts followed");
+    assert_eq!(tally.counts()[&AlbumId(smart)], unkeyworded - 1, "the photo has a keyword now");
+    // a keyword created on its own, for no photo: nothing else to follow
+    s.execute("keyword.create", &json!({"name": "Paris", "parent": "travel"})).unwrap();
+    let _ = s.visible_cloned();
+    assert_eq!((s.view_followed, s.view_worked_out), (followed + 2, whole));
+    assert!(tally.update(&s.catalog));
+    // and what was followed is what every photo says
+    assert_eq!(s.visible_cloned(), s.visible_in_full());
+    assert_eq!(tally.counts()[&AlbumId(smart)], s.catalog.album_count(AlbumId(smart)));
+}
+
 #[test]
 fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo() {
     use lightcraft_catalog::tally::AlbumTally;
@@ -378,6 +434,13 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         let made = s.execute("album.createSmart", &json!({"name": "More", "rules": rules}));
         assert!(made.is_ok(), "{rules}: {made:?}");
     }
+    // and folders of albums, one inside another: their counts are made from the albums inside them, and followed too
+    let folder = s.execute("album.create", &json!({"name": "Trips", "folder": true})).unwrap()["id"].as_u64().unwrap();
+    let inner = s.execute("album.create", &json!({"name": "Rome", "folder": true, "parent": folder})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.createSmart", &json!({"name": "Well rated here", "parent": folder, "rules": {"rating": 3}})).unwrap();
+    s.execute("album.createSmart", &json!({"name": "Red here", "parent": inner, "rules": {"label": "red"}})).unwrap();
+    s.execute("library.select", &json!({"ids": ids.iter().take(12).map(|id| id.0).collect::<Vec<_>>()})).unwrap();
+    s.execute("album.create", &json!({"name": "Chosen here", "parent": inner, "addSelected": true})).unwrap();
     assert!(s.catalog.album(lightcraft_catalog::AlbumId(smart)).is_some_and(|a| a.is_smart()));
     let fresh = |s: &Session| -> Vec<(u64, usize)> {
         let mut v: Vec<(u64, usize)> = s.catalog.albums().map(|a| (a.id.0, s.catalog.album_count(a.id))).collect();
@@ -402,7 +465,10 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         let moved = tally.revision() != s.catalog.revision;
         match (moved, tally.update(&s.catalog)) {
             (true, true) => followed += 1,
-            (true, false) => whole += 1,
+            (true, false) => {
+                tally = AlbumTally::of(&s.catalog);
+                whole += 1;
+            }
             // (an edit that was refused changed nothing: nothing to follow)
             (false, _) => {}
         }
@@ -428,8 +494,10 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
     let many: Vec<u64> = if many.len() >= 300 { many } else { s.visible_cloned().iter().take(300).map(|id| id.0).collect() };
     if many.len() > 256 {
         s.execute("library.select", &json!({"ids": many})).unwrap();
+        let before = shown(&tally);
         s.execute("photo.rate", &json!({"rating": 5})).unwrap();
         assert!(!tally.update(&s.catalog), "more photos than are followed one by one");
-        assert_eq!(shown(&tally), fresh(&s));
+        assert_eq!(shown(&tally), before, "not followed: left as they were, to be counted again");
+        assert_eq!(shown(&AlbumTally::of(&s.catalog)), fresh(&s));
     }
 }

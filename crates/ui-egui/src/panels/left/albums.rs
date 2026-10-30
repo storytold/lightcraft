@@ -34,8 +34,14 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 open = true;
                 set_tree_open(ui, open_id, true);
             }
-            let resp = Row::new(&format!("folder:{}", a.id.0), Icon::Folder, &a.name).indent(indent).sense(Sense::click_and_drag()).show(app, ui);
-            // a folder is no source, so its row folds it too; the triangle is the same click, aimed
+            // a folder is a source: the photos of the albums inside it, each once (no count shown on its row, for a
+            // number the albums already give; `albums.list` counts it from theirs, kept with theirs)
+            let sel = app.session.source == LibrarySource::Album(a.id);
+            let resp = Row::new(&format!("folder:{}", a.id.0), Icon::Folder, &a.name)
+                .selected(sel)
+                .indent(indent)
+                .sense(Sense::click_and_drag())
+                .show(app, ui);
             let has_children = all.get(&Some(a.id)).is_some_and(|v| !v.is_empty());
             if resp.drag_started() {
                 app.ui.dragging_album = Some(a.id.0);
@@ -45,16 +51,15 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             // what this frame draws; a click shows from the next one
             let draw_open = open;
-            let mut toggled = false;
             if has_children {
+                // only the triangle folds it; it sits on the row and takes its clicks, so the
+                // menu opens from it too
                 let tri = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("albumToggle:{}", a.id.0));
-                toggled = tri.clicked();
-                // the triangle sits on the row and takes its clicks: the menu opens from it too
                 folder_menu(app, &tri, a);
             }
-            // one click, one toggle: the triangle's is not the row's as well
-            if resp.clicked() && !toggled {
-                set_tree_open(ui, open_id, !open);
+            // the row itself is the source: the photos of the albums inside the folder
+            if resp.clicked() {
+                let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
             }
             folder_menu(app, &resp, a);
             if draw_open {
@@ -63,9 +68,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
-            // cached: a smart album's count scans the catalog
+            // cached: a smart album's count scans the catalog (in the background: no number until it is known)
             let now = (app.session.clock)();
-            let n = app.caches.album_counts(&app.session.catalog, &now).get(&a.id).copied().unwrap_or(0);
+            let n = app.caches.album_counts(&app.session.catalog, app.session.library_generation(), &now, ui.ctx()).get(&a.id).copied();
             // the album B adds to is marked "+"
             let target =
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
@@ -74,7 +79,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
             let mut resp = Row::new(&format!("album:{}", a.id.0), icon, &label)
-                .count(Some(n))
+                .count(n)
                 .selected(sel)
                 .indent(indent)
                 .sense(Sense::click_and_drag())
@@ -179,12 +184,19 @@ pub(super) const MARK_W: f32 = 12.0;
 const HOVER_OPEN_SECS: f64 = 0.6;
 
 /// Whether the album `dragged` may be dropped into the folder `target` (`None`: the top level):
-/// a folder other than where it already is, and not itself or something inside it.
+/// a folder other than where it already is, not itself or something inside it, and not one a
+/// smart album that moves with it shows (it would include itself).
 fn can_drop_album(app: &LightcraftApp, dragged: AlbumId, target: Option<AlbumId>) -> bool {
-    let Some(d) = app.session.catalog.album(dragged) else { return false };
+    let cat = &app.session.catalog;
+    let Some(d) = cat.album(dragged) else { return false };
     match target {
         None => d.parent.is_some(),
-        Some(t) => app.session.catalog.album(t).is_some_and(|f| f.folder) && d.parent != Some(t) && !is_within(app, t, dragged),
+        Some(t) => {
+            cat.album(t).is_some_and(|f| f.folder)
+                && d.parent != Some(t)
+                && !is_within(app, t, dragged)
+                && cat.album_move_would_loop(dragged, t).is_none()
+        }
     }
 }
 

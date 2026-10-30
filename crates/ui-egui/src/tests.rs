@@ -1,4 +1,5 @@
 mod activity;
+mod album_list;
 mod album_picker;
 mod album_remove;
 mod appearance;

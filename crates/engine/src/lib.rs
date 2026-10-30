@@ -15,6 +15,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+mod album_counts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -85,6 +86,7 @@ pub mod walk;
 
 use std::sync::Arc;
 
+pub use album_counts::CountsAge;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
@@ -200,7 +202,8 @@ fn clock_minute(now: &str) -> &str {
     now.get(..16).unwrap_or(now)
 }
 
-/// Whether a query can change membership without a catalog edit, including the smart albums it tests.
+/// Whether a query can change membership without a catalog edit, including the smart albums it tests (and the ones
+/// inside a folder of albums it tests, at any depth).
 fn filter_depends_on_clock(filter: &Filter, catalog: &Catalog) -> bool {
     if filter.depends_on_now() {
         return true;
@@ -211,7 +214,12 @@ fn filter_depends_on_clock(filter: &Filter, catalog: &Catalog) -> bool {
         if !seen.insert(id) {
             continue;
         }
-        let Some(smart) = catalog.album(id).and_then(|album| album.smart.as_deref()) else { continue };
+        let Some(album) = catalog.album(id) else { continue };
+        if album.folder {
+            pending.extend(catalog.album_members(id));
+            continue;
+        }
+        let Some(smart) = album.smart.as_deref() else { continue };
         if smart.depends_on_now() {
             return true;
         }
@@ -226,6 +234,8 @@ static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub struct Session {
     library_generation: u64,
+    /// The counts `albums.list` answers with.
+    album_counts: album_counts::AlbumCounts,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -444,9 +454,23 @@ impl Session {
         self.library_generation
     }
 
+    /// The next `albums.list` answers with `counts` and counts nothing itself: a window that keeps the albums' counts
+    /// (counted off its UI thread) offers them with how far they are from the catalog and the clock as they are now,
+    /// and `albums.list` marks the smart albums whose count is behind as pending.
+    /// [`Session::withdraw_album_counts`] takes the offer back once the command has run.
+    pub fn offer_album_counts(&mut self, counts: Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>, age: CountsAge) {
+        self.album_counts.offer(counts, age);
+    }
+
+    /// Take back what [`Session::offer_album_counts`] offered, if `albums.list` didn't use it.
+    pub fn withdraw_album_counts(&mut self) {
+        self.album_counts.withdraw();
+    }
+
     pub fn new() -> Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            album_counts: album_counts::AlbumCounts::default(),
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,
@@ -1114,7 +1138,7 @@ impl Session {
             // its own order, Recently Added (how far back it reaches moves with every import), Missing Photos.
             let own_order = matches!(self.source, LibrarySource::Album(a) if self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && self.filter == Filter::default()
-                && self.catalog.album(a).is_some_and(|al| !al.is_smart()));
+                && self.catalog.album(a).is_some_and(|al| !al.is_smart() && !al.folder));
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
             // with the clock as well as with edits: a photo nobody touched can stop matching. It is asked whole.
@@ -1154,7 +1178,9 @@ impl Session {
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
+                // an album's own order; a smart album and a folder of albums have none
                 && !al.is_smart()
+                && !al.folder
                 && self.filter == Filter::default()
             {
                 // each photo's place looked up, not searched for (a big album sorted in O(n log n))

@@ -7,7 +7,7 @@ use lightcraft_develop::{CONTROLS, controls};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_active};
-use crate::{LibrarySource, Session};
+use crate::{CountsAge, LibrarySource, Session};
 
 pub fn photo_summary(p: &Photo) -> Value {
     json!({
@@ -38,20 +38,54 @@ pub fn photo_summary(p: &Photo) -> Value {
 /// instead of overflowing the stack.
 const MAX_ALBUM_DEPTH: usize = 64;
 
-fn album_json(a: &Album, all: &[Album], counts: &HashMap<AlbumId, usize>, cat: &lightcraft_catalog::Catalog, depth: usize) -> Value {
+/// The counts [`album_json`] shows a smart album or a folder with, and how far they are from the catalog and the clock
+/// as they are now.
+struct AlbumCounts<'a> {
+    counts: &'a HashMap<AlbumId, usize>,
+    age: CountsAge,
+}
+
+impl AlbumCounts<'_> {
+    /// Whether the count of smart album or folder `a` is behind: any of them when the catalog moved on, only those with
+    /// rules about "the last N days" (of the album, or of one inside the folder) when only the clock did.
+    fn behind(&self, a: &Album, cat: &lightcraft_catalog::Catalog) -> bool {
+        match self.age {
+            CountsAge::Current => false,
+            CountsAge::Behind => true,
+            CountsAge::ClockBehind => cat
+                .album_members(a.id)
+                .iter()
+                .filter_map(|m| cat.album(*m))
+                .filter_map(|m| m.smart.as_deref())
+                .any(|rules| crate::filter_depends_on_clock(rules, cat)),
+        }
+    }
+}
+
+fn album_json(a: &Album, all: &[Album], counts: &AlbumCounts, cat: &lightcraft_catalog::Catalog, depth: usize) -> Value {
     let children: Vec<Value> = if depth < MAX_ALBUM_DEPTH {
         all.iter().filter(|c| c.parent == Some(a.id)).map(|c| album_json(c, all, counts, cat, depth + 1)).collect()
     } else {
         Vec::new()
     };
+    // An album of chosen photos is counted from its list, at once; a smart album's rules are asked of every photo, and a
+    // folder holds what the albums inside it do (a pass over the library of its own), so theirs are the counts kept.
+    let kept = a.is_smart() || a.folder;
+    let count = if kept { counts.counts.get(&a.id).copied().unwrap_or(0) } else { cat.album_count(a.id) };
     let mut v = json!({
         "id": a.id.0,
         "name": a.name,
         "folder": a.folder,
-        "count": counts.get(&a.id).copied().unwrap_or(0),
+        "count": count,
         "cover": a.cover.map(|c| c.0),
         "children": children,
     });
+    if kept {
+        // Behind the catalog (an edit counted by every photo is under way), or behind the clock for an album whose rules,
+        // or those of an album inside the folder, ask about "the last N days": the count is the one before (0 before any),
+        // and the real one is being worked out.
+        v["countPending"] = json!(counts.behind(a, cat));
+    }
     if let Some(rules) = &a.smart {
         v["smart"] = json!(true);
         v["rules"] = serde_json::to_value(rules).unwrap_or_default();
@@ -152,11 +186,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 .unwrap_or_default();
             Ok(json!({"exif": exif, "xmp": xmp}))
         }),
-        cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
+        cmd!(query "albums.list", "List Albums", [], None, "{} → [{id, name, folder, count, cover, children, smart?, rules?, rulesText?, problems?, countPending?}] — the `count` of a smart album or a folder comes from the counts kept (`countPending: true`: not of the catalog as it is now yet, the ones before or 0)", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();
-            // every album counted in one pass, so a smart album tested by others is worked out once
-            let counts = lightcraft_catalog::tally::AlbumTally::of(&s.catalog);
-            Ok(Value::Array(all.iter().filter(|a| a.parent.is_none()).map(|a| album_json(a, &all, counts.counts(), &s.catalog, 0)).collect()))
+            // counted nowhere here when a window keeps the counts; else every album in one pass, so a smart album tested
+            // by others is worked out once, and kept
+            let (now, library) = ((s.clock)(), s.library_generation());
+            let counted = s.album_counts.answer(&s.catalog, library, &now);
+            let counts = AlbumCounts { counts: &counted.counts, age: counted.age };
+            Ok(Value::Array(all.iter().filter(|a| a.parent.is_none()).map(|a| album_json(a, &all, &counts, &s.catalog, 0)).collect()))
         }),
         cmd!(query "photo.inspect", "Inspect Photo", [], None, "{id?}", always, |s, p| {
             let id = photo_arg(s, p, "photo.inspect")?;

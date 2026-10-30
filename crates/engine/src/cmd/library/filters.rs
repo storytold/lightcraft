@@ -38,6 +38,24 @@ pub(super) fn merge_rules(
     Ok(f)
 }
 
+/// Why a smart album called `name` with `rules` can't be in folder `parent`: its rules lead to
+/// that folder or one around it (the view of a folder, saved inside it), so it would be one of
+/// the albums it asks about. `None` when it can.
+pub(super) fn smart_loop_in(cat: &lightcraft_catalog::Catalog, name: &str, rules: &lightcraft_catalog::Filter, parent: AlbumId) -> Option<String> {
+    cat.smart_album_would_loop_in(rules, parent).then(|| {
+        let folder = cat.album(parent).map(|f| f.name.as_str()).unwrap_or_default();
+        format!("smart album “{name}” would include itself in folder “{folder}”: its rules show that folder or one around it. Put it outside them")
+    })
+}
+
+/// [`smart_loop_in`] for album or folder `id` on its way into `parent` (`None`: the top level,
+/// where nothing loops): the first smart album among what moves that would include itself.
+pub(super) fn moved_loop_in(cat: &lightcraft_catalog::Catalog, id: AlbumId, parent: Option<AlbumId>) -> Option<String> {
+    let parent = parent?;
+    let looping = cat.album(cat.album_move_would_loop(id, parent)?)?;
+    smart_loop_in(cat, &looping.name, looping.smart.as_deref()?, parent)
+}
+
 /// Whether `path` lies above a disk: some of its `ids` photos are on a disk (not the startup
 /// disk) that the folder does not lie in. Such a folder (`/Volumes`, `/mnt`…) is not a folder of
 /// one disk but a way to reach several.

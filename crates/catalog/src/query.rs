@@ -485,11 +485,13 @@ impl Catalog {
         let prepared = filter.prepare();
         // `within` only decides for the few kept photos: worked out per photo, not hashed
         let within_prepared = within.prepare_one();
-        let mut v: Vec<&Photo> = self
-            .photos()
-            .map(|p| p.as_ref())
-            .filter(|p| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared)))
-            .collect();
+        // one pass: a folder of albums it asks about is gathered once
+        let mut v: Vec<&Photo> = crate::gathering(|| {
+            self.photos()
+                .map(|p| p.as_ref())
+                .filter(|p| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared)))
+                .collect()
+        });
         v.sort_by(|a, b| sort.order(a, b));
         v.into_iter().map(|p| p.id).collect()
     }
@@ -503,22 +505,26 @@ impl Catalog {
         let listed: std::collections::HashSet<PhotoId> = was.iter().copied().filter(|id| touched.binary_search(id).is_ok()).collect();
         let mut ids: Vec<PhotoId> = was.iter().copied().filter(|id| !listed.contains(id)).collect();
         let (prepared, within_prepared) = (filter.prepare_one(), within.map(Filter::prepare_one));
-        for id in touched {
-            let Some(p) = self.photo(*id) else { continue };
-            let kept = within.zip(within_prepared.as_ref()).is_some_and(|(w, wp)| listed.contains(id) && w.matches_in(p, self, wp));
-            if filter.matches_in(p, self, &prepared) || kept {
-                // (the list is in order without the touched photos, and stays so as each is put back)
-                let at = ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()));
-                ids.insert(at, *id);
+        // one pass: a folder of albums it asks about is gathered once
+        crate::gathering(|| {
+            for id in touched {
+                let Some(p) = self.photo(*id) else { continue };
+                let kept = within.zip(within_prepared.as_ref()).is_some_and(|(w, wp)| listed.contains(id) && w.matches_in(p, self, wp));
+                if filter.matches_in(p, self, &prepared) || kept {
+                    // (the list is in order without the touched photos, and stays so as each is put back)
+                    let at = ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()));
+                    ids.insert(at, *id);
+                }
             }
-        }
+        });
         ids
     }
 
     /// How many photos match `filter`: [`Catalog::query`]'s length without its sorting.
     pub fn count(&self, filter: &Filter) -> usize {
         let prepared = filter.prepare();
-        self.photos().filter(|p| filter.matches_in(p, self, &prepared)).count()
+        // one pass: a folder of albums it asks about is gathered once
+        crate::gathering(|| self.photos().filter(|p| filter.matches_in(p, self, &prepared)).count())
     }
 
     /// Year → month → day counts for the "By Date" section (newest first).
@@ -575,7 +581,8 @@ impl Catalog {
         let filter = Filter { person: None, ..filter.clone() };
         let mut m: std::collections::HashMap<String, (Person, f64)> = Default::default();
         let prepared = filter.prepare();
-        for p in self.photos().filter(|p| filter.matches_in(p, self, &prepared)) {
+        let matching: Vec<_> = crate::gathering(|| self.photos().filter(|p| filter.matches_in(p, self, &prepared)).collect());
+        for p in matching {
             let mut seen: Vec<String> = Vec::new();
             for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
                 let Some(name) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };

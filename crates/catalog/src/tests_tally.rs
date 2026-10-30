@@ -47,7 +47,7 @@ fn path(op: &str, value: &str) -> serde_json::Value {
     json!({"field": "filePath", "op": op, "value": value})
 }
 
-/// Every album's count in `c`, each album counted alone (no pass, rules worked out per photo).
+/// Every album's count in `c`, each album counted alone (no pass, rules worked out per photo), folders of albums too.
 fn counted_alone(c: &Catalog) -> Vec<(AlbumId, usize)> {
     let mut v: Vec<_> = c.albums().map(|a| (a.id, c.album_count(a.id))).collect();
     v.sort_unstable();
@@ -70,6 +70,14 @@ fn a_whole_count_equals_each_album_counted_alone() {
     let folder = Album { folder: true, ..Album::new(AlbumId(2), "Trips") };
     let inside = Album { parent: Some(AlbumId(2)), photos: (0..240).step_by(3).map(|i| PhotoId(i + 1)).collect(), ..Album::new(AlbumId(3), "In") };
     ops.extend([plain, folder, inside].map(|album| Op::AddAlbum { album }));
+    // folders inside folders, with smart albums (one testing another) and an empty folder; a deleted photo is in none
+    let inner = Album { folder: true, parent: Some(AlbumId(2)), ..Album::new(AlbumId(4), "Rome") };
+    let empty = Album { folder: true, ..Album::new(AlbumId(5), "Nothing") };
+    ops.extend([inner, empty].map(|album| Op::AddAlbum { album }));
+    for (id, parent, rules) in [(40, 4, json!({"rules": [{"field": "rating", "op": "gte", "value": 3}]})), (41, 2, json!({"rules": [is(40)]}))] {
+        let album = Album { parent: Some(AlbumId(parent)), ..smart(id, rules) };
+        ops.push(Op::AddAlbum { album });
+    }
     // the inner albums: #2-like, #14-like, then albums chained on it, the other way round, in groups and in different orders
     ops.push(Op::AddAlbum {
         album: smart(

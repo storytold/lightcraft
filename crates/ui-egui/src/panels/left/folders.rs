@@ -223,9 +223,14 @@ pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Al
             });
             ui.separator();
         }
-        // move into another folder (not into itself or one of its own subfolders)
-        let mut folders: Vec<(u64, String)> =
-            app.session.catalog.albums().filter(|f| f.folder && !is_within(app, f.id, a.id)).map(|f| (f.id.0, f.name.clone())).collect();
+        // move into another folder (not into itself or one of its own subfolders, nor into one
+        // a smart album that moves with it shows)
+        let cat = &app.session.catalog;
+        let mut folders: Vec<(u64, String)> = cat
+            .albums()
+            .filter(|f| f.folder && !is_within(app, f.id, a.id) && cat.album_move_would_loop(a.id, f.id).is_none())
+            .map(|f| (f.id.0, f.name.clone()))
+            .collect();
         folders.sort_by_key(|(_, n)| n.to_lowercase());
         crate::widgets::menu_button(ui, crate::i18n::tr("Move to"), |ui| {
             if ui.add_enabled(a.parent.is_some(), egui::Button::new(crate::i18n::tr("Top Level"))).clicked() {
@@ -233,7 +238,10 @@ pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Al
             }
             for (fid, name) in &folders {
                 if ui.add_enabled(a.parent.map(|p| p.0) != Some(*fid), egui::Button::new(name)).clicked() {
-                    let _ = app.run("album.move", json!({"id": a.id.0, "parent": fid}));
+                    // refused for a smart album that would then include itself: say so
+                    if let Err(e) = app.run("album.move", json!({"id": a.id.0, "parent": fid})) {
+                        app.toast(ui.ctx(), e);
+                    }
                 }
             }
         });

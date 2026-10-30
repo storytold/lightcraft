@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### `albums.list` no longer freezes the window in a large library
+- The `albums.list` command (also reached as `cmd_albums_list` through MCP when connected to the app) used to count every
+  smart album's photos on the window's thread before it answered: with many smart albums in a large library, seconds
+  in which the window did not respond. It now answers at once from the counts the Albums list in the sidebar keeps.
+  A smart album or folder whose count is not of the library as it is now yet (new rules, an edit to many photos, a
+  library just opened, or a new minute for an album asking about “the last N days”, itself or through an album it
+  tests, or a folder with one inside) has `countPending: true`, with the count made before (0 if there is none); ask
+  again a moment later. A folder's count (the photos of the albums inside it) is put together from their counts, with
+  no pass over the library of its own, and followed through edits to a few photos like theirs. A script or MCP client
+  with no window (`lightcraft-cli run`, the headless MCP server) gets the counts counted once and kept, followed
+  through edits to a few photos instead of counted again with every call.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -914,6 +928,17 @@
 - Settings ▸ General ▸ External Editing: the format (PSD or TIFF), colour space and bit depth for PhotoCraft and for
   the other editor (Edit in Other Editor, now ⌥⌘E), and where PhotoCraft is if you use a portable copy.
 - Export can write PSD too (flat, 8- or 16-bit).
+
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
 
 ### Faster GPU exports
 - Exports with noise reduction, Texture, Clarity, Dehaze or Highlights and Shadows can be much faster on the GPU,
