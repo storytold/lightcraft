@@ -74,15 +74,18 @@ fn writes_waiting_for_their_folder_have_a_row_until_they_are_made() {
     // the folder takes writes again
     open_folder(&dir);
     // a retry skips a file whose availability the cache hasn't answered yet (its worker thread may lag on a busy
-    // machine), so retry until the writes are made rather than counting on one call
+    // machine), so retry until the writes are made rather than counting on one call; the frame's own 10 s retry is held
+    // off so that every write is counted here
+    h.app.ui.sidecar_retry_at = f64::INFINITY;
     let t0 = std::time::Instant::now();
     let mut written = 0;
     while written < 2 && t0.elapsed() < T {
         written += h.app.session.retry_unsaved_sidecars();
         h.step();
     }
-    assert_eq!(written, 2);
+    assert_eq!(written, 2, "still waiting: {}", h.app.session.unsaved_sidecars());
     assert!(waiting_rows(&h).is_empty(), "written: no row");
+    assert!((0..2).all(|i| dir.join(format!("p{i}.xmp")).exists()), "both sidecars are on disk");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
