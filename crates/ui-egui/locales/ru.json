@@ -2349,5 +2349,9 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "The library's own folder can't be moved": "Папку самой библиотеки нельзя переместить",
+  "A folder can't move into itself or a folder inside it": "Папку нельзя переместить в саму себя или в папку внутри неё",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Папка, её файлы и XMP-файлы перемещаются на диске. Правка → Отменить вернёт её.",
+  "Another library was opened since the folder was dropped: nothing was moved": "После перетаскивания папки была открыта другая библиотека: ничего не перемещено"
 }

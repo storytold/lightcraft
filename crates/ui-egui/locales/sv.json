@@ -2429,5 +2429,9 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "The library's own folder can't be moved": "Bibliotekets egen mapp kan inte flyttas",
+  "A folder can't move into itself or a folder inside it": "En mapp kan inte flyttas till sig själv eller till en mapp i den",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Mappen, dess filer och XMP-sidofiler flyttas på disken. Redigera → Ångra flyttar tillbaka den.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Ett annat bibliotek öppnades efter att mappen släpptes: inget flyttades"
 }

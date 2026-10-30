@@ -2157,5 +2157,9 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "The library's own folder can't be moved": "無法移動照片庫本身的資料夾",
+  "A folder can't move into itself or a folder inside it": "資料夾不能移到自身或其內部的資料夾中",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "該資料夾、其檔案和 XMP 附屬檔案會在磁碟上移動。編輯 → 復原 可移回。",
+  "Another library was opened since the folder was dropped: nothing was moved": "拖放資料夾後開啟了另一個照片庫：未移動任何內容"
 }

@@ -305,5 +305,9 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Move “{name}” into “{into}”": "Di chuyển «{name}» vào «{into}»",
+  "Move “{name}” into “{into}”?": "Di chuyển «{name}» vào «{into}»?",
+  "Photos in it and in the folders inside it: {count}": "Ảnh trong đó và trong các thư mục bên trong: {count}",
+  "“{name}” is no longer there: nothing was moved": "«{name}» không còn nữa: không có gì được di chuyển"
 }

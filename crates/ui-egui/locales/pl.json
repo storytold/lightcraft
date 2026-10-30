@@ -2283,5 +2283,9 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "The library's own folder can't be moved": "Nie można przenieść folderu samej biblioteki",
+  "A folder can't move into itself or a folder inside it": "Folderu nie można przenieść do samego siebie ani do folderu w nim zawartego",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Folder, jego pliki i pliki XMP zostaną przeniesione na dysku. Edycja → Cofnij przenosi go z powrotem.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Po upuszczeniu folderu otwarto inną bibliotekę: nic nie zostało przeniesione"
 }

@@ -2339,5 +2339,9 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "The library's own folder can't be moved": "Folder pustaka itu sendiri tidak dapat dipindahkan",
+  "A folder can't move into itself or a folder inside it": "Folder tidak dapat dipindahkan ke dalam dirinya sendiri atau folder di dalamnya",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Folder, file, dan sidecar XMP-nya ikut dipindahkan di disk. Edit → Urungkan akan memindahkannya kembali.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Pustaka lain telah dibuka setelah folder diletakkan: tidak ada yang dipindahkan"
 }

@@ -1,7 +1,7 @@
 use super::albums::pointer_over_row;
 use super::local::{same_folder, subfolders};
 use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
-use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
+use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Sense, Tokens, json, register, vec2};
 
 /// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
 /// subfolders. In the tree that holds the folder being browsed (`reveal`), the folders on the
@@ -341,8 +341,22 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
         None => name.to_string(),
     };
     let mark = n.label.map(crate::theme::label_color);
-    let resp = Row::new(id, Icon::Folder, name).spoken(&spoken).count(Some(n.count)).selected(sel).indent(indent).mark(mark).show(app, ui);
+    let resp = Row::new(id, Icon::Folder, name)
+        .spoken(&spoken)
+        .count(Some(n.count))
+        .selected(sel)
+        .indent(indent)
+        .sense(Sense::click_and_drag())
+        .mark(mark)
+        .show(app, ui);
+    // a folder inside a disk can be picked up (egui starts the drag after a few points of
+    // movement, so a click still chooses the row); a disk, or a row covering several, can't be moved
+    if resp.drag_started_by(egui::PointerButton::Primary) && n.selectable && !n.volume {
+        app.ui.dragging_folder = Some(n.path.clone());
+        app.ui.dragging_folder_library = app.session.library_generation();
+    }
     folder_drop_target(app, ui, &resp, n, open_id, open);
+    folder_drag_target(app, ui, &resp, n, open_id, open);
     let mut toggled = false;
     if !n.children.is_empty() {
         let tr = tree_toggle(ui, &resp, indent, open_id, open, format!("libraryFolderToggle:{}", n.path));
@@ -429,6 +443,146 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
             move_photos_here(app, ui.ctx(), Some(&ids), &n.path, &name);
         }
     }
+}
+
+/// Why the Folders row `target` can't take the folder `from` dragged onto it, from what the
+/// sidebar knows (no disk is read: the move's own refusals, such as a disk that isn't connected or
+/// a name already taken, come back from `folder.move` when the drop runs). `Ok` when a drop
+/// there asks to move it.
+pub(crate) fn folder_drop_refusal(app: &LightcraftApp, from: &str, target: &FolderNode) -> Result<(), String> {
+    let src = std::path::Path::new(from);
+    if app.session.library.as_ref().is_some_and(|l| l.dir.starts_with(src) || src.starts_with(&l.dir)) {
+        return Err(crate::i18n::tr("The library's own folder can't be moved").to_string());
+    }
+    if !target.selectable {
+        return Err(crate::i18n::tr("This row covers more than one disk: drop on a folder inside it").to_string());
+    }
+    if lightcraft_catalog::query::folder_within(&target.path, from) {
+        return Err(crate::i18n::tr("A folder can't move into itself or a folder inside it").to_string());
+    }
+    let parent = src.parent().map(|p| p.to_string_lossy().to_string());
+    if parent.as_deref().is_some_and(|p| same_folder(p, &target.path)) {
+        return Err(crate::i18n::tr_format!("Already in “{}”", folder_name(&target.path, &target.name)));
+    }
+    Ok(())
+}
+
+/// The Folders row being dragged. A drag doesn't outlive the library it was picked up in: when
+/// another one opens meanwhile it is given up. Esc gives it up too, before any row acts on a release
+/// that came in the same frame.
+fn dragged_folder(app: &mut LightcraftApp, ctx: &egui::Context) -> Option<String> {
+    let other_library = app.ui.dragging_folder_library != app.session.library_generation();
+    if app.ui.dragging_folder.is_some() && (other_library || ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
+        app.ui.dragging_folder = None;
+    }
+    app.ui.dragging_folder.clone()
+}
+
+/// A folder's own name (`fallback` when the path has none).
+fn folder_name(path: &str, fallback: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| fallback.to_string(), |f| f.to_string_lossy().to_string())
+}
+
+/// A Folders row while another Folders row is dragged: a drop moves that folder into this one on
+/// disk (`folder.move`, one undo step), asked first unless the person said not to. The row lights
+/// up and the dragged label says where the folder will go; a row that can't take it shows the
+/// not-allowed cursor with the reason in the label, and a release says it too. Held over a
+/// closed row, it opens, so a folder inside it can be reached.
+fn folder_drag_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, n: &FolderNode, open_id: egui::Id, open: &mut bool) {
+    let Some(from) = dragged_folder(app, ui.ctx()) else { return };
+    // only where the row can be seen: not scrolled out of the sidebar or beneath the pinned header
+    if !pointer_over_row(ui, resp.rect) {
+        return;
+    }
+    // not under the folder's own drag: rows opening there would shift away from the pointer
+    if !lightcraft_catalog::query::folder_within(&n.path, &from) {
+        spring_open(ui, n, open_id, open);
+    }
+    let released = ui.input(|i| i.pointer.primary_released());
+    let name = folder_name(&from, &from);
+    if let Err(why) = folder_drop_refusal(app, &from, n) {
+        crate::panels::grid::drag_hint(ui.ctx(), why.clone());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+        if released {
+            // letting go over the row it was picked up on (a slow click, a wobble) is no request
+            // to move it anywhere: it says nothing
+            if !same_folder(&from, &n.path) {
+                app.toast(ui.ctx(), why);
+            }
+            app.ui.dragging_folder = None;
+        }
+        return;
+    }
+    let into_name = folder_name(&n.path, &n.name);
+    crate::panels::grid::drag_hint(ui.ctx(), crate::i18n::tr_format!("Move “{name}” into “{into}”", name = name, into = into_name));
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_stroke(resp.rect.shrink2(vec2(8.0, 1.0)), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    if !released {
+        return;
+    }
+    app.ui.dragging_folder = None;
+    if app.ui.settings.ask_before_move {
+        let tree = app.caches.folder_tree(&app.session.catalog);
+        let count = folder_row_of(&tree, &from).map_or(0, |f| f.count);
+        app.ui.dialog = Some(crate::state::Dialog::MoveFolder {
+            name: lightcraft_catalog::folders::folder_label(&from),
+            into_name: lightcraft_catalog::folders::folder_label(&n.path),
+            path: from,
+            into: n.path.clone(),
+            count,
+            dont_ask: false,
+            library: app.session.library_generation(),
+        });
+    } else {
+        match run_folder_move(app, &from, &n.path) {
+            Ok(r) => toast_folder_moved(app, ui.ctx(), &r),
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+}
+
+/// `folder.move` of `from` into `into`, unless `into` isn't a folder any more (renamed or deleted
+/// meanwhile, its disk gone): the move would make it again and go in. Nothing is moved then.
+pub(crate) fn run_folder_move(app: &mut LightcraftApp, from: &str, into: &str) -> Result<serde_json::Value, String> {
+    if !std::path::Path::new(into).is_dir() {
+        return Err(crate::i18n::tr_format!("“{name}” is no longer there: nothing was moved", name = folder_name(into, into)));
+    }
+    app.run("folder.move", json!({"path": from, "into": into}))
+}
+
+/// What a finished folder move (`folder.move`'s result `r`) says.
+pub(crate) fn toast_folder_moved(app: &mut LightcraftApp, ctx: &egui::Context, r: &serde_json::Value) {
+    app.toast(ctx, crate::i18n::tr_format!("Moved; {} photo(s) relinked", r["relinked"]));
+}
+
+/// While a Folders row is dragged: its name at the pointer, or what the row under it says (where
+/// the folder would go, or why it can't). The drag ends when the button is up (the drop targets
+/// act on the release frame, before this runs); Esc gives it up (see [`dragged_folder`]).
+pub fn folder_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(from) = dragged_folder(app, ctx) else { return };
+    let (released, down, pos) = ctx.input(|i| (i.pointer.primary_released(), i.pointer.primary_down(), i.pointer.latest_pos()));
+    if released || !down {
+        app.ui.dragging_folder = None;
+        return;
+    }
+    let Some(pos) = pos else { return };
+    let frame = ctx.cumulative_frame_nr();
+    let hint = ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint"))).filter(|(f, _)| *f == frame).map(|(_, text)| text);
+    let text = hint.unwrap_or_else(|| folder_name(&from, &from));
+    let t = Tokens::get(ctx);
+    // (a row that can't take the folder asked for the not-allowed cursor while it was drawn)
+    if ctx.output(|o| o.cursor_icon) != egui::CursorIcon::NotAllowed {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    egui::Area::new(egui::Id::unique("drag-folder")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(
+        ctx,
+        |ui| {
+            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
+                let label = ui.add(egui::Label::new(egui::RichText::new(text).color(egui::Color32::WHITE).font(t.semibold(12.0))).extend());
+                crate::widgets::register(ui, "dragFolder", label.rect);
+            });
+        },
+    );
 }
 
 /// Photos dragged over the closed row `n` for [`SPRING_OPEN_SECONDS`] open it (a row with folders

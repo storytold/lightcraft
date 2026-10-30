@@ -3440,5 +3440,9 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "The library's own folder can't be moved": "Der Ordner der Bibliothek selbst kann nicht verschoben werden",
+  "A folder can't move into itself or a folder inside it": "Ein Ordner kann nicht in sich selbst oder in einen Ordner darin verschoben werden",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Der Ordner, seine Dateien und XMP-Filialdateien werden auf dem Datenträger verschoben. Bearbeiten → Rückgängig holt ihn zurück.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Seit dem Ablegen des Ordners wurde eine andere Bibliothek geöffnet: Es wurde nichts verschoben"
 }

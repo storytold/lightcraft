@@ -305,5 +305,9 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Move “{name}” into “{into}”": "Siirrä ”{name}” kohteeseen ”{into}”",
+  "Move “{name}” into “{into}”?": "Siirretäänkö ”{name}” kohteeseen ”{into}”?",
+  "Photos in it and in the folders inside it: {count}": "Kuvia siinä ja sen sisällä olevissa kansioissa: {count}",
+  "“{name}” is no longer there: nothing was moved": "”{name}” ei ole enää siellä: mitään ei siirretty"
 }

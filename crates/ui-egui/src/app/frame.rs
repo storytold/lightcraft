@@ -430,6 +430,7 @@ impl LightcraftApp {
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
         panels::left::album_drag_feedback(self, &ctx);
+        panels::left::folder_drag_feedback(self, &ctx);
         panels::left::section_drag_feedback(self, &ctx);
         panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);

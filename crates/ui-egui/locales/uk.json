@@ -2354,5 +2354,9 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "The library's own folder can't be moved": "Теку самої бібліотеки не можна перемістити",
+  "A folder can't move into itself or a folder inside it": "Теку не можна перемістити в саму себе або в теку всередині неї",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Тека, її файли та XMP-файли переміщуються на диску. Редагування → Скасувати поверне її.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Після перетягування теки було відкрито іншу бібліотеку: нічого не переміщено"
 }

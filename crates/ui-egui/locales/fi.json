@@ -2327,5 +2327,9 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "The library's own folder can't be moved": "Kirjaston omaa kansiota ei voi siirtää",
+  "A folder can't move into itself or a folder inside it": "Kansiota ei voi siirtää itseensä tai sen sisällä olevaan kansioon",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Kansio, sen tiedostot ja XMP-sivutiedostot siirtyvät levyllä. Muokkaa → Kumoa siirtää sen takaisin.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Toinen kirjasto avattiin kansion pudottamisen jälkeen: mitään ei siirretty"
 }

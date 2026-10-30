@@ -12,7 +12,7 @@ use crate::headless::Headless;
 use crate::{LightcraftApp, Services};
 
 /// Folders `trip` and `home` in a fresh temporary folder, with a photo file in each.
-fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+pub(crate) fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let root = std::env::temp_dir().join(format!("lc-folder-drop-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (trip, home) = (root.join("trip"), root.join("home"));
@@ -27,7 +27,7 @@ fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 
 /// The photos at `paths` in the catalog (`local`: browsed, not in the library), in the grid with
 /// the sidebar out, tall enough for the Folders section.
-fn app(paths: &[(PathBuf, bool)]) -> Headless {
+pub(crate) fn app(paths: &[(PathBuf, bool)]) -> Headless {
     use lightcraft_catalog::{Op, Photo, Source};
     let mut session = lightcraft_engine::Session::new().with_fs();
     for (path, local) in paths {
@@ -46,24 +46,24 @@ fn app(paths: &[(PathBuf, bool)]) -> Headless {
     h
 }
 
-fn widget(h: &Headless, id: &str) -> Option<Rect> {
+pub(crate) fn widget(h: &Headless, id: &str) -> Option<Rect> {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
 }
 
 /// How the Folders section names `dir` in widget ids: with `/` separators, on Windows too.
-fn folder_key(dir: &Path) -> String {
+pub(crate) fn folder_key(dir: &Path) -> String {
     dir.to_string_lossy().replace('\\', "/")
 }
 
-fn folder_row(h: &Headless, dir: &Path) -> Option<Rect> {
+pub(crate) fn folder_row(h: &Headless, dir: &Path) -> Option<Rect> {
     widget(h, &format!("source:libfolder:{}", folder_key(dir)))
 }
 
-fn id_of(h: &Headless, file: &str) -> u64 {
+pub(crate) fn id_of(h: &Headless, file: &str) -> u64 {
     h.app.session.catalog.photos().find(|p| p.file_name == file).map(|p| p.id.0).unwrap()
 }
 
-fn press(h: &mut Headless, at: Pos2) {
+pub(crate) fn press(h: &mut Headless, at: Pos2) {
     h.app.synthetic.push(egui::Event::PointerMoved(at));
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: at,
@@ -75,14 +75,14 @@ fn press(h: &mut Headless, at: Pos2) {
 }
 
 /// Move the pointer, pressed, from `from` to `to` over a few frames.
-fn glide(h: &mut Headless, from: Pos2, to: Pos2) {
+pub(crate) fn glide(h: &mut Headless, from: Pos2, to: Pos2) {
     for i in 1..=8 {
         h.app.synthetic.push(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
         h.step();
     }
 }
 
-fn release(h: &mut Headless, at: Pos2) {
+pub(crate) fn release(h: &mut Headless, at: Pos2) {
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: at,
         button: egui::PointerButton::Primary,
@@ -94,18 +94,18 @@ fn release(h: &mut Headless, at: Pos2) {
 }
 
 /// What the dragged label says this frame instead of the count, if a drop target set it.
-fn hint(h: &Headless) -> Option<String> {
+pub(crate) fn hint(h: &Headless) -> Option<String> {
     h.view.ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint"))).map(|(_, text)| text)
 }
 
 /// Click a widget the way a person does (press and release on it).
-fn click(h: &mut Headless, id: &str) {
+pub(crate) fn click(h: &mut Headless, id: &str) {
     let at = widget(h, id).unwrap_or_else(|| panic!("no {id}")).center();
     press(h, at);
     release(h, at);
 }
 
-fn toast(h: &Headless) -> String {
+pub(crate) fn toast(h: &Headless) -> String {
     h.app.ui.toast.as_ref().map(|(t, _, _)| t.clone()).unwrap_or_default()
 }
 

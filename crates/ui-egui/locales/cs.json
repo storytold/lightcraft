@@ -2408,5 +2408,9 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "The library's own folder can't be moved": "Složku knihovny nelze přesunout",
+  "A folder can't move into itself or a folder inside it": "Složku nelze přesunout do sebe samé ani do složky v ní",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Složka, její soubory a přidružené soubory XMP se přesunou na disku. Úpravy → Zpět ji přesune zpět.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Od přetažení složky byla otevřena jiná knihovna: nic nebylo přesunuto"
 }

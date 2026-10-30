@@ -2390,5 +2390,9 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "The library's own folder can't be moved": "Le dossier de la bibliothèque elle-même ne peut pas être déplacé",
+  "A folder can't move into itself or a folder inside it": "Un dossier ne peut pas être déplacé dans lui-même ni dans un dossier qu'il contient",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "Le dossier, ses fichiers et fichiers annexes XMP sont déplacés sur le disque. Modifier → Annuler le remet en place.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Une autre bibliothèque a été ouverte depuis le dépôt du dossier : rien n’a été déplacé"
 }

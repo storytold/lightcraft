@@ -2361,5 +2361,9 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "The library's own folder can't be moved": "La cartella della libreria stessa non può essere spostata",
+  "A folder can't move into itself or a folder inside it": "Una cartella non può essere spostata in se stessa o in una cartella al suo interno",
+  "The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.": "La cartella, i suoi file e i file XMP collegati vengono spostati sul disco. Modifica → Annulla la riporta indietro.",
+  "Another library was opened since the folder was dropped: nothing was moved": "Dopo il trascinamento della cartella è stata aperta un'altra libreria: non è stato spostato nulla"
 }
