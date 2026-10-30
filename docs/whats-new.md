@@ -101,6 +101,11 @@
 - Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
   shortcut changes; clicking a menu row still selects that grid (issue #2500).
 
+### Moving a folder says where it went
+- After Move Folder To…, the message now says where the folder went in plain words, for example Moved “Trip” into
+  “Archive”. Edit → Undo moves it back. When library photos went with the folder, it adds “Photos: 12”. The Folders
+  tree and Local say the same, in every language; before, the Folders tree showed an English “Moved; 12 photo(s)
+  relinked” in every language, and Local a translated version of it.
 
 ## 2026-10-21
 
