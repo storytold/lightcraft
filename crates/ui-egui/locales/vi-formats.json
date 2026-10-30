@@ -130,7 +130,6 @@
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
   "Move {what} to Recently Deleted?": "Chuyển {what} vào Đã xóa gần đây?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
-  "Moved {} photo(s)": "Đã di chuyển {} ảnh",
   "Moved; {} photo(s) relinked": "Đã di chuyển; liên kết lại {} ảnh",
   "Named ({named_n})": "Có tên ({named_n})",
   "New Folder in “{name}”": "Thư mục mới trong «{name}»",

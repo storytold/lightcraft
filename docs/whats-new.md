@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### A move cut short is followed at the next open
+- If LightCraft is force-quit or crashes part-way through a move, or you choose Quit Anyway, the next time the
+  library opens, the photos whose files reached the new folder point there (their sidecars follow) and the others stay.
+  Edits made while the files were moving reach their XMP sidecars then too. A file that was half copied to another
+  disk leaves a hidden `.lc-partial` file in the new folder, which that open removes; a copy that reached the new
+  folder while the original stayed is removed only when it is the same file or holds the same bytes. In a library that
+  was opened without its lock (some network shares can't lock it), nothing is followed or removed, because another
+  program may be making the move: use File ▸ Find Missing Photos… to relink files that moved.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -103,6 +114,18 @@
 
 
 ## 2026-10-21
+
+### Moving photos to a NAS no longer freezes the window
+- Moving photos to another folder (dropping them on a Folders row, Move Selected Photos Here, Move to Folder…) now
+  runs in the background. The activity stack shows "Moving photos" with how many have moved and the file in hand,
+  and a toast says how it ended. The photos move as one step Edit ▸ Undo takes back.
+- While a move runs, editing, rating and keywording go on as usual; the moving photos' XMP sidecars are written once
+  they arrive. Another move, a rename, Undo or Redo of a file move and opening another library are refused until it
+  ends, and so is anything that would take a moving photo out of the library or point it at another file: Delete
+  Permanently, Empty Recently Deleted, importing a file again as a new photo over its trashed record, Convert to DNG,
+  Find Missing Photos, Locate and the Undo of those steps. A message pops up saying how many photos are moving, and
+  nothing is changed; try again once the move is done.
+- Quitting while photos are moving asks first.
 
 ### Settings window
 - Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own

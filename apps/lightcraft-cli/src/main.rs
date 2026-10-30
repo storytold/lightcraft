@@ -119,11 +119,14 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 /// Why `--library DIR` can't be opened; for a library open in another program, how to work with
 /// that one instead (issue #99).
-/// Print the open library's warnings (an unlockable library, damaged settings files) on stderr:
-/// stdout carries command results / MCP protocol messages only.
+/// Print the open library's warnings (an unlockable library, damaged settings files, moves an
+/// earlier run cut short) on stderr: stdout carries command results / MCP protocol messages only.
 fn library_warnings(session: &mut Session, who: &str) {
     for w in session.take_library_warnings() {
         eprintln!("{who}: warning: {w}");
+    }
+    if let Some(text) = session.take_recovered_moves().and_then(|r| r.notice()) {
+        eprintln!("{who}: {text}");
     }
 }
 

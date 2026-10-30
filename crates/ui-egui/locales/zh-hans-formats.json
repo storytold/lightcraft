@@ -252,7 +252,6 @@
   "{what} merge cancelled": "已取消 {what} 合并",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已跳过 {n} 张本地照片{0:.0}：相册只能收录图库中的照片（请先添加到我的照片）",
   "New Folder in “{name}”": "在“{name}”中新建文件夹",
-  "Moved {} photo(s)": "已移动 {} 张照片",
   "not added to Apple Photos: {e}": "未添加到 Apple 照片：{e}",
   "{n} added to Apple Photos album “{album}”": "已将 {n} 个添加到 Apple 照片相册“{album}”",
   "{n} added to Apple Photos": "已将 {n} 个添加到 Apple 照片",

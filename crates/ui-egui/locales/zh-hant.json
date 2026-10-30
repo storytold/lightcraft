@@ -2157,5 +2157,8 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Moving photos": "正在移動照片",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "移動因發生錯誤而停止（見記錄）。照片庫會跟隨已移動的檔案。",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "移動因發生錯誤而停止（見記錄）。照片庫可能沒有跟隨所有已移動的檔案：用「尋找遺失的照片」可重新連結遺失的檔案。"
 }

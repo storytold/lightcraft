@@ -172,9 +172,49 @@ impl Session {
     /// (all or nothing), then commit one undoable op, labelled `label(count)`, that points the
     /// photos (and their virtual copies) at the new paths. Undo moves the files back.
     pub(crate) fn apply_file_plans(&mut self, fs: &dyn MoveFs, plans: &[RenamePlan], label: &dyn Fn(usize) -> String) -> Result<usize> {
+        self.refuse_while_moving()?;
         // A partly completed rename can already have the requested photo name. Repair
         // its sidecars before treating that empty move list as a successful retry.
         self.repair_sidecars_with(fs)?;
+        let ops = self.set_file_ops(plans);
+        let n = ops.len();
+        let op = Op::Batch { ops };
+        let moves: Vec<(String, String)> = plans
+            .iter()
+            .filter_map(|pl| match (&pl.from_path, &pl.to_path) {
+                (Some(a), Some(b)) if Path::new(a) != Path::new(b) => Some((a.clone(), b.clone())),
+                _ => None,
+            })
+            .collect();
+        // noted before anything moves: a stop part-way is found and followed at the next open
+        let record = self.record_moves(&moves)?;
+        let moved = move_all(fs, &moves);
+        if let Err(e) = moved {
+            let (message, _, followed) = self.follow_stuck(&op, e, true);
+            // (a library that could not follow keeps the record for the next open)
+            if followed {
+                self.settle_moves(record);
+            }
+            return Err(EngineError::Other(message));
+        }
+        if n > 0
+            && let Err(err) = self.commit(&label(n), op)
+        {
+            let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
+            if let Err(e) = move_all(fs, &back) {
+                // the files stay at the new place and the library doesn't point there: the record stays for the next open
+                return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
+            }
+            self.settle_moves(record);
+            return Err(err);
+        }
+        self.settle_moves(record);
+        Ok(n)
+    }
+
+    /// The catalog changes that point the photos `plans` name (and their virtual copies, which
+    /// share the file) at their new names and paths. No file-system calls.
+    pub(crate) fn set_file_ops(&self, plans: &[RenamePlan]) -> Vec<Op> {
         let mut ops = Vec::new();
         let by_path: HashMap<&str, &RenamePlan> = plans.iter().filter_map(|p| p.from_path.as_deref().map(|f| (f, p))).collect();
         for p in self.catalog.photos() {
@@ -192,39 +232,19 @@ impl Session {
                 ops.push(Op::SetFile { id: p.id, file_name: plan.to.clone(), source });
             }
         }
-        let n = ops.len();
-        let op = Op::Batch { ops };
-        let moves: Vec<(String, String)> = plans
-            .iter()
-            .filter_map(|pl| match (&pl.from_path, &pl.to_path) {
-                (Some(a), Some(b)) if Path::new(a) != Path::new(b) => Some((a.clone(), b.clone())),
-                _ => None,
-            })
-            .collect();
-        if let Err(e) = move_all(fs, &moves) {
-            return Err(EngineError::Other(self.follow_stuck(&op, e, true).0));
-        }
-        if n > 0
-            && let Err(err) = self.commit(&label(n), op)
-        {
-            let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
-            if let Err(e) = move_all(fs, &back) {
-                return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
-            }
-            return Err(err);
-        }
-        Ok(n)
+        ops
     }
 
     /// After a failed batch of moves for `op`: point the photos whose files stayed moved at
     /// their new paths (an undoable "partly" rename when `undoable`, otherwise a plain logged
-    /// change), so the library matches the disk. Returns the message and, for a history retry,
-    /// the correction's inverse file ops (so a retry doesn't lose the original paths).
-    pub(crate) fn follow_stuck(&mut self, op: &Op, e: BatchMoveError, undoable: bool) -> (String, Vec<Op>) {
+    /// change), so the library matches the disk. Returns the message, for a history retry the
+    /// correction's inverse file ops (so a retry doesn't lose the original paths), and whether the
+    /// library follows the files now (when not, the move's record has to stay for the next open).
+    pub(crate) fn follow_stuck(&mut self, op: &Op, e: BatchMoveError, undoable: bool) -> (String, Vec<Op>, bool) {
         let mut msg = e.message;
         let pending_sidecars = e.pending_sidecars;
         if e.stuck.is_empty() && (!undoable || pending_sidecars.is_empty()) {
-            return (msg, Vec::new());
+            return (msg, Vec::new(), true);
         }
         let to: HashSet<&str> = e.stuck.iter().map(|m| m.1.as_str()).collect();
         let mut keep = Vec::new();
@@ -254,6 +274,8 @@ impl Session {
                 Err(e) => Err(e),
             }
         };
+        // (with no file stuck at the new place there is nothing the library has to follow)
+        let followed = applied.is_ok() || n == 0;
         match applied {
             Ok(()) if n > 0 => msg
                 .push_str(&format!(". {n} file{s} could not be moved back and kept the new name; the library now points there: {}", list.join(", "))),
@@ -263,7 +285,7 @@ impl Session {
                 list.join(", ")
             )),
         }
-        (msg, inverses)
+        (msg, inverses, followed)
     }
 
     /// Physical moves to the final `SetFile` destination of each photo. A merged history

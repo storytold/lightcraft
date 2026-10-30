@@ -2202,5 +2202,8 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Moving photos": "Movendo fotos",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Um erro interrompeu a movimentação (veja o registro). A biblioteca acompanha os arquivos que já tinham sido movidos.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Um erro interrompeu a movimentação (veja o registro). A biblioteca pode não acompanhar todos os arquivos que já tinham sido movidos: Localizar fotos ausentes vincula de novo os que ela perdeu."
 }

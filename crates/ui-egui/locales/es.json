@@ -2358,5 +2358,8 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Moving photos": "Moviendo fotos",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved.": "Un error detuvo el movimiento (consulta el registro). La biblioteca sigue los archivos que ya se habían movido.",
+  "Moving was stopped by an error (see the log). The library may not follow every file that had moved: Find Missing Photos relinks the ones it lost.": "Un error detuvo el movimiento (consulta el registro). Puede que la biblioteca no siga todos los archivos que ya se habían movido: Buscar fotos que faltan vuelve a enlazar los que perdió."
 }
