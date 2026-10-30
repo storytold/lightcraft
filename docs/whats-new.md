@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### A thumbnail cache of any size
+- Settings ▸ Performance ▸ Thumbnail cache ▸ Size limit has Custom…, a size of your own in GB (up to 1 TB): a large
+  library outgrows 8 GB, and its grid thumbnails and standard previews then push each other out. A size set before
+  (`library.preferences {cacheMb}`, 16 GB say) is shown as custom instead of as 2 GB. (#3252)
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
