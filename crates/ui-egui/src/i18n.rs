@@ -133,6 +133,7 @@ language_table! {
     Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
     It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
     Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
+    Lo, "lo", "ພາສາລາວ", "Laoo", include_str!("../locales/lo.json");
     Sv, "sv", "Svenska", "Latn", include_str!("../locales/sv.json");
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
     Id, "id", "Bahasa Indonesia", "Latn", include_str!("../locales/id.json");
@@ -570,6 +571,470 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn czech_coverage_of_catalogs_commands_controls_and_rules_is_reported() {
+        let catalog = Locale::Cs.catalog();
+        let keys: std::collections::BTreeSet<&String> = Locale::ALL.iter().flat_map(|language| language.catalog().keys()).collect();
+        let lacking: Vec<_> = keys.into_iter().filter(|key| !catalog.contains_key(key.as_str())).collect();
+        if !lacking.is_empty() {
+            eprintln!("cs lacks {} catalog message(s) (shown in English): {lacking:?}", lacking.len());
+        }
+        let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
+        labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
+        labels.extend(lightcraft_develop::CONTROLS.iter().map(|control| control.label));
+        labels.extend(crate::panels::settings::TABS.iter().map(|(_, label)| *label));
+        labels.extend(lightcraft_catalog::rules::FIELD_GROUPS.iter().map(|group| group.0));
+        labels.extend(lightcraft_engine::rename::TOKENS.iter().map(|token| token.meaning));
+        labels.extend(lightcraft_engine::rename::TEMPLATE_NOTES);
+        let missing: Vec<_> = labels.into_iter().filter(|label| !catalog.contains_key(*label)).collect();
+        if !missing.is_empty() {
+            eprintln!("cs lacks {} display label(s) (shown in English): {missing:?}", missing.len());
+        }
+    }
+
+    #[test]
+    fn czech_switches_persists_and_formats_without_changing_user_values() {
+        use crate::control::{ControlRequest, Outcome};
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.run("app.language.czech", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::Cs);
+        assert_eq!(Locale::Cs.name(), "Čeština");
+        assert_eq!(Locale::Cs.script(), "Latn");
+        assert_eq!(crate::menubar::checked(&app, "app.language.czech"), Some(true));
+        assert_eq!(tr("File"), "Soubor");
+        assert_eq!(tr("Develop"), "Vyvolat");
+        assert_eq!(date_group_label("2026-09-20", false), "Neděle, 20. 9. 2026");
+        assert_eq!(date_group_label("2026-09-20", true), "Neděle, 20.");
+        assert_eq!(date_group_label("2026-09", false), "9. 2026");
+        assert_eq!(date_group_label("2026", false), "2026");
+        assert_eq!(display_time("2026-09-20T16:04:05"), "Neděle, 20. 9. 2026 16:04:05");
+        for n in [0, 1, 2, 4, 5, 11, 21, 22, 25] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("Importováno fotografií: {n}"));
+            assert_eq!(
+                tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { "photo waiting" } else { "photos waiting" })),
+                format!("Čekající fotografie: {n}")
+            );
+        }
+        let name = String::from("Color 1234.56 {title} 日本語");
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Do „{name}“ přidáno fotografií: 22"));
+        assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
+        assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Cs);
+        let ctx = egui::Context::default();
+        for tag in ["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"] {
+            assert_eq!(Locale::parse_tag(tag), Some(Locale::Cs));
+            let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": tag}));
+            let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
+            assert_eq!(reply["ok"], true);
+            assert_eq!(language(), Locale::Cs);
+        }
+        let text = painted_text(&ctx, &mut app, Locale::Cs);
+        assert!(text.contains("Soubor") && text.contains("Expozice"), "{text}");
+        ctx.fonts_mut(|fonts| {
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“".chars() {
+                    assert!(fonts.has_glyph(&font, ch), "missing Czech glyph {ch}");
+                }
+            }
+        });
+        set_language(Locale::En);
+    }
+
+    #[test]
+    fn sentence_case_keeps_georgian_lowercase() {
+        assert_eq!(upper_first("its input is not an image"), "Its input is not an image");
+        assert_eq!(upper_first("ფაილი ვერ იკითხება"), "ფაილი ვერ იკითხება");
+        assert_eq!(upper_first("ᲥᲐᲠᲗᲣᲚᲘ"), "ᲥᲐᲠᲗᲣᲚᲘ");
+        assert_eq!(upper_first(""), "");
+        assert!(capitalizes('a') && capitalizes('ж') && !capitalizes('ქ') && !capitalizes('Ⴀ') && !capitalizes('ⴀ'));
+    }
+
+    #[test]
+    fn every_language_has_a_catalog_covering_the_source() {
+        assert!(crate::i18n::Locale::En.catalog().is_empty(), "the source language needs no catalog");
+        for language in Locale::ALL {
+            assert!(!language.name().is_empty(), "{language:?} has a name");
+            assert!(!language.script().is_empty(), "{language:?} has a script");
+            assert_eq!(Locale::parse(language.code()), Some(*language), "{language:?} parses its own code");
+            if *language == Locale::En {
+                continue;
+            }
+            let messages = language.catalog();
+            assert!(!messages.is_empty(), "{language:?}: {} has no messages", language.code());
+            for (key, value) in messages {
+                assert!(!value.is_empty(), "{language:?}: empty translation for {key:?}");
+            }
+        }
+    }
+
+    /// Where two catalogs translate the same text they agree on its placeholders. Catalogs may cover
+    /// different sets of messages (a message a language lacks shows in English): the gaps are
+    /// reported, not failed, so a translation can grow at its own pace.
+    #[test]
+    fn catalogs_agree_on_placeholders_and_report_gaps() {
+        let fields = |text: &str| {
+            let mut out: Vec<String> = Vec::new();
+            let mut rest = text;
+            while let Some(start) = rest.find('{') {
+                let Some(end) = rest[start..].find('}') else { break };
+                out.push(rest[start + 1..start + end].split(':').next().unwrap_or("").to_string());
+                rest = &rest[start + end + 1..];
+            }
+            out.sort();
+            out
+        };
+        let translated: Vec<Locale> = Locale::ALL.iter().copied().filter(|language| *language != Locale::En).collect();
+        let all: std::collections::BTreeSet<&String> = translated.iter().flat_map(|language| language.catalog().keys()).collect();
+        for language in &translated {
+            let catalog = language.catalog();
+            for (key, value) in catalog {
+                assert_eq!(fields(key), fields(value), "{language:?}: {key:?} -> {value:?}");
+            }
+            let missing: Vec<&&String> = all.iter().filter(|key| !catalog.contains_key(key.as_str())).collect();
+            if !missing.is_empty() {
+                eprintln!("{} lacks {} message(s) another language translates (shown in English): {missing:?}", language.code(), missing.len());
+            }
+        }
+    }
+
+    /// Locale tags are matched leniently, so a system locale reaches a shipped language.
+    /// The message box for a desktop start that failed (issue #260) names the error and the log
+    /// file, in the UI language.
+    #[test]
+    fn startup_failure_message_names_the_error_and_the_log() {
+        let (title, text) = startup_failed_message("no adapter", Some("/home/a/.config/lightcraft/logs/lightcraft.log"));
+        assert_eq!(title, "LightCraft could not start");
+        assert!(text.contains("no adapter") && text.ends_with("lightcraft.log"), "{text}");
+        assert!(!startup_failed_message("no adapter", None).1.contains("log file"));
+    }
+
+    #[test]
+    fn locale_tags_normalize() {
+        assert_eq!(Locale::parse_tag("en"), Some(Locale::En));
+        assert_eq!(Locale::parse_tag("en-US"), Some(Locale::En));
+        assert_eq!(Locale::parse_tag("zh-hans"), Some(Locale::ZhHans));
+        assert_eq!(Locale::parse_tag("zh"), Some(Locale::ZhHans));
+        assert_eq!(Locale::parse_tag("zh_CN"), Some(Locale::ZhHans));
+        assert_eq!(Locale::parse_tag("zh-hant"), Some(Locale::ZhHant));
+        assert_eq!(Locale::parse_tag("zh-Hant"), Some(Locale::ZhHant));
+        assert_eq!(Locale::parse_tag("zh-TW"), Some(Locale::ZhHant));
+        assert_eq!(Locale::parse_tag("zh_TW.UTF-8"), Some(Locale::ZhHant));
+        assert_eq!(Locale::parse_tag("zh-HK"), Some(Locale::ZhHant));
+        assert_eq!(Locale::parse_tag("zh-Hant-TW"), Some(Locale::ZhHant));
+        assert_eq!(Locale::parse_tag("zh-CN"), Some(Locale::ZhHans));
+        assert_eq!(Locale::parse_tag("ja_JP.UTF-8"), Some(Locale::Ja));
+        assert_eq!(Locale::parse_tag("pt-br"), Some(Locale::PtBr));
+        assert_eq!(Locale::parse_tag("pt-BR"), Some(Locale::PtBr));
+        assert_eq!(Locale::parse_tag("pt_BR.UTF-8"), Some(Locale::PtBr));
+        assert_eq!(Locale::parse_tag("pt"), Some(Locale::PtBr));
+        assert_eq!(Locale::parse_tag("fr"), Some(Locale::Fr));
+        assert_eq!(Locale::parse_tag("fr-FR"), Some(Locale::Fr));
+        assert_eq!(Locale::parse_tag("fr_FR.UTF-8"), Some(Locale::Fr));
+        for tag in ["de", "de-DE", "de_AT.UTF-8", "de-CH"] {
+            assert_eq!(Locale::parse_tag(tag), Some(Locale::De), "{tag}");
+        }
+        for tag in ["ru", "ru-RU", "ru_RU.UTF-8", "ru-UA"] {
+            assert_eq!(Locale::parse_tag(tag), Some(Locale::Ru), "{tag}");
+        }
+        for tag in ["es", "es-ES", "es_MX.UTF-8", "es-419"] {
+            assert_eq!(Locale::parse_tag(tag), Some(Locale::Es), "{tag}");
+        }
+        assert_eq!(Locale::parse_tag("xx"), None);
+    }
+
+    #[test]
+    fn switching_language_translates_and_restores() {
+        set_language(Locale::ZhHans);
+        assert_eq!(tr("Exposure"), "曝光");
+        assert_eq!(tr("Settings"), "设置");
+        // Untranslated and data-like text passes through untouched.
+        assert_eq!(tr("my-photo.jpg"), "my-photo.jpg");
+        assert_eq!(tr("develop.set"), "develop.set");
+        assert_eq!(tr("A string no catalog has"), "A string no catalog has");
+        set_language(Locale::Ja);
+        assert_eq!(tr("Exposure"), "露出");
+        set_language(Locale::PtBr);
+        assert_eq!(tr("Exposure"), "Exposição");
+        assert_eq!(tr("Settings"), "Configurações");
+        set_language(Locale::En);
+        assert_eq!(tr("Exposure"), "Exposure");
+    }
+
+    /// Format strings carry their values in every language, and a language without a translation
+    /// falls back to the English format rather than dropping the values.
+    #[test]
+    fn formats_render_in_every_language() {
+        // Every language's format string is checked by `format!` against the call site's values.
+        set_language(Locale::En);
+        assert_eq!(tr_format!("Imported {} photo{}", 12, "s"), "Imported 12 photos");
+        assert_eq!(tr_format!("Exported {ok} of {total} photo{}", "s", ok = 4, total = 12), "Exported 4 of 12 photos");
+        set_language(Locale::ZhHans);
+        assert_eq!(tr_format!("Imported {} photo{}", 12, "s"), "已导入 12 张照片");
+        assert_eq!(tr_format!("Exported {ok} of {total} photo{}", "s", ok = 4, total = 12), "已导出 12 张中的 4 张照片");
+        set_language(Locale::Ja);
+        assert_eq!(tr_format!("Imported {} photo{}", 12, "s"), "12枚を読み込みました");
+        assert_eq!(tr_format!("Exported {ok} of {total} photo{}", "s", ok = 4, total = 12), "12枚中4枚を書き出しました");
+        set_language(Locale::Fr);
+        assert_eq!(tr_format!("Imported {} photo{}", 12, "s"), "12 photos importée(s)");
+        assert_eq!(tr_format!("Imported {} photo{}", 1, ""), "1 photo importée(s)");
+        // Format specs survive translation: precision, sign, and values a language reorders.
+        for language in Locale::ALL {
+            set_language(*language);
+            let text = tr_format!("{count} smart preview{} · {:.1} MB", "s", 12.345, count = 3);
+            assert!(text.contains("12.3") && !text.contains("12.34"), "{language:?}: {text}");
+            let merging = tr_format!("Merging… {stage} {:.0}%", 42.4, stage = "Aligning");
+            assert!(merging.contains("42%"), "{language:?}: {merging}");
+            let delta = tr_format!("{label} {d:+} on every selected photo", label = "Exposure", d = 5);
+            assert!(delta.contains("+5"), "{language:?}: {delta}");
+            let reading = tr_format!("Reading photos… {} of {}", 3, 10);
+            let (three, ten) = (reading.find('3'), reading.find("10"));
+            assert!(three.is_some() && ten.is_some(), "{language:?}: {reading}");
+        }
+        set_language(Locale::En);
+        assert_eq!(tr_format!("Reading photos… {} of {}", 3, 10), "Reading photos… 3 of 10");
+    }
+
+    /// Every character a catalog paints has a glyph in the fonts the UI installs, so a translation
+    /// never shows as boxes. Without craft-fonts there are no CJK faces at all, and the CJK
+    /// catalogs are skipped (the same degradation the Japanese UI has always had).
+    #[test]
+    fn catalog_characters_are_paintable() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(lightcraft_engine::CRAFT_FONTS));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+        for language in Locale::ALL {
+            let messages = language.catalog();
+            if messages.is_empty() {
+                continue;
+            }
+            // The faces this language's script needs; a language the craft-fonts input does not
+            // cover (a translation added ahead of its font) is reported, not failed.
+            let mut faces: Vec<&str> =
+                lightcraft_engine::CRAFT_FONTS.iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
+            faces.dedup();
+            if faces.is_empty() {
+                lightcraft_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
+                continue;
+            }
+            ctx.fonts_mut(|fonts| {
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                    let font = egui::FontId::new(13.0, family.clone());
+                    let mut missing: Vec<char> = messages
+                        .values()
+                        .flat_map(|message| message.chars())
+                        .filter(|ch| !ch.is_whitespace() && !fonts.has_glyph(&font, *ch))
+                        .collect();
+                    missing.sort_unstable();
+                    missing.dedup();
+                    assert!(
+                        missing.is_empty(),
+                        "{} in {family:?} (faces: {faces:?}) lack glyphs: {}",
+                        language.code(),
+                        missing.iter().collect::<String>()
+                    );
+                }
+            });
+        }
+    }
+
+    /// The interface's own symbols paint in every language: the CJK faces stop at Han and kana, so a
+    /// translation must not carry a symbol no installed font has (egui's defaults cover the rest).
+    #[test]
+    fn interface_symbols_are_paintable() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(lightcraft_engine::CRAFT_FONTS));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+        // ⌥ and ⌫ come from egui's bundled fonts; ▸ and ▾ are in neither (measured 2026-10-07).
+        ctx.fonts_mut(|fonts| {
+            for symbol in ['⌥', '⌫', '⇧', '⌘', '→', '…', '—', '“', '”', '·', '»', '⌄', '★'] {
+                let font = egui::FontId::new(13.0, egui::FontFamily::Proportional);
+                assert!(fonts.has_glyph(&font, symbol), "{symbol:?} has no glyph in any installed font");
+            }
+        });
+    }
+
+    #[test]
+    fn translated_catalogs_do_not_use_missing_menu_triangles() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let messages: BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for (source, text) in messages {
+                assert!(!text.contains(['▸', '▾']), "{}: {source:?} uses an unpaintable menu triangle", path.display());
+            }
+        }
+    }
+
+    /// The language menu covers every language, and a language's own command selects it.
+    #[test]
+    fn language_commands_cover_every_language() {
+        let commands = [
+            ("app.language.traditionalChinese", Locale::ZhHant),
+            ("app.language.english", Locale::En),
+            ("app.language.simplifiedChinese", Locale::ZhHans),
+            ("app.language.japanese", Locale::Ja),
+            ("app.language.portuguese", Locale::PtBr),
+            ("app.language.french", Locale::Fr),
+            ("app.language.spanish", Locale::Es),
+            ("app.language.german", Locale::De),
+            ("app.language.russian", Locale::Ru),
+            ("app.language.ukrainian", Locale::Uk),
+            ("app.language.polish", Locale::Pl),
+            ("app.language.czech", Locale::Cs),
+            ("app.language.italian", Locale::It),
+            ("app.language.georgian", Locale::Ka),
+            ("app.language.lao", Locale::Lo),
+        ];
+        // One command per language, and every command reachable from the menu table.
+        assert_eq!(commands.len(), Locale::ALL.len());
+        for (id, language) in commands {
+            assert_eq!(crate::menus::language_from_command(id), Some(language), "{id}");
+            assert!(crate::menus::ui_commands().any(|command| command.0 == id), "{id} is not in the menu");
+        }
+        assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
+        assert_eq!(crate::menus::language_from_command("view.detail"), None);
+    }
+
+    #[test]
+    fn preferences_round_trip_and_old_settings_remain_readable() {
+        let old: crate::state::UiState = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.language, Locale::En);
+        // Settings written before the language list grew still load.
+        let legacy: crate::state::UiState = serde_json::from_str(r#"{"language":"ja"}"#).unwrap();
+        assert_eq!(legacy.language, Locale::Ja);
+        let settings = crate::state::UiState { language: Locale::ZhHans, ..old };
+        let saved = serde_json::to_string(&settings).unwrap();
+        let restored: crate::state::UiState = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.language, Locale::ZhHans);
+    }
+
+    #[test]
+    fn catalogs_contain_core_workflows() {
+        for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+            for key in ["Import Photos…", "Export…", "Exposure", "White Balance", "Settings", "Language"] {
+                let value = language.tr(key);
+                assert!(!value.is_empty() && value != key, "{language:?}: {key}");
+            }
+        }
+    }
+
+    /// Smart-album choice values read as words in every language (English "Public Domain", German
+    /// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
+    /// written. Unlike other labels these must be translated: an untranslated one would be English
+    /// in the middle of a translated rule.
+    #[test]
+    fn choice_values_read_as_words_in_every_language() {
+        use lightcraft_catalog::rules::{FIELDS, Kind};
+        assert_eq!(choice_text_in(Locale::En, "copyrightStatus", "publicDomain"), "Public Domain");
+        assert_eq!(choice_text_in(Locale::De, "copyrightStatus", "publicDomain"), "Gemeinfrei");
+        assert_eq!(choice_text_in(Locale::De, "copyrightStatus", "someday"), "someday");
+        assert_eq!(choice_text_in(Locale::ZhHans, "treatment", "color"), "彩色", "in colour, not the colour noun");
+        assert_eq!(choice_text_in(Locale::Ru, "treatment", "color"), "Цветное");
+        assert_eq!(choice_text_in(Locale::Es, "label", "none"), "Sin etiqueta");
+        // yes/no fields read Yes / No, never true / false
+        assert_eq!((bool_text_in(Locale::En, true), bool_text_in(Locale::En, false)), ("Yes", "No"));
+        assert_eq!(bool_text_in(Locale::De, false), "Nein");
+        // Japanese answers はい / いいえ don't read as a rule's value: its own wording, あり / なし,
+        // through a context, while the shared Yes / No keep their meaning everywhere else
+        assert_eq!((bool_text_in(Locale::Ja, true), bool_text_in(Locale::Ja, false)), ("あり", "なし"));
+        assert_eq!((Locale::Ja.tr("Yes"), Locale::Ja.tr("No")), ("はい", "いいえ"));
+        assert_eq!(tr_ctx_in(Locale::Ja, "nope", "Yes"), "はい", "no contextual entry: the plain message");
+        assert_eq!(tr_ctx_in(Locale::En, BOOL_CONTEXT, "Yes"), "Yes");
+        // and the yes/no fields are named by plain nouns, so "編集 … なし" doesn't read "edits: yes … none"
+        for (field, label, kind) in FIELDS {
+            if *kind != Kind::Bool {
+                continue;
+            }
+            let ja = Locale::Ja.catalog().get(*label).unwrap_or_else(|| panic!("ja lacks the {field} label {label:?}"));
+            assert!(!ja.contains("あり") && !ja.contains("なし"), "{field}: {ja}");
+        }
+        // a contextual entry names a real value (a typo would silently fall back to はい / いいえ)
+        let values = [lightcraft_catalog::rules::bool_label(true), lightcraft_catalog::rules::bool_label(false)];
+        for language in Locale::ALL {
+            for key in language.catalog().keys() {
+                if let Some(value) = key.strip_prefix(BOOL_CONTEXT).and_then(|k| k.strip_prefix('|')) {
+                    assert!(values.contains(&value), "{}: {key:?} isn't a yes/no value", language.code());
+                }
+            }
+        }
+        for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+            for label in [lightcraft_catalog::rules::bool_label(true), lightcraft_catalog::rules::bool_label(false)] {
+                assert!(language.catalog().contains_key(label), "{} lacks {label:?}", language.code());
+            }
+        }
+        for language in Locale::ALL {
+            for (field, _, kind) in FIELDS {
+                let Kind::Choice(choices) = kind else { continue };
+                for (id, label) in *choices {
+                    let text = choice_text_in(*language, field, id);
+                    assert_ne!(text, *id, "{}: {field} {id}", language.code());
+                    if *language != Locale::En {
+                        assert!(language.catalog().contains_key(*label), "{} lacks {label:?}", language.code());
+                    }
+                }
+            }
+        }
+    }
+
+    /// A rule's problem reads as the field's name and the issue, in the editor's language ("Titel:
+    /// braucht einen Suchbegriff …"); the sidebar's list puts the rule's position first. Every issue
+    /// is translated in every language: an English one would stand out in a translated editor.
+    #[test]
+    fn problems_read_in_every_language() {
+        use lightcraft_catalog::rules::Issue;
+        let cat = lightcraft_catalog::Catalog::new();
+        let problems = |rules: serde_json::Value| {
+            serde_json::from_value::<lightcraft_catalog::RuleSet>(serde_json::json!({"rules": rules})).unwrap().check(&cat)
+        };
+        let p = problems(serde_json::json!([{"field": "rating", "op": "gte", "value": 3}, {"field": "title", "op": "contains", "value": ""}]));
+        assert_eq!(problem_text_in(Locale::En, &p[0]), "Title: needs something to look for (or use “is empty”)");
+        assert_eq!(problem_text_in(Locale::De, &p[0]), "Titel: braucht einen Suchbegriff (oder „ist leer“)");
+        assert_eq!(problem_line_in(Locale::En, &p[0]), "#2 Title: needs something to look for (or use “is empty”)");
+        // Japanese and Chinese join with a full-width colon, as their catalogs do
+        assert_eq!(problem_text_in(Locale::Ja, &p[0]), "タイトル：検索する語句が必要です（または「が空」を使用）");
+        // a problem with the album filter itself has no rule position to show
+        let filter_loop =
+            lightcraft_catalog::rules::Problem { path: Vec::new(), field: Some("album".into()), issue: Issue::AlbumLoop, message: String::new() };
+        assert!(problem_line_in(Locale::En, &filter_loop).starts_with("Album: "), "{}", problem_line_in(Locale::En, &filter_loop));
+        let g = problems(serde_json::json!([{"group": {"rules": []}}]));
+        assert_eq!(problem_text_in(Locale::En, &g[0]), "This group is empty: add a rule or remove it.");
+        // the issues, the operators their hints name and the album picker's words, in every language
+        for language in Locale::ALL.iter().filter(|l| **l != Locale::En) {
+            // the field menu: every field and every group, so it never mixes languages
+            for label in lightcraft_catalog::rules::FIELDS.iter().map(|f| f.1).chain(lightcraft_catalog::rules::FIELD_GROUPS.iter().map(|g| g.0)) {
+                assert!(language.catalog().contains_key(label), "{} lacks the rule label {label:?}", language.code());
+            }
+            for word in [
+                "Choose an album…",
+                "No albums yet",
+                "Search albums",
+                "No albums match",
+                "This is the album you're editing",
+                "It tests this album, so testing it back would loop",
+                "Fix the marked rules to save this album.",
+            ] {
+                assert!(language.catalog().contains_key(word), "{} lacks {word:?}", language.code());
+            }
+            for issue in Issue::ALL {
+                assert!(language.catalog().contains_key(issue.text()), "{} lacks {:?}", language.code(), issue.text());
+            }
+            for (_, _, kind) in lightcraft_catalog::rules::FIELDS {
+                for (_, op) in lightcraft_catalog::rules::ops_for(*kind) {
+                    assert!(language.catalog().contains_key(*op), "{} lacks the operator {op:?}", language.code());
+                }
+            }
+        }
+    }
 mod tests;
 
 #[cfg(test)]
