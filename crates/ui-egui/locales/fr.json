@@ -2390,5 +2390,11 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Meanwhile your raw photos use the standard noise reduction: Luminance and Color under Detail in the Edit panel. It works on every photo.": "En attendant, vos photos raw utilisent la réduction du bruit standard : Luminance et Couleur dans Détail, dans le panneau Retouche. Elle fonctionne sur toutes les photos.",
+  "Only if you were given a LightCraft denoise model (a folder with a .onnx file and denoise-model.json):": "Seulement si l’on vous a donné un modèle de débruitage LightCraft (un dossier avec un fichier .onnx et denoise-model.json) :",
+  "Why?": "Pourquoi ?",
+  "AI Denoise needs a model, and none is installed. Meanwhile, Luminance and Color under Detail reduce noise.": "Le débruitage IA a besoin d’un modèle, et aucun n’est installé. En attendant, Luminance et Couleur dans Détail réduisent le bruit.",
+  "This version doesn't come with an AI Denoise model, and none can be downloaded from here yet.": "Cette version ne contient aucun modèle de débruitage IA, et aucun ne peut encore être téléchargé d’ici.",
+  "No AI Denoise model is installed": "Aucun modèle de débruitage IA n’est installé"
 }

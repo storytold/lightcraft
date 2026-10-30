@@ -2283,5 +2283,11 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Meanwhile your raw photos use the standard noise reduction: Luminance and Color under Detail in the Edit panel. It works on every photo.": "Do tego czasu twoje zdjęcia raw korzystają ze standardowej redukcji szumu: Luminancja i Kolor w sekcji Szczegóły panelu Edycja. Działa na każdym zdjęciu.",
+  "Only if you were given a LightCraft denoise model (a folder with a .onnx file and denoise-model.json):": "Tylko jeśli otrzymano model odszumiania LightCraft (folder z plikiem .onnx i denoise-model.json):",
+  "Why?": "Dlaczego?",
+  "AI Denoise needs a model, and none is installed. Meanwhile, Luminance and Color under Detail reduce noise.": "Odszumianie AI wymaga modelu, a żaden nie jest zainstalowany. Do tego czasu szum redukują Luminancja i Kolor w sekcji Szczegóły.",
+  "This version doesn't come with an AI Denoise model, and none can be downloaded from here yet.": "Ta wersja nie zawiera modelu odszumiania AI i na razie nie można go stąd pobrać.",
+  "No AI Denoise model is installed": "Nie zainstalowano modelu odszumiania AI"
 }

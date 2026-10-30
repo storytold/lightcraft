@@ -39,6 +39,16 @@ pub struct Ui {
     rejected: Option<String>,
 }
 
+impl Ui {
+    /// Makes Settings ▸ AI Denoise draw from `list` (a `denoise.models.list` reply) instead of asking the engine, so a
+    /// test can show what a build with other compiled-in models would list.
+    #[cfg(test)]
+    pub(crate) fn seed_list(&mut self, now: f64, list: Value) {
+        // dated an hour ahead: still fresh however many frames the test runs
+        self.list = Some((self.epoch, now + 3600.0, list));
+    }
+}
+
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
 /// loupe and the thumbnails then render from it) or while one is being made (the progress).
 /// `pump_background` plus the UI-input half, for hosts/tests that have no phase split (the app's
@@ -182,7 +192,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
         PhotoState::NotApplicable | PhotoState::Ready => {}
         PhotoState::NoModel => {
             egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-                note(ui, "AI Denoise needs a model. Install one in Settings.", t.text_dim);
+                note(ui, "AI Denoise needs a model, and none is installed. Meanwhile, Luminance and Color under Detail reduce noise.", t.text_dim);
                 ui.add_space(2.0);
                 let r = ui.small_button(crate::i18n::tr("Set up AI Denoise…"));
                 register(ui, "denoise:setup", r.rect);
@@ -250,6 +260,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
 pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     heading(ui, t, "AI Denoise");
+    // (also without a model to offer: a model installed from a file finishes the request)
     crate::model_setup::notice(app, ui, "denoise");
     if list["dir"].is_null() {
         hint(ui, t, "This build has nowhere to keep denoise models, so AI Denoise is not available. (The desktop app has.)");
@@ -271,7 +282,13 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .execute("denoise.models.downloads", &json!({}))
         .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
+    if all.is_empty() {
+        no_model_yet(ui, t);
+    }
     heading(ui, t, "Models");
+    if all.is_empty() {
+        hint(ui, t, "Only if you were given a LightCraft denoise model (a folder with a .onnx file and denoise-model.json):");
+    }
     let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
     let r = crate::button::Button::new("Install from file…")
         .enabled(runtime && app.services.pick_denoise_model.is_some())
@@ -292,9 +309,6 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some(why) = &app.caches.denoise.rejected {
         hint(ui, t, why);
     }
-    if all.is_empty() {
-        hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");
-    }
     if let Some(job) = downloads.iter().find(|d| d["id"] == "local-install") {
         match job["state"].as_str() {
             Some("installing") => hint(ui, t, "Checking and installing the model…"),
@@ -311,6 +325,25 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
     work_section(app, ui, t, &list);
+}
+
+/// No model is installed and none can be downloaded: say so plainly, and what to use meanwhile, without promising one.
+fn no_model_yet(ui: &mut egui::Ui, t: &Tokens) {
+    ui.add_space(4.0);
+    let r = egui::Frame::NONE.fill(t.inset).corner_radius(6.0).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+        ui.set_max_width(ui.available_width().min(680.0));
+        ui.label(RichText::new(tr("No AI Denoise model is installed")).font(t.semibold(13.0)).color(t.text));
+        ui.add_space(2.0);
+        for line in [
+            "This version doesn't come with an AI Denoise model, and none can be downloaded from here yet.",
+            "Meanwhile your raw photos use the standard noise reduction: Luminance and Color under Detail in the Edit panel. It works on every photo.",
+        ] {
+            ui.add(egui::Label::new(RichText::new(tr(line)).size(12.0).color(t.text_label)).wrap());
+            ui.add_space(2.0);
+        }
+    });
+    crate::widgets::register(ui, "denoise:noModelYet", r.response.rect);
+    ui.add_space(4.0);
 }
 
 /// What the cache holds, its limit, and what is being made.

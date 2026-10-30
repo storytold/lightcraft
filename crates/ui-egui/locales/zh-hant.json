@@ -2157,5 +2157,11 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Meanwhile your raw photos use the standard noise reduction: Luminance and Color under Detail in the Edit panel. It works on every photo.": "在此之前，你的 RAW 照片使用標準降噪：編輯面板「細節」中的「明亮度」和「顏色」。它適用於每張照片。",
+  "Only if you were given a LightCraft denoise model (a folder with a .onnx file and denoise-model.json):": "僅當你拿到了 LightCraft 降噪模型（含 .onnx 檔案和 denoise-model.json 的資料夾）時：",
+  "Why?": "為什麼？",
+  "AI Denoise needs a model, and none is installed. Meanwhile, Luminance and Color under Detail reduce noise.": "AI 降噪需要模型，但尚未安裝。在此之前，可用「細節」下的「明亮度」和「顏色」減少雜訊。",
+  "This version doesn't come with an AI Denoise model, and none can be downloaded from here yet.": "此版本不附帶 AI 降噪模型，目前也無法在這裡下載。",
+  "No AI Denoise model is installed": "未安裝 AI 降噪模型"
 }

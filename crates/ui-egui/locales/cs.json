@@ -2408,5 +2408,11 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Meanwhile your raw photos use the standard noise reduction: Luminance and Color under Detail in the Edit panel. It works on every photo.": "Mezitím vaše raw fotografie používají standardní redukci šumu: Jas a Barva v části Detail panelu Úpravy. Funguje na každé fotografii.",
+  "Only if you were given a LightCraft denoise model (a folder with a .onnx file and denoise-model.json):": "Jen pokud jste dostali model LightCraftu pro redukci šumu (složku se souborem .onnx a denoise-model.json):",
+  "Why?": "Proč?",
+  "AI Denoise needs a model, and none is installed. Meanwhile, Luminance and Color under Detail reduce noise.": "AI odšumění potřebuje model a žádný není nainstalován. Mezitím šum omezí Jas a Barva v části Detaily.",
+  "This version doesn't come with an AI Denoise model, and none can be downloaded from here yet.": "Tato verze neobsahuje žádný model pro AI odšumění a zatím si ho odsud nelze stáhnout.",
+  "No AI Denoise model is installed": "Není nainstalován žádný model pro AI odšumění"
 }
