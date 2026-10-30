@@ -193,6 +193,11 @@ fn main() -> eframe::Result {
     // what the arguments name, resolved now: an empty or relative argument never becomes a drive
     // root, and a whole drive or home folder is not walked (issue #374)
     let (files, launch_notices) = launch_imports(&files);
+    // "Auto" follows the system's preferred languages, as the web build follows the browser's:
+    // installed before the settings load, since a library without saved settings starts in it.
+    if let Some(language) = lightcraft_ui_egui::i18n::locale_from_tags(&sys_locale::get_locales().collect::<Vec<_>>()) {
+        lightcraft_ui_egui::i18n::set_default_language(language);
+    }
     let (prefs, prefs_warning, keep_prefs_file) = load_prefs(in_memory);
     // the saved language from the start, so a failed start is reported in it too
     if let Some(ui) = &prefs {

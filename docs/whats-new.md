@@ -2,6 +2,12 @@
 
 ## 2026-10-27
 
+### The desktop app starts in the system's language
+- On macOS, Windows and Linux, a library with no saved settings now opens in the first of the system's preferred
+  languages that LightCraft has a catalog for (Russian for `ru-SK`, German for `de-AT`), as the web build follows the
+  browser's languages. Before, it opened in English unless `LIGHTCRAFT_LANGUAGE` was set. A language chosen in
+  Settings ▸ General ▸ Language is kept as before.
+
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
 
