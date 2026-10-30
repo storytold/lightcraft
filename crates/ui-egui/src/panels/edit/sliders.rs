@@ -192,7 +192,7 @@ pub(super) fn section(
         // ⌥-click opens just this section, as in Lightroom Classic
         let solo = ui.input(|i| i.modifiers.alt);
         if let Err(e) = app.run(&format!("section.{id}"), json!({"solo": solo})) {
-            app.toast(ui.ctx(), e);
+            app.toast_error(ui.ctx(), e);
         }
     }
     crate::widgets::context_menu(&resp, |ui| {
@@ -201,7 +201,7 @@ pub(super) fn section(
         register(ui, "sectionMenu:solo", item.rect);
         if item.clicked() {
             if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
-                app.toast(ui.ctx(), e);
+                app.toast_error(ui.ctx(), e);
             }
             ui.close();
         }
@@ -292,7 +292,7 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
         Ok(_) if app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none()) => {
             app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data"))
         }
-        Ok(_) => app.toast(ctx, crate::i18n::tr("This raw variant still can't be decoded")),
+        Ok(_) => app.toast_error(ctx, crate::i18n::tr("This raw variant still can't be decoded")),
     }
 }
 

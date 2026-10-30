@@ -462,7 +462,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::CaptureTime { .. }
             ) =>
         {
-            app.toast(ctx, e)
+            app.toast_error(ctx, e)
         }
         // the SAM 3 dialog stays open to show the download (or why it can't start)
         Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
@@ -484,19 +484,19 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             closed = true;
         }
         Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
-            app.toast(ctx, e);
+            app.toast_error(ctx, e);
             closed = true;
         }
         // photos whose capture time doesn't read are left as they were: say so
         Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r["unreadable"].as_u64().is_some_and(|n| n > 0) => {
-            app.toast(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
+            app.toast_error(ctx, crate::i18n::tr("Photos whose capture time can't be read were left as they were"));
             closed = true;
         }
         // where a Lightroom catalog goes: stays open to be corrected (a folder that isn't
         // empty), unless the library it names has gone
         Err(e) if matches!(dlg, Dialog::LightroomDestination { .. }) => {
             closed = !crate::lightroom_destination::keeps_open_on_error(app, dlg);
-            app.toast(ctx, e);
+            app.toast_error(ctx, e);
         }
         Ok(_) if keeps_open(app, dlg) => {
             if let Dialog::SamModel { error, .. } = dlg {
@@ -1505,7 +1505,7 @@ fn export_save_preset_row(
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Saved export preset “{}”", preset_name.trim()));
                         preset_name.clear();
                     }
-                    Err(e) => app.toast(ui.ctx(), e),
+                    Err(e) => app.toast_error(ui.ctx(), e),
                 }
             }
             crate::widgets::named(

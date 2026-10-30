@@ -66,7 +66,7 @@ impl LightcraftApp {
         }
         // a dialog is on screen: the review would replace it, losing what it holds
         if self.ui.dialog.is_some() {
-            self.toast(ctx, crate::i18n::tr("Close the open dialog, then drop the files again"));
+            self.toast_error(ctx, crate::i18n::tr("Close the open dialog, then drop the files again"));
             return;
         }
         let drop = drop_overlay::classify(dropped);
@@ -75,15 +75,15 @@ impl LightcraftApp {
             // dialog would open behind the window that owns input. The drop is refused like a
             // preset; photos below still wait for the library chosen.
             if panels::library_problem::holds_drops(self) {
-                self.toast(ctx, crate::i18n::tr("Open a library first, then drop the model again"));
+                self.toast_error(ctx, crate::i18n::tr("Open a library first, then drop the model again"));
             } else if let Err(e) = panels::faces::open_dialog(self, model) {
-                self.toast(ctx, e);
+                self.toast_error(ctx, e);
             }
         }
         if !drop.presets.is_empty() {
             // presets live in a library: with none open they would go with the session it replaces
             if panels::library_problem::holds_drops(self) {
-                self.toast(ctx, crate::i18n::tr("Open a library first, then drop the presets again"));
+                self.toast_error(ctx, crate::i18n::tr("Open a library first, then drop the presets again"));
             } else {
                 let _ = self.run("file.importPresets", serde_json::json!({"paths": drop.presets}));
             }
@@ -94,11 +94,11 @@ impl LightcraftApp {
         // no library open yet (the launch list, a library that failed to open): they wait for one
         let Some(photos) = panels::library_problem::hold_dropped(self, ctx, drop.photos) else { return };
         if self.lightroom.is_some() {
-            self.toast(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
+            self.toast_error(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
             return;
         }
         if import::running(self) {
-            self.toast(ctx, crate::i18n::tr("An import is running"));
+            self.toast_error(ctx, crate::i18n::tr("An import is running"));
             return;
         }
         let started = if self.ui.settings.import_dropped_directly {
@@ -108,7 +108,7 @@ impl LightcraftApp {
             import::open(self, photos).map(|_| ())
         };
         if let Err(e) = started {
-            self.toast(ctx, e);
+            self.toast_error(ctx, e);
         }
     }
 

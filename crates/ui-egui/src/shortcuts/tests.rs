@@ -337,25 +337,25 @@ fn color_label_actions_show_feedback_only_after_success() {
             h.app.session.execute("library.select", &json!({"ids": [1]})).unwrap();
             h.app.ui.toast = None;
             key(&mut h, k, shift);
-            assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some(format!("{name} Label").as_str()));
-            assert_eq!(h.app.ui.toast.as_ref().and_then(|t| t.2), h.app.session.catalog.photo(PhotoId(1)).unwrap().label);
+            assert_eq!(h.app.ui.toast.as_ref().map(|t| t.text.as_str()), Some(format!("{name} Label").as_str()));
+            assert_eq!(h.app.ui.toast.as_ref().and_then(|t| t.label), h.app.session.catalog.photo(PhotoId(1)).unwrap().label);
             assert_eq!(h.app.session.active(), Some(PhotoId(if shift { 2 } else { 1 })));
         }
     }
     // Menus and the Info-panel swatches dispatch the same command, including purple/clear.
     h.app.run("photo.label", json!({"label": "purple"})).unwrap();
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Purple Label"));
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.text.as_str()), Some("Purple Label"));
     h.app.run("photo.label", json!({"label": "none"})).unwrap();
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Color label cleared"));
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.2.is_none()), "clear uses neutral feedback");
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.text.as_str()), Some("Color label cleared"));
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.label.is_none()), "clear uses neutral feedback");
     h.app.session.execute("label.setNames", &json!({"names": {"red": "Needs review"}})).unwrap();
     key(&mut h, "6", false);
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Needs review Label"));
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.text.as_str()), Some("Needs review Label"));
     // Native menu callbacks run before logic() catches up to the current frame's clock.
     let now = h.view.ctx.input(|i| i.time);
     h.app.last_time = now - 10.0;
     h.app.run("photo.label", json!({"label": "blue"})).unwrap();
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.1 > now), "menu feedback must survive an idle gap");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.until > now), "menu feedback must survive an idle gap");
     h.app.ui.toast = None;
     assert!(h.app.run("photo.label", json!({"label": "invalid"})).is_err());
     assert!(h.app.ui.toast.is_none(), "failed actions must not announce success");

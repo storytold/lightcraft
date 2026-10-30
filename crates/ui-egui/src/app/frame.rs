@@ -128,7 +128,7 @@ impl LightcraftApp {
             }
             let waiting = self.session.unsaved_sidecars();
             if waiting > 0 && self.ui.sidecars_waiting == 0 {
-                self.toast_for(
+                self.toast_error_for(
                     ctx,
                     crate::i18n::tr_format!(
                         "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.",

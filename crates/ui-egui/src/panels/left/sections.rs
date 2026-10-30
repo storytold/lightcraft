@@ -142,7 +142,7 @@ pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &
         app.ui.dragging_section = None;
         let before = before.map_or(serde_json::Value::Null, |b| json!(b.id()));
         if let Err(e) = app.run("view.sidebarMoveSection", json!({"section": dragged.id(), "before": before})) {
-            app.toast(ui.ctx(), e);
+            app.toast_error(ui.ctx(), e);
         }
         return;
     }
@@ -344,7 +344,7 @@ pub(super) fn sections_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, on: Opti
     }
     if let Some((command, params)) = run {
         if let Err(e) = app.run(command, params) {
-            app.toast(ui.ctx(), e);
+            app.toast_error(ui.ctx(), e);
         }
         ui.close();
     }

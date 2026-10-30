@@ -266,6 +266,10 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
             o.entry("library").or_insert_with(|| json!(library.dir.to_string_lossy()));
         }
     }
+    // a failure, a warning or failed photos: an error toast
+    let problem = value.get("error").is_some()
+        || value.get("indexWarning").is_some()
+        || value.get("report").unwrap_or(&value)["failed"].as_array().is_some_and(|f| !f.is_empty());
     let message = if let Some(e) = value.get("error").and_then(Value::as_str) {
         let warning = value.get("indexWarning").and_then(Value::as_str).map_or(String::new(), |w| format!("; index warning: {w}"));
         if matches!(kind, Kind::Inspect) {
@@ -308,7 +312,11 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
     }
     app.lightroom_last = Some(value);
     app.lightroom = None;
-    app.toast_for(ctx, message, 6.0);
+    if problem {
+        app.toast_error(ctx, message);
+    } else {
+        app.toast_for(ctx, message, 6.0);
+    }
 }
 
 fn show_result(app: &mut LightcraftApp) {
@@ -652,7 +660,7 @@ mod tests {
         let (task, _tx, _, _) = fake_import(&h);
         let value = json!({"photos": 1, "imported": 1, "collections": 0, "missing": ["D:/Photos/a.NEF"], "mapping": {"1": id}, "library": "C:/Pictures/LightCraft Library"});
         terminal(&mut h.app, &h.view.ctx, &task, value);
-        assert!(h.app.ui.toast.as_ref().unwrap().0.contains("1 photos added"));
+        assert!(h.app.ui.toast.as_ref().unwrap().text.contains("1 photos added"));
         h.step();
         h.step();
         let text = h.painted_text().join(" ");

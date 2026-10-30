@@ -106,7 +106,7 @@ fn click(h: &mut Headless, id: &str) {
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.as_ref().map(|(t, _, _)| t.clone()).unwrap_or_default()
+    h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
 }
 
 #[test]

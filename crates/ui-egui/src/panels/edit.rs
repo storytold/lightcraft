@@ -227,7 +227,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             app.ui.tool.clear();
                         } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
                             // the same as W: from Compare, Survey or the grid it opens the photo in Detail
-                            app.toast(ui.ctx(), e);
+                            app.toast_error(ui.ctx(), e);
                         }
                     }
                 });

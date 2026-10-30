@@ -1131,8 +1131,12 @@ fn a_dropped_photos_notice_names_every_outcome_of_the_import_and_is_silent_for_d
         Some("Added 1 photo · Restored 1 photo from Recently Deleted · 1 photo not readable"),
         "{report}"
     );
+    assert!(dropped_photos_failed(&report), "an unreadable file is a failure: {report}");
     let again = s.execute("library.import", &serde_json::json!({"paths": [added]})).unwrap();
     assert_eq!(dropped_photos_outcome(&again), None, "a duplicate only: {again}");
+    assert!(!dropped_photos_failed(&again), "{again}");
+    let clean = s.execute("library.import", &serde_json::json!({"paths": [png("clean.png", 3)]})).unwrap();
+    assert!(!dropped_photos_failed(&clean), "an import with nothing unreadable is not: {clean}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

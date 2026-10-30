@@ -157,7 +157,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
                 && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
             {
-                app.toast(ui.ctx(), e);
+                app.toast_error(ui.ctx(), e);
             }
             if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
                 let _ = app.run("library.autoImport", json!({"folder": null}));

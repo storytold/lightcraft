@@ -208,7 +208,7 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, params: serde_json::Value
                 app.toast_for(ctx, crate::i18n::tr_format!("Removed from {}", lost.join(", ")), 3.0);
             }
         }
-        Err(e) => app.toast_for(ctx, e, 3.0),
+        Err(e) => app.toast_error(ctx, e),
     }
 }
 
@@ -238,6 +238,6 @@ fn capture(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     match shortcuts::format(modifiers, key) {
         Some(sc) => apply(app, ctx, serde_json::json!({"id": id, "shortcut": sc})),
-        None => app.toast_for(ctx, crate::i18n::tr("That key can't be used as a shortcut"), 3.0),
+        None => app.toast_error(ctx, crate::i18n::tr("That key can't be used as a shortcut")),
     }
 }

@@ -588,7 +588,7 @@ fn the_highlight_stays_on_the_list() {
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+    h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
 }
 
 // Given several photos selected, the box says how many its keywords are of; with one photo there

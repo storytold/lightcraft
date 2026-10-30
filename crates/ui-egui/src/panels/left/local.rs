@@ -70,7 +70,7 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
                     let dir = r["path"].as_str().unwrap_or(&path).to_string();
                     let _ = app.run("local.addRoot", json!({"path": dir}));
                 }
-                Err(e) => app.toast(ui.ctx(), e),
+                Err(e) => app.toast_error(ui.ctx(), e),
             }
         }
     }

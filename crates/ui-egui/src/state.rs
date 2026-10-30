@@ -328,9 +328,9 @@ pub struct UiState {
     /// Reference view: the reference photo.
     #[serde(skip)]
     pub reference: Option<u64>,
-    /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
+    /// The HUD toast on screen (shown only through [`UiState::show_toast`]; the painter then extends `until` while hovered and clears it).
     #[serde(skip)]
-    pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    pub toast: Option<crate::toast::Toast>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -498,6 +498,20 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// Show `text` at app time `now`, for at least `floor` seconds (and its reading time). The one
+    /// way a toast gets on screen. The same text shown again while still visible extends it and
+    /// keeps its `shown_at`, so it does not fade in again; a different text replaces it.
+    pub fn show_toast(&mut self, now: f64, text: String, floor: f64, label: Option<lightcraft_catalog::ColorLabel>) {
+        let until = now + crate::toast::Toast::duration(&text, floor);
+        match &mut self.toast {
+            Some(t) if t.text == text && (now <= t.until || t.hovered) => {
+                t.until = t.until.max(until);
+                t.label = label;
+            }
+            slot => *slot = Some(crate::toast::Toast { text, shown_at: now, until, hovered: false, label }),
+        }
+    }
+
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {

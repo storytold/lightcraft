@@ -306,7 +306,7 @@ fn a_folder_that_isnt_empty_is_refused_and_the_window_stays() {
     }
     click(&mut h, "button:dialogOk");
     assert!(destination(&h).is_some(), "the window stays to be corrected");
-    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    let toast = h.app.ui.toast.clone().map(|t| t.text).unwrap_or_default();
     assert!(toast.contains("isn't empty"), "{toast}");
     assert_eq!(open_dir(&h), Some(f.lib.clone()));
     assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none());

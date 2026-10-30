@@ -174,7 +174,7 @@ fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Val
     if r.changed() {
         match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
             Ok(_) => app.caches.faces_epoch += 1,
-            Err(e) => app.toast(ui.ctx(), e),
+            Err(e) => app.toast_error(ui.ctx(), e),
         }
     }
     for (what, label) in [("detection", "Detection"), ("recognition", "Recognition")] {
@@ -261,7 +261,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if r.changed() {
         match app.run("faces.enable", json!({"enabled": on})) {
             Ok(_) => app.caches.faces_epoch += 1,
-            Err(e) => app.toast(ui.ctx(), e),
+            Err(e) => app.toast_error(ui.ctx(), e),
         }
     }
     hint(ui, t, "Suggests who is in a photo from the faces you have named. Everything stays on your computer.");

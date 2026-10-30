@@ -45,6 +45,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+pub mod toast;
 pub mod widgets;
 pub mod window_place;
 
@@ -99,6 +100,8 @@ pub use services::{
 use state::{GestureFrame, InjectedPress};
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long an error toast stays at least.
+const ERROR_TOAST_SECONDS: f64 = 6.0;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 

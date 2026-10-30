@@ -161,7 +161,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         Err(_) => {
             app.scan = None;
-            app.toast(ctx, crate::i18n::tr("Scan failed"));
+            app.toast_error(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };

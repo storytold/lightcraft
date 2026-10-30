@@ -220,7 +220,7 @@ pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
             let outcome = job.json();
             let msg = apple_photos_note(&outcome);
             if outcome.get("error").is_some() {
-                app.toast_for(ctx, msg, 15.0);
+                app.toast_error_for(ctx, msg, 15.0);
             } else {
                 app.toast(ctx, msg);
             }
@@ -232,8 +232,9 @@ pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
 #[cfg(target_arch = "wasm32")]
 pub fn poll_photos(_: &mut LightcraftApp, _: &egui::Context) {}
 
-/// What a finished export says: how many files were written, skipped or failed, and the Apple Photos note.
-fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancelled: bool) -> String {
+/// What a finished export says: how many files were written, skipped or failed, and the Apple Photos note,
+/// and whether any file failed.
+fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancelled: bool) -> (String, bool) {
     let sheet = files.first().filter(|f| f["contactSheet"] == true);
     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
@@ -248,6 +249,7 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     if skipped > 0 {
         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
     }
+    let had_failures = !failed.is_empty();
     if let Some(first) = failed.first() {
         m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
     }
@@ -258,7 +260,7 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
         m += " · ";
         m += &apple_photos_note(photos);
     }
-    m
+    (m, had_failures)
 }
 
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
@@ -271,16 +273,21 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
+            let errored = r.is_err();
+            let mut had_failures = false;
             let msg = match r {
                 Ok((files, photos, _)) => {
-                    let m = export_summary(&files, photos.as_ref(), total, cancelled);
+                    let (m, failed) = export_summary(&files, photos.as_ref(), total, cancelled);
+                    had_failures = failed;
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m
                 }
                 Err(e) => e,
             };
             if photos_failed {
-                app.toast_for(ctx, msg, 15.0);
+                app.toast_error_for(ctx, msg, 15.0);
+            } else if errored || had_failures {
+                app.toast_error(ctx, msg);
             } else {
                 app.toast(ctx, msg);
             }
@@ -292,7 +299,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             app.export = None;
-            app.toast(ctx, crate::i18n::tr("Export stopped unexpectedly"));
+            app.toast_error(ctx, crate::i18n::tr("Export stopped unexpectedly"));
         }
     }
 }

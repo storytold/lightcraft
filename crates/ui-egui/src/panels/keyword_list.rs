@@ -160,7 +160,7 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
     }
     match app.run("keyword.move", json!({"keyword": keyword, "parent": parent})) {
         Ok(_) => follow(app, keyword, &to),
-        Err(e) => app.toast(ctx, e),
+        Err(e) => app.toast_error(ctx, e),
     }
 }
 
@@ -343,7 +343,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
                         n = n
                     ),
                 ),
-                Err(e) => app.toast(ui.ctx(), e),
+                Err(e) => app.toast_error(ui.ctx(), e),
             }
         }
     }

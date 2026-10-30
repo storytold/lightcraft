@@ -75,11 +75,17 @@ fn label_tints_grid_and_filmstrip_chrome_without_changing_photo_pixels() {
 fn label_toast_has_pale_colour_and_rating_restores_neutral_style() {
     let mut h = app(ViewMode::SquareGrid);
     h.app.run("photo.label", json!({"label": "red"})).unwrap();
-    h.step();
+    // a toast fades in over 120 ms: read it once it is opaque
+    for _ in 0..10 {
+        h.step();
+    }
     let at = egui::pos2(h.app.canvas_rect.unwrap().center().x, h.app.canvas_rect.unwrap().bottom() - 45.0);
     let red = pixel(&h.paint(), at);
     assert!(red.r() > 180 && red.r() > red.g() && red.r() > red.b(), "pale red toast: {red:?}");
     h.request("ui.key", json!({"key": "5"}), Duration::from_secs(20));
+    for _ in 0..10 {
+        h.step();
+    }
     let rating = pixel(&h.paint(), at);
     assert!(rating.r() < 80 && rating.r() == rating.g() && rating.g() == rating.b(), "neutral rating toast: {rating:?}");
 }

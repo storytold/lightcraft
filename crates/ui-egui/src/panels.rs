@@ -86,30 +86,46 @@ pub fn resizable_side(ui: &mut egui::Ui, side: SidePanel, add: impl FnOnce(&mut 
     Some(w.round().clamp(limits.min, max))
 }
 
-/// The HUD toast at the bottom centre of the canvas.
+/// The HUD toast at the bottom centre of the canvas. It fades in, holds while the pointer rests
+/// on it, and fades out; it only reads the pointer position and never takes a click.
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
+    use crate::toast::{HOVER_HOLD, toast_alpha};
     let now = app.tick_now();
-    let Some((text, until, label)) = app.ui.toast.clone() else { return };
-    if now > until {
+    let Some(shown) = app.ui.toast.as_mut() else { return };
+    // no frames run in an idle app while the pointer rests on it: a hovered toast is not expired
+    // before the frame that sees the pointer leave has started its hold
+    if now > shown.until && !shown.hovered {
         app.ui.toast = None;
         return;
     }
-    let Some(canvas) = app.canvas_rect else { return };
+    let Some(canvas) = app.canvas_rect else {
+        shown.hovered = false; // a hidden canvas cannot pin the toast
+        return;
+    };
     let t = Tokens::get(ctx);
-    let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("toast")));
     // long messages (a save warning, the web build's notices) wrap within the canvas
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
-    let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
-    let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
+    let (background, foreground) = shown.label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
+    let galley = painter.layout(shown.text.clone(), t.font(14.0), foreground, wrap);
     let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
     let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
     let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
-    painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
-    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    // while the pointer rests on it, the clock stops; the first frame after it leaves starts the 1.5 s hold,
+    // unless what the toast had left (an error's 6 s the pointer only crossed) is longer
+    let hovered = ctx.pointer_hover_pos().is_some_and(|p| r.contains(p));
+    if hovered || shown.hovered {
+        shown.until = shown.until.max(now + HOVER_HOLD);
+    }
+    shown.hovered = hovered;
+    let alpha = toast_alpha(now, shown.shown_at, shown.until);
+    painter.rect_filled(r, 6.0, background.gamma_multiply(alpha));
+    painter.galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, foreground.gamma_multiply(alpha));
+    // a toast held under the pointer is static once faded in: no timer, the pointer leaving wakes the app
+    if crate::toast::needs_repaint(hovered, now, shown.shown_at) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    }
 }
 
 /// Paint a centred, dimmed message (empty states).

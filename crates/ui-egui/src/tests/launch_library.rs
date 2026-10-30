@@ -866,7 +866,7 @@ fn photos_dropped_on_the_launch_list_go_into_the_library_chosen() {
     assert!(crate::panels::library_problem::holds_drops(&h.app));
     assert_eq!(crate::panels::library_problem::hold_dropped(&mut h.app, &ctx, photos.clone()), None, "held while no library is open");
     assert_eq!(h.app.library_problem.as_ref().map(|p| p.pending_import.clone()), Some(photos.clone()));
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("once a library is open")), "{:?}", h.app.ui.toast);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.text.contains("once a library is open")), "{:?}", h.app.ui.toast);
     assert_eq!(h.app.session.catalog.len(), 0, "nothing goes into the session the library replaces");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryOpen"}), T)["ok"], true);
     settle(&mut h);

@@ -180,7 +180,7 @@ fn targeted_adjustment_announces_itself_and_esc_turns_it_off() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.ui.tool, "tat:curve");
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Esc")), "{:?}", h.app.ui.toast);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.text.contains("Esc")), "{:?}", h.app.ui.toast);
     let r = h.request("ui.key", json!({"key": "esc"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();

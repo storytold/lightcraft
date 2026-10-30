@@ -176,9 +176,13 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
                     _ => "Smart previews folder changed".to_string(),
                 };
-                app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
+                if failed > 0 {
+                    app.toast_error(ui.ctx(), crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg));
+                } else {
+                    app.toast(ui.ctx(), msg);
+                }
             }
-            Err(e) => app.toast(ui.ctx(), e),
+            Err(e) => app.toast_error(ui.ctx(), e),
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));

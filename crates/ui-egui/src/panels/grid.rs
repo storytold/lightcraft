@@ -1035,7 +1035,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
                     let n = local.len();
                     match app.run("photo.addToLibrary", json!({"ids": local})) {
                         Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Added {n} photo{} to My Photos", if n == 1 { "" } else { "s" }, n = n)),
-                        Err(e) => app.toast(ui.ctx(), e),
+                        Err(e) => app.toast_error(ui.ctx(), e),
                     }
                 }
             }
@@ -1252,7 +1252,7 @@ pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid:
 /// not. The selection stays as it is (Compare keeps its pair).
 pub fn toggle_stack(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     if let Err(e) = app.run("stack.toggle", json!({"ids": [id.0]})) {
-        app.toast(ctx, e);
+        app.toast_error(ctx, e);
     }
 }
 
@@ -1305,7 +1305,7 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
                     crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
                 );
             }
-            Err(e) => app.toast(ui.ctx(), e),
+            Err(e) => app.toast_error(ui.ctx(), e),
         }
     }
     let live = super::compare::live(app, id);
@@ -1315,7 +1315,7 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
     if set_reference.clicked()
         && let Err(e) = app.run("photo.setReference", json!({"id": id.0}))
     {
-        app.toast(ui.ctx(), e);
+        app.toast_error(ui.ctx(), e);
     }
     ui.separator();
 }
@@ -1353,7 +1353,7 @@ fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 if b.clicked() {
                     match app.run("album.addPhotos", json!({"id": aid})) {
                         Ok(r) => toast_skipped(app, ui.ctx(), &r),
-                        Err(e) => app.toast(ui.ctx(), e),
+                        Err(e) => app.toast_error(ui.ctx(), e),
                     }
                 }
             }
@@ -1399,7 +1399,7 @@ fn context_menu_file_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         {
             match app.run("photo.moveToFolder", json!({"folder": into})) {
                 Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
-                Err(e) => app.toast(ui.ctx(), e),
+                Err(e) => app.toast_error(ui.ctx(), e),
             }
         }
     }
@@ -1498,7 +1498,7 @@ fn context_menu_locate_and_export(app: &mut LightcraftApp, ui: &mut egui::Ui, id
                         let n = r["files"].as_array().map_or(0, Vec::len);
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n));
                     }
-                    Err(e) => app.toast(ui.ctx(), e),
+                    Err(e) => app.toast_error(ui.ctx(), e),
                 }
             }
         }

@@ -287,7 +287,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
             Err(e) => {
                 log::warn!("import: {e}");
-                app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
+                app.toast_error(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
                 return;
             }
         }
@@ -463,22 +463,26 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     let mut msg = import_summary(app, &task);
     if task.warnings.is_empty() {
-        app.toast(ctx, msg);
+        if task.failed > 0 {
+            app.toast_error(ctx, msg);
+        } else {
+            app.toast(ctx, msg);
+        }
     } else {
         msg.push_str("\n\n");
         msg.push_str(&xmp_warnings_text(&task.warnings));
-        app.toast_for(ctx, msg, 8.0);
+        app.toast_error_for(ctx, msg, 8.0);
     }
 }
 
 /// The end of an automatic import or of one that only browses: a toast only when there is something to warn about.
 fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask) {
     if !task.warnings.is_empty() {
-        app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+        app.toast_error_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
     } else if task.auto && task.imported > 0 {
         app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, crate::i18n::plural_s(task.imported)));
     } else if !task.auto && task.failed > 0 {
-        app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, crate::i18n::plural_s(task.failed)));
+        app.toast_error(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, crate::i18n::plural_s(task.failed)));
     }
 }
 

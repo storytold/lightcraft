@@ -104,7 +104,7 @@ pub(super) fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: 
             if r.clicked()
                 && let Err(e) = crate::links::open(app, SAM_HELP)
             {
-                app.toast(ui.ctx(), e);
+                app.toast_error(ui.ctx(), e);
             }
         });
     }

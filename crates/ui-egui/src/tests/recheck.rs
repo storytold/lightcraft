@@ -58,7 +58,7 @@ fn opening_a_library_rechecks_stale_preview_only_raws_in_the_background() {
     assert!(app.session.activity.list().iter().all(|r| r.kind != "recheck"), "the row goes with the task");
     let p = app.session.catalog.photo(id).unwrap();
     assert_eq!(p.preview_only, None);
-    assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "1 raw can now be developed from its raw data"), "{:?}", app.ui.toast);
+    assert!(app.ui.toast.as_ref().is_some_and(|t| t.text == "1 raw can now be developed from its raw data"), "{:?}", app.ui.toast);
     // once per opened library
     app.ui.toast = None;
     crate::recheck::tick(&mut app);
@@ -93,7 +93,7 @@ fn notice_reload_button_rereads_the_file() {
     assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
     assert!(app.session.activity.list().iter().all(|r| r.kind != "reload"), "the row goes with the task");
     assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
-    assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
+    assert!(app.ui.toast.as_ref().is_some_and(|t| t.text == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
     // one undo step
     assert_eq!(app.session.undo.last().map(|u| u.label.as_str()), Some("Reload Changed Files"));
 }
@@ -275,7 +275,7 @@ fn a_cancelled_reload_reports_only_what_it_did() {
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
         if read {
             assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
-            assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
+            assert!(app.ui.toast.as_ref().is_some_and(|t| t.text == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
         } else {
             assert!(app.session.catalog.photo(id).unwrap().preview_only.is_some());
             assert!(app.ui.toast.is_none(), "a cancelled reload reported {:?}", app.ui.toast);

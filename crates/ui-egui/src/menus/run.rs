@@ -1706,7 +1706,7 @@ fn find_missing_done(app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<
             app.ui.last_find_missing_result = Some(Ok(v));
         }
         Err(e) => {
-            app.toast(ctx, e.clone());
+            app.toast_error(ctx, e.clone());
             app.ui.last_find_missing_result = Some(Err(e));
         }
     }
@@ -2025,7 +2025,7 @@ fn file_import_keywords_command(app: &mut LightcraftApp, ctx: &egui::Context, id
             }
             app.toast(ctx, msg);
         }
-        Err(e) => app.toast(ctx, e.clone()),
+        Err(e) => app.toast_error(ctx, e.clone()),
     }
     r
 }
@@ -2049,7 +2049,7 @@ fn file_export_keywords_command(app: &mut LightcraftApp, ctx: &egui::Context, id
     };
     let r = app.session.execute("keyword.export", &json!({"path": path})).map_err(|e| e.to_string());
     if let Err(e) = &r {
-        app.toast(ctx, e.clone());
+        app.toast_error(ctx, e.clone());
     }
     if let Ok(v) = &r {
         let n = v["keywords"].as_u64().unwrap_or(0);
@@ -2123,7 +2123,12 @@ fn file_import_curve_presets_command(app: &mut LightcraftApp, ctx: &egui::Contex
     };
     let r = app.session.execute("curve.importPresets", &json!({"paths": paths})).map_err(|e| e.to_string());
     if let Ok(v) = &r {
-        app.toast(ctx, curve_import_message(v));
+        let msg = curve_import_message(v);
+        if v["failed"].as_array().is_some_and(|f| !f.is_empty()) {
+            app.toast_error(ctx, msg);
+        } else {
+            app.toast(ctx, msg);
+        }
     }
     r
 }

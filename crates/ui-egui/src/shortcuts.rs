@@ -518,7 +518,7 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
         && matches!(id, "app.export" | "app.exportPrevious")
     {
         // an export that can't start (e.g. no folder) says why instead of doing nothing
-        app.toast(ctx, e);
+        app.toast_error(ctx, e);
     }
 }
 
@@ -561,7 +561,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
     if let Err(e) = app.run(f, json!({}))
         && matches!(f, "app.export" | "app.exportPrevious")
     {
-        app.toast(ctx, e);
+        app.toast_error(ctx, e);
     }
     match f {
         "photo.pick" => flag_toast(app, ctx, lightcraft_catalog::Flag::Pick),

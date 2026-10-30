@@ -64,7 +64,7 @@ fn failed_save_is_reported_and_shown_until_a_save_succeeds() {
     assert_eq!(h.app.session.catalog.albums().count(), 1, "the change is applied");
     h.step();
     h.step();
-    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    let toast = h.app.ui.toast.clone().map(|t| t.text).unwrap_or_default();
     assert!(toast.contains("not written to disk"), "{toast}");
     assert!(has_indicator(&h));
     let inspect = h.request("ui.inspect", json!({}), T);
@@ -77,5 +77,5 @@ fn failed_save_is_reported_and_shown_until_a_save_succeeds() {
     h.step();
     h.step();
     assert!(!has_indicator(&h));
-    assert_eq!(h.app.ui.toast.clone().map(|t| t.0).as_deref(), Some("Library saved"));
+    assert_eq!(h.app.ui.toast.clone().map(|t| t.text).as_deref(), Some("Library saved"));
 }
