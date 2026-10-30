@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (gap 30: the Info panel shows the selected photos' shared metadata and marks mixed fields; gap 28: ⌘⌥⇧C / ⌘⌥⇧V copy and paste metadata; gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (#2783: GPU histogram and result diagnostics, no ranked gap closes; gap 30: the Info panel shows the selected photos' shared metadata and marks mixed fields; gap 28: ⌘⌥⇧C / ⌘⌥⇧V copy and paste metadata; gap 13: before a Lightroom catalog import the app asks merge or new library, #2672; gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains; gap 28: ⌘L Enable Filters switches the filter off and on; gap 15: Japanese photo and postcard paper sizes in the Print page setup and PDF)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -61,6 +61,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-10-24: #2783 moves the SDR histogram and unwritten-pixel diagnostics to GPU reductions, with a 4,108-byte summary and exact CPU sampling. Current presentation still reads pixels (#1228); render admission/OOM (#1764) and mask caching (#1145) are unchanged. No ranked gap or readiness estimate changes.
+
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
 
 - 2026-10-22: PSD/PSB imports and metadata readers now expose embedded EXIF resource 1058 and XMP resource 1060 for capture dates, GPS and All Metadata (#2519); imported PSD edit copies retain their capture date, and the `removeLocation` Original-export guard sees embedded PSD/PSB GPS. No ranked gap or headline feature count closes.
@@ -86,6 +88,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 |---|---|---|
 | 2026-10-24 | minor | Gap 28: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata; no key leaves the entry; hours unchanged |
 | 2026-10-24 | minor | Gap 30 shrinks: the Info panel's Show Metadata For (Target Photo / Selected Photos, `view.infoSelectedPhotos`) shows the selected photos' shared values and marks fields that differ as Mixed; the All Metadata dialog remains; 1–3 h (was 4–8) |
+| 2026-10-24 | patch | #2783: GPU histogram/result reductions; no ranked gap or readiness count closes |
 | 2026-10-23 | minor | Gap 13: before a Lightroom catalog import the app asks whether it merges into the open library or goes into a new one (opt-out in Settings, #2672); hours unchanged |
 | 2026-10-22 | patch | Gap 28: View shows the current grid-cycle key beside Photo Grid and Square Grid (#2500); no new binding and no change to the remaining shortcut gap or hours |
 | 2026-10-22 | minor | Gap 15: the Print page setup and PDF gain the Japanese photo and postcard paper sizes (L判 89×127, 2L判 127×178, KG判 102×152, はがき 100×148, 往復はがき 148×200, 六切 203×254, 四切 254×305, 名刺 55×91 mm), by their customary names; gap not closed |

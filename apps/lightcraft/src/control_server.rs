@@ -495,6 +495,8 @@ mod tests {
         assert!(waited < Duration::from_secs(2), "the client saw the close only after {waited:?}, when the program exited");
     }
 
+    /// Reject junk over loopback, preserving both replies even when Windows resets a socket
+    /// closed with unread pipelined input instead of reporting a clean EOF.
     #[test]
     fn tcp_connection_is_closed_after_junk() {
         // End to end over a real loopback socket (the transport the app uses).
@@ -509,8 +511,14 @@ mod tests {
         c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n{\"method\":\"y\"}\n").unwrap();
         let mut text = String::new();
-        c.read_to_string(&mut text).unwrap(); // returns at EOF: the server closed the connection
+        let closed = c.read_to_string(&mut text);
         server.join().unwrap();
+        // The third pipelined request can remain unread when junk closes the socket. Windows
+        // may report that close as WSAECONNRESET; timeouts and every other error still fail.
+        assert!(
+            closed.is_ok() || (cfg!(windows) && closed.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::ConnectionReset)),
+            "the server must close the connection: {closed:?}"
+        );
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2, "{text}");
         assert!(lines[0].contains("\"id\":7"));

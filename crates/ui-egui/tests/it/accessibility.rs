@@ -14,7 +14,9 @@ fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp>
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+    // Audit screen-reader semantics with the app's missing-font fallback. Optional craft-fonts
+    // are absent on some test hosts; egui 0.37's harness otherwise panics before the audit runs.
+    let mut h = Harness::builder().allow_missing_glyphs().with_size(vec2(1500.0, 950.0)).build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);

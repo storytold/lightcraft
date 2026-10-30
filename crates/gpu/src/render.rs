@@ -11,7 +11,7 @@ use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
-use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
+use lightcraft_raster::{Plane, Rgb32f, Rgba8};
 
 use crate::ctx::{Buf, FailKind, Gpu, fail, groups1, groups2};
 use crate::params::{Present, finish_block};
@@ -161,6 +161,14 @@ impl<'a> Cx<'a> {
         self.pending = 0;
         let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
         self.gpu.finish_and_read(enc, b, len)
+    }
+
+    /// Submit pending work and read `len` 32-bit words plus a summary in one map/wait.
+    /// The first result is decoded as `T`; readback failures are recorded on this render.
+    pub fn read_with_tail<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize, tail: &Buf) -> (Vec<T>, Vec<u32>) {
+        self.pending = 0;
+        let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
+        self.gpu.finish_and_read_with_tail(enc, b, len, Some(tail))
     }
 
     /// Submit what is recorded so far without waiting. Renders submit stage by stage and every
@@ -748,25 +756,32 @@ pub fn render(
     } else {
         None
     };
-    let data: Vec<[u8; 4]> = cx.read(&out, n);
+    let mut reduction = crate::reduction::Reduction::encode(&mut cx, &out, w, h, plan.keep)?;
+    if fault == Some(crate::Fault::DropSummary) {
+        reduction.buffer = cx.zeroed(crate::reduction::WORDS);
+    }
+    let (data, summary): (Vec<[u8; 4]>, _) = cx.read_with_tail(&out, n, &reduction.buffer);
     let image = Rgba8 { width: w, height: h, data };
-    lap("finish + readback", &mut t, &mut cx);
+    lap("finish + reduction + readback", &mut t, &mut cx);
     if crate::ctx::failed() {
         return None;
     }
     // The per-pixel kernel writes alpha 255 everywhere and `out` was cleared: a pixel with any
     // other alpha means work silently did not run (a driver that reset or dropped a submission
     // without reporting it — issue #78's all-black exports).
-    let unwritten = unwritten(&image.data);
+    let summary = match reduction.decode(&summary) {
+        Ok(s) => s,
+        Err(why) => {
+            fail(FailKind::Fatal, format!("invalid GPU result summary: {why}"));
+            return None;
+        }
+    };
+    let unwritten = summary.unwritten;
     if unwritten > 0 {
         fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({unwritten} of {n} pixels unwritten)"));
         return None;
     }
-    let histogram = match plan.keep {
-        Some(k) => Histogram::of_srgb8(&image.crop(k.x, k.y, k.w, k.h)),
-        None => Histogram::of_srgb8(&image),
-    };
-    lap("histogram", &mut t, &mut cx);
+    let histogram = summary.histogram;
     // An entirely black result (upstream work that did not run would give that too): redo it on
     // the CPU, which costs time only for the rare photo that really is black.
     if n >= 4096 && [&histogram.r, &histogram.g, &histogram.b].iter().all(|c| c.first() == Some(&histogram.total)) {
@@ -789,11 +804,6 @@ pub fn render(
         image = image.crop(k.x, k.y, k.w, k.h);
     }
     Some(Rendered { image, histogram, deep: None })
-}
-
-/// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).
-fn unwritten(data: &[[u8; 4]]) -> usize {
-    data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
 /// The white-balanced, retouched, denoised image.

@@ -1,5 +1,7 @@
 # GPU develop pipeline (M5.2)
 
+> **Last updated:** 2026-10-26 · #2783: GPU reduction contracts and Windows Vulkan / DX12 verification.
+
 The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gpu` (`crates/gpu`, L3)
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
@@ -174,7 +176,7 @@ walks the drive.
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
   per-plane radii) and lives in it as an extension, so the UI needs no change. The uploaded source is
-  kept per view. A tone / colour / exposure drag re-runs one dispatch of `finish` plus the readback.
+  kept per view. A tone / colour / exposure drag re-runs `finish`, the compact histogram/validation reduction and the readback.
 - One command encoder per render; the only mid-render readback is the airlight samples (dehaze, when
   the dark channel is recomputed). Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
   thread that dropped them has submitted — allocating and zero-filling fresh 100–300 MB buffers
@@ -210,7 +212,7 @@ cannot vouch for:
   base radius, dehaze dark channel) and some need global values (airlight percentile), so tiles
   would need wide overlaps and a two-pass plan — the CPU renders those exports instead.
 - **Sanity checks on the result.** The output buffer is cleared before the per-pixel stage, which
-  writes alpha 255 everywhere: any pixel without it means work did not run, and the GPU is not used
+  writes alpha 255 everywhere: a GPU reduction counts pixels without it across the whole working image, including unsampled pixels and context outside a kept window. Any such pixel means work did not run, and the GPU is not used
   again (`incomplete image`). An entirely black result (n ≥ 4096 pixels) is re-rendered on the CPU
   for that render only — a really black photo costs one extra CPU render, nothing else; there are
   no false positives because the CPU result is what is returned.
@@ -302,6 +304,137 @@ compilation: ~0.4 s once per process — the desktop app starts it on a backgrou
 (`lightcraft_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
 the device on their first GPU render. `lightcraft_gpu::ready()` asks without blocking.
 
+## GPU histogram and result diagnostics (#2783)
+
+The 8-bit result is reduced on the GPU before overlays are applied. One dispatch builds
+per-workgroup partials using baseline WGSL workgroup atomics, and a second sums them. No optional
+GPU features are requested. At most 256 partials (~1 MiB) are allocated through the existing
+buffer pool, independent of image size.
+
+The summary is **1,027 u32 words / 4,108 bytes**: R/G/B/luma bins (256 each), sampled total,
+unwritten-pixel count and visited-pixel count. Histogram sampling exactly matches
+`Histogram::of_srgb8`: the step is computed from the kept region's area and anchored at that
+region's origin. Validation still visits every pixel of the working image, including context
+outside a kept zoom window. Cleared reduction buffers, visited/sample totals and per-channel bin
+sums reject missing or inconsistent reductions. Unwritten pixels retain the fatal fallback;
+entirely black sampled histograms retain the existing CPU verification and pixel-count threshold.
+HDR histograms and CPU-only output paths are unchanged.
+
+Validation: all eight `xtask ci` gates passed. On this host, native gates used MacPorts Rust
+1.99.1 and the WASM gate used rustup Rust 1.95.0 with its installed WASM standard library through
+a temporary `CARGO` dispatcher (no repository tooling or checks were changed). The standard
+optional corpus/font/model checks reported 169 skips; private NEFs were checked separately below.
+
+**Presentation still reads pixels.** Until #1228 provides native-texture presentation, the renderer
+appends the summary to the image's staging readback: one submission/map/wait for both, no CPU scan
+for histogram or alpha validation, and 4,108 additional readback bytes. A consumer needing only the
+summary can read the reduction buffer alone; the GPU tests and benchmark exercise that path.
+Exports, screenshots and headless consumers keep their CPU-readable image.
+
+### Measurements (2026-10-24, Apple M5 Pro / Metal)
+
+Minimum of 30 warmed iterations, procedural RGBA8 input already on the GPU, idle app/builds:
+
+| Size | Previous pixel readback + CPU scans | GPU reduction + pixel readback | GPU summary only |
+|---|---:|---:|---:|
+| 256 × 256 | 0.281 ms | 0.322 ms | 0.296 ms |
+| 1920 × 1280 | 1.766 ms | 0.905 ms | 0.395 ms |
+| 3072 × 2304 | 3.867 ms | 2.615 ms | 0.604 ms |
+| 6000 × 4000 | 11.438 ms | 8.795 ms | 1.458 ms |
+
+The small-image case adds ~0.041 ms: the dispatch overhead outweighs the short CPU scan there.
+For 24 MP, summary-only readback transfers 4,108 bytes instead of 96,000,000; today's combined
+path transfers 96,004,108 bytes. The CPU histogram/alpha scan alone measured 0.769 ms at loupe
+size and 2.449 ms at 24 MP. These are isolated postprocessing measurements, not complete renders.
+
+End-to-end `cargo xtask bench`, minimum of 7 runs on the same procedural 24 MP input, base
+`4ae30894` versus this change: warm exposure rendering at 1920 × 1280 changed from **2.4 to
+1.5 ms wall / 1.9 to 1.1 ms process CPU** on the GPU path. Full-size GPU rendering stayed
+approximately unchanged (**444.0 → 443.4 ms**, process CPU **186.2 → 190.0 ms**): its spatial
+filters dominate, so this change does not promise a general export speedup. Do not compare
+first-device/kernel initialization times, which are affected by the driver's shader cache.
+
+The additional real-NEF benchmark (one of the supplied D750 files, seven runs) measured warm
+exposure rendering at **2.1 ms wall / 1.2 ms process CPU** on the GPU path, and full-size
+6032 × 4032 rendering at **436.6 ms wall / 183.8 ms process CPU**. The full-size CPU/GPU pixel
+comparison had max 1 LSB and mean 0.0033 LSB with the benchmark's heavier settings. This real-file
+run has no pre-change baseline; the following test supplies direct correctness assertions.
+
+### Verification on private RAW files
+
+2026-10-24, Apple M5 Pro / Metal: all 11 Nikon D750 NEFs supplied by the contributor decoded
+from sensor data at 6032 × 4032. Preview, an offset 1101 × 991 zoom window, and full-resolution
+renders gave **33 CPU/GPU comparisons**, max 1 LSB and worst mean 0.000098 LSB per RGB channel.
+Every GPU histogram exactly matched the CPU histogram of the same output pixels; repeating each
+GPU render with a warm stage cache produced identical pixels and histogram. Originals were read
+only, and no private media or sidecars were added to the repository. The opt-in test below repeats
+these assertions on a caller-selected NEF directory. These RAW runs verify Metal; the procedural
+Windows checks below separately verify the new reduction and readback paths on Vulkan and DX12.
+
+### Windows backend verification (2026-10-26)
+
+Windows, Intel(R) Graphics, driver **32.0.101.8831**, Rust **1.99.0**, native MSVC test profile:
+the reduction tests passed on both **DX12** (the default FXC compiler) and **Vulkan**
+(reported driver: Intel Corporation 101.8831). Each backend ran three tests with no failures
+or GPU skips; the performance benchmark remained ignored. The GPU test prints the selected
+adapter, backend and driver so a successful CPU-only run cannot be mistaken for backend evidence.
+
+The checks require exact CPU histograms for 1 × 1 through 2101 × 2003 images, sampling-step
+boundaries, offset crops and constant colours. They exercise both summary-only and combined
+pixel/summary readback, count invalid alpha outside the sampled region, reject corrupt or
+incomplete summaries, and reject oversized readback requests without panicking. These checks
+verify the reduction shaders and readback path, not RAW colour fidelity on every driver.
+
+Reproduce in PowerShell, running each command in a separate test process:
+
+```powershell
+$env:LIGHTCRAFT_GPU_BACKEND = 'dx12'
+cargo test -p lightcraft-gpu --lib reduction::tests:: -- --nocapture
+$env:LIGHTCRAFT_GPU_BACKEND = 'vulkan'
+cargo test -p lightcraft-gpu --lib reduction::tests:: -- --nocapture
+Remove-Item Env:LIGHTCRAFT_GPU_BACKEND
+```
+
+`cargo xtask ci --hardware` additionally probes all compiled backends, runs the GPU suite on
+each backend with a hardware adapter, and records results in `target/ci/report.json` and
+`target/ci/summary.md`. Check the skip report as well as the test exit status on other machines.
+
+On this Windows host, all nine steps passed: fmt, clippy (`-D warnings`), HEIF, workspace tests
+and doctests, GPU backends (including Vulkan and DX12), parity, layers, assets and WASM. The run
+also exposed Windows-only test assumptions about unused Unix variables, path separators, TCP
+reset on unread pipelined input, and reading an empty locked file; these were corrected in test
+code without changing production behaviour. Optional corpus, font and model checks still skip
+when their inputs are absent.
+
+### Reproducing the measurements
+
+Run from the repository root, with other builds/renders idle. Inputs are procedural, so no corpus
+or AI model is needed. GPU tests report a skip when no hardware adapter is available.
+
+```sh
+# Isolated reduction benchmark; input upload and shader compilation are outside the measurement.
+N=30 cargo test -p lightcraft-gpu --release --lib reduction::tests::bench_result_reduction -- --ignored --exact --nocapture
+
+# End-to-end CPU/GPU render benchmark, including process CPU time; saves history and compares runs.
+N=7 cargo xtask bench
+
+# Optional real RAW input (provide your own path).
+N=7 cargo xtask bench /absolute/path/to/photo.arw
+
+# Exact histogram/diagnostic tests, CPU/GPU equivalence and failure recovery.
+cargo test -p lightcraft-gpu --release
+
+# Optional private Nikon NEFs: reads every .NEF in the directory, writes no photos or sidecars.
+LC_HISTOGRAM_RAW_DIR=/absolute/path/to/RAW cargo test -p lightcraft-engine --release --test it gpu_histogram_raw:: -- --ignored --nocapture
+```
+
+The isolated benchmark reports CPU scan time, the previous full-readback + CPU-scan path, GPU
+summary-only latency, combined GPU summary + pixel-readback latency, and bytes transferred.
+Timings are minimum wall-clock milliseconds after warmup, including host dispatch, synchronization,
+readback and summary decoding; they are **not GPU timestamp measurements**. `cargo xtask bench`
+separately records wall and process CPU time in `target/bench/history.jsonl`. Use identical inputs,
+settings and iteration counts on the base and updated revisions when comparing whole renders.
+
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its
   current settings, else (raws with their import look) the embedded camera JPEG, else a
@@ -354,4 +487,3 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area
   table or a downsampled dark channel would cut them further.
-- GPU histogram (atomics) to skip the CPU pass over the readback.

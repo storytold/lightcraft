@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(any(unix, windows)))]
 use std::time::SystemTime;
 
-use lightcraft_catalog::safe_file::{same_file, same_file_strict};
+use lightcraft_catalog::safe_file::same_file_strict;
 use lightcraft_catalog::{Catalog, Source};
 
 /// The directory entry a screenshot is about to write, pinned at request admission.
@@ -140,37 +140,31 @@ impl OriginalGuard {
     }
 
     fn check_target(&self, target: &Path, hard_links: bool) -> Result<(), String> {
-        if std::fs::symlink_metadata(target).is_err() {
-            return Ok(()); // nothing there to replace
+        match std::fs::symlink_metadata(target) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()), // nothing there to replace
+            Err(error) => return Err(format!("{}: cannot inspect write target: {error}", target.display())),
+            Ok(_) => {}
         }
+        let matches = |original: &Path, what: &str| match same_file_strict(original, target) {
+            // Offline originals and sidecars that were never written have no existing file
+            // to protect. Confirm the missing candidate; do not suppress errors on the target.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && original.try_exists().is_ok_and(|exists| !exists) => Ok(false),
+            result => result.map_err(|error| {
+                format!("{}: cannot verify file identity against {what} ({}): {error}; writing was refused", target.display(), original.display())
+            }),
+        };
         let mut names: Vec<String> = target.file_name().map(|n| n.to_string_lossy().to_lowercase()).into_iter().collect();
         if let Some(n) = std::fs::canonicalize(target).ok().and_then(|c| c.file_name().map(|n| n.to_string_lossy().to_lowercase())) {
             names.push(n);
         }
-        // The identity check refuses a target whose file identity cannot be read, so an unreadable
-        // hard link to an original is not taken for an ordinary file.
-        let refuse_if_same = |p: &Path, what: &str| -> Result<(), String> {
-            let same = if hard_links {
-                same_file_strict(p, target).map_err(|e| {
-                    format!(
-                        "{}: LightCraft cannot tell whether this is {what} in the library ({e}) and never writes over an original (choose another folder or file name)",
-                        target.display()
-                    )
-                })?
-            } else {
-                same_file(p, target)
-            };
-            if same {
-                return Err(format!(
-                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
-                    target.display()
-                ));
-            }
-            Ok(())
-        };
         for n in &names {
             for (p, what) in self.by_name.get(n).into_iter().flatten() {
-                refuse_if_same(p, what)?;
+                if matches(p, what)? {
+                    return Err(format!(
+                        "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                        target.display()
+                    ));
+                }
             }
         }
         // An imported hard link or symlink can have a different name from its original. A write
@@ -182,7 +176,12 @@ impl OriginalGuard {
             if !hard_links && std::fs::read_link(p).is_err() {
                 continue;
             }
-            refuse_if_same(p, what)?;
+            if matches(p, what)? {
+                return Err(format!(
+                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                    target.display()
+                ));
+            }
         }
         Ok(())
     }
@@ -198,7 +197,7 @@ impl crate::Session {
     /// path (the usual case) is answered without building the guard over the whole library.
     pub fn check_write_target(&self, path: &str) -> Result<(), String> {
         let path = Path::new(path);
-        if std::fs::symlink_metadata(path).is_err() {
+        if std::fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) {
             return Ok(()); // nothing there to replace
         }
         self.original_guard().check(path)
@@ -272,6 +271,61 @@ impl crate::Session {
 mod tests {
     use super::*;
     use lightcraft_catalog::{Op, Photo, PhotoId};
+
+    /// Both the name index and the differently named hard-link scan must refuse admission
+    /// and revalidation when Windows permits replacement but denies identity-reader handles.
+    #[cfg(windows)]
+    #[test]
+    fn unreadable_original_identity_refuses_named_and_hard_link_write_targets() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = std::env::temp_dir().join(format!("lc-original-identity-errors-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("original.jpg");
+        let alias = dir.join("different-name.png");
+        std::fs::write(&original, b"keep original bytes").unwrap();
+        std::fs::hard_link(&original, &alias).unwrap();
+        let mut session = crate::Session::new();
+        let targets = [&original, &alias];
+        let queued: Vec<_> = targets.iter().map(|path| session.pin_write_target(&path.to_string_lossy()).unwrap()).collect();
+        let photo = Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "original.jpg", "JPEG", 1, 1, "");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+
+        // FILE_SHARE_DELETE allows replacement while withholding read sharing. Metadata can
+        // still be inspected, but the identity reader's handle fails with a sharing violation.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(4).open(&original).unwrap();
+        for (path, target) in targets.iter().zip(&queued) {
+            assert!(std::fs::symlink_metadata(path).is_ok());
+            assert!(same_file_strict(&original, path).is_err(), "identity must actually be unavailable");
+            let admission = session.pin_write_target(&path.to_string_lossy()).unwrap_err();
+            assert!(admission.contains("cannot verify file identity"), "{admission}");
+            let revalidation = session.revalidate_write_target(target).unwrap_err();
+            assert!(revalidation.contains("cannot verify file identity"), "{revalidation}");
+        }
+        drop(held);
+        for path in targets {
+            assert_eq!(std::fs::read(path).unwrap(), b"keep original bytes");
+        }
+        drop(session);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A catalogue may contain offline originals and absent XMPs: confirmed missing candidates
+    /// do not prevent writing an unrelated existing file.
+    #[test]
+    fn missing_originals_and_sidecars_do_not_block_unrelated_write_targets() {
+        let dir = std::env::temp_dir().join(format!("lc-offline-original-guard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("output.png");
+        std::fs::write(&target, b"existing screenshot").unwrap();
+        let mut guard = OriginalGuard::default();
+        guard.add(&dir.join("offline.jpg"), "offline.jpg");
+        assert!(guard.check_identity(&target).is_ok());
+        // Same-name candidates are skipped too, without suppressing unrelated I/O errors.
+        guard.add(&dir.join("missing-folder/output.png"), "output.png");
+        assert!(guard.check_identity(&target).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn originals_and_their_sidecars_are_protected_by_identity() {
@@ -370,12 +424,12 @@ mod tests {
         // identity of either name cannot be read while it is held.
         let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&original).unwrap();
         let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
-        assert!(refused.contains("cannot tell whether"), "{refused}");
+        assert!(refused.contains("cannot verify file identity"), "{refused}");
         drop(held);
 
         let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
         assert!(refused.contains("original"), "{refused}");
-        assert!(!refused.contains("cannot tell whether"), "{refused}");
+        assert!(!refused.contains("cannot verify file identity"), "{refused}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

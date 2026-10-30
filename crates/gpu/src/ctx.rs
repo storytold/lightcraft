@@ -15,6 +15,11 @@ struct Module {
 
 const MODULES: &[Module] = &[
     Module {
+        src: include_str!("wgsl/reduction.wgsl"),
+        bindings: &[("pixels", false, "u32"), ("partials", true, "u32"), ("summary", true, "u32")],
+        entries: &["summary_partial", "summary_reduce"],
+    },
+    Module {
         src: include_str!("wgsl/finish.wgsl"),
         bindings: &[
             ("img", false, "f32"),
@@ -592,22 +597,53 @@ impl Gpu {
     /// A failed readback (device lost, map error, timeout) fails the render ([`FailKind::Fatal`])
     /// and returns zeros, which the caller discards; after an earlier failure in the same render
     /// nothing more is submitted.
-    pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
-        assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
-        let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
+    pub fn finish_and_read<T: bytemuck::Pod>(&self, enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
+        self.finish_and_read_with_tail(enc, src, len, None).0
+    }
+
+    /// Read pixels and an optional compact summary with a single submission, map and wait.
+    /// A summary-only consumer can instead read its buffer through `finish_and_read`.
+    /// `len` counts 32-bit words; their byte length must be divisible by the size of `T`.
+    /// Invalid sizes record a fatal failure and return empty vectors. Device/map failures
+    /// return zero-filled vectors for the caller to discard after checking the render failure.
+    pub fn finish_and_read_with_tail<T: bytemuck::Pod>(
+        &self,
+        mut enc: wgpu::CommandEncoder,
+        src: &Buf,
+        len: usize,
+        tail: Option<&Buf>,
+    ) -> (Vec<T>, Vec<u32>) {
+        // `len` counts 32-bit words, not T elements: RGB f32 uses three words per element.
+        // Reject a malformed internal request before slicing or recording a GPU copy.
+        let size = len.checked_mul(4);
+        let tail_size = tail.map_or(Some(0), |b| b.len.checked_mul(4));
+        let total = size.zip(tail_size).and_then(|(a, b)| a.checked_add(b));
+        let Some((size, total)) = size.zip(total).filter(|(size, total)| {
+            len <= src.len
+                && size.checked_rem(std::mem::size_of::<T>()) == Some(0)
+                && *total > 0
+                && (*total as u64) <= self.device.limits().max_buffer_size
+        }) else {
+            fail(FailKind::Fatal, "invalid readback size or element type".into());
+            return (Vec::new(), Vec::new());
+        };
+        let zeros = || (vec![<T as bytemuck::Zeroable>::zeroed(); size / std::mem::size_of::<T>()], vec![0; tail.map_or(0, |b| b.len)]);
         if failed() {
             return zeros();
         }
-        let size = (len * 4) as u64;
+        let size = size as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
-            size: size.max(4),
+            size: total as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         enc.copy_buffer_to_buffer(src.raw(), 0, &staging, 0, size);
+        if let Some(tail) = tail {
+            enc.copy_buffer_to_buffer(tail.raw(), 0, &staging, size, (tail.len * 4) as u64);
+        }
         self.submit([enc.finish()]);
-        let slice = staging.slice(..size);
+        let slice = staging.slice(..total as u64);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
@@ -632,17 +668,23 @@ impl Gpu {
             Ok(d) => d,
             Err(e) => return failed(format!("{e:?}")),
         };
-        // copied out in parallel parts: one thread reads mapped memory slowly (~2 GB/s, so ~45 ms for a 24 MP
-        // export's pixels), and the new vector's pages are first touched there too
-        let src: &[u8] = &data;
-        // (`len` counts 32-bit words: as many `T` as they fill)
-        let mut out = vec![<T as bytemuck::Zeroable>::zeroed(); src.len() / std::mem::size_of::<T>().max(1)];
+        let Some((image, tail)) = data.get(..size as usize).zip(data.get(size as usize..)) else {
+            return failed("truncated mapped buffer".into());
+        };
+        let (Ok(image), Ok(tail)): (Result<&[T], _>, Result<&[u32], _>) = (bytemuck::try_cast_slice(image), bytemuck::try_cast_slice(tail)) else {
+            return failed("invalid mapped buffer alignment".into());
+        };
+        // Copy image pixels in parallel parts: mapped memory is slow to read on one thread.
+        // Keep the compact summary separate so it cannot be mistaken for image pixels.
+        let mut pixels = vec![<T as bytemuck::Zeroable>::zeroed(); image.len()];
         const PART: usize = 1 << 20;
-        lightcraft_raster::par_rows(bytemuck::cast_slice_mut::<T, u8>(&mut out), PART, |k, part| {
+        let src: &[u8] = bytemuck::cast_slice(image);
+        lightcraft_raster::par_rows(bytemuck::cast_slice_mut::<T, u8>(&mut pixels), PART, |k, part| {
             if let Some(s) = src.get(k * PART..k * PART + part.len()) {
                 part.copy_from_slice(s);
             }
         });
+        let out = (pixels, tail.to_vec());
         drop(data);
         staging.unmap();
         out
@@ -860,6 +902,12 @@ mod tests {
         let b = g.upload(&data);
         let back: Vec<[u32; 3]> = g.finish_and_read(g.encoder(), &b, data.len());
         assert!(back.len() == 1 << 20 && back.as_flattened() == data.as_slice());
+        // A paired readback keeps the compact tail out of the image, even across parallel parts.
+        let summary = [17u32, 42, u32::MAX];
+        let tail = g.upload(&summary);
+        let (back, words): (Vec<[u32; 3]>, _) = g.finish_and_read_with_tail(g.encoder(), &b, data.len(), Some(&tail));
+        assert_eq!(back.as_flattened(), data.as_slice());
+        assert_eq!(words, summary);
     }
     /// Issue #1858: once a Vulkan or DX12 device is lost, wgpu 30 panics in `Device::poll` instead of
     /// returning an error. A render's readback panicked; while it unwound, a buffer's way back to

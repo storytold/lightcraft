@@ -466,6 +466,8 @@ mod tests {
         fs::write(d.join("copy.png"), b"original").unwrap();
         assert!(same_file(&p, &linked), "a hard link is the same file");
         assert!(same_file(&linked, &p));
+        assert!(same_file_strict(&p, &linked).unwrap());
+        assert!(same_file_strict(&linked, &p).unwrap());
         assert!(!same_file(&p, &d.join("copy.png")), "a copy with the same content and length is another file");
         let _ = fs::remove_dir_all(&d);
     }
