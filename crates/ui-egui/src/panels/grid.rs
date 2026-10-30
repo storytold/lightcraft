@@ -838,11 +838,34 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
             let ring = if t.skeleton.r() > 0x80 { t.text_dim } else { Color32::from_gray(170) };
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, ring), StrokeKind::Outside);
         }
-        if app.renderer.failure(Slot::Thumb(id)).is_some() {
+        if app.renderer.thumb_failure(id).is_some() {
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
+        } else {
+            paint_loading_cue(p, t, img_rect, ph, "badge:loading:", id.0);
         }
     }
+}
+
+/// A quiet cue on a thumbnail's placeholder while the picture is still on its way (an unreadable one
+/// says "!" instead): three small dots in the middle, in the icon color (3:1 on every theme's placeholder). It stands still, so
+/// Reduce motion has nothing to stop. It is left off tiles too small to hold it: judged by the
+/// `tile` (the placeholder's cell, smaller than 32 pt either way) and by the `rect` (the
+/// placeholder, which must have room for the dots). Registered as `{prefix}{id}` (the grid's
+/// `badge:loading:{id}`, the filmstrip's `film:badge:loading:{id}`).
+pub(crate) fn paint_loading_cue(p: &egui::Painter, t: &Tokens, tile: Rect, rect: Rect, prefix: &str, id: u64) {
+    const RADIUS: f32 = 1.75;
+    const GAP: f32 = 7.0;
+    const CUE_W: f32 = 2.0 * (GAP + RADIUS);
+    const CUE_H: f32 = 2.0 * RADIUS;
+    if tile.width().min(tile.height()) < 32.0 || rect.width() < CUE_W || rect.height() < CUE_H {
+        return;
+    }
+    let middle = rect.center();
+    for dx in [-GAP, 0.0, GAP] {
+        p.circle_filled(middle + vec2(dx, 0.0), RADIUS, t.icon);
+    }
+    crate::widgets::register_geometry(p.ctx(), format!("{prefix}{id}"), Rect::from_center_size(middle, vec2(2.0 * (GAP + RADIUS), 2.0 * RADIUS)));
 }
 
 fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, r: Rect, square: bool) {

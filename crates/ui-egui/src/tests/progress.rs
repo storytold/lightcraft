@@ -191,6 +191,8 @@ fn the_thumbnail_placeholder_stands_apart_in_every_theme() {
         }
         let mark = contrast(t.text, t.skeleton);
         assert!(mark >= 3.0, "{kind:?}: the failure mark on the placeholder is {mark:.2}:1");
+        let dots = contrast(t.icon, t.skeleton);
+        assert!(dots >= 3.0, "{kind:?}: the loading dots on the placeholder are {dots:.2}:1");
     }
 }
 
