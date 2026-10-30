@@ -305,5 +305,10 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Queued: it starts after {n} more": "Dalam antrean: dimulai setelah {n} lagi",
+  "Left alone: {n} (synchronize again to review them)": "Dibiarkan: {n} (sinkronkan lagi untuk meninjau)",
+  "Starts after {n} more": "Dimulai setelah {n} lagi",
+  "Remove from Queue: {label}": "Hapus dari antrean: {label}",
+  "Without review: copy to {destination}": "Tanpa tinjauan: salin ke {destination}"
 }

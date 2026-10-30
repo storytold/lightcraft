@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Queued: it starts after {n} more": "Na fila: começa depois de mais {n}",
+  "Left alone: {n} (synchronize again to review them)": "Deixados como estavam: {n} (sincronize de novo para revisá-los)",
+  "Starts after {n} more": "Começa depois de mais {n}",
+  "Remove from Queue: {label}": "Remover da fila: {label}",
+  "Without review: copy to {destination}": "Sem revisão: copiar para {destination}"
 }

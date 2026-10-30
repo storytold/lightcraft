@@ -2100,7 +2100,6 @@
   "Skipped: files that can't be read": "Пропущено: файли, які не вдається прочитати",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Цієї теки немає: її переміщено чи перейменовано, або її диск не під’єднано.",
   "Relink photos whose file was renamed or moved": "Перезв’язати фото, файл яких перейменовано чи переміщено",
-  "A folder is already being synchronized": "Тека вже синхронізується",
   "Synchronizing…": "Синхронізація…",
   "Relinked": "Перезв’язано",
   "Removed": "Прибрано",
@@ -2109,8 +2108,6 @@
   "Stopped": "Зупинено",
   "Stopped by an error (see the log)": "Зупинено через помилку (див. журнал)",
   "Not saved": "Не збережено",
-  "A folder is being synchronized": "Тека синхронізується",
-  "Wait for the import to finish": "Дочекайтеся завершення імпорту",
   "Show less": "Показати менше",
   "Quit while tasks are running?": "Вийти, поки виконуються завдання?",
   "Exporting contact sheet": "Експорт аркуша мініатюр",
@@ -2354,5 +2351,15 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Queued: it starts when the task ahead of it ends": "У черзі: почнеться, коли завершиться попереднє завдання",
+  "Another library was opened: nothing was done": "Відкрито іншу бібліотеку: нічого не зроблено",
+  "Photos of the folder changed while it was read: nothing was done": "Фотографії в теці змінилися під час читання: нічого не зроблено",
+  "Starts next": "Почнеться наступним",
+  "Queue without review": "Поставити в чергу без перевірки",
+  "Review…": "Перевірити…",
+  "A folder is already being scanned": "Тека вже сканується",
+  "Without review: add in place": "Без перевірки: додати на місці",
+  "Without review: copy into the library": "Без перевірки: копіювати до бібліотеки",
+  "Close the open dialog, then choose Review… again": "Закрийте відкрите вікно та ще раз виберіть «Перевірити…»"
 }

@@ -1,7 +1,10 @@
 //! The activity stack (issue #345): every long-running task in one place, floating in the top-left corner under the
 //! top bar while something runs — a row each with its name, a progress bar, what it is working on, and ✕ for the ones
-//! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
-//! `activity.cancel` like any other frontend would.
+//! that can be cancelled. A task waiting in line behind another of its lane has a row too, at once: its name, when it
+//! starts, and ✕ to take it out of the line. The tasks come from the engine's registry
+//! ([`lightcraft_engine::activity`]); ✕ runs `activity.cancel` like any other frontend would. While the library lane
+//! is busy, the row of the review's folder scan offers Queue without review, and a folder queued that way offers
+//! Review… on its waiting row ([`crate::import`]).
 
 use egui::{Align, Layout, Margin, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::activity::{TaskInfo, Unit};
@@ -55,14 +58,17 @@ fn detail_line(t: &TaskInfo) -> String {
 
 /// Draw the stack (called every frame, after the panels and dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let all = app.session.activity.list();
+    crate::import::prune_unreviewed(app);
+    // (a task waiting in line has a row without a bar: its name, when it starts, and ✕)
+    let all: Vec<TaskInfo> = app.session.activity.list();
     if all.is_empty() {
         app.activity_expanded = false;
         return;
     }
     // look again soon: a young task becomes due, bars move
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
+    // a running task shows once it has run a while; one waiting in line was just asked for, so it shows now
+    let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.waiting || t.age_ms >= SHOW_AFTER_MS).collect();
     if tasks.is_empty() {
         return;
     }
@@ -72,6 +78,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let max_height = (ctx.content_rect().height() - t.top_bar_h - 60.0).max(80.0);
     let mut cancel = None;
     let mut toggle = false;
+    let mut link_act = None;
+    let queue_scan = crate::import::queueable_scan(app);
+    let unreviewed: Vec<(u64, String)> = app.unreviewed.iter().map(|u| (u.id, crate::import_queue::describe(&u.transfer))).collect();
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
     egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
         // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
@@ -90,6 +99,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if row(ui, &t, task, inner) {
                         cancel = Some(task.id);
                     }
+                    if queue_scan == Some(task.id) && link(ui, &t, tr("Queue without review"), "activity:queueScan".into()) {
+                        link_act = Some(Act::QueueScan);
+                    }
+                    if let Some((_, how)) = unreviewed.iter().find(|(id, _)| *id == task.id)
+                        && let Some(id) = review_line(ui, &t, how, task.id, inner)
+                    {
+                        link_act = Some(Act::Review(id));
+                    }
                 }
             });
             if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
@@ -104,9 +121,54 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(id) = cancel {
         self::cancel(app, id);
     }
+    match link_act {
+        Some(Act::QueueScan) => {
+            if let Err(e) = crate::import::queue_scan(app) {
+                app.toast(ctx, e);
+            }
+        }
+        Some(Act::Review(id)) => {
+            if let Err(e) = crate::import::review_queued(app, id) {
+                app.toast(ctx, e);
+            }
+        }
+        None => {}
+    }
     if toggle {
         app.activity_expanded = !app.activity_expanded;
     }
+}
+
+/// What a link under a row asks for.
+enum Act {
+    /// Put the folder being scanned in line without its review.
+    QueueScan,
+    /// Open the review of an import waiting in line.
+    Review(u64),
+}
+
+/// A small link in the stack's accent color, registered as widget `id`. True when clicked.
+fn link(ui: &mut egui::Ui, t: &Tokens, text: impl Into<String>, id: String) -> bool {
+    let r = ui.add(egui::Label::new(RichText::new(text.into()).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
+    register(ui, id, r.rect);
+    r.clicked()
+}
+
+/// The line under a waiting row of a folder queued without its review: how it brings its files in, and Review…
+/// (the link is laid out first, from the right: a long destination is cut short, never the link).
+fn review_line(ui: &mut egui::Ui, t: &Tokens, how: &str, id: u64, width: f32) -> Option<u64> {
+    let mut asked = None;
+    ui.allocate_ui_with_layout(vec2(width, 16.0), Layout::right_to_left(Align::Center), |ui| {
+        if link(ui, t, tr("Review…"), format!("activity:review:{id}")) {
+            asked = Some(id);
+        }
+        let room = ui.available_width();
+        ui.allocate_ui_with_layout(vec2(room, 16.0), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_width(room);
+            ui.add(egui::Label::new(RichText::new(how).font(t.font(11.0)).color(t.text_dim)).truncate());
+        });
+    });
+    asked
 }
 
 /// ✕ on task `id`'s row. The task may have just finished or stopped being cancellable: nothing to tell the user then,
@@ -115,7 +177,12 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 
-/// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.
+/// What ✕ on `task`'s row is called, for screen readers and its tooltip.
+pub(crate) fn cross_name(task: &TaskInfo) -> String {
+    if task.waiting { tr_format!("Remove from Queue: {label}", label = tr(&task.label)) } else { tr("Cancel").to_string() }
+}
+
+/// One task: name and ✕, the bar, the detail line (a waiting one: name and ✕, when it starts). True when ✕ was clicked.
 fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
     let mut clicked = false;
     let r = ui.vertical(|ui| {
@@ -130,14 +197,20 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
             });
             if cross {
                 let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
+                let name = cross_name(task);
+                crate::widgets::announce(&resp, name.clone());
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
                 register(ui, format!("activity:cancel:{}", task.id), rect);
-                clicked = resp.on_hover_text(tr("Cancel")).clicked();
+                clicked = resp.on_hover_text(name).clicked();
             }
         });
-        bar(ui, task, width);
-        let line = detail_line(task);
+        let line = if task.waiting {
+            // (counted as the Queued toast counts: the waiting tasks ahead of it, after the running one)
+            if task.place <= 1 { tr("Starts next").to_string() } else { tr_format!("Starts after {n} more", n = task.place - 1) }
+        } else {
+            bar(ui, task, width);
+            detail_line(task)
+        };
         if !line.is_empty() {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
         }

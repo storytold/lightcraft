@@ -1916,7 +1916,6 @@
   "Skipped: files that can't be read": "已略過：無法讀取的檔案",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "此資料夾不存在：它已被移動或重新命名，或其磁碟未連接。",
   "Relink photos whose file was renamed or moved": "重新連結檔案被重新命名或移動的照片",
-  "A folder is already being synchronized": "已有資料夾正在同步",
   "Synchronizing…": "正在同步…",
   "Relinked": "已重新連結",
   "Removed": "已移除",
@@ -1925,8 +1924,6 @@
   "Stopped": "已停止",
   "Stopped by an error (see the log)": "因錯誤而停止（請見記錄）",
   "Not saved": "未儲存",
-  "A folder is being synchronized": "正在同步資料夾",
-  "Wait for the import to finish": "請等待匯入完成",
   "Appearance": "外觀",
   "Appearance Mode": "外觀模式",
   "Sync with System": "與系統同步",
@@ -2157,5 +2154,15 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Queued: it starts when the task ahead of it ends": "已加入佇列：前一個工作結束後開始",
+  "Another library was opened: nothing was done": "已開啟另一個圖庫：未執行任何操作",
+  "Photos of the folder changed while it was read: nothing was done": "讀取期間資料夾中的照片發生了變化：未執行任何操作",
+  "Starts next": "接下來開始",
+  "Queue without review": "不經檢視直接加入佇列",
+  "Review…": "檢視…",
+  "A folder is already being scanned": "正在掃描另一個資料夾",
+  "Without review: add in place": "不經檢視：原地加入",
+  "Without review: copy into the library": "不經檢視：複製到照片庫",
+  "Close the open dialog, then choose Review… again": "請先關閉開啟的對話框，然後再次選擇「檢視…」"
 }

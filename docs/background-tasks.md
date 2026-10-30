@@ -49,6 +49,43 @@ guard.detail(&file_name);
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
+## Waiting in line
+
+Jobs that must not run side by side share a lane (`activity::Lane`). There are two so far:
+
+- **The preview lane:** Build Previews and the background Build / Discard Smart Previews, one preview build at a time.
+- **The library lane:** imports (the import review's Import, files dropped on the window) and Synchronize Folder.
+  Each plans its work against the library as it is when it starts, so two side by side could add the same file. An
+  import asked for while the lane is taken is not refused any more: it waits and checks for duplicates against the
+  library as it is when its turn comes. A Synchronize Folder that waits scans its folder again at its turn, then
+  removes, relinks or reads the sidecars of only the photos its dialog showed: one that went missing, moved or got a
+  sidecar update while it waited was never shown, so it is left alone and the end says so ("Left alone: 1
+  (synchronize again to review them)"). If another library is opened while it scans, its folder is gone, or a photo of the
+  folder is changed in the library (a rating, an edit) while it scans, it stops without doing anything and a toast says
+  so (at once for a new library, even if the old folder's scan is still going). The focus points and face regions the
+  background searches add don't count as changes.
+  A toast says it was queued when it was put in line. The dialog's own scan ("Looking for changes", kind `scan`) only
+  reads and holds up nothing. These requests are the app's (`app:import`, `app:synchronize`): the app starts them
+  (`LightcraftApp::start_waiting`, every frame), and the engine leaves them alone (`Activity::take_ready_if`). Auto
+  Import lists its folder only when nothing runs, rescans or waits in this lane; files it finds after something
+  started meanwhile wait in line, quietly. A drop while a scan runs or an import's review waits behind a dialog is
+  still refused.
+  While this lane is busy, the stack's row of the review's folder scan (kind `scan`, "Scanning folder") has Queue
+  without review: the scan is let go and the folder waits as an import asked as the last confirmed review brought its
+  files in (`import_queue::plan`: add in place, or copy with its destination, folders, names and DNG conversion, never Move; with none,
+  add in place, or copy for a card). Its waiting row says so ("Without review: add in place", "…copy to <folder>") and
+  has Review…, which takes it out of the line and scans it for the usual review, or is refused with a toast while
+  another folder is being scanned or a finished scan's review waits for a dialog to close. The notes of the last review and of the queued rows are kept in memory only.
+
+A call that sets `queue: true` while its lane is busy does not fail:
+`Activity::enqueue` keeps what it was asked (`Request`: the command and its parameters, with the photos written out)
+and `Session::start_waiting` runs it, under the id it had in line, once the lane is free. The engine calls it after
+every command and the app every frame. `activity.list` shows a waiting task after the running ones (`waiting`,
+`place`, `lane`); the activity stack in the app draws a waiting task too, at once, as a row without a bar ("Starts next" or "Starts after N more") with ✕, "Remove from Queue", which runs `activity.cancel`. `activity.cancel` takes a waiting task out
+of the line, `activity.cancel {all: true}` empties it, and opening another library drops it: the photos it names
+belong to the old one. At most `MAX_WAITING` (100) tasks wait. Without `queue` a call is refused while its lane is
+busy, as before. A waiting task whose start fails (there is no smart previews folder any more, say) is logged (the app's own, an import or a Synchronize Folder, also says why in a toast) and the next in line goes on.
+
 ## Examples in the code
 
 | Job | Where | Shows how to |

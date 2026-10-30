@@ -9,6 +9,7 @@
 //! one undo step.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use lightcraft_engine::activity::{Lane, Request};
 use lightcraft_engine::import::{
     ImportCandidate, ImportUprightMode, ImportWarning, ImportWarningCode, ScanInput, ScanOutput, ScanProgress, scan_with,
 };
@@ -17,6 +18,7 @@ use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
 use crate::LightcraftApp;
+use crate::import_queue::{self, Remembered, Transfer};
 use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -32,13 +34,16 @@ pub(crate) use body::grid_height;
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
 pub(crate) use body::{DIALOG_SIZE, note_dialog_bottom};
+pub(crate) use scan::library_busy;
+pub use scan::{
+    IMPORT_REQUEST, ScanTask, Unreviewed, browse, drop_blocked, open, poll_scan, prune_unreviewed, queue_scan, queueable_scan, review_queued, running,
+};
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use scan::cards_seen;
-pub use scan::{ScanTask, browse, open, poll_scan, running};
+pub(crate) use scan::{auto_import_listed, cards_seen};
 #[cfg(test)]
-pub(crate) use scan::{stall_scan, stall_scan_of};
+pub(crate) use scan::{stall_scan, stall_scan_in, stall_scan_of};
 pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-pub use task::{ImportTask, start, start_paths, tick};
+pub use task::{ImportTask, start, start_paths, start_request, tick};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

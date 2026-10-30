@@ -566,6 +566,21 @@ fn face_regions_found_meanwhile_leave_the_scan_current() {
     assert_eq!(r["imported"], 1, "{r}");
 }
 
+#[test]
+fn a_focus_point_found_meanwhile_leaves_the_scan_current() {
+    let dir = Scratch::new("focus");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/c.png"), 3);
+    scan(&mut s, &dir.path("trip"));
+    // the background focus-point scan commits a point for a photo of the folder
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let mut meta = s.catalog.photo(a).unwrap().meta.clone();
+    meta.focus = Some(lightcraft_meta::FocusPoint { rect: Default::default(), mode: None, area: None, tracking: None });
+    s.catalog.apply(lightcraft_catalog::Op::SetMeta { id: a, meta: Box::new(meta) }).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true})).unwrap();
+    assert_eq!(r["imported"], 1, "{r}");
+}
+
 /// Synchronizing in halves, as the app does it: readied on the UI thread without touching the
 /// disk, the work (every file read) on a worker, each step committed back on the UI thread.
 fn sync_in_halves(s: &mut Session, path: &str, choice: crate::sync::SyncChoice) -> crate::sync::SyncReport {

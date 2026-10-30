@@ -302,13 +302,13 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
 }
 
 /// Whether a photo is the same as far as synchronizing goes: its file, its place in the library
-/// and what a sidecar is compared with. Face and pet regions found in the background meanwhile
-/// don't make a scan stale.
+/// and what a sidecar is compared with. Face and pet regions and the focus point, which the
+/// background searches fill in meanwhile, don't make a scan stale.
 fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
     if Arc::ptr_eq(a, b) {
         return true;
     }
-    let meta = |p: &Photo| lightcraft_catalog::Meta { regions: Vec::new(), ..p.meta.clone() };
+    let meta = |p: &Photo| lightcraft_catalog::Meta { regions: Vec::new(), focus: None, ..p.meta.clone() };
     (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size, a.rating, a.flag, a.label, &a.captured, &a.edited, &a.develop)
         == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size, b.rating, b.flag, b.label, &b.captured, &b.edited, &b.develop)
         && meta(a) == meta(b)
@@ -584,13 +584,18 @@ impl Session {
         if lightcraft_catalog::query::folder_key(&c.path) != lightcraft_catalog::query::folder_key(path) {
             return None;
         }
-        let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
+        self.scan_is_current(&c).then_some(c)
+    }
+
+    /// Whether the library still holds the photos `changes` saw in its folder, none of them changed since: a scan that
+    /// ran on a worker thread from a snapshot (a waiting synchronize's) is acted on only while this holds.
+    pub fn scan_is_current(&self, changes: &FolderChanges) -> bool {
+        let f = Filter { library_folder: Some(changes.path.clone()), ..Default::default() };
         let mut now: Vec<PhotoId> = self.catalog.query(&f, &Sort::default());
-        let mut then: Vec<PhotoId> = c.seen.iter().map(|p| p.id).collect();
+        let mut then: Vec<PhotoId> = changes.seen.iter().map(|p| p.id).collect();
         now.sort();
         then.sort();
-        let unchanged = now == then && c.seen.iter().all(|p| self.catalog.photo(p.id).is_some_and(|q| same_for_sync(p, q)));
-        unchanged.then_some(c)
+        now == then && changes.seen.iter().all(|p| self.catalog.photo(p.id).is_some_and(|q| same_for_sync(p, q)))
     }
 }
 

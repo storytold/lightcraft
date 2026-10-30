@@ -2,6 +2,35 @@
 
 ## 2026-10-24
 
+### Queue a folder without waiting for its review
+- While an import or Synchronize Folder runs (or waits), the "Scanning folder" row in the activity stack has Queue
+  without review. It stops the scan, which on a network share can take minutes, and puts the folder in line to be
+  imported the way your last import review was confirmed: added in place, or copied with the same destination, folders,
+  file names and DNG conversion. Before any review it is added in place; a camera or card is copied into the library. An album chosen
+  by Import into this album is kept. Keywords, presets and other albums are not: they belong to one batch.
+- It never moves files. After a review that moved its originals the folder is copied instead, and the originals stay.
+- The waiting row says how the folder comes in ("Without review: add in place", "…copy to <folder>") and has Review…:
+  it takes the folder out of the line and scans it for the usual review. Review… is refused (the row stays) while
+  another folder is being scanned, or a finished scan's review waits for a dialog to close. With the library free there is nothing to queue: the review opens when the scan is in.
+- What your last review chose is kept until you quit or open another library.
+
+### Imports and Synchronize Folder wait for each other
+- An import confirmed (or photos dropped on the window) while a Synchronize Folder runs, or a Synchronize Folder
+  confirmed while an import runs, now waits in line and starts by itself when the other ends, with a message that it
+  was queued. Before, it was refused ("Wait for the import to finish", "A folder is being synchronized").
+- Photos dropped on the window, or an import review confirmed, while another import runs also wait in line instead of
+  being refused with "An import is running"; a drop is still refused while a folder is being scanned for the review or
+  read for the Local view, or while a finished scan's review waits behind another dialog.
+- A task waiting in line shows in the activity stack at once: its name, "Starts next" or "Starts after N more", and ✕
+  to take it out of the line, so a mistaken one can be withdrawn. This holds for a waiting preview build too.
+- A waiting import checks for duplicates against the library as it is when its turn comes, so nothing is added twice.
+- A waiting Synchronize Folder looks at its folder again when its turn comes. It removes, relinks or reads sidecars of
+  only the photos its dialog showed: one that went missing, moved or got a sidecar update while it waited is left
+  alone, and the message at the end says how many ("Left alone: 1 (synchronize again to review them)").
+- Nothing waits across another library: a Synchronize Folder that is still scanning when another library opens does
+  nothing. It also does nothing, and says so, when a photo of its folder is changed in the library (a rating, an edit)
+  while it scans, because what it saw is no longer what is there.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

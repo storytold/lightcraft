@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Queued: it starts after {n} more": "У черзі: почнеться після ще {n}",
+  "Left alone: {n} (synchronize again to review them)": "Залишено без змін: {n} (синхронізуйте знову, щоб переглянути)",
+  "Starts after {n} more": "Почнеться після ще {n}",
+  "Remove from Queue: {label}": "Прибрати з черги: {label}",
+  "Without review: copy to {destination}": "Без перевірки: копіювати до {destination}"
 }

@@ -21,8 +21,6 @@
   "A dark slate backdrop with the exposure, ISO and focal length, then the camera and lens, under each photo.": "Tumma liuskekivitausta, jossa kunkin kuvan alla valotus, ISO ja polttoväli sekä kamera ja objektiivi.",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Kasvomalli käyttää GPU:ta vain, jos tarkistus osoittaa sen antavan samat tulokset nopeammin.",
   "A filter is hiding this view's photos: change it, or clear it (View → Clear Filters)": "Suodatin piilottaa tämän näkymän kuvat: muuta sitä tai tyhjennä se (Näytä → Tyhjennä suodattimet)",
-  "A folder is already being synchronized": "Kansio on jo synkronoitumassa",
-  "A folder is being synchronized": "Kansiota synkronoidaan",
   "A keyword set needs a name": "Avainsanajoukolle täytyy antaa nimi",
   "A light grey wall with a white mat and a soft shadow; the caption and the rating under the photo.": "Vaaleanharmaa seinä, valkoinen paspis ja pehmeä varjo; kuvateksti ja luokitus kuvan alla.",
   "A one-time download of about": "Kertaluonteinen lataus, noin",
@@ -2147,7 +2145,6 @@
   "Visualize range": "Havainnollista alue",
   "Vivid": "Eloisa",
   "Vivid Pop": "Eloisa pop",
-  "Wait for the import to finish": "Odota tuonnin valmistumista",
   "Waiting to start…": "Odotetaan käynnistymistä…",
   "Warm Film": "Lämmin filmi",
   "Warm Glow": "Lämmin hehku",
@@ -2327,5 +2324,15 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Queued: it starts when the task ahead of it ends": "Jonossa: alkaa, kun sen edellä oleva tehtävä päättyy",
+  "Another library was opened: nothing was done": "Toinen kirjasto avattiin: mitään ei tehty",
+  "Photos of the folder changed while it was read: nothing was done": "Kansion valokuvat muuttuivat lukemisen aikana: mitään ei tehty",
+  "Starts next": "Alkaa seuraavaksi",
+  "Queue without review": "Lisää jonoon ilman tarkistusta",
+  "Review…": "Tarkista…",
+  "A folder is already being scanned": "Kansiota skannataan jo",
+  "Without review: add in place": "Ilman tarkistusta: lisää paikalleen",
+  "Without review: copy into the library": "Ilman tarkistusta: kopioi kirjastoon",
+  "Close the open dialog, then choose Review… again": "Sulje avoin valintaikkuna ja valitse sitten Tarkista… uudelleen"
 }

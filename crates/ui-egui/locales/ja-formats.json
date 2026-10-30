@@ -305,5 +305,10 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Queued: it starts after {n} more": "キューに追加: あと {n} 件の後に開始します",
+  "Left alone: {n} (synchronize again to review them)": "そのまま: {n} 件（再度同期して確認してください）",
+  "Starts after {n} more": "あと {n} 件の後に開始します",
+  "Remove from Queue: {label}": "キューから削除: {label}",
+  "Without review: copy to {destination}": "確認なし: {destination} にコピー"
 }

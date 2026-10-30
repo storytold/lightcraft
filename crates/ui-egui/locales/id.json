@@ -22,8 +22,6 @@
   "A dark slate backdrop with the exposure, ISO and focal length, then the camera and lens, under each photo.": "Latar abu-abu gelap berisi eksposur, ISO, dan panjang fokus, lalu kamera dan lensa, di bawah setiap foto.",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Model wajah hanya menggunakan GPU jika pengujian menunjukkan hasilnya sama tetapi lebih cepat.",
   "A filter is hiding this view's photos: change it, or clear it (View → Clear Filters)": "Filter menyembunyikan foto di tampilan ini: ubah atau hapus filternya (Tampilan → Hapus filter)",
-  "A folder is already being synchronized": "Sudah ada folder yang sedang disinkronkan",
-  "A folder is being synchronized": "Folder sedang disinkronkan",
   "A keyword set needs a name": "Set kata kunci harus diberi nama",
   "A light grey wall with a white mat and a soft shadow; the caption and the rating under the photo.": "Dinding abu-abu muda dengan paspartu putih dan bayangan lembut; keterangan dan rating di bawah foto.",
   "A one-time download of about": "Unduhan satu kali, sekitar",
@@ -2140,7 +2138,6 @@
   "Visualize range": "Visualisasikan rentang",
   "Vivid": "Cerah",
   "Vivid Pop": "Warna Hidup",
-  "Wait for the import to finish": "Tunggu hingga impor selesai",
   "Waiting to start…": "Menunggu untuk dimulai…",
   "Warm Film": "Film Hangat",
   "Warm Glow": "Hangat Bercahaya",
@@ -2339,5 +2336,15 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Queued: it starts when the task ahead of it ends": "Dalam antrean: dimulai saat tugas di depannya selesai",
+  "Another library was opened: nothing was done": "Pustaka lain dibuka: tidak ada yang dilakukan",
+  "Photos of the folder changed while it was read: nothing was done": "Foto di folder berubah saat dibaca: tidak ada yang dilakukan",
+  "Starts next": "Dimulai berikutnya",
+  "Queue without review": "Antrekan tanpa tinjauan",
+  "Review…": "Tinjau…",
+  "A folder is already being scanned": "Sebuah folder sedang dipindai",
+  "Without review: add in place": "Tanpa tinjauan: tambahkan di lokasi asli",
+  "Without review: copy into the library": "Tanpa tinjauan: salin ke pustaka",
+  "Close the open dialog, then choose Review… again": "Tutup dialog yang terbuka, lalu pilih Tinjau… lagi"
 }
