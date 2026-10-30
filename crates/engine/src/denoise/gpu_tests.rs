@@ -304,18 +304,22 @@ fn a_set_up_that_takes_too_long_is_given_up_on() {
         f.store(true, Ordering::SeqCst);
         Ok(())
     };
-    // the deadline is on the caller's answer: a set_up_card that waited for the card fails here
-    let (tx, rx) = std::sync::mpsc::channel();
-    let m = marker.clone();
-    std::thread::spawn(move || {
-        let _ = tx.send(set_up_card(&m, Duration::from_millis(50), slow, || ()));
-    });
-    let r = lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), "set_up_card's answer while the card is stuck");
+    // each call runs on a helper thread with the deadline on its answer: a set_up_card that waited
+    // for the stuck card fails the test there instead of hanging it
+    let answer = |limit: Duration, card: Box<dyn FnOnce() -> Result<(), String> + Send>, what: &str| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let m = marker.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(set_up_card(&m, limit, card, || ()));
+        });
+        lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), what)
+    };
+    let r = answer(Duration::from_millis(50), Box::new(slow), "set_up_card's answer while the card is stuck");
     assert!(r.as_ref().is_err_and(|e| e.contains("took longer") && worth_retrying(e)), "{r:?}");
     assert!(!finished.load(Ordering::SeqCst), "the caller does not wait for the card");
     // while the first is still stuck, another set-up of the same model does not start a second one
-    let again = set_up_card(&marker, Duration::from_secs(5), || Ok(()), || ());
-    assert!(again.is_err_and(|e| e.contains("still setting up") && worth_retrying(&e)));
+    let again = answer(Duration::from_secs(5), Box::new(|| Ok(())), "a second set-up's answer while the first is stuck");
+    assert!(again.as_ref().is_err_and(|e| e.contains("still setting up") && worth_retrying(e)), "{again:?}");
     // once it ends its marker goes, and the card can be set up again
     drop(release);
     lightcraft_testkit::wait_until(Duration::from_secs(10), "the stuck set-up ended and removed its marker", || !marker.exists());
