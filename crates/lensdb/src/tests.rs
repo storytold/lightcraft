@@ -36,6 +36,7 @@ const DB: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <maker>Testcam</maker>
     <model>Testcam 50mm f/1.8</model>
     <mount>Other Mount</mount>
+    <cropfactor>1</cropfactor>
     <calibration>
       <distortion model="poly5" focal="50" k1="-0.02" k2="0.0003" />
     </calibration>
@@ -44,6 +45,7 @@ const DB: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <maker>Fishco</maker>
     <model>Fishco 8mm f/3.5 Fisheye</model>
     <type>equisolid</type>
+    <cropfactor>1</cropfactor>
     <calibration>
       <distortion model="poly3" focal="8" k1="0.5" />
     </calibration>
@@ -101,8 +103,8 @@ fn malformed_documents_are_errors_not_panics() {
 #[test]
 fn finds_cameras_by_exif_strings() {
     let db = db();
-    assert_eq!(db.find_camera("TESTCAM CORPORATION", "TC-1").unwrap().crop_factor, 1.5);
-    assert_eq!(db.find_camera("Testcam", "tc-ff").unwrap().crop_factor, 1.0);
+    assert_eq!(db.find_camera("TESTCAM CORPORATION", "TC-1").unwrap().crop_factor, Some(1.5));
+    assert_eq!(db.find_camera("Testcam", "tc-ff").unwrap().crop_factor, Some(1.0));
     assert!(db.find_camera("Testcam", "TC-2").is_none());
     assert!(db.find_camera("Other", "TC-1").is_none());
 }
@@ -291,4 +293,92 @@ fn a_named_profile_is_found_behind_a_tie() {
     assert_eq!(db.find_lens(None, &name, None).unwrap().maker, "Otherco", "a plain lookup keeps the first of a tie");
     assert_eq!(db.find_lens_named(None, &name, None).unwrap().maker, "Testcam");
     assert!(db.find_lens_named(None, "70-200mm f/4", None).is_none());
+}
+
+fn crop_xml(parent: &str, calibration: &str) -> String {
+    format!(
+        r#"<lensdatabase><lens><maker>Test</maker><model>Test 50mm</model>{parent}
+          <calibration {calibration}><distortion model="poly3" focal="50" k1="-0.01" /></calibration>
+        </lens></lensdatabase>"#
+    )
+}
+
+#[test]
+fn unknown_calibration_crop_is_not_assumed_full_frame() {
+    for parent in [
+        "",
+        "<cropfactor/>",
+        "<cropfactor>bad</cropfactor>",
+        "<cropfactor>NaN</cropfactor>",
+        "<cropfactor>inf</cropfactor>",
+        "<cropfactor>0</cropfactor>",
+        "<cropfactor>-1</cropfactor>",
+        "<cropfactor>0.049</cropfactor>",
+        "<cropfactor>21</cropfactor>",
+    ] {
+        let db = LensDb::parse(&crop_xml(parent, "")).unwrap();
+        assert_eq!(db.lenses[0].crop_factor, None, "{parent}");
+        assert!(db.lenses[0].correction(&shot(50.0)).is_none(), "unknown calibration crop: {parent}");
+    }
+}
+
+#[test]
+fn invalid_calibration_override_does_not_inherit_parent_crop() {
+    for value in ["", "bad", "NaN", "inf", "0", "-1", "0.049", "21"] {
+        let db = LensDb::parse(&crop_xml("<cropfactor>1.5</cropfactor>", &format!(r#"cropfactor="{value}""#))).unwrap();
+        assert_eq!(db.lenses[0].crop_factor, None, "{value}");
+        assert!(db.lenses[0].correction(&shot(50.0)).is_none(), "invalid calibration override: {value}");
+    }
+}
+
+#[test]
+fn calibration_crop_inherits_only_when_omitted_and_accepts_valid_overrides() {
+    let inherited = LensDb::parse(&crop_xml("<cropfactor>1.5</cropfactor>", "")).unwrap();
+    assert_eq!(inherited.lenses[0].crop_factor, Some(1.5));
+    assert!(inherited.lenses[0].correction(&shot(50.0)).is_some());
+    for parent in ["", "<cropfactor>bad</cropfactor>", "<cropfactor>1.5</cropfactor>"] {
+        for value in ["0.05", "1", "2", "20"] {
+            let db = LensDb::parse(&crop_xml(parent, &format!(r#"cropfactor="{value}""#))).unwrap();
+            assert_eq!(db.lenses[0].crop_factor, value.parse().ok());
+            // With no shot crop the valid calibration supplies the scale, even at the range boundaries.
+            assert!(db.lenses[0].correction(&Shot { crop_factor: None, ..shot(50.0) }).is_some());
+        }
+    }
+}
+
+#[test]
+fn camera_crop_preserves_unknown_and_explicit_full_frame() {
+    for (crop, expected) in [
+        ("", None),
+        ("bad", None),
+        ("NaN", None),
+        ("inf", None),
+        ("0", None),
+        ("-1", None),
+        ("0.049", None),
+        ("21", None),
+        ("0.05", Some(0.05)),
+        ("1", Some(1.0)),
+        ("20", Some(20.0)),
+    ] {
+        let xml = format!(r#"<lensdatabase><camera><maker>Test</maker><model>Body</model><cropfactor>{crop}</cropfactor></camera></lensdatabase>"#);
+        let db = LensDb::parse(&xml).unwrap();
+        assert_eq!(db.cameras[0].crop_factor, expected, "{crop}");
+    }
+    let db = LensDb::parse("<lensdatabase><camera><maker>Test</maker><model>Body</model></camera></lensdatabase>").unwrap();
+    assert_eq!(db.cameras[0].crop_factor, None);
+}
+
+#[test]
+fn direct_profile_api_rejects_invalid_calibration_and_preserves_shot_fallback() {
+    let mut profile = db().lenses[0].clone();
+    for crop in [None, Some(f64::NAN), Some(f64::INFINITY), Some(0.0), Some(-1.0), Some(0.049), Some(21.0)] {
+        profile.crop_factor = crop;
+        assert!(profile.correction(&shot(24.0)).is_none(), "{crop:?}");
+    }
+    profile.crop_factor = Some(1.0);
+    let expected = profile.correction(&shot(24.0)).unwrap();
+    for crop in [None, Some(f64::NAN), Some(f64::INFINITY), Some(0.0), Some(-1.0)] {
+        assert_eq!(profile.correction(&Shot { crop_factor: crop, ..shot(24.0) }).unwrap(), expected);
+    }
 }

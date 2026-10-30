@@ -17,7 +17,7 @@ changes.
 ## What is applied
 
 The lens is identified from EXIF: camera make / model (for the mount and crop factor; the 35 mm equivalent focal
-length is used when the camera isn't listed) and the lens model string. Lens names match on their words; every
+length is used when the camera isn't listed or its crop factor is unknown) and the lens model string. Lens names match on their words; every
 number (focal lengths, apertures) in the database name must appear in the EXIF name, and the lens maker must agree
 when the file names one.
 
@@ -44,7 +44,10 @@ half diagonal, or that would fold the image, is not applied.
 
 Normalisation follows lensfun's documentation: distortion and TCA radii are 1 at half the shorter side of the
 calibration frame (its `cropfactor` and `aspect-ratio`), vignetting radii 1 at its corner; the optical centre is
-the image centre (lensfun's `<center>` offsets are not read).
+the image centre (lensfun's `<center>` offsets are not read). Missing or invalid crop factors remain unknown;
+only finite values from 0.05 through 20 are accepted. A calibration inherits the lens's crop factor only when its
+`cropfactor` attribute is omitted; an explicit invalid override remains unknown. Profiles with an unknown
+calibration crop factor are not applied. An explicit crop factor of 1 still means full frame.
 
 ## Limits
 
