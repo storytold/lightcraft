@@ -280,9 +280,9 @@ machine without a hardware GPU (a VM, a container) every GPU test skips.
 `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` lets them through for one run (tests only: the app never sets it):
 
 ```sh
-rm -f /tmp/gpu-skips.jsonl   # the log is appended to; an absolute path, as tests run in crates/gpu
-LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG=/tmp/gpu-skips.jsonl cargo test -p lightcraft-gpu --tests
-grep '"reason":"no GPU adapter' /tmp/gpu-skips.jsonl   # no output: nothing skipped for want of an adapter
+log="$(mktemp -d)/gpu-skips.jsonl"   # a new private directory; an absolute path, as tests run in crates/gpu
+LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG="$log" cargo test -p lightcraft-gpu --tests
+grep '"need":"gpu"' "$log" | grep -v 'lost on purpose'   # no output: no GPU test skipped but the device-loss one
 ```
 
 - **Linux:** Mesa's lavapipe (Vulkan; `mesa-vulkan-drivers` on Debian and Ubuntu). Its storage
