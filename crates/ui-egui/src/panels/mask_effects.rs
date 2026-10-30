@@ -147,7 +147,7 @@ fn menu_rows(effects: &[MaskEffect], query: &str) -> Vec<(String, String, String
 /// The Effect menu above the mask's sliders.
 pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
     let t = Tokens::get(ui.ctx());
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(2, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(t.text_label));
             let current = fx::matching_effect(&app.session, &mask.adjust);
@@ -227,7 +227,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
             }
             let lit = st.highlight == Some(i) || resp.hovered();
             if lit {
-                ui.painter().rect_filled(rect, 3.0, t.hover);
+                ui.painter().rect_filled(rect, crate::theme::RADIUS, t.hover);
             }
             if current == Some(name.as_str()) {
                 ui.painter().text(rect.left_center() + vec2(4.0, 0.0), egui::Align2::LEFT_CENTER, "✓", t.font(12.0), t.accent);
@@ -548,9 +548,9 @@ pub fn manage_body(
                         register(ui, format!("effectRow:{}", e.name), rect);
                     }
                     if sel {
-                        ui.painter().rect_filled(rect, 3.0, t.tool_active);
+                        ui.painter().rect_filled(rect, crate::theme::RADIUS, t.tool_active);
                     } else if r.hovered() {
-                        ui.painter().rect_filled(rect, 3.0, t.hover);
+                        ui.painter().rect_filled(rect, crate::theme::RADIUS, t.hover);
                     }
                     let g = crate::widgets::one_line(ui.painter(), &display_name(&e.name), t.font(12.5), t.text, rect.width() - 8.0);
                     let elided = g.elided;

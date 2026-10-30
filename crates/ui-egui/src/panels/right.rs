@@ -1,4 +1,4 @@
-//! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
+//! The right-hand panel, its tool row at the top: Edit, Crop, Remove, Masking, Red Eye, Info,
 //! Keywords, Versions, Activity.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
@@ -32,6 +32,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        // fixed at the top, as the panel's content scrolls under them: the photo's histogram
+        // (while developing it), then the tool row
+        if app.ui.histogram
+            && let Some(id) = app.session.active()
+            && matches!(
+                app.ui.right,
+                RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye
+            )
+        {
+            super::edit::histogram(app, ui, id);
+        }
+        super::strip::row(app, ui);
         // (taken on every pass the panel is drawn; one from earlier than the pass before is forgotten)
         let held = held_offset(ui.ctx());
         let Some(id) = app.session.active() else {
@@ -73,7 +86,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             None => d.remove::<f32>(egui::Id::unique(OFFSET)),
         });
         let scrolled = area.show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
+            compact_style(ui);
             match app.ui.right {
                 RightPanel::Edit => super::edit::show(app, ui, id),
                 RightPanel::Profiles => super::profiles::show(app, ui, id),
@@ -90,6 +103,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
         ui.data_mut(|d| d.insert_temp(egui::Id::unique(AREA), scrolled.id));
     });
+}
+
+/// The panel's text, checkboxes and radio buttons at the dense rows' size: 12 pt text, 16 pt
+/// rows, small boxes, little space between rows.
+pub(crate) fn compact_style(ui: &mut egui::Ui) {
+    let style = ui.style_mut();
+    style.spacing.item_spacing.y = 0.0;
+    style.spacing.interact_size.y = 16.0;
+    style.spacing.icon_width = 12.0;
+    style.spacing.icon_width_inner = 6.0;
+    style.spacing.icon_spacing = 5.0;
+    style.spacing.button_padding = egui::vec2(5.0, 1.0);
+    for (text, size) in [(egui::TextStyle::Body, 12.0), (egui::TextStyle::Button, 12.0)] {
+        if let Some(font) = style.text_styles.get_mut(&text) {
+            font.size = size;
+        }
+    }
 }
 
 /// The panel's scroll area, its offset as the last pass started, and how far
@@ -112,14 +142,14 @@ fn held_offset(ctx: &egui::Context) -> Option<f32> {
 
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), t.section_h), Sense::hover());
+    ui.painter().text(pos2(r.left() + crate::widgets::PAD_L, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(12.5), t.text);
 }
 
 /// A panel title that folds its section shut and open again (`section:{id}`; kept in
 /// [`crate::state::UiState::folded_sections`]). Says whether the section is open.
 pub fn fold_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), Tokens::get(ui.ctx()).section_h), Sense::click());
     let title = crate::i18n::tr(title);
     fold_title(app, ui, id, r, &resp, title)
 }
@@ -131,14 +161,12 @@ pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, res
     crate::widgets::announce_disclosure(resp, true, open, title);
     register(ui, format!("section:{id}"), r);
     let p = ui.painter();
-    if resp.hovered() {
-        p.rect_filled(r, 0.0, t.chrome.gamma_multiply(1.06));
-    }
+    crate::widgets::paint_section_band(p, r, &t, resp.hovered());
     if resp.has_focus() {
-        p.rect_stroke(r.shrink(2.0), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+        p.rect_stroke(r.shrink(2.0), crate::theme::RADIUS, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
-    p.text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
-    let chevron = Rect::from_center_size(pos2(r.right() - 30.0, r.center().y + 2.0), vec2(14.0, 14.0));
+    p.text(pos2(r.left() + crate::widgets::PAD_L, r.center().y), Align2::LEFT_CENTER, title, t.semibold(crate::widgets::SECTION_TITLE), t.text);
+    let chevron = Rect::from_center_size(pos2(r.right() - crate::widgets::PAD_R - 8.0, r.center().y), vec2(12.0, 12.0));
     paint(p, chevron, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.icon);
     if resp.clicked() {
         app.ui.toggle_folded(id);
@@ -154,7 +182,7 @@ pub fn label_row(ui: &mut egui::Ui, label: &str, value: &str) {
 }
 
 fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 6 }).show(ui, add);
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, add);
 }
 
 #[cfg(test)]

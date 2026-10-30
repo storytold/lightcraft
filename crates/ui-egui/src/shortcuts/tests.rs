@@ -226,6 +226,24 @@ fn classic_f8_shows_a_minimized_tools_window_and_keeps_its_mode() {
     assert!(crate::docking::exposed(&h.app, Panel::Tools), "the window opens");
 }
 
+/// A minimized Tools window keeps its mode, so its tool row is out of sight: the tools stand at
+/// the window's edge, as when the panel is closed, to open it again.
+#[test]
+fn a_minimized_tools_window_shows_the_tools_at_the_edge() {
+    use crate::{docking::Panel, state::RightPanel};
+    let mut h = library();
+    h.app.ui.view = crate::state::ViewMode::Detail;
+    h.app.ui.right = RightPanel::Edit;
+    h.settle(std::time::Duration::from_secs(10));
+    h.app.run("ui.dock", json!({"operation": "float", "panel": "tools", "rect": [400, 100, 320, 500]})).unwrap();
+    h.app.run("ui.dock", json!({"action": {"SetMinimized": {"panel": "tools", "minimized": true}}})).unwrap();
+    h.step();
+    h.step();
+    assert!(!crate::docking::exposed(&h.app, Panel::Tools));
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "the window keeps its mode");
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "icon:edit"), "the tools stand at the edge: {:?}", h.app.widgets);
+}
+
 #[test]
 fn shift_culling_keys_advance_exactly_once() {
     use lightcraft_catalog::{ColorLabel, Flag, PhotoId};

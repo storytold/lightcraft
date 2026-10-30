@@ -1,4 +1,8 @@
-//! The vertical tool strip at the far right (Presets, Edit, Crop, Remove, Masking, Red Eye …).
+//! The tool strip: one horizontal row of tool icons at the top of the right-hand panel, under the
+//! histogram (Edit, Crop, Remove, Masking …, rarely used tools in its "…" menu), as Lightroom
+//! Classic has it, so the panel keeps the whole width for its sliders. While the
+//! panel is closed, the same tools stand in a vertical strip at the window's right edge, to open it
+//! again.
 
 use egui::vec2;
 use serde_json::json;
@@ -78,6 +82,70 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             });
         });
+}
+
+/// Height of the horizontal tool row.
+pub const ROW_H: f32 = 30.0;
+
+/// The tools in the horizontal row: id (`icon:{id}`), icon, panel, tooltip, enabled without a photo.
+const ROW_TOOLS: [(&str, Icon, RightPanel, &str, bool); 8] = [
+    ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)", false),
+    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)", false),
+    ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)", false),
+    ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)", false),
+    ("versions", Icon::Versions, RightPanel::Versions, "Versions (Shift+V)", false),
+    ("activity", Icon::Activity, RightPanel::Activity, "History & Activity (Y)", true),
+    ("keywords", Icon::Tag, RightPanel::Keywords, "Keywords (K)", false),
+    ("info", Icon::Info, RightPanel::Info, "Info (I)", false),
+];
+
+/// The horizontal tool row at the top of the right-hand panel (under the histogram): the tools,
+/// Presets, and "…" with the rarely used ones (Red Eye) and About. Same widget ids as the
+/// vertical strip (`icon:edit` …), so scripts and shortcuts don't change.
+pub fn row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let has_photo = app.session.active().is_some();
+    // the tools, Presets, …
+    let count = ROW_TOOLS.len() + 2;
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(vec2(w, ROW_H), egui::Sense::hover());
+    crate::widgets::register(ui, "toolRow", r);
+    let gap = 2.0;
+    let side = 8.0;
+    let bw = ((w - 2.0 * side - gap * (count as f32 - 1.0)) / count as f32).clamp(12.0, 30.0);
+    let total = bw * count as f32 + gap * (count as f32 - 1.0);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_center_size(r.center(), vec2(total, ROW_H)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let ui = &mut child;
+    ui.spacing_mut().item_spacing.x = gap;
+    let sz = vec2(bw, ROW_H - 4.0);
+    for (id, icon, panel, tip, without_photo) in ROW_TOOLS {
+        let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
+        if icon_button(ui, id, icon, sz, on, has_photo || without_photo, tip).clicked() {
+            let _ = app.run(&format!("panel.{id}"), json!({}));
+        }
+    }
+    if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+        let _ = app.run("panel.presets", json!({}));
+    }
+    let more = icon_button(ui, "more", Icon::More, sz, app.ui.right == RightPanel::RedEye, true, "More tools");
+    egui::Popup::menu(&more).show(|ui| {
+        let r = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Red Eye")));
+        crate::widgets::register_response("menuItem:toolRow:redeye", r.rect, &r);
+        if r.clicked() {
+            let _ = app.run("panel.redeye", json!({}));
+        }
+        let r = ui.button(crate::i18n::tr("About LightCraft"));
+        crate::widgets::register_response("menuItem:toolRow:about", r.rect, &r);
+        if r.clicked() {
+            app.ui.dialog = Some(crate::state::Dialog::About);
+        }
+    });
+    let p = ui.painter();
+    p.hline(r.x_range(), r.bottom() - 0.5, egui::Stroke::new(1.0, t.divider));
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {

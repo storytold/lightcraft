@@ -297,7 +297,7 @@ impl<'a> AlbumPicker<'a> {
                                     let height = ui.spacing().interact_size.y;
                                     let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click());
                                     if r.hovered() {
-                                        ui.painter().rect_filled(rect, 3.0, t.hover);
+                                        ui.painter().rect_filled(rect, crate::theme::RADIUS, t.hover);
                                     }
                                     let x = rect.left() + indent;
                                     disclosure(

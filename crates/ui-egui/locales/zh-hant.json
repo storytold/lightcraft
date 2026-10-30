@@ -162,6 +162,7 @@
   "Blue channel": "藍色通道",
   "Blue label": "藍色標籤",
   "Blue/Yellow Fringe": "藍／黃色邊緣",
+  "Blue/Yellow": "藍／黃",
   "Blurry photos below the score are flagged as rejects.": "焦點分數低於門檻的模糊照片會標記為排除。",
   "Boundary Warp": "邊界變形",
   "Bright & Airy": "明亮輕盈",
@@ -788,6 +789,8 @@
   "Horizontal": "水平",
   "Horizontal text": "水平文字",
   "Hue": "色相",
+  "Hue Low": "色相下限",
+  "Hue High": "色相上限",
   "Hue Range": "色相範圍",
   "If file exists": "檔案已存在時",
   "Image": "圖片",
@@ -1166,6 +1169,7 @@
   "Red Saturation": "紅色飽和度",
   "Red channel": "紅色通道",
   "Red/Cyan Fringe": "紅／青色邊緣",
+  "Red/Cyan": "紅／青",
   "Redo": "重做",
   "Reference": "參考",
   "Reference View": "參考檢視",
@@ -2157,5 +2161,6 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Brightness": "亮度"
 }

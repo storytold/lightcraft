@@ -135,8 +135,16 @@ fn a_click_outside_an_open_dropdown_keeps_the_dialog() {
     let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
     h.app.ui.settings.close_dialogs_outside = true;
     h.app.run("dialog.export", json!({})).unwrap();
-    h.step();
-    h.step();
+    // (the dialog sizes itself to its rows over its first frames: click once it stands still)
+    let mut last = None;
+    for _ in 0..10 {
+        h.step();
+        let now = h.app.widgets.iter().find(|(w, _)| w == "dialog:window").map(|(_, r)| *r);
+        if now.is_some() && now == last {
+            break;
+        }
+        last = now;
+    }
     let r = h.request("ui.clickWidget", json!({"id": "combo:exportPreset"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
