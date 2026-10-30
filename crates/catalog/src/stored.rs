@@ -54,11 +54,12 @@ type Stated = fn(&DevelopSettings) -> Value;
 /// is: [`base`] states them all the same. A test holds that these are all of them, but for the
 /// rendering process: a record without one is on the first process in every build (a missing
 /// process never means "the default one"), so there is no default of it to state.
-pub(crate) const UNWRITTEN: [(&[&str], Stated); 4] = [
+pub(crate) const UNWRITTEN: [(&[&str], Stated); 5] = [
     (&["wb", "scale"], |s| serde_json::to_value(s.wb.scale).unwrap_or(Value::Null)),
     (&["hdr"], |s| serde_json::to_value(s.hdr).unwrap_or(Value::Null)),
     (&["profile", "camera_local_tone"], |s| Value::Bool(s.profile.camera_local_tone)),
     (&["enhance", "denoise_on"], |s| serde_json::to_value(s.enhance.denoise_on).unwrap_or(Value::Null)),
+    (&["detail", "nr_outliers"], |s| Value::Bool(s.detail.nr_outliers)),
 ];
 
 /// Put `value` at `path` of `v` (through objects that are there).

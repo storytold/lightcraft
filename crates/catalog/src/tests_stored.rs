@@ -203,14 +203,18 @@ fn a_library_with_other_defaults_that_cannot_be_rewritten_is_refused() {
     assert_eq!(m.files.lock().unwrap().clone(), [(SNAPSHOT.to_string(), snap)].into_iter().collect());
 }
 
-/// A reader of one library's defaults leaves the next library read on the thread alone.
+/// A reader of one library's defaults leaves the next library read on the thread alone: a record
+/// that leaves out the values the library states other defaults for reads as this build's, once
+/// the open that read the library is over.
 #[test]
 fn reading_over_a_librarys_defaults_ends_with_that_library() {
     let m = MemStore::new();
     m.set(SNAPSHOT, snapshot_stating(&other_defaults(), serde_json::json!({"1": stored_record(1, serde_json::json!({}))})));
-    Journal::open(Box::new(m)).unwrap();
-    let plainly: DevelopSettings = serde_json::from_str::<Photo>(&record(&catalog_of([plain(1)])).to_string()).map(|p| (*p.develop).clone()).unwrap();
-    assert_eq!(plainly, base());
+    let (_, c, r) = Journal::open(Box::new(m)).unwrap();
+    assert!(r.other_defaults, "{r:?}");
+    assert_eq!(c.photo(PhotoId(1)).unwrap().develop.light.exposure, 1.0, "read over the library's own");
+    let plainly: Photo = serde_json::from_value(stored_record(2, serde_json::json!({}))).unwrap();
+    assert_eq!(*plainly.develop, base());
 }
 
 /// Given a library written by a build whose default for a setting that is left out of the

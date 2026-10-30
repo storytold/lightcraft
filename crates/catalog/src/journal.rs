@@ -513,8 +513,9 @@ impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
     /// tail. Fails if the snapshot is unreadable or a newer LightCraft's (then nothing is
     /// modified), or if the library is in an older format and its damaged log can't be replaced,
-    /// its snapshot can't be kept, or it can't be told whether its upgrade was written (see the
-    /// module docs → *Format versions*).
+    /// its snapshot can't be kept, or it can't be told whether its upgrade was written, or if the
+    /// library states other develop defaults than this build's and its rewrite with this build's
+    /// can't be written, or its log can't then be emptied (see the module docs → *Format versions*).
     pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;

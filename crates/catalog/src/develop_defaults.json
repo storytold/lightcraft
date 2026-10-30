@@ -154,7 +154,8 @@
     "nr_contrast": 0.0,
     "nr_color": 0.0,
     "nr_color_detail": 50.0,
-    "nr_color_smoothness": 50.0
+    "nr_color_smoothness": 50.0,
+    "nr_outliers": false
   },
   "optics": {
     "remove_ca": false,
