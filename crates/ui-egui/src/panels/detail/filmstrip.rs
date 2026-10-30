@@ -96,7 +96,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             let failed = app.renderer.thumb(*id).is_none() && app.renderer.failure(Slot::Thumb(*id)).is_some();
             crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
             register(ui, format!("film:{}", id.0), cr);
-            let state = app.session.selection.state_of(*id);
+            let state = app.session.selection_view().state_of(*id);
             let sel = state == lightcraft_engine::SelectionState::Active;
             let p = ui.painter();
             let label = app.session.catalog.photo(*id).and_then(|ph| ph.label);

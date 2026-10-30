@@ -70,6 +70,7 @@ pub mod profile_refs;
 pub mod proof;
 pub mod rename;
 pub mod segment;
+mod selection_facts;
 pub mod sidecar;
 pub mod slide;
 pub mod slide_overlay;
@@ -91,6 +92,7 @@ pub use fonts::{CRAFT_FONTS, CraftFont};
 use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
+pub use selection_facts::{SelectionFacts, SelectionIndex, SelectionView};
 use serde_json::Value;
 pub use view::{Browse, FilterChip, LibrarySource, Selection, SelectionState, filter_chips};
 pub use {lightcraft_catalog as catalog, lightcraft_develop as develop, lightcraft_gpu as gpu, lightcraft_pipeline as pipeline};
@@ -236,6 +238,8 @@ pub struct Session {
     pub(crate) shelved_filter: Option<Filter>,
     pub sort: Sort,
     pub selection: Selection,
+    /// See [`Session::selection_facts`].
+    selection_cache: std::sync::Mutex<selection_facts::SelectionCache>,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
     visible: Arc<[PhotoId]>,
@@ -454,6 +458,7 @@ impl Session {
             shelved_filter: None,
             sort: Sort::default(),
             selection: Selection::default(),
+            selection_cache: Default::default(),
             visible: Vec::new().into(),
             visible_key: None,
             visible_clock_minute: None,
@@ -556,6 +561,7 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        self.begin_frame();
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {
@@ -574,6 +580,7 @@ impl Session {
     /// panic guard, auto versions, XMP sidecar auto-write and the durable save (a failed save is
     /// `NotSaved`). Not journaled. The app's import task commits its batches this way.
     pub fn execute_fn(&mut self, id: &str, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
+        self.begin_frame();
         self.run_command(id, None, f)
     }
 
@@ -584,6 +591,9 @@ impl Session {
         // last-resort guard: a panic in a command is that command's error, not a crash
         let r = guard::catch(&format!("`{id}`"), || f(self)).unwrap_or_else(|e| Err(EngineError::Other(e)));
         self.depth -= 1;
+        // the command may have read the selection's index and then changed its ids to others of the same
+        // length and ends: the caller must not be answered from what was cached before
+        self.begin_frame();
         if self.depth == 0 && was_active.is_some() && self.active() != was_active {
             self.previous_active = was_active;
             if let Some(left) = was_active {

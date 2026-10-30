@@ -111,9 +111,7 @@ fn already_current() -> String {
 /// checked by the command instead (`explicit_targets`).
 fn has_outdated_process(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;
-    let sel = &s.selection;
-    let targets = if sel.ids.is_empty() { sel.active.as_slice() } else { sel.ids.as_slice() };
-    if targets.iter().any(|id| outdated(s, *id)) { Ok(()) } else { Err(already_current()) }
+    if s.selection_facts().any_outdated_process(s) { Ok(()) } else { Err(already_current()) }
 }
 
 /// The photos a call names (`ids`, or `id`), each of which must be in the library; `None` when it

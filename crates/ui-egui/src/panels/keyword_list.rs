@@ -77,10 +77,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(crate::i18n::tr(none)).color(t.text_dim));
         });
     }
-    let selection = app.session.selected();
-    let ticks = app.caches.keyword_ticks(&app.session.catalog, &selection);
+    let some = app.session.selected_count() > 0;
+    let ticks = app.caches.keyword_ticks(&app.session);
     for r in &rows {
-        row(app, ui, r, &selection, &ticks, filter.trim().is_empty());
+        row(app, ui, r, some, &ticks, filter.trim().is_empty());
     }
     ui.add_space(12.0);
 }
@@ -166,7 +166,7 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 
 /// One keyword's row: the triangle, the tick box, the name, the count, and on hover the arrow.
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
-fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
+fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, some: bool, ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
     crate::widgets::announce(&resp, r.path.clone());
@@ -207,7 +207,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let state = ticks.tick(&r.path);
     let inside = ticks.inside(&r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
-    let on = !selection.is_empty();
+    let on = some;
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
     let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
@@ -289,7 +289,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if resp.double_clicked() {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
-    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
+    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, some));
 }
 
 /// How many of the keywords inside one are named before the rest are counted.
@@ -350,7 +350,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
 }
 
 /// A keyword's context menu.
-fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
+fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, some: bool) {
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(label));
@@ -374,7 +374,6 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
         let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
     }
     ui.separator();
-    let some = !selection.is_empty();
     if item(ui, "add", crate::i18n::tr("Add to Selected Photos"), some) {
         let _ = app.run("photo.setMeta", json!({"addKeywords": [path]}));
     }

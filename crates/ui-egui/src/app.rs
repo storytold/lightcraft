@@ -593,6 +593,7 @@ impl LightcraftApp {
     /// frame bookkeeping. A hidden `run_logic` never reaches this.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
+        self.session.begin_frame();
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
             ctx.request_repaint();

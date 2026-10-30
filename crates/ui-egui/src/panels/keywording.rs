@@ -30,9 +30,8 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// exported files will carry. One only some of the photos have is marked with an asterisk.
 pub fn names_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let selection = app.session.selected();
     let export = app.ui.keywording_view == crate::state::KeywordingView::WillExport;
-    let names = app.caches.keyword_names(&app.session.catalog, &selection, export);
+    let names = app.caches.keyword_names(&app.session, export);
     if names.is_empty() {
         ui.label(egui::RichText::new(crate::i18n::tr(if export { "No keywords are exported" } else { "No keywords yet" })).color(t.text_dim));
         return;
@@ -169,8 +168,8 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
 
 /// With several photos selected, how many the box's keywords are of (`keywordScope`): what a ×
 /// or a keyword typed here acts on.
-pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
-    let photos = app.caches.selected_photos(&app.session.catalog, selection);
+pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let photos = app.caches.selected_photos(&app.session);
     if photos < 2 {
         return;
     }
@@ -184,8 +183,8 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
 /// The selection's keywords as chips: the name (right-click for its menu), and × to take it off
 /// every selected photo. One only some of them have is marked with an asterisk. Whole names, or
 /// grouped by the keyword they are inside (Settings ▸ Interface).
-pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
-    let chips = app.caches.keyword_chips(&app.session.catalog, selection);
+pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let chips = app.caches.keyword_chips(&app.session);
     if chips.is_empty() {
         let t = Tokens::get(ui.ctx());
         let r = ui.label(egui::RichText::new(crate::i18n::tr("No keywords yet")).color(t.text_dim));
@@ -193,8 +192,8 @@ pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId
         return;
     }
     if app.ui.settings.keyword_chips == crate::state::KeywordChips::Grouped {
-        let groups = app.caches.keyword_groups(&app.session.catalog, selection);
-        chip_groups(app, ui, &groups, crate::key_of(selection));
+        let groups = app.caches.keyword_groups(&app.session);
+        chip_groups(app, ui, &groups, crate::key_of(app.session.selection_key()));
         return;
     }
     ui.horizontal_wrapped(|ui| {

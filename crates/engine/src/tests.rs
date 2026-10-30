@@ -41,6 +41,7 @@ mod print;
 mod process;
 mod recheck;
 mod segment;
+mod selection_facts;
 mod settings_files;
 mod slide;
 mod slideshow_export;

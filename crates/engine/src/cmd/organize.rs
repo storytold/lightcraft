@@ -22,7 +22,7 @@ fn stacks_of(s: &Session, targets: &[PhotoId]) -> Vec<StackId> {
 
 fn in_stack(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;
-    if stacks_of(s, &s.selected()).is_empty() { Err("no stacked photo selected".into()) } else { Ok(()) }
+    if s.selection_facts().any_stacked(s) { Ok(()) } else { Err("no stacked photo selected".into()) }
 }
 
 fn has_stacks(s: &Session) -> std::result::Result<(), String> {

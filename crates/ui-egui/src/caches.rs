@@ -69,13 +69,9 @@ impl Caches {
     }
     /// The Keywording box's read-only names for the selection: what exported files carry
     /// (`export`), or the keywords with those containing them.
-    pub(crate) fn keyword_names(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
-        export: bool,
-    ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
-        let key = key_of((selection, export));
+    pub(crate) fn keyword_names(&mut self, session: &lightcraft_engine::Session, export: bool) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
+        let (cat, selection) = (&session.catalog, session.selected_ids());
+        let key = key_of((session.selection_key(), export));
         match &self.keyword_names {
             Some((r, k, c)) if *r == cat.revision && *k == key => c.clone(),
             _ => {
@@ -90,12 +86,9 @@ impl Caches {
         }
     }
     /// The selection's keywords (the Keywording box's chips).
-    pub(crate) fn keyword_chips(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
-    ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
-        let key = key_of(selection);
+    pub(crate) fn keyword_chips(&mut self, session: &lightcraft_engine::Session) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
+        let (cat, selection) = (&session.catalog, session.selected_ids());
+        let key = key_of(session.selection_key());
         match &self.keyword_chips {
             Some((r, k, c)) if *r == cat.revision && *k == key => c.clone(),
             _ => {
@@ -107,8 +100,9 @@ impl Caches {
     }
     /// How many photos the selection is: each once, those the library has (what the Keywording
     /// box's "N of M" counts).
-    pub(crate) fn selected_photos(&mut self, cat: &lightcraft_catalog::Catalog, selection: &[lightcraft_catalog::PhotoId]) -> usize {
-        let key = key_of(selection);
+    pub(crate) fn selected_photos(&mut self, session: &lightcraft_engine::Session) -> usize {
+        let (cat, selection) = (&session.catalog, session.selected_ids());
+        let key = key_of(session.selection_key());
         match self.selected_photos {
             Some((r, k, n)) if r == cat.revision && k == key => n,
             _ => {
@@ -119,16 +113,13 @@ impl Caches {
         }
     }
     /// The selection's keywords grouped by the keyword they are inside (the grouped Keywording box).
-    pub(crate) fn keyword_groups(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
-    ) -> std::sync::Arc<Vec<panels::keywording::Group>> {
-        let key = key_of(selection);
+    pub(crate) fn keyword_groups(&mut self, session: &lightcraft_engine::Session) -> std::sync::Arc<Vec<panels::keywording::Group>> {
+        let cat = &session.catalog;
+        let key = key_of(session.selection_key());
         match &self.keyword_groups {
             Some((r, k, g)) if *r == cat.revision && *k == key => g.clone(),
             _ => {
-                let chips = self.keyword_chips(cat, selection);
+                let chips = self.keyword_chips(session);
                 let g = std::sync::Arc::new(panels::keywording::grouped(&chips));
                 self.keyword_groups = Some((cat.revision, key, g.clone()));
                 g
@@ -136,12 +127,9 @@ impl Caches {
         }
     }
     /// How many selected photos have each keyword (the Keyword List's tick boxes).
-    pub(crate) fn keyword_ticks(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
-    ) -> std::sync::Arc<panels::keyword_list::Ticks> {
-        let key = key_of(selection);
+    pub(crate) fn keyword_ticks(&mut self, session: &lightcraft_engine::Session) -> std::sync::Arc<panels::keyword_list::Ticks> {
+        let (cat, selection) = (&session.catalog, session.selected_ids());
+        let key = key_of(session.selection_key());
         match &self.keyword_ticks {
             Some((r, k, t)) if *r == cat.revision && *k == key => t.clone(),
             _ => {

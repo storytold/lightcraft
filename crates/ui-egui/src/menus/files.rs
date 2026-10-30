@@ -11,7 +11,7 @@ pub fn delete_in_album(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
         app.toast(ctx, crate::i18n::tr("Smart albums update automatically: change their rules, or use Photo ▸ Delete Photo"));
         return true;
     }
-    if app.session.selected().is_empty() {
+    if app.session.selected_count() == 0 {
         return true;
     }
     match app.run("album.removePhotos", json!({"id": aid.0})) {
@@ -32,7 +32,7 @@ pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
     if !app.ui.settings.confirm_delete {
         return false;
     }
-    let count = app.session.selected().len();
+    let count = app.session.selected_count();
     if count == 0 {
         return false;
     }

@@ -21,9 +21,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let kid = egui::Id::unique("kw-input");
         let mut text = ui.data_mut(|d| d.get_temp::<String>(kid).unwrap_or_default());
         // the keywords every selected photo has: those only some have are still offered and suggested
-        let selection = app.session.selected();
-        let have: Vec<String> =
-            app.caches.keyword_chips(&app.session.catalog, &selection).iter().filter(|c| c.on_all()).map(|c| c.path.clone()).collect();
+        let have: Vec<String> = app.caches.keyword_chips(&app.session).iter().filter(|c| c.on_all()).map(|c| c.path.clone()).collect();
         // while the box has the cursor it offers the library's keywords for what is being typed,
         // right under itself; it stays for a click on one of them, which takes the cursor away
         let field = crate::text_field::id("field:keyword");
@@ -137,9 +135,9 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         crate::panels::keywording::view_switch(app, ui);
         ui.add_space(4.0);
-        crate::panels::keywording::scope(app, ui, &selection);
+        crate::panels::keywording::scope(app, ui);
         if app.ui.keywording_view == crate::state::KeywordingView::Keywords {
-            crate::panels::keywording::chip_row(app, ui, &selection);
+            crate::panels::keywording::chip_row(app, ui);
         } else {
             crate::panels::keywording::names_row(app, ui);
         }
@@ -232,8 +230,7 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
 /// selected photos; "Save as Set…" keeps the current nine under a name.
 fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // on: every selected photo has it (⌥1–⌥9 then take it off them); partly on: only some do
-    let selection = app.session.selected();
-    let chips = app.caches.keyword_chips(&app.session.catalog, &selection);
+    let chips = app.caches.keyword_chips(&app.session);
     let t = Tokens::get(ui.ctx());
     let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();

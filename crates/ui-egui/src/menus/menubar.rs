@@ -353,8 +353,7 @@ const HIDDEN: &[&str] = &[
 
 /// The selection includes a photo in Recently Deleted.
 pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
-    let s = &app.session;
-    s.selection.ids.iter().copied().chain(s.selection.active).any(|id| s.catalog.photo(id).is_some_and(|p| p.deleted))
+    app.session.selection_facts().any_deleted(&app.session)
 }
 
 /// Items only some hosts have are left out of the others' menus (the web build's library backup);
@@ -787,10 +786,9 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             v
         }
         "Add to Album" => {
-            let targets = app.session.selected();
-            let sel = !targets.is_empty();
+            let sel = app.session.selected_count() > 0;
             // albums hold library photos (issue #684): a Local-only selection is told what to do first
-            let local_only = crate::panels::grid::local_only(app, &targets);
+            let local_only = crate::panels::grid::selection_local_only(app);
             let mut v: Vec<MenuNode> = vec![];
             if local_only {
                 v.push(item("photo.addToLibrary", Value::Null, crate::i18n::tr("Add to My Photos First"), None, false, None));
