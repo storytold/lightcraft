@@ -22,7 +22,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use lightcraft_ui_egui::LightcraftApp;
 use lightcraft_ui_egui::menubar::{
-    MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_structure as structure_of,
+    MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_split, native_menu_structure as structure_of,
 };
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -331,6 +331,7 @@ impl NativeMenu {
     fn rebuild(&mut self, app: &mut LightcraftApp) {
         let bar = menu_bar(app);
         self.structure = structure_of(&bar, &app.ui.settings.keymap);
+        let (app_rows, menus) = native_menu_split(bar);
         self.menu = Menu::new();
         self.items.clear();
         self.app_items.clear();
@@ -340,8 +341,11 @@ impl NativeMenu {
         let about = MenuItem::with_id("app.about", lightcraft_ui_egui::i18n::tr("About LightCraft"), true, None);
         let settings = MenuItem::with_id(SETTINGS, lightcraft_ui_egui::i18n::tr("Settings…"), true, accelerator(SETTINGS_KEY));
         let quit = MenuItem::with_id(QUIT, lightcraft_ui_egui::i18n::tr("Quit LightCraft"), true, accelerator("Cmd+Q"));
+        let _ = app_menu.append(&about);
+        // Check for Updates… follows About LightCraft (Help keeps it on other platforms)
+        let update_rows: Vec<MenuNode> = app_rows.into_iter().filter(|n| !matches!(n, MenuNode::Item { id, .. } if id == "app.about")).collect();
+        self.append_nodes(&app_menu, &update_rows, &app.ui.settings.keymap, true);
         let _ = app_menu.append_items(&[
-            &about,
             &PredefinedMenuItem::separator(),
             &settings,
             &PredefinedMenuItem::separator(),
@@ -371,7 +375,7 @@ impl NativeMenu {
         }
         let _ = self.menu.append(&app_menu);
 
-        for (title, nodes) in &bar {
+        for (title, nodes) in &menus {
             let sub = Submenu::new(label_text(title), true);
             if title == "Window" {
                 let _ = sub.append_items(&[
@@ -380,13 +384,7 @@ impl NativeMenu {
                     &PredefinedMenuItem::separator(),
                 ]);
             }
-            // About and Settings live in the app menu on macOS
-            let nodes: Vec<MenuNode> = nodes
-                .iter()
-                .filter(|n| !matches!(n, MenuNode::Item { id, .. } if id == "app.about" || id == SETTINGS || id == QUIT))
-                .cloned()
-                .collect();
-            let nodes = tidy_separators(nodes);
+            let nodes = tidy_separators(nodes.clone());
             // Swapping an item in the Help menu leaves the old row in place and adds a second one
             // (measured on macOS 27 with muda 0.21): the Help menu is not addressed row for row.
             self.append_nodes(&sub, &nodes, &app.ui.settings.keymap, title != "Help");

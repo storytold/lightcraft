@@ -823,3 +823,72 @@ fn no_two_menu_commands_share_a_label() {
     }
     assert!(clashes.is_empty(), "{clashes:#?}");
 }
+
+/// The ids of a menu's top-level rows, a submenu as `@Label`, separators left out.
+fn row_ids(nodes: &[MenuNode]) -> Vec<String> {
+    nodes
+        .iter()
+        .filter_map(|n| match n {
+            MenuNode::Item { id, .. } => Some(id.clone()),
+            MenuNode::Submenu { label, .. } => Some(format!("@{label}")),
+            MenuNode::Separator => None,
+        })
+        .collect()
+}
+
+fn menu<'a>(bar: &'a [(String, Vec<MenuNode>)], title: &str) -> &'a [MenuNode] {
+    &bar.iter().find(|(t, _)| t == title).unwrap_or_else(|| panic!("{title} menu")).1
+}
+
+/// macOS puts Check for Updates… in the application menu, right after About LightCraft.
+#[test]
+fn macos_app_menu_holds_about_then_check_for_updates() {
+    let (app_rows, menus) = native_menu_split(menu_bar(&app()));
+    assert_eq!(row_ids(&app_rows), ["app.about", "app.checkForUpdates"]);
+    let help = row_ids(menu(&menus, "Help"));
+    assert!(!help.contains(&"app.checkForUpdates".to_string()) && !help.contains(&"app.about".to_string()), "{help:?}");
+    // the rows the host builds itself stay out of the menus too
+    for (title, nodes) in &menus {
+        assert!(find(nodes, "app.settings").is_none() && find(nodes, "app.quit").is_none(), "{title}");
+    }
+}
+
+/// Windows, Linux and the web keep Check for Updates… in Help, last before About.
+#[test]
+fn in_window_help_keeps_check_for_updates_before_about() {
+    let help = row_ids(menu(&menu_bar(&app()), "Help"));
+    assert_eq!(&help[help.len() - 2..], ["app.checkForUpdates", "app.about"], "{help:?}");
+}
+
+/// Help reads like a Mac Help menu: the help page, what's new and the shortcuts first, then
+/// feedback and the community, the websites, and the diagnostics last.
+#[test]
+fn help_menu_leads_with_help_then_whats_new_and_the_shortcuts() {
+    let help = row_ids(menu(&menu_bar(&app()), "Help"));
+    assert_eq!(
+        help,
+        [
+            "app.help",
+            "app.whatsNew",
+            "app.shortcuts",
+            "app.feedback",
+            "app.discord",
+            "app.website",
+            "app.github",
+            "app.artcraft",
+            "app.systemInfo",
+            "app.openLogFolder",
+            "@Debug",
+            "app.checkForUpdates",
+            "app.about",
+        ]
+    );
+}
+
+/// LightCraft Help is ⇧⌘? on macOS (a function key needs fn on a Mac keyboard) and F1 elsewhere.
+#[test]
+fn help_shortcut_is_the_mac_one_on_macos_and_f1_elsewhere() {
+    let keymap = crate::shortcuts::Keymap::new();
+    let want = if cfg!(target_os = "macos") { "Cmd+Shift+/" } else { "F1" };
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "app.help"), Some(want));
+}
