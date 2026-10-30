@@ -2390,5 +2390,7 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "This album is in a loop, so it shows nothing": "Cet album est pris dans une boucle : il n'affiche rien",
+  "It tests itself: change its rules (Edit Smart Album…)": "Il se teste lui-même : modifiez ses règles (Modifier l'album intelligent…)"
 }

@@ -2734,5 +2734,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "This album is in a loop, so it shows nothing": "ეს ალბომი ციკლშია, ამიტომ არაფერს აჩვენებს",
+  "It tests itself: change its rules (Edit Smart Album…)": "ის საკუთარ თავს ამოწმებს: შეცვალეთ მისი წესები (სმარტ-ალბომის რედაქტირება…)"
 }

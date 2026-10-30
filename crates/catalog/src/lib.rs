@@ -450,8 +450,33 @@ impl Catalog {
 
     /// Whether smart album `id` with `rules` (as [`Filter::prepare`]d) holds `p`.
     fn smart_album_has(&self, id: AlbumId, rules: &Filter, prepared: &query::Prepared, p: &Photo) -> bool {
-        // guarded: a smart album testing smart albums can't loop or recurse without end
-        !p.deleted && rules::smart_album_holds(id, p.id, || rules.matches_in(p, self, prepared))
+        // an album on a loop holds nothing, whoever asks (see `album_on_a_loop`); beyond that, a
+        // smart album testing smart albums can't recurse without end (the guard)
+        !p.deleted && !self.looping().contains(&id) && rules::smart_album_holds(id, p.id, || rules.matches_in(p, self, prepared))
+    }
+
+    /// Whether album `id` is on a loop: a smart album that includes itself, directly or through
+    /// the smart albums it tests. Such an album holds no photos ([`Self::album_photos`],
+    /// [`Self::album_count`], [`Self::album_contains`] and the grid all agree), until its rules or
+    /// those of an album on the loop change. An album that only tests a looping album is not on
+    /// the loop: it is worked out as usual, seeing the looping album as empty.
+    pub fn album_on_a_loop(&self, id: AlbumId) -> bool {
+        self.looping().contains(&id)
+    }
+
+    /// For an album on a loop, an album it tests that leads back to it: the one to name when
+    /// saying why it is empty (itself when it tests itself and nothing else on the loop). `None`
+    /// for an album that is not on a loop.
+    pub fn album_loops_through(&self, id: AlbumId) -> Option<AlbumId> {
+        if !self.album_on_a_loop(id) {
+            return None;
+        }
+        let tested = self.albums.get(&id)?.smart.as_deref()?.albums_tested();
+        tested
+            .iter()
+            .copied()
+            .find(|b| *b != id && self.album_on_a_loop(*b) && self.album_reaches(*b, id))
+            .or_else(|| tested.contains(&id).then_some(id))
     }
 
     /// Whether smart album `from` tests `to`, directly or through the smart albums it tests (the
@@ -779,6 +804,7 @@ impl Catalog {
                 Op::SetHistoryCursor { id, cursor: std::mem::replace(&mut p.history_cursor, cursor) }
             }
             Op::AddAlbum { album } => {
+                self.index.forget_loops();
                 if self.albums.contains_key(&album.id) {
                     return Err(CatalogError::Invalid(format!("album {:?} exists", album.id)));
                 }
@@ -800,6 +826,7 @@ impl Catalog {
                 Op::RemoveAlbum { id }
             }
             Op::RemoveAlbum { id } => {
+                self.index.forget_loops();
                 if self.albums.values().any(|a| a.parent == Some(id)) {
                     return Err(CatalogError::Invalid("folder is not empty".into()));
                 }
@@ -860,6 +887,7 @@ impl Catalog {
                 Op::SetAlbumCover { id, cover: std::mem::replace(&mut a.cover, cover) }
             }
             Op::SetAlbumRules { id, rules } => {
+                self.index.forget_loops();
                 self.validate_rules(&rules)?;
                 let a = self.album_mut(id)?;
                 let Some(old) = a.smart.as_mut() else {
@@ -1180,6 +1208,84 @@ impl Catalog {
     }
 }
 
+/// Which album tests which: what a smart album's photos depend on beyond its own rules. Made in
+/// one look at the albums, for questions about all of them.
+struct AlbumGraph {
+    /// Every album; `Some(albums its rules test)` for a smart album, `None` for any other.
+    leads_to: std::collections::HashMap<AlbumId, Option<Vec<AlbumId>>>,
+}
+
+impl AlbumGraph {
+    fn of<'a>(albums: impl Iterator<Item = &'a Album>) -> AlbumGraph {
+        AlbumGraph { leads_to: albums.map(|a| (a.id, a.smart.as_deref().map(Filter::albums_tested))).collect() }
+    }
+
+    /// The smart albums that lead back to themselves: those in a ring of albums leading to one
+    /// another (a strongly connected part of more than one album), or testing themselves. One
+    /// walk over the albums (Tarjan's, with its own stack rather than recursion: a chain of
+    /// thousands of albums must not overflow the call stack).
+    fn on_a_loop(&self) -> std::collections::BTreeSet<AlbumId> {
+        // only what tests an album can be on a ring: number those
+        let testing: Vec<(AlbumId, &[AlbumId])> =
+            self.leads_to.iter().filter_map(|(id, tested)| tested.as_deref().filter(|t| !t.is_empty()).map(|t| (*id, t))).collect();
+        let number: std::collections::HashMap<AlbumId, usize> = testing.iter().enumerate().map(|(i, (id, _))| (*id, i)).collect();
+        let leads: Vec<Vec<usize>> = testing.iter().map(|(_, t)| t.iter().filter_map(|to| number.get(to).copied()).collect()).collect();
+        const UNSEEN: usize = usize::MAX;
+        let n = testing.len();
+        // when each was first reached, the earliest still-open album it leads back to, the open
+        // ones in the order reached, and whether each ended up on a ring
+        let (mut reached, mut back) = (vec![UNSEEN; n], vec![0usize; n]);
+        let (mut open, mut is_open, mut ringed) = (Vec::new(), vec![false; n], vec![false; n]);
+        let mut clock = 0usize;
+        for root in 0..n {
+            if reached[root] != UNSEEN {
+                continue;
+            }
+            // (album, how many of its leads were followed)
+            let mut walk: Vec<(usize, usize)> = vec![(root, 0)];
+            while let Some(&(v, followed)) = walk.last() {
+                if followed == 0 && reached[v] == UNSEEN {
+                    reached[v] = clock;
+                    back[v] = clock;
+                    clock += 1;
+                    open.push(v);
+                    is_open[v] = true;
+                }
+                if let Some(&w) = leads[v].get(followed) {
+                    if let Some(top) = walk.last_mut() {
+                        top.1 += 1;
+                    }
+                    if reached[w] == UNSEEN {
+                        walk.push((w, 0));
+                    } else if is_open[w] {
+                        back[v] = back[v].min(reached[w]);
+                    }
+                    continue;
+                }
+                // every lead of `v` followed: it closes, and with it the ring it is the first of
+                walk.pop();
+                if let Some(&(parent, _)) = walk.last() {
+                    back[parent] = back[parent].min(back[v]);
+                }
+                if back[v] == reached[v] {
+                    let mut ring = Vec::new();
+                    while let Some(w) = open.pop() {
+                        is_open[w] = false;
+                        ring.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    if ring.len() > 1 || leads[v].contains(&v) {
+                        ring.into_iter().for_each(|w| ringed[w] = true);
+                    }
+                }
+            }
+        }
+        testing.iter().zip(&ringed).filter(|(_, ringed)| **ringed).map(|((id, _), _)| *id).collect()
+    }
+}
+
 /// How siblings are listed: folders first, then the ones with a place of their own by it, then by
 /// name; the id settles any tie.
 fn album_order_key(a: &Album) -> (bool, bool, u32, String, AlbumId) {
@@ -1206,6 +1312,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_looping_albums;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

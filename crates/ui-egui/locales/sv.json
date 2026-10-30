@@ -2429,5 +2429,7 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "This album is in a loop, so it shows nothing": "Det här albumet ingår i en loop och visar därför ingenting",
+  "It tests itself: change its rules (Edit Smart Album…)": "Det testar sig självt: ändra dess regler (Redigera smart album…)"
 }

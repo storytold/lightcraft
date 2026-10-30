@@ -8,7 +8,7 @@
 //! `AddAlbum`, `RemoveAlbum`, `SetAlbumPhotos`) update them as they apply, inverses and the
 //! rollback of a failed batch included, as those are ops too.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 use crate::{AlbumId, Catalog, PhotoId, StackId};
@@ -20,6 +20,10 @@ pub(crate) struct Indexes {
     stacks: OnceLock<Option<HashMap<PhotoId, StackId>>>,
     /// Album → its photos (regular albums; a smart album's list is empty).
     albums: OnceLock<HashMap<AlbumId, HashSet<PhotoId>>>,
+    /// The smart albums on a loop (see [`crate::Catalog::album_on_a_loop`]). Built from the albums'
+    /// rules, so forgotten whenever an album is added or removed or its rules change (and by no
+    /// other op: photos never change which album tests which).
+    looping: OnceLock<BTreeSet<AlbumId>>,
 }
 
 /// A copy builds its own when asked (copies are made to be saved, not queried).
@@ -45,6 +49,12 @@ impl std::fmt::Debug for Indexes {
 }
 
 impl Indexes {
+    /// An op is about to add or remove an album or change its rules (the undo of any of them is
+    /// one of those too): the albums on a loop are worked out again when asked.
+    pub(crate) fn forget_loops(&mut self) {
+        self.looping.take();
+    }
+
     /// Stack `id` held `old` and holds `new` now (empty: it was added, or is gone).
     pub(crate) fn stack_changed(&mut self, id: StackId, old: &[PhotoId], new: &[PhotoId]) {
         let Some(Some(m)) = self.stacks.get_mut() else { return };
@@ -73,6 +83,18 @@ impl Indexes {
 }
 
 impl Catalog {
+    /// The smart albums that lead back to themselves through the albums they test, worked out once
+    /// (by [`crate::AlbumGraph`]) and kept until an album is added, removed or has its rules changed.
+    pub(crate) fn looping(&self) -> &BTreeSet<AlbumId> {
+        self.index.looping.get_or_init(|| crate::AlbumGraph::of(self.albums.values()).on_a_loop())
+    }
+
+    /// Whether the albums on a loop are worked out and kept now (what the tests look at).
+    #[cfg(test)]
+    pub(crate) fn loops_known(&self) -> bool {
+        self.index.looping.get().is_some()
+    }
+
     /// The stack photo `photo` is in, by the index (built on first use).
     pub(crate) fn stack_id_of(&self, photo: PhotoId) -> Option<StackId> {
         let m = self.index.stacks.get_or_init(|| {

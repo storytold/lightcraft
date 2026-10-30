@@ -19,6 +19,19 @@
   photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
   Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
 
+### An album caught in a loop is empty, and says so
+- A smart album that tests another album, which tests it back (or that tests itself), used to show a share of
+  its photos, and which photos depended on the album you asked about. Now every album on such a loop shows no
+  photos, however you look at it: in the grid, in the count beside it in the sidebar, and in an Album rule of
+  another smart album.
+- The empty album says why instead of "No photos": "This album is in a loop, so it shows nothing", then the album it
+  loops through and where to fix it (Edit Smart Album…). The row in the sidebar keeps its ⚠, and hovering it says the
+  same.
+- An album that only tests a looping album is not on the loop: it keeps working, and sees the looping album as empty
+  (so an Album rule set to "isn't" that album matches every photo). Change the rules of one album on the loop and its albums hold
+  their photos again.
+- A library that already holds such a loop opens as before; only what the albums on it show changes.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts

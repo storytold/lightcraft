@@ -2349,5 +2349,7 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "This album is in a loop, so it shows nothing": "Этот альбом попал в цикл, поэтому ничего не показывает",
+  "It tests itself: change its rules (Edit Smart Album…)": "Он проверяет сам себя: измените его условия (Изменить смарт-альбом…)"
 }

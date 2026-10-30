@@ -305,5 +305,6 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Det leder tillbaka till sig självt via albumet ”{}”: ändra reglerna för ett av albumen i loopen (Redigera smart album…)"
 }

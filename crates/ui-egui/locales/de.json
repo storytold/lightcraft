@@ -3440,5 +3440,7 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "This album is in a loop, so it shows nothing": "Dieses Album ist in einem Kreis und zeigt deshalb nichts",
+  "It tests itself: change its rules (Edit Smart Album…)": "Es prüft sich selbst: Ändere seine Regeln (Smart-Album bearbeiten…)"
 }

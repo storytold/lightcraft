@@ -2327,5 +2327,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "This album is in a loop, so it shows nothing": "Tämä albumi on silmukassa, joten se ei näytä mitään",
+  "It tests itself: change its rules (Edit Smart Album…)": "Se testaa itseään: muuta sen sääntöjä (Muokkaa älyalbumia…)"
 }

@@ -2339,5 +2339,7 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "This album is in a loop, so it shows nothing": "Album ini berada dalam perulangan, jadi tidak menampilkan apa pun",
+  "It tests itself: change its rules (Edit Smart Album…)": "Album ini menjadikan dirinya sendiri syarat: ubah aturannya (Edit album pintar…)"
 }

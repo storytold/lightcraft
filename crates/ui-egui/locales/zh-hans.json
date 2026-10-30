@@ -2200,5 +2200,7 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "This album is in a loop, so it shows nothing": "此相册处于循环中，因此不显示任何内容",
+  "It tests itself: change its rules (Edit Smart Album…)": "它引用了自身：请更改其规则（编辑智能相册…）"
 }
