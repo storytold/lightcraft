@@ -77,18 +77,22 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         [("copyright", "Copyright", "© 2026 Your Name", d.copyright.clone()), ("creator", "Creator", "Your Name", d.creator.clone())]
     {
         row(ui, t, label, |ui| {
-            let id = egui::Id::unique(("settingsMeta", key));
-            let mut text: String = ui.data(|m| m.get_temp(id)).unwrap_or(value.clone());
-            let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint_text).desired_width(240.0));
-            register(ui, format!("field:settings.{key}"), r.rect);
-            if r.lost_focus() && text.trim() != value {
-                let _ = app.run("library.preferences", json!({"import": {key: text.trim()}}));
+            // (a field of the library it was typed for: another one's is another edit)
+            let library = app.session.library_generation();
+            let mut text = crate::text_field::draft(ui, ("settingsMeta", key), &library, &value);
+            let widget = format!("field:settings.{key}");
+            let r = crate::text_field::TextField::singleline(&widget, &mut text)
+                .hint(hint_text)
+                .width(240.0)
+                .saves_with(library, |typed| {
+                    let typed = typed.trim();
+                    (typed != value).then(|| crate::text_field::Save { command: "library.preferences", params: json!({"import": {key: typed}}) })
+                })
+                .show(ui);
+            if let Some(save) = r.save {
+                let _ = app.run(save.command, save.params);
             }
-            if r.has_focus() {
-                ui.data_mut(|m| m.insert_temp(id, text));
-            } else {
-                ui.data_mut(|m| m.remove::<String>(id));
-            }
+            crate::text_field::keep_draft(ui, ("settingsMeta", key), &library, r.editing, &text);
         });
     }
     if !app.session.metadata_presets.is_empty() {
@@ -171,13 +175,22 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 }
             });
             row(ui, t, crate::i18n::tr("Album"), |ui| {
-                let id = egui::Id::unique("auto-album");
-                let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
-                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
-                if r.lost_focus() {
-                    let _ = app.run("library.autoImport", json!({"album": name.trim()}));
+                // (a field of the library it was typed for: another one's is another edit)
+                let library = app.session.library_generation();
+                let mut name = crate::text_field::draft(ui, "auto-album", &library, &d.auto_album.clone().unwrap_or_default());
+                let current = d.auto_album.clone().unwrap_or_default();
+                let r = crate::text_field::TextField::singleline("field:settingsAutoAlbum", &mut name)
+                    .hint(crate::i18n::tr("None"))
+                    .width(180.0)
+                    .saves_with(library, |typed| {
+                        let typed = typed.trim();
+                        (typed != current).then(|| crate::text_field::Save { command: "library.autoImport", params: json!({"album": typed}) })
+                    })
+                    .show(ui);
+                if let Some(save) = r.save {
+                    let _ = app.run(save.command, save.params);
                 }
-                ui.data_mut(|m| m.insert_temp(id, name));
+                crate::text_field::keep_draft(ui, "auto-album", &library, r.editing, &name);
             });
         }
     }

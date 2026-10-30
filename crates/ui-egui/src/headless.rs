@@ -269,6 +269,9 @@ pub struct Headless {
     /// create a prompt after the host input was already filtered for the previous frame.
     #[cfg(test)]
     after_raw_input_hook: Option<Box<dyn FnMut(&mut LightcraftApp)>>,
+    /// Test-only: the next frame carries the window's close request ([`Self::request_close`]).
+    #[cfg(test)]
+    close_next: bool,
 }
 
 /// A headless run (`lightcraft-cli snapshot`, tests) is a one-shot process: however it ends, it
@@ -311,6 +314,8 @@ impl Headless {
             last_cursor: egui::CursorIcon::Default,
             #[cfg(test)]
             after_raw_input_hook: None,
+            #[cfg(test)]
+            close_next: false,
         }
     }
 
@@ -320,6 +325,13 @@ impl Headless {
     #[cfg(test)]
     pub(crate) fn set_after_raw_input_hook(&mut self, hook: impl FnMut(&mut LightcraftApp) + 'static) {
         self.after_raw_input_hook = Some(Box::new(hook));
+    }
+
+    /// The next frame carries the window's close request, as the close button (or the host's Quit)
+    /// sends it.
+    #[cfg(test)]
+    pub(crate) fn request_close(&mut self) {
+        self.close_next = true;
     }
 
     pub fn frames(&self) -> u64 {
@@ -352,6 +364,10 @@ impl Headless {
         self.app.set_simulated_clock(Some(self.time));
         self.app.raw_input_hook(&self.view.ctx, &mut raw);
         #[cfg(test)]
+        if std::mem::take(&mut self.close_next) {
+            raw.viewports.entry(ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        }
+        #[cfg(test)]
         if let Some(mut hook) = self.after_raw_input_hook.take() {
             hook(&mut self.app);
         }
@@ -382,7 +398,9 @@ impl Headless {
                     self.window_commands.push(c);
                 }
                 // recorded, not carried out: the simulated pointer moves only when a test moves it
-                ViewportCommand::StartDrag | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => self.window_commands.push(c),
+                ViewportCommand::CancelClose | ViewportCommand::StartDrag | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => {
+                    self.window_commands.push(c)
+                }
                 _ => {}
             }
         }

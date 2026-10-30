@@ -46,7 +46,7 @@ impl LightcraftApp {
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
         panels::notices::logic(self);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
-        if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.may_close_after_saving_edits(ctx) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let now = self.tick_now();
@@ -270,6 +270,9 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        // an edit still recorded names photos of the library that was left (their ids are local to
+        // it): it is dropped, never run against this one
+        drop(crate::text_field::take_all(ctx));
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
@@ -317,6 +320,20 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        // a text edit whose field was not drawn in this pass ended there: every way of leaving an
+        // edit saves except Esc (an Esc that came with the pass gives it up)
+        let left = crate::text_field::take_left_behind(ctx);
+        if !ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && let Err((e, _)) = self.run_saves(ctx, left)
+        {
+            // (the box is gone with its text: all that is left is to say so)
+            self.toast_error(ctx, e);
+        }
+        // (a refusal is remembered only while the text it refused is still there to be offered again)
+        // (not in the pass of the refusal itself: a box drawn before it records again in the next)
+        if self.edit_saves_refused.0 < ctx.cumulative_pass_nr() && !crate::text_field::any_unfinished(ctx) {
+            self.edit_saves_refused.1.clear();
+        }
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);
@@ -328,6 +345,72 @@ impl LightcraftApp {
             // nothing else may ask for the frame that applies its cancellation.
             ctx.request_repaint();
         }
+    }
+
+    /// Save the text edits under way, whether their fields are drawn or not: the window is closing
+    /// (or Quit was chosen), before the question about unsaved changes, which they may add to; or a
+    /// change is about to move what other boxes were typed for (Remove on a text overlay).
+    /// A save the engine refuses is an `Err` with its message, and the caller stops: the fields
+    /// still hold their text and record the saves again. Offered again unchanged, once the error
+    /// was shown, that text is given up (`Ok`): the person asked to leave twice.
+    pub fn save_unfinished_edits(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let saves = crate::text_field::take_all(ctx);
+        // (the same text offered again, after the error was shown: the person asked to leave twice;
+        // text put right or typed since is a new edit and is saved)
+        let refused = std::mem::take(&mut self.edit_saves_refused).1;
+        if !saves.is_empty() && refused == saves {
+            return Ok(());
+        }
+        self.run_saves(ctx, saves).map_err(|(e, refused)| {
+            self.edit_saves_refused = (ctx.cumulative_pass_nr(), refused);
+            e
+        })
+    }
+
+    /// The one way to the question "may the app close now?", for the window's close button and
+    /// the menu bar's Quit alike: the edits under way are saved first (they may be the change the
+    /// unsaved-changes question is about), then [`panels::notices::may_close`] asks. A save the
+    /// engine refuses keeps the app open with the error shown. `false`: stay open.
+    pub fn may_close_after_saving_edits(&mut self, ctx: &egui::Context) -> bool {
+        match self.save_unfinished_edits(ctx) {
+            Ok(()) => panels::notices::may_close(self),
+            Err(e) => {
+                self.toast_error(ctx, e);
+                false
+            }
+        }
+    }
+
+    /// [`Self::save_unfinished_edits`] where no frame is at hand: before a library closes (Open
+    /// Library, New Library), whose photos the text was typed for.
+    pub(crate) fn save_edits_before_library_closes(&mut self) -> Result<(), String> {
+        match self.egui_ctx.clone() {
+            Some(ctx) => self.save_unfinished_edits(&ctx),
+            None => Ok(()),
+        }
+    }
+
+    /// Run the saves fields declared ([`crate::text_field::Save`]), all of them. The fields of the
+    /// saves that succeeded are told their edit is over ([`crate::text_field::end_edits`]): one
+    /// that is still drawn must not save the same text again, nor have an Esc to undo it. The
+    /// first refusal's message is the `Err`, with every save that was refused.
+    fn run_saves(&mut self, ctx: &egui::Context, saves: Vec<crate::text_field::Pending>) -> Result<(), (String, Vec<crate::text_field::Pending>)> {
+        if saves.is_empty() {
+            return Ok(());
+        }
+        let (mut first, mut refused, mut done) = (None, Vec::new(), Vec::new());
+        for pending in saves {
+            match self.run(pending.save.command, pending.save.params.clone()) {
+                Ok(_) => done.push(pending.id),
+                Err(e) => {
+                    first.get_or_insert(e);
+                    refused.push(pending);
+                }
+            }
+        }
+        crate::text_field::end_edits(ctx, done);
+        ctx.request_repaint();
+        first.map_or(Ok(()), |e| Err((e, refused)))
     }
 
     /// Presentation only: the window's panels, dialogs and overlays.

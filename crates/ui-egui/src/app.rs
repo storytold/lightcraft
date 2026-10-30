@@ -45,6 +45,8 @@ impl LightcraftApp {
             quit_prompt: None,
             notice_input: Default::default(),
             quit_confirmed: false,
+            egui_ctx: None,
+            edit_saves_refused: (0, Vec::new()),
             control_rx: None,
             pending_screenshots: vec![],
             pending_gestures: vec![],
@@ -548,6 +550,9 @@ impl LightcraftApp {
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
+        if self.egui_ctx.is_none() {
+            self.egui_ctx = Some(ctx.clone());
+        }
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and
         // this runs on every UI pass and every hidden logic tick.

@@ -89,17 +89,22 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &
 
 /// The screen's text field (`field:{id}`), saved when the edit ends.
 fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &str) {
-    let mem = egui::Id::unique(("slideshow-title-field", id));
-    let mut s: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| value.to_string());
+    // (a field of the library it was typed for: another one's is another edit)
+    let library = app.session.library_generation();
+    let mem = ("slideshow-title-field", id);
+    let mut s = crate::text_field::draft(ui, mem, &library, value);
     let widget = format!("field:{id}");
-    let r = TextField::singleline(&widget, &mut s).hint(crate::i18n::tr("Title text")).width(ui.available_width().clamp(80.0, 260.0)).show(ui);
-    if r.editing {
-        ui.data_mut(|d| d.insert_temp(mem, s.clone()));
-    } else {
-        ui.data_mut(|d| d.remove::<String>(mem));
-    }
-    if r.committed() && s != value {
-        set(app, ui.ctx(), t, "text", json!(s));
+    let r = TextField::singleline(&widget, &mut s)
+        .hint(crate::i18n::tr("Title text"))
+        .width(ui.available_width().clamp(80.0, 260.0))
+        .saves_with(library, |typed| {
+            (typed != value).then(|| crate::text_field::Save { command: "slideshow.titles", params: json!({ t.id(): { "text": typed } }) })
+        })
+        .show(ui);
+    crate::text_field::keep_draft(ui, mem, &library, r.editing, &s);
+    if let Some(save) = r.save {
+        let _ = app.run(save.command, save.params);
+        set_preview_shows(ui.ctx(), Some(t));
     }
 }
 

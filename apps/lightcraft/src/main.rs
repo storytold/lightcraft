@@ -83,7 +83,7 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
             && m.update(&mut self.0, ctx)
-            && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
+            && self.0.may_close_after_saving_edits(ctx)
         {
             // Quit from the menu bar: save exactly what closing the window saves (settings and
             // library, after the unsaved-changes check; otherwise its prompt shows), then end the

@@ -486,7 +486,7 @@ impl TextOverlay {
 }
 
 /// The keys [`OverlaySettings::merged`] takes.
-const KEYS: &str = "identityPlate, ratingStars, texts, addText, removeText, showWatermark, watermark";
+const KEYS: &str = "identityPlate, ratingStars, texts, addText, removeText, editText, showWatermark, watermark";
 
 impl OverlaySettings {
     /// Every value in range (non-finite numbers take the defaults), at most [`MAX_TEXTS`] texts.
@@ -534,8 +534,10 @@ impl OverlaySettings {
     /// These settings with the keys `p` names changed, validated and clamped; a wrong type or an
     /// unknown key is an error and nothing changes. `texts` replaces the list (each entry merged
     /// onto the one at its index, or a new default text); `addText` appends one (an object, `{}`
-    /// for the default); `removeText` removes the one at an index; `watermark` takes the export
-    /// watermark's keys (or text alone) merged onto the current one.
+    /// for the default); `removeText` removes the one at an index; `editText` changes the one at an
+    /// index while its text is still the one given (and the list not shorter than `of`, when given;
+    /// refused if it was removed or changed);
+    /// `watermark` takes the export watermark's keys (or text alone) merged onto the current one.
     pub fn merged(&self, p: &Value) -> Result<Self, String> {
         let Some(obj) = p.as_object() else { return Err("parameters must be an object".into()) };
         let mut s = self.clone();
@@ -569,6 +571,7 @@ impl OverlaySettings {
                     let i = usize::try_from(i).ok().filter(|i| *i < s.texts.len()).ok_or_else(|| format!("no text overlay {i}"))?;
                     s.texts.remove(i);
                 }
+                "editText" => s.edit_text(v)?,
                 "showWatermark" => s.show_watermark = boolean("", k, v).map_err(|_| format!("`showWatermark` must be true or false, not {v}"))?,
                 "watermark" => {
                     crate::export::ExportOptions::validate_watermark("slideshow.overlays", v).map_err(|e| e.to_string())?;
@@ -598,6 +601,31 @@ impl OverlaySettings {
             }
         }
         Ok(s.sanitized())
+    }
+
+    /// `editText`: the text overlay at `index` changed by the keys beside `index`, `was` and `of`, but
+    /// only while it is still there and its text is still `was` (what the edit started from) and, when
+    /// `of` is given, the list is not shorter than `of` (an overlay added at the end moves none). A
+    /// change made for an overlay that was removed, or that another one took the place of (even one
+    /// with the same text), writes nothing. (A removal of a later overlay shortens the list too, so
+    /// an edit sent with `of` is refused then: the count cannot tell which overlay went.)
+    fn edit_text(&mut self, v: &Value) -> Result<(), String> {
+        let obj = v.as_object().ok_or_else(|| format!("`editText` must be {{index, was, of?, …text overlay}}, not {v}"))?;
+        let index = obj.get("index").and_then(Value::as_u64).ok_or("`editText.index` must be the index of a text overlay")?;
+        let was = obj.get("was").and_then(Value::as_str).ok_or("`editText.was` must be the text the overlay had")?;
+        if let Some(of) = obj.get("of") {
+            let of = of.as_u64().ok_or("`editText.of` must be how many text overlays there were")?;
+            if usize::try_from(of).ok().is_none_or(|of| self.texts.len() < of) {
+                return Err(format!("there are {} text overlays, fewer than the {of} there were: one was removed", self.texts.len()));
+            }
+        }
+        let current = usize::try_from(index).ok().and_then(|i| self.texts.get_mut(i)).ok_or_else(|| format!("no text overlay {index}"))?;
+        if current.text != was {
+            return Err(format!("text overlay {index} is not \"{was}\" any more: it was changed or replaced"));
+        }
+        let change: serde_json::Map<String, Value> =
+            obj.iter().filter(|(k, _)| !matches!(k.as_str(), "index" | "was" | "of")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        current.merge("editText", &Value::Object(change))
     }
 
     /// A hash of the settings (for render keys). Stable within a run.

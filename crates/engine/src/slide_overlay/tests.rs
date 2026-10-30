@@ -206,6 +206,44 @@ fn watermark_takes_the_export_insets_and_rotation() {
     assert!(OverlaySettings::default().merged(&json!({"watermark": {"rotation": 45}})).is_err());
 }
 
+/// `editText` changes a text overlay only while it is the one the edit started from: removed, or
+/// another one in its place, it writes nothing (the whole list sent by `texts` would bring it back).
+#[test]
+fn edit_text_changes_only_the_overlay_it_was_made_for() {
+    let s = OverlaySettings::default().merged(&json!({"texts": [{"text": "{title}"}, {"text": "{caption}"}]})).unwrap();
+    let edited = s.merged(&json!({"editText": {"index": 1, "was": "{caption}", "text": "{file}", "size": 0.1}})).unwrap();
+    assert_eq!((edited.texts[0].text.as_str(), edited.texts[1].text.as_str(), edited.texts[1].size), ("{title}", "{file}", 0.1));
+    // removed: nothing is written, nothing comes back
+    let removed = s.merged(&json!({"removeText": 1})).unwrap();
+    let err = removed.merged(&json!({"editText": {"index": 1, "was": "{caption}", "text": "{file}"}})).unwrap_err();
+    assert_eq!(err, "no text overlay 1");
+    // the one at that index is another now (the first was removed)
+    let shifted = s.merged(&json!({"removeText": 0})).unwrap();
+    let err = shifted.merged(&json!({"editText": {"index": 0, "was": "{title}", "text": "{file}"}})).unwrap_err();
+    assert!(err.contains("not \"{title}\" any more"), "{err}");
+    assert_eq!(shifted.texts.len(), 1);
+    // an overlay with the same text moved into the index: the count tells
+    let twins = OverlaySettings::default().merged(&json!({"texts": [{"text": "{file}"}, {"text": "{file}"}]})).unwrap();
+    let after_remove = twins.merged(&json!({"removeText": 0})).unwrap();
+    let err = after_remove.merged(&json!({"editText": {"index": 0, "was": "{file}", "of": 2, "text": "{title}"}})).unwrap_err();
+    assert!(err.contains("one was removed"), "{err}");
+    let ok = twins.merged(&json!({"editText": {"index": 0, "was": "{file}", "of": 2, "text": "{title}"}})).unwrap();
+    assert_eq!(ok.texts[0].text, "{title}");
+    // one added at the end moves none: the edit still applies
+    let appended = twins.merged(&json!({"addText": {}})).unwrap();
+    let ok = appended.merged(&json!({"editText": {"index": 0, "was": "{file}", "of": 2, "text": "{title}"}})).unwrap();
+    assert_eq!((ok.texts.len(), ok.texts[0].text.as_str()), (3, "{title}"));
+    assert!(twins.merged(&json!({"editText": {"index": 0, "was": "{file}", "of": "2"}})).is_err());
+    for bad in [
+        json!({"editText": 0}),
+        json!({"editText": {"was": "a"}}),
+        json!({"editText": {"index": 0}}),
+        json!({"editText": {"index": 0, "was": "{title}", "sparkle": 1}}),
+    ] {
+        assert!(s.merged(&bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn hostile_settings_are_refused_or_clamped_and_never_panic() {
     let d = OverlaySettings::default();

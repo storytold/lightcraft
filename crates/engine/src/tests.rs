@@ -374,6 +374,23 @@ fn permanently_deleting_explicit_targets_keeps_the_surviving_selection() {
     assert_eq!(s.catalog.to_snapshot(), snapshot);
 }
 
+#[test]
+fn editing_info_of_named_photos_needs_no_selection() {
+    let mut s = demo();
+    let first = s.visible_cloned()[0];
+    // (what Select by leaves when nothing matches)
+    s.selection = Selection::default();
+    s.execute("photo.setMeta", &json!({"ids": [first], "caption": "Evening"})).unwrap();
+    assert_eq!(s.catalog.photo(first).unwrap().meta.caption, "Evening");
+    // photos that are gone change nothing and leave no empty undo step
+    let undo = s.undo.len();
+    assert_eq!(s.execute("photo.setMeta", &json!({"ids": [999_999], "caption": "Gone"})).unwrap()["changed"], 0);
+    assert_eq!(s.undo.len(), undo);
+    // without photos named it still acts on the selection, and there is none
+    assert!(s.execute("photo.setMeta", &json!({"caption": "Nowhere"})).is_err());
+    assert!(s.execute("photo.setMeta", &json!({"ids": [], "caption": "Nowhere"})).is_err());
+}
+
 /// `mask.brushStroke {connect: true}` (a ⇧-click) starts from the last point of the mask's last stroke: one straight
 /// stroke when the brush is unchanged, pieces whose size, feather and flow step from the last stroke's to the new
 /// values when it changed, and a plain dab when there is nothing to connect to.

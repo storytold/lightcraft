@@ -86,6 +86,11 @@ fn act(app: &mut LightcraftApp, ctx: &egui::Context, cmd: &str, p: serde_json::V
 }
 
 fn apply(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, name: &str) {
+    // (a box being typed in is saved first, to what it was typed for: the template replaces that, and the
+    // box is drawn after the Template Browser, so it would only see its target change)
+    if let Err(e) = app.save_unfinished_edits(ctx) {
+        return app.toast_error(ctx, e);
+    }
     let name = name.to_string();
     act(app, ctx, "slideshow.templates.apply", json!({"id": id}), |_| crate::i18n::tr_format!("Applied {name}", name = name));
 }
@@ -98,14 +103,18 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
         let r = TextField::singleline("field:slideshowTemplateRename", &mut text)
             .width(ui.available_width().clamp(80.0, 260.0))
             .select_on_focus(true)
+            .saves_with(&id, |typed| {
+                (typed.trim() != tpl.name)
+                    .then(|| crate::text_field::Save { command: "slideshow.templates.rename", params: json!({"id": id, "name": typed}) })
+            })
             .show(ui);
         if !r.editing && r.ending.is_none() {
             r.response.request_focus();
         }
         if r.committed() {
             set_pending(&ctx, None);
-            if text.trim() != tpl.name {
-                act(app, &ctx, "slideshow.templates.rename", json!({"id": id, "name": text}), |_| String::new());
+            if let Some(save) = r.save {
+                act(app, &ctx, save.command, save.params, |_| String::new());
             }
         } else if r.cancelled() {
             set_pending(&ctx, None);

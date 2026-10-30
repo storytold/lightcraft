@@ -76,19 +76,23 @@ fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: bool, lab
     v
 }
 
-/// A one-line text field (`field:{id}`), saved when the edit ends.
-fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: &str, hint: &str, wrap: &dyn Fn(&str) -> Value) {
-    let mem = egui::Id::unique(("slideshow-overlay-field", id));
-    let mut s: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| value.to_string());
+/// A one-line text field (`field:{id}`), saved when the edit ends. The edit is for the library, the
+/// text the box showed and `of`, how many text overlays there were (0 for a box that isn't one): if
+/// any of them changes under it (another library, a text overlay removed, added or replaced), it ends
+/// there and is saved as it was typed, for the request to refuse or carry out.
+fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, of: usize, value: &str, hint: &str, wrap: &dyn Fn(&str) -> Value) {
+    let target = (app.session.library_generation(), of, value);
+    let mem = ("slideshow-overlay-field", id);
+    let mut s = crate::text_field::draft(ui, mem, &target, value);
     let widget = format!("field:{id}");
-    let r = TextField::singleline(&widget, &mut s).hint(crate::i18n::tr(hint)).width(ui.available_width().clamp(80.0, 260.0)).show(ui);
-    if r.editing {
-        ui.data_mut(|d| d.insert_temp(mem, s.clone()));
-    } else {
-        ui.data_mut(|d| d.remove::<String>(mem));
-    }
-    if r.committed() && s != value {
-        set(app, wrap(&s));
+    let r = TextField::singleline(&widget, &mut s)
+        .hint(crate::i18n::tr(hint))
+        .width(ui.available_width().clamp(80.0, 260.0))
+        .saves_with(target, |typed| (typed != value).then(|| crate::text_field::Save { command: "slideshow.overlays", params: wrap(typed) }))
+        .show(ui);
+    crate::text_field::keep_draft(ui, mem, &target, r.editing, &s);
+    if let Some(save) = r.save {
+        set(app, save.params);
     }
 }
 
@@ -176,10 +180,10 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 {
                     set(app, plate(json!({"image": f})));
                 }
-                text(app, ui, "slideshowPlateImage", &p.image, "logo.png", &|v| plate(json!({"image": v})));
+                text(app, ui, "slideshowPlateImage", 0, &p.image, "logo.png", &|v| plate(json!({"image": v})));
             });
         } else {
-            row(ui, t, "Text", |ui| text(app, ui, "slideshowPlateText", &p.text, "Your name or studio", &|v| plate(json!({"text": v}))));
+            row(ui, t, "Text", |ui| text(app, ui, "slideshowPlateText", 0, &p.text, "Your name or studio", &|v| plate(json!({"text": v}))));
             row(ui, t, "Colour", |ui| colour(app, ui, "slideshowPlateColor", p.color, &|c| plate(json!({"color": c}))));
         }
         row(ui, t, "Size", |ui| {
@@ -213,9 +217,17 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let wrap = |v: Value| text_change(i, n, v);
         ui.add_space(2.0);
         row(ui, t, &format!("{} {}", crate::i18n::tr("Text"), i + 1), |ui| {
-            text(app, ui, &id, &o.text, "{title} · {exposure}", &|v| wrap(json!({"text": v})));
+            // (a save for the overlay as it was when the box was drawn: once it is removed or another one
+            // is at that index, the engine refuses it, and the whole list is never sent back)
+            text(app, ui, &id, n, &o.text, "{title} · {exposure}", &|v| json!({"editText": {"index": i, "was": o.text, "of": n, "text": v}}));
             if crate::widgets::text_button(ui, &format!("{id}Remove"), "Remove", false).clicked() {
-                set(app, json!({"removeText": i}));
+                // (an edit under way in another box is saved first, while its index is still right: the page
+                // returns below before that box is drawn again, so its save would be swept afterwards
+                // against the shorter list and refused, losing the text)
+                match app.save_unfinished_edits(ui.ctx()) {
+                    Ok(()) => set(app, json!({"removeText": i})),
+                    Err(e) => app.toast_error(ui.ctx(), e),
+                }
             }
         });
         if app.session.slide_overlays.texts.len() != n {
@@ -269,7 +281,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let w = s.watermark.clone();
     let wm = |v: Value| json!({ "watermark": v });
     if toggle(app, ui, "slideshowWatermark", s.show_watermark, "Watermark", &|v| json!({"showWatermark": v})) {
-        row(ui, t, "Text", |ui| text(app, ui, "slideshowWatermarkText", &w.text, "© Your Name", &|v| wm(json!({"text": v}))));
+        row(ui, t, "Text", |ui| text(app, ui, "slideshowWatermarkText", 0, &w.text, "© Your Name", &|v| wm(json!({"text": v}))));
         row(ui, t, "Size", |ui| {
             slider(app, ui, "slideshowWatermarkSize", w.size as f64, Range { lo: 0.01, hi: 0.15, unit: Unit::Percent }, &|v| wm(json!({"size": v})))
         });
