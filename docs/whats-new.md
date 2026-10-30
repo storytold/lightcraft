@@ -30,6 +30,14 @@
   photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
   Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
 
+### Big libraries take less memory
+- Photos whose develop settings are equal now hold them once in memory: every unedited JPEG, PNG or other rendered
+  file, every raw on the same import look, and the equal history steps, versions and import looks of one photo. (A
+  raw's unedited Kelvin settings carry its own as-shot white balance, so those share only with raws of the very same
+  white balance.) On a test library of 100,000 photos, 90 % unedited JPEGs, 8 % raws with one as-shot white balance
+  and 2 % edited, a photo takes about 2.8 kB where it took 4.4 kB (285 MB instead of 441 MB). Nothing changes on
+  screen, and the library's files are byte for byte what they were, so earlier versions open them as before.
+
 ## 2026-10-23
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
