@@ -2100,6 +2100,7 @@
   "Reading folder": "Ordner wird gelesen",
   "Scanning folder": "Ordner wird durchsucht",
   "Building previews": "Vorschauen werden erstellt",
+  "Writing XMP sidecars": "XMP-Filialdateien werden geschrieben",
   "Building smart previews": "Smart-Vorschauen werden erstellt",
   "Discarding smart previews": "Smart-Vorschauen werden verworfen",
   "Importing Lightroom catalog": "Lightroom-Katalog wird importiert",

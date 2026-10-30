@@ -457,6 +457,33 @@ pub struct SidecarSaved {
     pub backup: Option<PathBuf>,
 }
 
+/// The sidecar to write among `candidates` (the spellings an existing packet may have), else `preferred`. An existing
+/// packet keeps its spelling and style, so foreign properties survive the save and later Undo / Redo writes. On a
+/// case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder lists comes first, so the atomic
+/// write doesn't rename the packet.
+fn sidecar_target(candidates: Vec<PathBuf>, preferred: PathBuf) -> PathBuf {
+    use crate::rename::MoveFs;
+    let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
+    let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
+    listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred)
+}
+
+/// Make a background sidecar write ([`crate::sidecar_writer`]): the packet merged into an existing one and written
+/// atomically. Returns the path and the bytes written.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_job(job: &crate::sidecar_writer::Job) -> std::result::Result<Option<(PathBuf, Vec<u8>)>, String> {
+    // the photo's file moved or went after this was queued: its sidecar is written where it is now, by the auto-write
+    // the move itself makes
+    if !job.original.exists() {
+        return Ok(None);
+    }
+    let path = sidecar_target(job.candidates.clone(), job.preferred.clone());
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let (data, _, _) = sidecar_contents(&path, job.packet.clone(), &job.stamp).map_err(err)?;
+    write_atomic(&path, data.as_bytes()).map_err(err)?;
+    Ok(Some((path, data.into_bytes())))
+}
+
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
 fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
@@ -779,14 +806,28 @@ impl Session {
         self.save_sidecar_with(id, &StemOwners::among(&self.catalog, &[id]))
     }
 
-    pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
+    /// Where photo `id`'s sidecar goes: the preferred path and the spellings an existing packet may have (a shared stem
+    /// owned by another photo left out). Catalog only; no file is looked at.
+    fn sidecar_places(&self, id: PhotoId, owners: &StemOwners) -> Result<(PathBuf, Vec<PathBuf>)> {
+        let places = self.sidecar_paths(id, owners)?;
+        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let orig = file_path(p).unwrap_or_default();
+        if !Path::new(orig).is_file() {
+            return Err(EngineError::Other(format!("{}: the original {orig} is missing; no XMP sidecar is written", p.file_name)));
+        }
+        Ok(places)
+    }
+
+    /// [`Self::sidecar_places`] from the catalog alone, without looking at the disk: a background write checks the
+    /// original on its own thread, so an edit doesn't wait for a slow share.
+    fn sidecar_paths(&self, id: PhotoId, owners: &StemOwners) -> Result<(PathBuf, Vec<PathBuf>)> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         // A relative path would be taken from the working directory.
-        if Path::new(orig).is_relative() || !Path::new(orig).is_file() {
+        if Path::new(orig).is_relative() {
             return Err(EngineError::Other(format!("{}: the original {orig} is missing; no XMP sidecar is written", p.file_name)));
         }
         let naming = owners.naming(p, self.xmp.naming);
@@ -800,18 +841,16 @@ impl Session {
                 [path.clone(), path.with_extension("XMP")]
             })
             .collect();
+        Ok((preferred, candidates))
+    }
+
+    pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
+        let (preferred, candidates) = self.sidecar_places(id, owners)?;
         // A separated packet is still the photo's metadata. Repair it before a fresh write
         // occupies its destination; a failure preserves the queue and both existing packets.
         self.repair_sidecars_for_paths(&candidates, &crate::rename::RealFs)
             .map_err(|e| EngineError::Other(format!("{}: unfinished XMP repair: {e}", preferred.display())))?;
-        // Keep an existing packet's spelling/style so foreign properties survive this save and
-        // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
-        // On a case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder
-        // lists comes first, so the atomic write doesn't rename the packet.
-        use crate::rename::MoveFs;
-        let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
-        let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
-        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
+        let path = sidecar_target(candidates, preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
@@ -883,6 +922,28 @@ impl Session {
             return;
         }
         let owners = StemOwners::among(&self.catalog, &ids);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.sidecar_writer.is_some() && self.no_sidecar_repairs() {
+            let stamp = (self.clock)();
+            for id in ids {
+                let Some(p) = self.catalog.photo(id).filter(|p| file_path(p).is_some() && p.copy_of.is_none()) else { continue };
+                let original = PathBuf::from(file_path(p).unwrap_or_default());
+                let packet = sidecar_packet(p, &self.catalog);
+                match self.sidecar_paths(id, &owners) {
+                    Ok((preferred, candidates)) => {
+                        if let Some(w) = &self.sidecar_writer {
+                            w.submit(crate::sidecar_writer::Job { id, original, preferred, candidates, packet, stamp: stamp.clone() });
+                        }
+                    }
+                    Err(e) => {
+                        // the original is away (a share that dropped out): retried once it is back, as a failed write is
+                        log::warn!("auto-write XMP: {e}");
+                        self.unsaved_sidecars.insert(id);
+                    }
+                }
+            }
+            return;
+        }
         for id in ids {
             if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
                 match self.save_sidecar_with(id, &owners) {
@@ -898,6 +959,107 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// No sidecar move is waiting to be repaired: what a background write needs, since only the command path keeps the
+    /// repairs' bookkeeping in step with a write.
+    fn no_sidecar_repairs(&self) -> bool {
+        self.pending_sidecar_repairs.is_empty() && self.undo.iter().chain(&self.redo).all(|e| e.retry_sidecars.is_empty())
+    }
+
+    /// Make automatic sidecar writes on a thread of their own (`on`), or in the command that changed the photo, as by
+    /// default. The desktop app turns this on: on a network share a write is many round trips. Turning it off makes
+    /// the writes still queued first.
+    pub fn set_background_sidecar_writes(&mut self, on: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if on && self.sidecar_writer.is_none() {
+                self.sidecar_writer = crate::sidecar_writer::Writer::start(self.activity.clone());
+            } else if !on && self.sidecar_writer.is_some() {
+                self.flush_sidecar_writes();
+                self.sidecar_writer = None;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = on;
+    }
+
+    /// Background sidecar writes queued or being made.
+    pub fn sidecar_writes_pending(&self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.sidecar_writer.as_ref().map_or(0, crate::sidecar_writer::Writer::pending);
+        #[cfg(target_arch = "wasm32")]
+        0
+    }
+
+    /// Take in the background sidecar writes that finished: a failed one waits for a retry, as a failed write in a
+    /// command does. Returns how many were written.
+    pub fn poll_sidecar_writes(&mut self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(w) = &self.sidecar_writer else { return 0 };
+            let mut written = 0;
+            for (id, original, result) in w.take_done() {
+                match result {
+                    Ok(Some((path, bytes))) => {
+                        self.note_sidecar_write(&path, &bytes);
+                        self.unsaved_sidecars.remove(&id);
+                        written += 1;
+                    }
+                    // the original wasn't there: when the photo is still at that path (a share that dropped out, not a
+                    // move or a removal made here) the write waits for a retry, as a write made in the command does
+                    Ok(None) => {
+                        let same = self
+                            .catalog
+                            .photo(id)
+                            .filter(|p| p.copy_of.is_none())
+                            .and_then(|p| file_path(p))
+                            .is_some_and(|f| Path::new(f) == original);
+                        if same {
+                            self.unsaved_sidecars.insert(id);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("auto-write XMP: {e}");
+                        self.unsaved_sidecars.insert(id);
+                    }
+                }
+            }
+            written
+        }
+        #[cfg(target_arch = "wasm32")]
+        0
+    }
+
+    /// Wait for the background sidecar writes queued so far (at most 30 s) and take them in: when the library closes
+    /// or another opens, and before a retry. A write still stuck then is logged and left to finish.
+    pub fn flush_sidecar_writes(&mut self) {
+        if let Err(e) = self.settle_sidecar_writes() {
+            log::warn!("{e}");
+        }
+    }
+
+    /// [`Self::flush_sidecar_writes`] for a file operation the queued writes could race (a photo's file moving, a
+    /// sidecar read or saved on request, a change of the sidecar preferences): a write still stuck after the wait (a
+    /// network share that stopped answering) fails it, so nothing lands at an old path.
+    pub(crate) fn settle_sidecar_writes(&mut self) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let limit = self.sidecar_flush_limit;
+            let stuck = self.sidecar_writer.as_ref().filter(|w| w.pending() > 0 && !w.wait_idle(limit)).map(|w| w.stuck_folder());
+            self.poll_sidecar_writes();
+            if let Some(folder) = stuck {
+                let folder = folder.map_or_else(|| "the photos' folder".to_string(), |f| f.display().to_string());
+                return Err(EngineError::Other(format!("XMP writes to {folder} are still running; try again in a moment")));
+            }
+        }
+        Ok(())
+    }
+
+    /// How long [`Self::settle_sidecar_writes`] waits (tests make it short).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn set_sidecar_flush_limit(&mut self, limit: std::time::Duration) {
+        self.sidecar_flush_limit = limit;
     }
 
     /// How many photos have an automatic sidecar write waiting (it failed: the folder offline, read-only or full).

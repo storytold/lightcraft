@@ -1659,6 +1659,7 @@
   "Reading folder": "Чтение папки",
   "Scanning folder": "Сканирование папки",
   "Building previews": "Создание просмотров",
+  "Writing XMP sidecars": "Запись файлов XMP",
   "Building smart previews": "Создание смарт-просмотров",
   "Discarding smart previews": "Удаление смарт-просмотров",
   "Importing Lightroom catalog": "Импорт каталога Lightroom",

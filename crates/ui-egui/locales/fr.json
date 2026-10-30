@@ -1923,6 +1923,7 @@
   "Reading folder": "Lecture du dossier",
   "Scanning folder": "Analyse du dossier",
   "Building previews": "Génération des aperçus",
+  "Writing XMP sidecars": "Écriture des fichiers annexes XMP",
   "Building smart previews": "Génération des aperçus dynamiques",
   "Discarding smart previews": "Suppression des aperçus dynamiques",
   "Importing Lightroom catalog": "Importation du catalogue Lightroom",

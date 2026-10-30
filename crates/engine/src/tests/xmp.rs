@@ -1641,3 +1641,245 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// With background sidecar writes on (the desktop app's setting), an edit returns before its sidecar is written; the
+/// write lands on the writer thread, a photo changed again before its write started writes only its newest packet,
+/// and a file that is about to move has its queued write made first, so nothing lands at the old name.
+#[test]
+fn background_sidecar_writes_land_and_never_at_a_stale_path() {
+    let src = temp_dir("auto-background");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    for rating in 1..=5 {
+        s.execute("photo.rate", &json!({"rating": rating})).unwrap();
+    }
+    s.flush_sidecar_writes();
+    assert_eq!(s.sidecar_writes_pending(), 0);
+    let sidecar = src.join("a.xmp");
+    assert!(std::fs::read_to_string(&sidecar).unwrap().contains("<xmp:Rating>5</xmp:Rating>"), "the newest rating");
+    assert_eq!(s.unsaved_sidecars(), 0);
+    // an edit queued just before a rename: the write is made before the file (and its sidecar) moves
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("photo.rename", &json!({"ids": [id.0], "template": "renamed"})).unwrap();
+    s.flush_sidecar_writes();
+    assert!(!sidecar.exists(), "no sidecar left at the old name");
+    assert!(std::fs::read_to_string(src.join("renamed.xmp")).unwrap().contains("<xmp:Rating>2</xmp:Rating>"));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A background write that fails (the folder is read-only, as a network share that went away) waits for a retry,
+/// as a write made in the command does.
+#[cfg(unix)]
+#[test]
+fn a_failed_background_write_waits_for_a_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let src = temp_dir("auto-background-fail");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(src.join(".probe"), b"x").is_ok() {
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    s.flush_sidecar_writes();
+    assert_eq!(s.unsaved_sidecars(), 1, "the failed write waits");
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let r = s.execute("library.retrySidecars", &json!({})).unwrap();
+    assert_eq!(r, json!({"written": 1, "waiting": 0}));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A background write whose original can't be reached when the edit is made (a share that dropped out) waits for a
+/// retry, as a failed write does: the sidecar mustn't stay behind the edit once the file is back.
+#[test]
+fn a_background_write_with_its_original_away_waits_for_a_retry() {
+    let src = temp_dir("auto-background-away");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    s.flush_sidecar_writes();
+    std::fs::rename(src.join("a.png"), src.join("away.png")).unwrap();
+    s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    s.flush_sidecar_writes();
+    assert_eq!(s.unsaved_sidecars(), 1, "the write waits for the original");
+    std::fs::rename(src.join("away.png"), src.join("a.png")).unwrap();
+    let r = s.execute("library.retrySidecars", &json!({})).unwrap();
+    assert_eq!(r, json!({"written": 1, "waiting": 0}));
+    assert!(std::fs::read_to_string(src.join("a.xmp")).unwrap().contains("<xmp:Rating>3</xmp:Rating>"));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Opening another library makes the old one's queued background writes first, and drops its waiting retries: photo
+/// ids are per library, so a failure from the old one must not mark a photo of the new one.
+#[cfg(unix)]
+#[test]
+fn opening_another_library_drains_background_writes_and_old_retries() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = temp_dir("auto-background-switch");
+    let (photos, locked) = (base.join("photos"), base.join("locked"));
+    std::fs::create_dir_all(&photos).unwrap();
+    std::fs::create_dir_all(&locked).unwrap();
+    write_png(&photos.join("a.png"), 4);
+    write_png(&locked.join("b.png"), 5);
+    let mut s = Session::new().with_fs();
+    // both libraries write sidecars automatically (a library that doesn't drops its retries anyway)
+    s.open_library(base.join("two"), false).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.open_library(base.join("one"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [photos.to_string_lossy(), locked.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    s.flush_sidecar_writes();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(locked.join(".probe"), b"x").is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    s.execute("photo.rate", &json!({"ids": ids, "rating": 4})).unwrap();
+    // the writes are made but not yet taken in when the other library opens
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while s.sidecar_writes_pending() > 0 && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    s.open_library(base.join("two"), false).unwrap();
+    s.flush_sidecar_writes();
+    assert!(std::fs::read_to_string(photos.join("a.xmp")).unwrap().contains("<xmp:Rating>4</xmp:Rating>"), "written before the switch");
+    assert_eq!(s.unsaved_sidecars(), 0, "the old library's retries don't carry over");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A write queued while its original was there, whose original is gone by the time the writer gets to it (a share
+/// that dropped out), waits for a retry instead of being dropped: the edit is in the catalog, the sidecar isn't.
+#[cfg(unix)]
+#[test]
+fn a_queued_write_whose_original_went_away_waits_for_a_retry() {
+    let src = temp_dir("auto-background-gone");
+    write_png(&src.join("a.png"), 4);
+    write_png(&src.join("b.png"), 5);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    s.flush_sidecar_writes();
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id.0;
+    let (a, b) = (id(&s, "a.png"), id(&s, "b.png"));
+    // a.png's sidecar is a FIFO: its write blocks the writer until something opens the other end
+    let fifo = src.join("a.xmp");
+    let _ = std::fs::remove_file(&fifo);
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|st| st.success()) {
+        return;
+    }
+    s.execute("photo.rate", &json!({"ids": [a], "rating": 1})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [b], "rating": 2})).unwrap();
+    // b's original goes away while its write waits in the queue
+    std::fs::rename(src.join("b.png"), src.join("away.png")).unwrap();
+    drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    s.flush_sidecar_writes();
+    assert_eq!(s.unsaved_sidecars(), 1, "b's write waits for its original");
+    std::fs::rename(src.join("away.png"), src.join("b.png")).unwrap();
+    let r = s.execute("library.retrySidecars", &json!({})).unwrap();
+    assert_eq!(r, json!({"written": 1, "waiting": 0}));
+    assert!(std::fs::read_to_string(src.join("b.xmp")).unwrap().contains("<xmp:Rating>2</xmp:Rating>"));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// While a background sidecar write is stuck (a share that stopped answering; here a FIFO nobody writes to), the file
+/// operations it could race refuse with an error that says so, instead of going ahead after the wait: a rename, a
+/// sidecar read or save on request, a change of the sidecar preferences. Once the write lands they work again.
+#[cfg(unix)]
+#[test]
+fn file_operations_refuse_while_a_sidecar_write_is_stuck() {
+    let src = temp_dir("auto-background-stuck");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    s.flush_sidecar_writes();
+    s.set_sidecar_flush_limit(std::time::Duration::from_millis(100));
+    let fifo = src.join("a.xmp");
+    let _ = std::fs::remove_file(&fifo);
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|st| st.success()) {
+        return;
+    }
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("photo.rate", &json!({"ids": [id], "rating": 3})).unwrap();
+    for (command, params) in [
+        ("photo.rename", json!({"ids": [id], "template": "renamed"})),
+        ("photo.readMetadataFromFile", json!({"ids": [id]})),
+        ("photo.saveMetadataToFile", json!({"ids": [id]})),
+        ("library.xmpPreferences", json!({"naming": "full"})),
+    ] {
+        let e = s.execute(command, &params).expect_err(command).to_string();
+        assert!(e.contains("still running") && e.contains(&src.to_string_lossy().to_string()), "{command}: {e}");
+    }
+    assert!(src.join("a.png").exists(), "nothing was renamed");
+    // the share answers: the write lands and the rename goes ahead. Every reader waiting on the FIFO gets its end of
+    // file until the write has replaced it, as another reader (not the write) can be the one an open pairs with.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::fs::symlink_metadata(&fifo).is_ok_and(|m| std::os::unix::fs::FileTypeExt::is_fifo(&m.file_type())) && std::time::Instant::now() < until
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        drop(std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(&fifo));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    s.set_sidecar_flush_limit(std::time::Duration::from_secs(10));
+    s.execute("photo.rename", &json!({"ids": [id], "template": "renamed"})).unwrap();
+    assert!(std::fs::read_to_string(src.join("renamed.xmp")).unwrap().contains("<xmp:Rating>3</xmp:Rating>"));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Opening another library while a background sidecar write of this one is stuck (a share that stopped answering;
+/// here a FIFO nobody writes to) refuses, as the file operations do: the write's result belongs to this library's
+/// photos, so switching would lose it or pin it on a photo of the next library. Once the write lands it opens.
+#[cfg(unix)]
+#[test]
+fn opening_another_library_refuses_while_a_sidecar_write_is_stuck() {
+    let base = temp_dir("auto-background-switch-stuck");
+    let photos = base.join("photos");
+    std::fs::create_dir_all(&photos).unwrap();
+    write_png(&photos.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.open_library(base.join("one"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [photos.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    s.flush_sidecar_writes();
+    s.set_sidecar_flush_limit(std::time::Duration::from_millis(100));
+    let fifo = photos.join("a.xmp");
+    let _ = std::fs::remove_file(&fifo);
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|st| st.success()) {
+        return;
+    }
+    let id = s.catalog.photos().next().unwrap().id;
+    let smart_dir = s.media.smart_dir.clone();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 5})).unwrap();
+    let e = s.open_library(base.join("two"), false).map(|_| ()).expect_err("refused while the write is stuck").to_string();
+    assert!(e.contains("still running"), "{e}");
+    assert!(s.catalog.photo(id).is_some(), "still the first library");
+    assert_eq!(s.media.smart_dir, smart_dir, "and still its smart previews");
+    drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    s.set_sidecar_flush_limit(std::time::Duration::from_secs(10));
+    s.open_library(base.join("two"), false).unwrap();
+    assert!(std::fs::read_to_string(photos.join("a.xmp")).unwrap().contains("<xmp:Rating>5</xmp:Rating>"));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&base);
+}
