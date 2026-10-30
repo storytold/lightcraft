@@ -48,6 +48,7 @@ mod lights_out;
 mod mask_effects;
 mod masking;
 mod masking_layout;
+mod menu_item;
 mod menubar;
 mod merge_preview;
 mod model_setup;

@@ -168,6 +168,15 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Menus look the same everywhere
+- Every menu row, in the menu bar, in right-click menus and in the dropdowns of the panels, now has one height, one
+  hover look and one check mark column, and shows its shortcut at the right edge as the menu bar does. Choices that
+  are on show a check mark that screen readers announce as checked, and a disabled row can't be chosen.
+- Help ▸ Keyboard Shortcuts shows the fixed keys on keycaps.
+- The tooltips of the tool strip, the bottom bar's view buttons, the top bar's icons and the mask overlay buttons
+  name the key their command has now, so a key you remapped shows as remapped. The tool strip's History & Activity
+  button no longer shows a Y it never had.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

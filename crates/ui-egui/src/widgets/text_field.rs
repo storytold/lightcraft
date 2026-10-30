@@ -389,7 +389,6 @@ fn has_selection(ctx: &egui::Context, id: egui::Id) -> bool {
 
 /// The field's context menu: Cut, Copy, Paste, Select All, with the keyboard's shortcuts beside them.
 fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, action: &mut Option<Action>) {
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let selected = has_selection(ui.ctx(), id);
     let items = [
         (Action::Cut, "cut", "Cut", "Cmd+X", selected),
@@ -405,9 +404,8 @@ fn menu(ui: &mut Ui, widget: &str, id: egui::Id, text: &str, action: &mut Option
         if a == Action::SelectAll {
             ui.separator();
         }
-        let button = egui::Button::new(crate::i18n::tr(label)).shortcut_text(crate::menubar::shortcut_text(shortcut, mac));
-        let r = ui.add_enabled(enabled, button);
-        crate::widgets::register(ui, format!("{widget}:{key}"), r.rect);
+        let r =
+            crate::menu_item::MenuItem::new(crate::i18n::tr(label)).shortcut(shortcut).enabled(enabled).widget(format!("{widget}:{key}")).show(ui);
         if r.clicked() {
             *action = Some(a);
             ui.close();

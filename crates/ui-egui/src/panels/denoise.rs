@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::settings::{check, choices, heading, hint};
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -424,7 +425,9 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
         let mut choice = current;
         let combo = crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
             for gb in CACHE_LIMITS {
-                ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
+                if MenuItem::new(&tr_format!("{size} GB", size = gb)).selected(choice == gb).show(ui).clicked() {
+                    choice = gb;
+                }
             }
         });
         crate::widgets::name_combo(&combo.response, tr("Cache limit"));

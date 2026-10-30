@@ -12,6 +12,7 @@ use lightcraft_engine::presets::PresetList;
 use serde_json::json;
 
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, register, slider};
 use crate::{HoverPreview, LightcraftApp};
@@ -110,14 +111,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(28.0, 28.0), false, true, crate::i18n::tr("More preset options"));
         egui::Popup::menu(&more).show(|ui| {
-            let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
-            register(ui, "presetMenu:thumbnails", r.rect);
+            let thumbs_on = app.ui.preset_thumbs;
+            if MenuItem::new(crate::i18n::tr("Show Thumbnails")).checked(thumbs_on).widget("presetMenu:thumbnails").show(ui).clicked() {
+                app.ui.preset_thumbs = !thumbs_on;
+            }
             ui.separator();
-            if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
+            if MenuItem::new(crate::i18n::tr("Import Presets…")).check_slot(true).show(ui).clicked() {
                 let _ = app.run("file.importPresets", json!({}));
             }
             let any_user = app.session.presets.iter().any(|p| !p.builtin);
-            if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
+            if MenuItem::new(crate::i18n::tr("Export User Presets…")).check_slot(true).enabled(any_user).show(ui).clicked() {
                 let _ = app.run("file.exportPresets", json!({}));
             }
         });
@@ -194,7 +197,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 if !favorites {
                     crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr("Export Group…")).clicked() {
+                        if MenuItem::new(crate::i18n::tr("Export Group…")).show(ui).clicked() {
                             let _ = app.run("file.exportPresets", json!({"group": g}));
                         }
                     });
@@ -259,32 +262,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
                     crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
+                        if MenuItem::new(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).show(ui).clicked() {
                             let _ = app.run("preset.favorite", json!({"id": pid}));
                         }
                         if builtin {
                             return;
                         }
                         ui.separator();
-                        if ui
-                            .add_enabled(app.session.active().is_some(), egui::Button::new(crate::i18n::tr("Update with Current Settings")))
-                            .clicked()
-                        {
+                        if MenuItem::new(crate::i18n::tr("Update with Current Settings")).enabled(app.session.active().is_some()).show(ui).clicked() {
                             match app.run("preset.update", json!({"id": pid})) {
                                 Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
                                 Err(e) => app.toast(ui.ctx(), e),
                             }
                         }
-                        if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                        if MenuItem::new(crate::i18n::tr("Rename…")).show(ui).clicked() {
                             crate::panels::dialogs::prompt(app, "Rename Preset", "Preset name", &name, "preset.rename", json!({"id": pid}), "name");
                         }
-                        crate::widgets::menu_button(ui, crate::i18n::tr("Move to Group"), |ui| {
+                        MenuItem::new(crate::i18n::tr("Move to Group")).submenu(ui, |ui| {
                             for g in groups.iter().filter(|x| x.user && x.name != group).map(|x| &x.name) {
-                                if ui.button(g).clicked() {
+                                if MenuItem::new(g).show(ui).clicked() {
                                     let _ = app.run("preset.move", json!({"id": pid, "group": g}));
                                 }
                             }
-                            if ui.button(crate::i18n::tr("New Group…")).clicked() {
+                            if MenuItem::new(crate::i18n::tr("New Group…")).show(ui).clicked() {
                                 crate::panels::dialogs::prompt(
                                     app,
                                     "Move Preset to New Group",
@@ -297,7 +297,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             }
                         });
                         ui.separator();
-                        if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
+                        if MenuItem::new(crate::i18n::tr("Delete Preset")).show(ui).clicked() {
                             let _ = app.run("preset.delete", json!({"id": pid}));
                         }
                     });
@@ -390,7 +390,7 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
             rows
         }
     };
-    let row_h = ui.spacing().interact_size.y;
+    let row_h = crate::menu_item::ROW_H;
     let mut out = None;
     egui::ScrollArea::vertical().id_salt(("preset-picker", salt)).max_height(300.0).auto_shrink([false, true]).show_rows(
         ui,
@@ -406,7 +406,7 @@ pub fn picker_rows(ui: &mut egui::Ui, salt: &str, presets: &PresetList, selected
                     PickRow::Preset(i) => {
                         let Some(p) = presets.get(*i) else { continue };
                         let label = crate::i18n::builtin_label(&p.name, p.builtin);
-                        if ui.add_sized(size, egui::Button::selectable(selected == Some(p.id.as_str()), label)).clicked() {
+                        if MenuItem::new(label).selected(selected == Some(p.id.as_str())).show(ui).clicked() {
                             out = Some(p.id.clone());
                         }
                     }

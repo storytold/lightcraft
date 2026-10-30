@@ -7,6 +7,7 @@ use lightcraft_engine::FilterChip;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -142,8 +143,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
         egui::Popup::menu(&more).show(|ui| {
             for c in hidden {
-                if ui
-                    .button(format!("{}  ✕", display_label(c, &app.session.filter, &app.session.catalog)))
+                if MenuItem::new(&format!("{}  ✕", display_label(c, &app.session.filter, &app.session.catalog)))
+                    .show(ui)
                     .on_hover_text(crate::i18n::tr("Remove this filter"))
                     .clicked()
                 {

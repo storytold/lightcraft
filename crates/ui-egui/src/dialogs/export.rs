@@ -1,5 +1,6 @@
 use super::frame::{field, num};
 use super::{ControlSpec, LightcraftApp, Section, SettingsGroup, Tokens, Track};
+use crate::menu_item::MenuItem;
 
 /// The Export dialog's watermark preview: the first exported photo, as wide as the dialog whatever
 /// its shape, with the watermark drawn on it as the file will have it at size `resize` (`None` =
@@ -214,7 +215,9 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
             let before = r.mode;
             let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
                 for (m, l) in MODES {
-                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
+                    if MenuItem::new(crate::i18n::tr(l)).selected(r.mode == m).show(ui).clicked() {
+                        r.mode = m;
+                    }
                 }
             });
             crate::widgets::name_combo(&c.response, crate::i18n::tr("Resize"));

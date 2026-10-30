@@ -4,6 +4,7 @@ use lightcraft_develop::{ControlSpec, Section, SettingsGroup, Track};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use lightcraft_engine::export::{ExportOptions, Resize};
@@ -1060,8 +1061,12 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     ui.label(crate::i18n::tr_format!("{n} selected photos · {pages} pages", n = n, pages = n.div_ceil(options.columns * options.rows)));
     field(ui, "Paper", |ui| {
         let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
-            ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
+            if MenuItem::new("A4").selected(options.paper == "a4").show(ui).clicked() {
+                options.paper = "a4".into();
+            }
+            if MenuItem::new(crate::i18n::tr("Letter")).selected(options.paper == "letter").show(ui).clicked() {
+                options.paper = "letter".into();
+            }
         });
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
     });
@@ -1116,7 +1121,7 @@ fn export_preset_row(
                     ui.separator();
                 }
                 builtin = b;
-                if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
+                if MenuItem::new(crate::i18n::builtin_label(&p.name, b)).show(ui).clicked() {
                     chosen = Some(p.name);
                 }
             }

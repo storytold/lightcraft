@@ -50,18 +50,6 @@ pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon,
     r.response
 }
 
-/// Keep egui's submenu interaction and layout, using our vector chevron instead of a font glyph.
-pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
-    if !egui::containers::menu::is_in_menu(ui) {
-        return ui.menu_button(atoms, contents);
-    }
-    let button = egui::Button::new(atoms.into_atoms()).right_text("    ");
-    let (response, inner) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, contents);
-    let center = pos2(response.rect.right() - ui.spacing().button_padding.x - 8.0, response.rect.center().y);
-    paint(ui.painter(), Rect::from_center_size(center, vec2(16.0, 16.0)), Icon::ChevronRight, ui.style().interact(&response).fg_stroke.color);
-    egui::InnerResponse::new(inner.map(|r| r.inner), response)
-}
-
 /// A context menu on `response`, as `Response::context_menu` gives, that a right-click moves
 /// (#1877). egui closes a menu on any click once it was open on the previous frame, and judges
 /// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
@@ -1211,6 +1199,8 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
 pub mod album_picker;
 pub mod button;
 pub mod date_picker;
+pub mod kbd;
+pub mod menu_item;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;
