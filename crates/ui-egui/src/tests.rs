@@ -75,6 +75,7 @@ mod switch_library;
 mod sync;
 mod tallies;
 mod temp_slider;
+mod text_field_saves;
 mod titlebar;
 mod tool_overlay;
 mod unsaved;

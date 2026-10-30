@@ -7,6 +7,12 @@
 //! ended from [`TextFieldResponse::ending`]; what an ending means (save, apply, close) is the
 //! caller's. Each field's widget id is unique on screen: its state is keyed by it.
 //!
+//! An edit ends exactly once, and every way of leaving it except Esc saves, including the field no
+//! longer being drawn (egui reports a lost focus only to a widget that is drawn). A field that
+//! saves when its edit ends declares the save with [`TextField::saves_with`]; the app runs what is
+//! left recorded when a pass ends, and when the window closes (`LightcraftApp::finish_ui_pass`,
+//! `LightcraftApp::save_unfinished_edits`).
+//!
 //! New text boxes use it rather than `egui::TextEdit`.
 //!
 //! The keyboard's ⌘X / ⌘C / ⌘V / ⌘A and undo are egui's own, and the app's shortcuts step aside
@@ -25,12 +31,23 @@ pub enum Ending {
     Escape,
 }
 
+/// The command an edit saves when it ends, as a field declares it ([`TextField::saves_with`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Save {
+    pub command: &'static str,
+    pub params: serde_json::Value,
+}
+
 pub struct TextFieldResponse {
     pub response: Response,
     /// Set on the frame an edit ends.
     pub ending: Option<Ending>,
     /// An edit is under way: the field has the focus, or its menu does.
     pub editing: bool,
+    /// What the field declared with [`TextField::saves_with`], for the frame the edit ended with
+    /// the text kept (Return or leaving the field): run it, rather than deciding again from
+    /// `committed()`. `None` on every other frame, and when the text needs no save.
+    pub save: Option<Save>,
 }
 
 impl TextFieldResponse {
@@ -55,6 +72,7 @@ pub struct TextField<'a> {
     width: Option<f32>,
     select_on_focus: bool,
     begin_edit: bool,
+    saves: Option<SaveWith<'a>>,
     frame: bool,
     font: Option<egui::FontId>,
     color: Option<egui::Color32>,
@@ -74,6 +92,59 @@ pub(crate) fn was_editing(ctx: &egui::Context, widget: &str) -> bool {
     ctx.data(|d| d.get_temp::<Memo>(id(widget).with("memo")).is_some_and(|memo| memo.before.is_some() && memo.pass.checked_add(1) == Some(pass)))
 }
 
+/// A field's declaration of its save ([`TextField::saves_with`]).
+type SaveWith<'a> = Box<dyn FnOnce(&str) -> Option<Save> + 'a>;
+
+/// The saves of edits under way, in the order they were recorded: the field's id, the pass it
+/// was last drawn in, and what it saves.
+#[derive(Clone, Default)]
+struct Unfinished(Vec<(egui::Id, u64, Save)>);
+
+fn unfinished_id() -> egui::Id {
+    egui::Id::unique("lc-text-field-unfinished")
+}
+
+/// Record (or, with `None`, forget) the save of the field `id` drawn in `pass`. Only an entry from
+/// the pass just before is forgotten: an older one means the field was not drawn since (a pass
+/// egui discarded, a panel switched away), so it is for the sweep to run, not for the field to drop.
+fn record(ctx: &egui::Context, id: egui::Id, pass: u64, save: Option<Save>) {
+    ctx.data_mut(|d| {
+        let list = &mut d.get_temp_mut_or_default::<Unfinished>(unfinished_id()).0;
+        match (list.iter().position(|(other, ..)| *other == id), save) {
+            (Some(at), Some(save)) => list[at] = (id, pass, save),
+            (None, Some(save)) => list.push((id, pass, save)),
+            (Some(at), None) => {
+                if list[at].1.checked_add(1) == Some(pass) {
+                    list.remove(at);
+                }
+            }
+            (None, None) => {}
+        }
+    });
+}
+
+/// Take the saves of the edits whose field was not drawn in the pass that is ending: each went
+/// away mid-edit, and what is taken is no longer recorded.
+pub(crate) fn take_left_behind(ctx: &egui::Context) -> Vec<Save> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let list = &mut d.get_temp_mut_or_default::<Unfinished>(unfinished_id()).0;
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(list).into_iter().partition(|(_, at, _)| *at != pass);
+        *list = kept;
+        gone.into_iter().map(|(.., save)| save).collect()
+    })
+}
+
+/// Whether any edit with a declared save is under way (or was left behind and not swept yet).
+pub(crate) fn any_unfinished(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<Unfinished>(unfinished_id()).is_some_and(|u| !u.0.is_empty()))
+}
+
+/// Take every save of an edit under way, drawn or not (the window is closing).
+pub(crate) fn take_all(ctx: &egui::Context) -> Vec<Save> {
+    ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Unfinished>(unfinished_id()).0).into_iter().map(|(.., save)| save).collect())
+}
+
 impl<'a> TextField<'a> {
     /// A one-line field (Return ends the edit) registered as `widget`.
     pub fn singleline(widget: &'a str, text: &'a mut String) -> Self {
@@ -86,6 +157,7 @@ impl<'a> TextField<'a> {
             width: None,
             select_on_focus: false,
             begin_edit: false,
+            saves: None,
             frame: true,
             font: None,
             color: None,
@@ -98,6 +170,21 @@ impl<'a> TextField<'a> {
     /// A multi-line field: Return starts a new line; leaving the field ends the edit.
     pub fn multiline(widget: &'a str, text: &'a mut String) -> Self {
         TextField { multiline: true, ..Self::singleline(widget, text) }
+    }
+
+    /// Declare what the field saves when its edit ends, from the text then: `None` when there is
+    /// nothing to save (unchanged, or the text is not meant). The rule: an edit ends exactly once,
+    /// and every way of leaving it except Esc saves, including the field no longer being drawn
+    /// (a tab, panel or dialog that replaces it mid-edit, a command, Quit). While the edit is
+    /// under way the save is recorded; the frame the edit ends in the field shows it as
+    /// [`TextFieldResponse::save`] (and forgets it), and one that is still recorded when the field
+    /// was not drawn is run by [`take_left_behind`] / [`take_all`]. Leave it off where Return
+    /// means OK and Cancel must not save (a dialog's own fields). A save the sweep runs after the
+    /// view changed must not depend on the view: its command is `always` enabled or it saves to
+    /// the ids captured when the edit started; a new opt-in keeps to that.
+    pub fn saves_with(mut self, save: impl FnOnce(&str) -> Option<Save> + 'a) -> Self {
+        self.saves = Some(Box::new(save));
+        self
     }
 
     /// Grey text shown while the field is empty.
@@ -270,31 +357,7 @@ impl<'a> TextField<'a> {
             select_all(ui.ctx(), id, self.text);
         }
 
-        // an edit not under way (none, or one cut short when the field went away) is forgotten
-        let in_menu = memo.away || memo.menu_open || memo.action.is_some();
-        if !focused && !response.lost_focus() && !in_menu {
-            memo.before = None;
-        }
-        // the start of an edit (not the focus coming back from the menu)
-        let pressing = ui.input(|i| i.pointer.any_down());
-        if focused && memo.before.is_none() {
-            memo.before = Some(self.text.clone());
-            if self.select_on_focus {
-                // a press that took the focus may go on to drag a selection: wait for its release
-                if pressing {
-                    memo.select_on_release = true;
-                } else {
-                    select_all(ui.ctx(), id, self.text);
-                }
-            }
-        }
-        if memo.select_on_release && !pressing {
-            memo.select_on_release = false;
-            // a plain click selects everything; a drag keeps what it selected
-            if focused && !has_selection(ui.ctx(), id) {
-                select_all(ui.ctx(), id, self.text);
-            }
-        }
+        track_edit_start(&mut memo, ui, id, self.text, self.select_on_focus, focused, response.lost_focus());
         let menu_was_open = memo.menu_open;
         // a click on a greyed-out item does nothing, as in a native menu: only a choice or a click
         // outside closes it (not the right-click that moves the menu within the field, #1877)
@@ -343,7 +406,41 @@ impl<'a> TextField<'a> {
         }
         let editing = ending.is_none() && (focused || memo.away || memo.menu_open || memo.action.is_some());
         ui.data_mut(|d| d.insert_temp(id.with("memo"), memo));
-        TextFieldResponse { response, ending, editing }
+        // the save the field declares from its text now: recorded while the edit is under way (to
+        // be run if the field is not drawn again), handed over once, with the text kept, when it ends
+        let kept = matches!(ending, Some(Ending::Return | Ending::Away));
+        let declared = self.saves.filter(|_| editing || kept).and_then(|saves| saves(self.text));
+        let save = if kept { declared.clone() } else { None };
+        record(ui.ctx(), id, pass, declared.filter(|_| editing));
+        TextFieldResponse { response, ending, editing, save }
+    }
+}
+
+/// An edit not under way (none, or one cut short when the field went away) is forgotten; the start of an edit
+/// (not the focus coming back from the menu) keeps the text for Esc and selects it when the field asks to.
+fn track_edit_start(memo: &mut Memo, ui: &Ui, id: egui::Id, text: &str, select_on_focus: bool, focused: bool, lost_focus: bool) {
+    let in_menu = memo.away || memo.menu_open || memo.action.is_some();
+    if !focused && !lost_focus && !in_menu {
+        memo.before = None;
+    }
+    let pressing = ui.input(|i| i.pointer.any_down());
+    if focused && memo.before.is_none() {
+        memo.before = Some(text.to_owned());
+        if select_on_focus {
+            // a press that took the focus may go on to drag a selection: wait for its release
+            if pressing {
+                memo.select_on_release = true;
+            } else {
+                select_all(ui.ctx(), id, text);
+            }
+        }
+    }
+    if memo.select_on_release && !pressing {
+        memo.select_on_release = false;
+        // a plain click selects everything; a drag keeps what it selected
+        if focused && !has_selection(ui.ctx(), id) {
+            select_all(ui.ctx(), id, text);
+        }
     }
 }
 

@@ -1039,3 +1039,105 @@ fn the_slide_preview_stays_in_view_while_the_templates_are_browsed() {
         assert!(preview.bottom() <= room.top() + 1.0, "{size:?}: above the page, not in it: {preview:?} {room:?}");
     }
 }
+
+/// Press the primary button at `at`, step a frame, release it, step a frame: a mouse's click, whose
+/// press and release reach the app in separate frames (the control channel's `ui.click` sends both
+/// in one).
+fn press_and_release(h: &mut Headless, at: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.events.extend([egui::Event::PointerMoved(at), button(true)]);
+    h.step();
+    h.events.push(button(false));
+    h.step();
+    for _ in 0..3 {
+        h.step();
+    }
+}
+
+/// The Intro title's text field with `typed` typed into it, Settings open on Slideshow.
+fn typing_in_the_intro_text(typed: &str) -> Headless {
+    let mut h = grid();
+    let first = h.app.session.visible_cloned()[0];
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    run(&mut h, "slideshow.titles", json!({"intro": {"enabled": true, "content": "text"}, "ending": {"enabled": true, "content": "text"}}));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    reveal(&mut h, "field:slideshowIntroText");
+    let r = h.request("ui.clickWidget", json!({"id": "field:slideshowIntroText"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.text", json!({"text": typed}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(!h.app.session.slide_titles.intro.text.contains(typed), "the title is saved when the edit ends, not as it is typed");
+    h
+}
+
+/// A click on another Settings tab (press and release in separate frames) keeps what was typed in a
+/// title's text box: the page switched on the release, the frame in which egui takes the focus away
+/// from the box, so the box was not drawn again to say its edit ended.
+#[test]
+fn a_click_on_another_settings_tab_keeps_the_text_typed_in_a_title_box() {
+    let mut h = typing_in_the_intro_text("Rome");
+    let tab = latest_widget_rect(&h, "button:settingsTab-general").expect("the General tab");
+    press_and_release(&mut h, tab.center());
+    assert!(latest_widget_rect(&h, "field:slideshowIntroText").is_none(), "the page is General's now");
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { ref tab }) if tab == "general"), "{:?}", h.app.ui.dialog);
+    assert!(latest_widget_rect(&h, "check:settings.autoAdvance").is_some(), "General's page is drawn");
+    assert!(h.app.session.slide_titles.intro.text.contains("Rome"), "the typed title was dropped: {:?}", h.app.session.slide_titles.intro.text);
+    h.settle(SETTLE);
+}
+
+/// A click inside the box goes on editing: nothing is saved yet.
+#[test]
+fn a_click_in_the_title_box_being_edited_keeps_editing() {
+    let mut h = typing_in_the_intro_text("Rome");
+    let field = latest_widget_rect(&h, "field:slideshowIntroText").expect("the field");
+    press_and_release(&mut h, field.center());
+    assert!(h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:slideshowIntroText"))), "still being edited");
+    assert!(!h.app.session.slide_titles.intro.text.contains("Rome"), "not saved before the edit ends");
+    h.settle(SETTLE);
+}
+
+/// A click that only moves the focus to another box of the page saves the first box's edit, and the
+/// second box is being edited.
+#[test]
+fn a_click_in_another_box_of_the_page_saves_the_first_and_edits_the_second() {
+    let mut h = typing_in_the_intro_text("Rome");
+    reveal(&mut h, "field:slideshowEndingText");
+    let second = latest_widget_rect(&h, "field:slideshowEndingText").expect("the ending's field");
+    press_and_release(&mut h, second.center());
+    assert!(h.app.session.slide_titles.intro.text.contains("Rome"), "{:?}", h.app.session.slide_titles.intro.text);
+    assert!(h.view.ctx.memory(|m| m.has_focus(crate::text_field::id("field:slideshowEndingText"))), "the second box has the focus");
+    h.settle(SETTLE);
+}
+
+/// Text 2 is being edited and Remove is clicked on Text 1: the settings page returns before Text 2's
+/// box is drawn again, and the overlay it was typed for is now at index 0. The text typed is saved
+/// first, while the indices are right, not sent for the old list afterwards (it would go onto
+/// another overlay and bring the removed one back).
+#[test]
+fn removing_an_overlay_above_the_one_being_edited_saves_the_edit_first() {
+    let mut h = grid();
+    let first = h.app.session.visible_cloned()[0];
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    run(&mut h, "slideshow.overlays", json!({"texts": [{"text": "{title}"}, {"text": "{iso}"}]}));
+    h.step();
+    h.step();
+    reveal(&mut h, "field:slideshowText1");
+    let r = h.request("ui.clickWidget", json!({"id": "field:slideshowText1"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.text", json!({"text": "x"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    reveal(&mut h, "button:slideshowText0Remove");
+    let r = h.request("ui.clickWidget", json!({"id": "button:slideshowText0Remove"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+    let texts: Vec<String> = h.app.session.slide_overlays.texts.iter().map(|t| t.text.clone()).collect();
+    assert!(texts.len() == 1 && texts[0].contains('x') && texts[0].contains("{iso}"), "the text typed in Text 2 was lost: {texts:?}");
+}

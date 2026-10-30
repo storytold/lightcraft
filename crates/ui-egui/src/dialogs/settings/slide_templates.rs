@@ -98,14 +98,18 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
         let r = TextField::singleline("field:slideshowTemplateRename", &mut text)
             .width(ui.available_width().clamp(80.0, 260.0))
             .select_on_focus(true)
+            .saves_with(|typed| {
+                (typed.trim() != tpl.name)
+                    .then(|| crate::text_field::Save { command: "slideshow.templates.rename", params: json!({"id": id, "name": typed}) })
+            })
             .show(ui);
         if !r.editing && r.ending.is_none() {
             r.response.request_focus();
         }
         if r.committed() {
             set_pending(&ctx, None);
-            if text.trim() != tpl.name {
-                act(app, &ctx, "slideshow.templates.rename", json!({"id": id, "name": text}), |_| String::new());
+            if let Some(save) = r.save {
+                act(app, &ctx, save.command, save.params, |_| String::new());
             }
         } else if r.cancelled() {
             set_pending(&ctx, None);

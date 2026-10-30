@@ -164,6 +164,14 @@ pub struct LightcraftApp {
     pub(crate) notice_input: panels::notices::PromptInput,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// The window's egui context, as of the last frame: for work that runs outside a frame's draw
+    /// but must reach the widgets' memory (saving a text edit under way before a library closes).
+    egui_ctx: Option<egui::Context>,
+    /// The saves the engine refused the last time the text edits under way were saved before
+    /// leaving (close, Quit, another library): the same text offered again is given up.
+    /// With the pass the refusal was in: a box drawn earlier in that same pass records its save
+    /// again only in the next one.
+    edit_saves_refused: (u64, Vec<crate::text_field::Save>),
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).

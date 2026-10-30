@@ -683,99 +683,113 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"deleted": t.len()}))
         }),
         // ---- metadata
-        cmd!(
-            "photo.setMeta",
-            "Edit Info",
-            [],
-            None,
-            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..]}",
-            has_selection,
-            |s, p| {
-                let strs =
-                    |k: &str| p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
-                let targets = s.targets(p)?;
-                // GPS: "lat, lon" (decimal or 51°30'26"N 0°7'39"W), [lat, lon], or null / "" to clear
-                let gps: Option<Option<(f64, f64)>> = match p.get("gps") {
-                    None => None,
-                    Some(Value::Null) => Some(None),
-                    Some(Value::String(t)) if t.trim().is_empty() => Some(None),
-                    Some(Value::String(t)) => Some(Some(
-                        parse_gps(t).ok_or_else(|| bad("photo.setMeta", format!("can't read `{t}` as coordinates (e.g. 51.5072, -0.1276)")))?,
-                    )),
-                    Some(Value::Array(a)) if a.len() == 2 => match (a[0].as_f64(), a[1].as_f64()) {
-                        (Some(la), Some(lo)) if la.abs() <= 90.0 && lo.abs() <= 180.0 => Some(Some((la, lo))),
-                        _ => return Err(bad("photo.setMeta", "gps is [latitude, longitude] in degrees")),
-                    },
-                    Some(_) => return Err(bad("photo.setMeta", "gps is \"lat, lon\", [lat, lon] or null")),
-                };
-                let status = match str_param(p, "copyrightStatus") {
-                    Some(t) => Some(
-                        CopyrightStatus::parse(t)
-                            .ok_or_else(|| bad("photo.setMeta", format!("copyrightStatus `{t}`: unknown, copyrighted or publicDomain")))?,
-                    ),
-                    None => None,
-                };
-                let mut ops = Vec::new();
-                for id in targets {
-                    let Some(ph) = s.catalog.photo(id) else { continue };
-                    let mut m = ph.meta.clone();
-                    if let Some(g) = gps {
-                        m.gps = g;
-                    }
-                    if let Some(st) = status {
-                        m.copyright_status = st;
-                    }
-                    for (k, field) in [
-                        ("title", &mut m.title),
-                        ("caption", &mut m.caption),
-                        ("copyright", &mut m.copyright),
-                        ("usageTerms", &mut m.usage_terms),
-                        ("copyrightUrl", &mut m.copyright_url),
-                        ("creator", &mut m.creator),
-                        ("location", &mut m.location),
-                        ("city", &mut m.city),
-                        ("state", &mut m.state),
-                        ("country", &mut m.country),
-                        ("altText", &mut m.alt_text),
-                        ("extendedDescription", &mut m.extended_description),
-                    ] {
-                        if let Some(v) = str_param(p, k) {
-                            *field = v.to_string();
-                        }
-                    }
-                    // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
-                        let k = clean(k);
-                        if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
-                            m.keywords.push(k);
-                        }
+        // `ids` names the photos without selecting them: a swept text edit (Info panel) is saved to
+        // the photo it was typed for, whatever selection the change that hid the box left
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.setMeta",
+                "Edit Info",
+                [],
+                None,
+                "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..]}",
+                has_selection,
+                |s, p| {
+                    let strs = |k: &str| {
+                        p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
                     };
-                    if let Some(k) = strs("keywords") {
-                        m.keywords.clear();
-                        for k in k {
+                    let targets = s.targets(p)?;
+                    if targets.is_empty() {
+                        // (a call that names photos skipped the selection check; an empty list names none)
+                        has_selection(s).map_err(|why| crate::EngineError::Disabled("photo.setMeta".into(), why))?;
+                    }
+                    // GPS: "lat, lon" (decimal or 51°30'26"N 0°7'39"W), [lat, lon], or null / "" to clear
+                    let gps: Option<Option<(f64, f64)>> = match p.get("gps") {
+                        None => None,
+                        Some(Value::Null) => Some(None),
+                        Some(Value::String(t)) if t.trim().is_empty() => Some(None),
+                        Some(Value::String(t)) => Some(Some(
+                            parse_gps(t).ok_or_else(|| bad("photo.setMeta", format!("can't read `{t}` as coordinates (e.g. 51.5072, -0.1276)")))?,
+                        )),
+                        Some(Value::Array(a)) if a.len() == 2 => match (a[0].as_f64(), a[1].as_f64()) {
+                            (Some(la), Some(lo)) if la.abs() <= 90.0 && lo.abs() <= 180.0 => Some(Some((la, lo))),
+                            _ => return Err(bad("photo.setMeta", "gps is [latitude, longitude] in degrees")),
+                        },
+                        Some(_) => return Err(bad("photo.setMeta", "gps is \"lat, lon\", [lat, lon] or null")),
+                    };
+                    let status = match str_param(p, "copyrightStatus") {
+                        Some(t) => Some(
+                            CopyrightStatus::parse(t)
+                                .ok_or_else(|| bad("photo.setMeta", format!("copyrightStatus `{t}`: unknown, copyrighted or publicDomain")))?,
+                        ),
+                        None => None,
+                    };
+                    let mut ops = Vec::new();
+                    for id in targets {
+                        let Some(ph) = s.catalog.photo(id) else { continue };
+                        let mut m = ph.meta.clone();
+                        if let Some(g) = gps {
+                            m.gps = g;
+                        }
+                        if let Some(st) = status {
+                            m.copyright_status = st;
+                        }
+                        for (k, field) in [
+                            ("title", &mut m.title),
+                            ("caption", &mut m.caption),
+                            ("copyright", &mut m.copyright),
+                            ("usageTerms", &mut m.usage_terms),
+                            ("copyrightUrl", &mut m.copyright_url),
+                            ("creator", &mut m.creator),
+                            ("location", &mut m.location),
+                            ("city", &mut m.city),
+                            ("state", &mut m.state),
+                            ("country", &mut m.country),
+                            ("altText", &mut m.alt_text),
+                            ("extendedDescription", &mut m.extended_description),
+                        ] {
+                            if let Some(v) = str_param(p, k) {
+                                *field = v.to_string();
+                            }
+                        }
+                        // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
+                        use lightcraft_catalog::keywords::{clean, same};
+                        let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
+                            let k = clean(k);
+                            if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
+                                m.keywords.push(k);
+                            }
+                        };
+                        if let Some(k) = strs("keywords") {
+                            m.keywords.clear();
+                            for k in k {
+                                add(&mut m, &k);
+                            }
+                        }
+                        for k in strs("addKeywords").unwrap_or_default() {
                             add(&mut m, &k);
                         }
+                        for k in strs("removeKeywords").unwrap_or_default() {
+                            let k = clean(&k);
+                            m.keywords.retain(|x| !same(&clean(x), &k));
+                        }
+                        ops.push(Op::SetMeta { id, meta: Box::new(m) });
                     }
-                    for k in strs("addKeywords").unwrap_or_default() {
-                        add(&mut m, &k);
+                    let n = ops.len();
+                    // (named photos that are gone leave nothing to commit: no empty undo step)
+                    if n > 0 {
+                        s.commit("Edit Info", Op::Batch { ops })?;
                     }
-                    for k in strs("removeKeywords").unwrap_or_default() {
-                        let k = clean(&k);
-                        m.keywords.retain(|x| !same(&clean(x), &k));
+                    // keywords just added become the Recent Keywords set
+                    let added: Vec<String> =
+                        strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
+                    if n > 0 && !added.is_empty() {
+                        crate::cmd::keywords::note_recent(s, &added);
                     }
-                    ops.push(Op::SetMeta { id, meta: Box::new(m) });
+                    Ok(json!({"changed": n}))
                 }
-                let n = ops.len();
-                s.commit("Edit Info", Op::Batch { ops })?;
-                // keywords just added become the Recent Keywords set
-                let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
-                if n > 0 && !added.is_empty() {
-                    crate::cmd::keywords::note_recent(s, &added);
-                }
-                Ok(json!({"changed": n}))
-            }
-        ),
+            )
+        },
         // ---- albums
         cmd!(
             "album.create",
