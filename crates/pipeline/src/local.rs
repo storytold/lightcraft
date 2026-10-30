@@ -342,7 +342,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 => base_detail_radius(px_per_long),
     }
 }
 
@@ -425,9 +425,17 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
 /// log-luminance, colour by blurring chromaticity (rgb / Y) and re-applying the original luminance.
-/// `scale`: output pixels per pixel of the original ([`nr_params`]).
-pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
+/// `scale`: output pixels per pixel of the original ([`nr_params`]). `colour_noise`: the whole
+/// frame's noise model for the joint colour NR ([`crate::colour_noise`]; `None`: measured on `img`).
+pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, colour_noise: Option<&crate::nrc_joint::JointNoise>) {
     let (lum, col) = nr_params(s, scale);
+    if col.is_some() && joint_colour_nr(s) {
+        apply_nr(img, lum, None);
+        if let Some(p) = nrc_params(s, scale) {
+            crate::nrc_joint::denoise(img, &p, (s.detail.nr_color_detail / 100.0) as f32, (s.detail.nr_color / 100.0) as f32, colour_noise);
+        }
+        return;
+    }
     apply_nr(img, lum, col);
 }
 
@@ -470,6 +478,87 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
             eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
         }
     }
+}
+
+/// Most samples the noise level of the new colour noise reduction is measured from. The CPU and
+/// the GPU sample the same pixels (see `nrc_joint::noise_sample_stride`).
+pub const NRC_SAMPLES: usize = 131_072;
+
+/// One self-guided pass of the new colour noise reduction: Gaussian windows of `sigma` px, the
+/// coefficients computed on a plane subsampled by `step`, `eps = k ×` the `pct`-quantile of the
+/// local variance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NrcPass {
+    pub sigma: f32,
+    pub step: usize,
+    pub k: f32,
+    pub pct: f32,
+}
+
+/// Parameters of the new colour noise reduction: the offset of the square roots and the passes
+/// (fine, then coarse).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NrcParams {
+    pub off: f32,
+    pub passes: Vec<NrcPass>,
+}
+
+/// The new colour noise reduction's parameters at `scale` output pixels per pixel of the original
+/// ([`crate::Plan::detail_scale`]), `None` when Color is 0.
+pub fn nrc_params(s: &DevelopSettings, scale: f32) -> Option<NrcParams> {
+    let amount = (s.detail.nr_color / 100.0) as f32;
+    if amount <= 0.0 {
+        return None;
+    }
+    let detail = (s.detail.nr_color_detail / 100.0) as f32;
+    let smooth = 1.0 + (s.detail.nr_color_smoothness / 100.0) as f32;
+    let scale = if scale.is_finite() { scale.clamp(0.05, 1.0) } else { 1.0 };
+    let sigma = (2.0 + 10.0 * amount) * smooth * scale;
+    let k = 64.0 * amount * (1.5 - detail);
+    // the coefficients vary over about sigma: a grid of sigma / 2 holds them
+    let pass = |sigma: f32| NrcPass { sigma, step: (sigma / 2.0).floor().clamp(1.0, 16.0) as usize, k, pct: 0.2 };
+    // fine, then coarse (three times wider); the joint method takes the coarse one's reach
+    Some(NrcParams { off: 0.003, passes: vec![pass(sigma), pass(sigma * 3.0)] })
+}
+
+/// Chroma noise variance per channel as a function of the local luminance: `α · Y + β` (shot plus read noise).
+#[derive(Clone, Copy, Debug)]
+pub struct NrcNoise {
+    pub alpha: [f32; 3],
+    pub beta: [f32; 3],
+}
+
+impl NrcNoise {
+    #[inline]
+    pub fn var(&self, i: usize, y: f32) -> f32 {
+        (self.alpha[i] * y.max(0.0) + self.beta[i]).max(1e-14)
+    }
+}
+
+/// Weighted least squares `v = a · l + b` over `(l, v, weight)` with `a, b ≥ 0`: the free fit if both come out
+/// non-negative, else the better of the line through the origin (`b = 0`) and the constant (`a = 0`).
+pub fn fit_nonneg_line(pts: &[(f64, f64, f64)]) -> (f64, f64) {
+    let sw: f64 = pts.iter().map(|p| p.2).sum::<f64>().max(1e-300);
+    let (ml, mv) = (pts.iter().map(|p| p.2 * p.0).sum::<f64>() / sw, pts.iter().map(|p| p.2 * p.1).sum::<f64>() / sw);
+    let (cov, vl) = pts.iter().fold((0.0, 0.0), |(c, v), p| (c + p.2 * (p.0 - ml) * (p.1 - mv), v + p.2 * (p.0 - ml) * (p.0 - ml)));
+    if vl > 0.0 {
+        let a = cov / vl;
+        let b = mv - a * ml;
+        if a >= 0.0 && b >= 0.0 {
+            return (a, b);
+        }
+    }
+    let sse = |a: f64, b: f64| pts.iter().map(|p| p.2 * (p.1 - a * p.0 - b).powi(2)).sum::<f64>();
+    let ll: f64 = pts.iter().map(|p| p.2 * p.0 * p.0).sum();
+    let origin = if ll > 0.0 { (pts.iter().map(|p| p.2 * p.0 * p.1).sum::<f64>() / ll).max(0.0) } else { 0.0 };
+    let constant = mv.max(0.0);
+    if sse(origin, 0.0) < sse(0.0, constant) { (origin, 0.0) } else { (0.0, constant) }
+}
+
+/// Whether `s` gets the joint colour noise reduction (`nrc_joint`, process V3 on), else main's
+/// blurred chromaticity.
+pub fn joint_colour_nr(s: &DevelopSettings) -> bool {
+    s.process.process() >= lightcraft_develop::Process::V3
 }
 
 pub fn log_lum(c: [f32; 3]) -> f32 {
@@ -702,6 +791,250 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// Edits saved under V1 and V2 keep main's colour noise reduction (blurred chromaticity); V3 gets
+    /// the joint method of `nrc_joint`.
+    #[test]
+    fn colour_nr_follows_the_process() {
+        use lightcraft_develop::{DevelopSettings, Process};
+        let (w, h) = (96usize, 64usize);
+        let img = Rgb32f::from_fn(w, h, |x, y| {
+            let n = |c: u32| {
+                let mut v = (x as u32).wrapping_mul(0x9e37_79b9) ^ (y as u32).wrapping_mul(0x85eb_ca6b) ^ c.wrapping_mul(0xc2b2_ae35) | 1;
+                v ^= v << 13;
+                v ^= v >> 17;
+                v ^= v << 5;
+                (v as f32 / u32::MAX as f32 - 0.5) * 0.02
+            };
+            let base = if x < w / 2 { [0.06, 0.03, 0.02] } else { [0.02, 0.04, 0.06] };
+            [base[0] + n(1), base[1] + n(2), base[2] + n(3)]
+        });
+        let run = |p: Process| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.detail.nr_color = 50.0;
+            let mut o = img.clone();
+            denoise(&mut o, &s, 1.0, None);
+            o
+        };
+        let (v1, v2, v3) = (run(Process::V1), run(Process::V2), run(Process::V3));
+        assert!(v1.data == v2.data, "V1 and V2 share main's colour NR");
+        // main's colour NR clamps at 0 and keeps each pixel's luminance; the joint method keeps it too
+        assert!(v2.data != v3.data, "V3 takes the joint colour NR");
+        let mut s = DevelopSettings { process: Process::V3.version(), ..Default::default() };
+        s.detail.nr_color = 50.0;
+        let mut joint = img.clone();
+        let p = nrc_params(&s, 1.0).expect("Color 50 has parameters");
+        crate::nrc_joint::denoise(&mut joint, &p, (s.detail.nr_color_detail / 100.0) as f32, 0.5, None);
+        assert!(joint.data == v3.data, "V3 is the joint method");
+    }
+
+    /// Float mean of a flat, noisy dark patch over three noise realisations; linear modes assert drift bounds.
+    #[test]
+    #[ignore]
+    fn probe_nrc_mean_drift() {
+        use lightcraft_develop::DevelopSettings;
+        let (w, h) = (768usize, 768usize);
+        let mut worst = 0.0f64;
+        for seed0 in [0x2545_f491_4f6c_dd1du64, 0x9e37_79b9_7f4a_7c15, 0x1234_5678_9abc_def1] {
+            let mut seed = seed0;
+            let mut gauss = || {
+                (0..4)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        (seed >> 11) as f32 / (1u64 << 53) as f32 - 0.5
+                    })
+                    .sum::<f32>()
+                    * 1.732
+            };
+            for (name, base, sigma) in [
+                ("dark warm, blue near 0", [0.006f32, 0.004, 0.0008], [0.002f32, 0.0015, 0.003]),
+                ("cat-like, red near 0", [0.0015, 0.004, 0.009], [0.004, 0.003, 0.005]),
+            ] {
+                let mut img = Rgb32f::new(w, h);
+                for p in img.data.iter_mut() {
+                    *p = [0, 1, 2].map(|i| base[i] + sigma[i] * gauss());
+                }
+                let mean = |im: &Rgb32f| {
+                    let n = im.data.len() as f64;
+                    [0, 1, 2].map(|i| im.data.iter().map(|p| p[i] as f64).sum::<f64>() / n)
+                };
+                let m0 = mean(&img);
+                for nr in [25.0, 100.0] {
+                    let mut s = DevelopSettings::default();
+                    s.detail.nr_color = nr;
+                    let mut a = img.clone();
+                    denoise(&mut a, &s, 1.0, None);
+                    let m = mean(&a);
+                    let clipped0 = mean(&img.map(|p| p.map(|v| v.max(0.0))));
+                    let sd = |im: &Rgb32f, mm: [f64; 3]| {
+                        [0, 1, 2].map(|i| (im.data.iter().map(|p| (p[i] as f64 - mm[i]).powi(2)).sum::<f64>() / im.data.len() as f64).sqrt())
+                    };
+                    worst = worst.max([0, 1, 2].iter().map(|&i| (m[i] / m0[i] - 1.0).abs()).fold(0.0, f64::max));
+                    println!(
+                        "{name} NR {nr}: true mean {m0:.5?}, clipped noisy mean {clipped0:.5?}, after v2 {m:.5?} → {:+.3?} % vs true; noise sd {:.5?} → {:.5?}",
+                        [0, 1, 2].map(|i| 100.0 * (m[i] / m0[i] - 1.0)),
+                        sd(&img, m0),
+                        sd(&a, m)
+                    );
+                }
+            }
+        }
+        println!("worst mean deviation {:.4} %", 100.0 * worst);
+        assert!(worst < 0.0005, "the joint colour NR moved a channel's mean by {:.3} %", 100.0 * worst);
+    }
+
+    /// PROBE (prints, never fails): what colour NR v2 keeps of real colour. A clean synthetic scene (an
+    /// equal-luminance red/green edge, a 2 px red line on grey, a saturated blue patch near black, a flat grey
+    /// patch) plus noise; each measure compares the output with the clean scene.
+    #[test]
+    #[ignore]
+    fn probe_nrc_real_colour() {
+        use lightcraft_develop::DevelopSettings;
+        let (w, h) = (768usize, 512usize);
+        let y_of = |c: [f32; 3]| luminance_2020(c);
+        // two colours of the same luminance 0.03
+        let red = [0.08f32, 0.0155, 0.02];
+        let green = {
+            let g = [0.012f32, 0.04, 0.015];
+            let k = y_of(red) / y_of(g);
+            g.map(|v| v * k)
+        };
+        let grey = [0.03f32; 3];
+        let blue_dark = [0.001f32, 0.0015, 0.02];
+        // a bright saturated green next to black (a lit leaf against a dark background)
+        let leaf = [0.02f32, 0.12, 0.01];
+        let clean = |x: usize, y: usize| -> [f32; 3] {
+            if y < 256 {
+                if x < 384 { red } else { green }
+            } else if x < 384 {
+                if (190..192).contains(&x) { red } else { grey }
+            } else if x < 576 {
+                blue_dark
+            } else if y < 384 {
+                grey
+            } else if x < 672 {
+                leaf
+            } else {
+                [0.0005f32; 3]
+            }
+        };
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut gauss = || {
+            (0..4)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed >> 11) as f32 / (1u64 << 53) as f32 - 0.5
+                })
+                .sum::<f32>()
+                * 1.732
+        };
+        let mut img = Rgb32f::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let c = clean(x, y);
+                // shot + read noise per channel
+                img.data[y * w + x] = c.map(|v| v + (0.00002 + 0.004 * v.max(0.0)).sqrt() * 0.6 * gauss());
+            }
+        }
+        let chroma = |c: [f32; 3]| {
+            let y = y_of(c);
+            c.map(|v| v - y)
+        };
+        let dist = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+        for nr in [25.0, 100.0] {
+            let mut s = DevelopSettings::default();
+            s.detail.nr_color = nr;
+            let mut o = img.clone();
+            denoise(&mut o, &s, 1.0, None);
+            let px = |x: usize, y: usize| o.data[y * w + x];
+            // edge: chroma error 1..8 px either side, relative to the step between the two colours
+            let step = dist(chroma(red), chroma(green));
+            let mut e = 0.0;
+            let mut n = 0.0;
+            for y in 40..216 {
+                for d in 1..=8 {
+                    for x in [384 - d, 383 + d] {
+                        e += dist(chroma(px(x, y)), chroma(clean(x, y)));
+                        n += 1.0;
+                    }
+                }
+            }
+            // line: share of the line's chroma kept (mean over its rows)
+            let (mut kept, mut m) = (0.0, 0.0);
+            for y in 300..480 {
+                for x in 190..192 {
+                    let c = chroma(px(x, y));
+                    let r = chroma(red);
+                    let rg = chroma(grey);
+                    let full = [0, 1, 2].map(|i| r[i] - rg[i]);
+                    let got = [0, 1, 2].map(|i| c[i] - rg[i]);
+                    kept += (got[0] * full[0] + got[1] * full[1] + got[2] * full[2]) / (full[0] * full[0] + full[1] * full[1] + full[2] * full[2]);
+                    m += 1.0;
+                }
+            }
+            // saturated blue near black: chroma of the patch's mean kept
+            let mut acc = [0.0f32; 3];
+            let mut cnt = 0.0;
+            for y in 300..480 {
+                for x in 420..540 {
+                    acc = [0, 1, 2].map(|i| acc[i] + px(x, y)[i]);
+                    cnt += 1.0;
+                }
+            }
+            let mean = acc.map(|v| v / cnt);
+            let sat_kept = dist(chroma(mean), [0.0; 3]) / dist(chroma(blue_dark), [0.0; 3]);
+            // grey: residual chroma noise
+            let mut sd = 0.0;
+            let mut k = 0.0;
+            for y in 270..370 {
+                for x in 600..760 {
+                    sd += dist(chroma(px(x, y)), [0.0; 3]).powi(2);
+                    k += 1.0;
+                }
+            }
+            let mut sd0 = 0.0;
+            for y in 270..370 {
+                for x in 600..760 {
+                    sd0 += dist(chroma(img.data[y * w + x]), [0.0; 3]).powi(2);
+                }
+            }
+            // leaf next to black: chroma kept in the leaf's 12 px next to the black (mean over rows)
+            let (mut lk, mut ln) = (0.0f32, 0.0f32);
+            for y in 400..500 {
+                for x in 660..672 {
+                    let c = chroma(px(x, y));
+                    let r = chroma(leaf);
+                    lk += (c[0] * r[0] + c[1] * r[1] + c[2] * r[2]) / (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+                    ln += 1.0;
+                }
+            }
+            println!("NR {nr}: leaf next to black keeps {:.0} % of its chroma (12 px next to the black)", 100.0 * lk / ln);
+            println!(
+                "NR {nr}: edge error {:.1} % of the step | red line kept {:.0} % | dark blue chroma kept {:.0} % | grey chroma noise {:.5} → {:.5}",
+                100.0 * e / n / step,
+                100.0 * kept / m,
+                100.0 * sat_kept,
+                (sd0 / k).sqrt(),
+                (sd / k).sqrt()
+            );
+        }
+    }
+
+    #[test]
+    fn nrc_noise_fit_is_non_negative() {
+        // a falling cloud would give a negative slope: the constant fits instead
+        let (a, b) = fit_nonneg_line(&[(0.0, 4.0, 1.0), (1.0, 3.0, 1.0), (2.0, 2.0, 1.0)]);
+        assert!(a == 0.0 && (b - 3.0).abs() < 1e-9);
+        // a line through a negative intercept: refitted through the origin
+        let (a, b) = fit_nonneg_line(&[(1.0, 1.0, 1.0), (2.0, 3.0, 1.0), (3.0, 5.0, 1.0)]);
+        assert!(a > 0.0 && b == 0.0);
+        // an exact shot + read noise line is found as it is
+        let (a, b) = fit_nonneg_line(&[(0.0, 2.0, 1.0), (1.0, 5.0, 1.0), (2.0, 8.0, 1.0)]);
+        assert!((a - 3.0).abs() < 1e-9 && (b - 2.0).abs() < 1e-9);
+    }
     use super::*;
 
     #[test]
@@ -883,7 +1216,7 @@ mod nr_tests {
         let (v0, m0) = var(&img);
         let mut s = DevelopSettings::default();
         s.detail.nr_luminance = 80.0;
-        denoise(&mut img, &s, 1.0);
+        denoise(&mut img, &s, 1.0, None);
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);

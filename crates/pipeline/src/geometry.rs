@@ -256,6 +256,43 @@ impl Frame {
             Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
             None => std::borrow::Cow::Borrowed(o),
         };
+        self.sample_base(base, plan, w, h)
+    }
+
+    /// [`Frame::sample`] of each of `windows` of this frame at its `full_w × full_h` output size: the
+    /// same pixels, with the source oriented and prefiltered once for all of them rather than per window.
+    pub fn sample_windows(&self, src: &Rgb32f, full_w: usize, full_h: usize, windows: &[crate::PixelWindow]) -> Vec<Rgb32f> {
+        let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
+        let o = oriented.as_ref().unwrap_or(src);
+        let plans: Vec<(Frame, SamplePlan)> = windows
+            .iter()
+            .map(|t| {
+                let frame = if (t.w, t.h) == (full_w, full_h) { self.clone() } else { self.window(full_w, full_h, *t) };
+                let plan = frame.sample_plan(src.width, src.height, t.w, t.h);
+                (frame, plan)
+            })
+            .collect();
+        let mut bases: Vec<((usize, usize), Rgb32f)> = Vec::new();
+        for dims in plans.iter().filter_map(|p| p.1.prefilter) {
+            if !bases.iter().any(|b| b.0 == dims) {
+                bases.push((dims, resize(o, dims.0, dims.1, Filter::Mitchell)));
+            }
+        }
+        plans
+            .into_iter()
+            .zip(windows)
+            .map(|((frame, plan), t)| {
+                let base = match plan.prefilter.and_then(|dims| bases.iter().find(|b| b.0 == dims)) {
+                    Some(b) => std::borrow::Cow::Borrowed(&b.1),
+                    None => std::borrow::Cow::Borrowed(o),
+                };
+                frame.sample_base(base, plan, t.w, t.h)
+            })
+            .collect()
+    }
+
+    /// The sampling of [`Frame::sample`] from the oriented, prefiltered source `base`.
+    fn sample_base(&self, base: std::borrow::Cow<'_, Rgb32f>, plan: SamplePlan, w: usize, h: usize) -> Rgb32f {
         let affine = |xf: Affine| {
             let mut out = Rgb32f::new(w, h);
             par_rows(&mut out.data, w, |y, row| {
