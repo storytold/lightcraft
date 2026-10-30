@@ -26,6 +26,8 @@
 
 mod alloc_release;
 mod appearance;
+#[cfg(target_os = "macos")]
+mod appkit_defaults;
 #[cfg(target_os = "linux")]
 mod colord;
 mod control_server;
@@ -189,6 +191,12 @@ fn main() -> eframe::Result {
             },
             None => logger.no_file(),
         }
+    }
+    // before the menu bar exists, after the arguments: AppKit reads these defaults when it builds
+    // its menus, and `--version` / `--help` / a --memory session (issue #164) write nothing
+    #[cfg(target_os = "macos")]
+    if !in_memory {
+        appkit_defaults::install();
     }
     // what the arguments name, resolved now: an empty or relative argument never becomes a drive
     // root, and a whole drive or home folder is not walked (issue #374)
