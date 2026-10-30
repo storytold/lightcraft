@@ -768,7 +768,9 @@ mod tests {
 
     /// The folder is synced once the archive has its name (and old ones are retired), so a power
     /// loss can't leave the archive the import reports without that name; also when a matching
-    /// archive is reused and old ones are retired.
+    /// archive is reused and old ones are retired. (Unix only: Windows can't open a folder to sync
+    /// it, so `sync_dir` does nothing there and counts nothing.)
+    #[cfg(unix)]
     #[test]
     fn the_archive_folder_is_synced_after_publishing_and_after_reuse() {
         let path = tempdir();
