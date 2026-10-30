@@ -9,7 +9,7 @@ use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::sidebar::SidebarSection;
 use crate::theme::Tokens;
-use crate::widgets::{icon_button, register};
+use crate::widgets::{icon_command, register};
 
 mod albums;
 mod dates;

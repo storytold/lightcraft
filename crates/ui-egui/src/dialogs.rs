@@ -4,6 +4,7 @@ use lightcraft_develop::{ControlSpec, Section, SettingsGroup, Track};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::check::{Check, check};
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use lightcraft_engine::export::{ExportOptions, Resize};
@@ -570,8 +571,7 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
         }))
         .color(t.text_dim),
     );
-    let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
-    crate::widgets::register(ui, "check:cullPick", r.rect);
+    check(ui, "cullPick", pick_best, "Pick the sharpest photo of each burst");
     ui.add_space(6.0);
     // the sliders drag over the usual range; their value fields take whatever
     // `photo.analyze` accepts (a gap of 0 s to a day, a similarity of 0 to 1)
@@ -778,7 +778,7 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
     field(ui, "Change", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for (i, (label, m)) in [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone")].iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("captureMode-{i}"), label, mode == m).clicked() {
+            if crate::widgets::choice_button(ui, &format!("captureMode-{i}"), label, mode == m).clicked() {
                 *mode = m.to_string();
             }
         }
@@ -845,7 +845,7 @@ fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
         ui.spacing_mut().item_spacing.x = 4.0;
         for set in sets["sets"].as_array().into_iter().flatten() {
             let name = set["name"].as_str().unwrap_or_default();
-            if crate::widgets::text_button(ui, &format!("labelSet-{name}"), name, false).clicked() {
+            if crate::widgets::command_button(ui, &format!("labelSet-{name}"), name).clicked() {
                 *names = set["names"].as_array().into_iter().flatten().map(|n| n.as_str().unwrap_or_default().to_string()).collect();
             }
         }
@@ -902,7 +902,7 @@ fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut
         for (i, (label, tpl)) in
             [("Name", "{name}"), ("Date–Name", "{date}_{name}"), ("Title–Seq", "{title}-{seq:3}"), ("Custom–Seq", "Photo-{seq:3}")].iter().enumerate()
         {
-            if crate::widgets::text_button(ui, &format!("renamePreset-{i}"), label, template == tpl).clicked() {
+            if crate::widgets::choice_button(ui, &format!("renamePreset-{i}"), label, template == tpl).clicked() {
                 *template = tpl.to_string();
             }
         }
@@ -971,8 +971,7 @@ fn rename_person_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, co
             ))
             .color(t.caution),
         );
-        let r = ui.checkbox(merge, crate::i18n::tr("Combine with the existing person"));
-        crate::widgets::register(ui, "check:personMerge", r.rect);
+        check(ui, "personMerge", merge, "Combine with the existing person");
     }
 }
 
@@ -1031,8 +1030,7 @@ fn new_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, confirm: &mut bool
     // as in Lightroom, the option is only there when something is selected
     if !*folder && !app.session.selected().is_empty() {
         ui.add_space(6.0);
-        let r = ui.checkbox(include_selected, crate::i18n::tr("Include selected photos"));
-        crate::widgets::register(ui, "check:albumIncludeSelected", r.rect);
+        check(ui, "albumIncludeSelected", include_selected, "Include selected photos");
     }
 }
 
@@ -1065,14 +1063,14 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
         });
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
     });
-    ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
+    check(ui, "contactSheetLandscape", &mut options.landscape, "Landscape");
     field(ui, "Columns", |ui| {
         ui.add(egui::DragValue::new(&mut options.columns).range(1..=8));
     });
     field(ui, "Rows", |ui| {
         ui.add(egui::DragValue::new(&mut options.rows).range(1..=10));
     });
-    ui.checkbox(&mut options.captions, crate::i18n::tr("Filename captions"));
+    check(ui, "contactSheetCaptions", &mut options.captions, "Filename captions");
     ui.label(crate::i18n::tr("150 dpi · sRGB · current edits · fit without cropping"));
     ui.label(crate::i18n::tr("Choose a PDF destination after confirming. Print the PDF from your viewer."));
 }
@@ -1190,10 +1188,8 @@ fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
     use lightcraft_engine::export::ExportFormat as F;
     let rendered = opts.format.is_rendered();
     if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif | F::Png | F::Jxl) {
-        let tip = crate::i18n::tr(
-            "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float",
-        );
-        ui.checkbox(&mut opts.hdr, crate::i18n::tr("HDR output")).on_hover_text(tip);
+        let tip = "Photos edited in HDR: JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays), AVIF as 10-bit, PNG and JPEG XL as 16-bit Rec. 2020 PQ; TIFF needs 32-bit float";
+        Check::new("exportHdr", &mut opts.hdr, "HDR output").tooltip(tip).show(ui);
         if opts.hdr && !opts.hdr_output() {
             ui.label(egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
         }
@@ -1238,7 +1234,7 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
     use lightcraft_engine::export::ExportFormat as F;
     if opts.format == F::Jxl {
         let tip = "Mathematically lossless: every pixel is kept exactly (larger files)";
-        ui.checkbox(&mut opts.jxl_lossless, crate::i18n::tr("Lossless")).on_hover_text(crate::i18n::tr(tip));
+        Check::new("exportJxlLossless", &mut opts.jxl_lossless, "Lossless").tooltip(tip).show(ui);
     }
     if matches!(opts.format, F::Jpeg | F::Avif) || (opts.format == F::Jxl && !opts.jxl_lossless) {
         let mut q = opts.quality as f64;
@@ -1250,7 +1246,7 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
         use lightcraft_engine::export::JxlEffort as E;
         choices(ui, "Effort", "exportJxlEffort", &[(E::Fast, "Fast"), (E::Normal, "Normal")], &mut opts.jxl_effort);
         let tip = "Shows a coarse version first and refines it as the file loads";
-        ui.checkbox(&mut opts.jxl_progressive, crate::i18n::tr("Progressive")).on_hover_text(crate::i18n::tr(tip));
+        Check::new("exportJxlProgressive", &mut opts.jxl_progressive, "Progressive").tooltip(tip).show(ui);
     }
     if opts.format == F::Jpeg {
         let mut k = *limit_kb as f64;
@@ -1281,7 +1277,7 @@ fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Exp
         &mut opts.metadata,
     );
     if !matches!(opts.metadata, M::None | M::Copyright) {
-        ui.checkbox(&mut opts.remove_location, crate::i18n::tr("Remove location info"));
+        check(ui, "exportRemoveLocation", &mut opts.remove_location, "Remove location info");
     }
     export_watermark(app, ui, opts, full_size, resize);
 }
@@ -1289,7 +1285,7 @@ fn export_output_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Exp
 /// Export dialog: the watermark switch, its preview and its settings.
 fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut ExportOptions, full_size: bool, resize: Resize) {
     let mut wm_on = opts.watermark.is_some();
-    if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {
+    if check(ui, "exportWatermark", &mut wm_on, "Watermark").changed() {
         opts.watermark = wm_on.then(|| lightcraft_engine::export::Watermark { text: "© ".into(), ..Default::default() });
     }
     let wm_shown = opts.watermark.clone();
@@ -1311,7 +1307,7 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
             field(ui, "Graphic", |ui| {
                 trailing_button_row(ui, |ui| {
                     if app.services.pick_files.is_some()
-                        && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
+                        && crate::widgets::command_button(ui, "exportWmChoose", crate::i18n::tr("Choose…")).clicked()
                         && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
                     {
                         wm.image = f;
@@ -1368,7 +1364,7 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
             wm.inset_y = (v / 100.0) as f32;
         }
         if !graphic {
-            ui.checkbox(&mut wm.shadow, crate::i18n::tr("Shadow"));
+            check(ui, "exportWatermarkShadow", &mut wm.shadow, "Shadow");
         }
     }
     if opts.watermark != wm_shown {
@@ -1439,7 +1435,7 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
         field(ui, "Folder", |ui| {
             trailing_button_row(ui, |ui| {
                 if app.services.pick_folder.is_some()
-                    && crate::widgets::text_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…"), false).clicked()
+                    && crate::widgets::command_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…")).clicked()
                     && let Some(pick) = app.services.pick_folder.as_mut()
                     && let Some(d) = pick()
                 {
@@ -1463,7 +1459,7 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
 /// Export dialog, after export: Apple Photos imports the files written (macOS only).
 #[cfg(target_os = "macos")]
 fn export_apple_photos_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
-    let r = ui.checkbox(&mut opts.add_to_photos, crate::i18n::tr("Add to Apple Photos"));
+    let r = check(ui, "exportAddToPhotos", &mut opts.add_to_photos, "Add to Apple Photos");
     crate::widgets::register(ui, "exportAddToPhotos", r.rect);
     if opts.add_to_photos {
         field(ui, "Album", |ui| {
@@ -1498,7 +1494,7 @@ fn export_save_preset_row(
     field(ui, "Save preset", |ui| {
         trailing_button_row(ui, |ui| {
             let named = !preset_name.trim().is_empty();
-            if crate::widgets::text_button(ui, "exportSavePreset", crate::i18n::tr("Save"), false).clicked() && named {
+            if crate::widgets::command_button(ui, "exportSavePreset", crate::i18n::tr("Save")).clicked() && named {
                 let params = export_dialog_params(opts, full_size, resize, limit_kb);
                 match app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params})) {
                     Ok(_) => {
@@ -1560,23 +1556,21 @@ fn keyword_tag_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, conf
     ui.add_space(6.0);
     if editing.is_none() {
         if let Some(p) = parent {
-            let r = ui.checkbox(inside, crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › ")));
-            crate::widgets::register(ui, "check:keywordInside", r.rect);
+            let label = crate::i18n::tr_format!("Put inside “{parent}”", parent = p.replace('|', " › "));
+            Check::new("keywordInside", inside, &label).translated().show(ui);
         }
         let n = app.session.selection.ids.len();
-        let r = ui.add_enabled(n > 0, egui::Checkbox::new(add_to_selected, crate::i18n::tr("Add to Selected Photos")));
-        crate::widgets::register(ui, "check:keywordAddToSelected", r.rect);
+        Check::new("keywordAddToSelected", add_to_selected, "Add to Selected Photos").enabled(n > 0).show(ui);
         ui.add_space(4.0);
     }
     ui.label(egui::RichText::new(crate::i18n::tr("Keyword Tag Options")).color(t.text_dim));
     for (on, label, id) in [
-        (include_on_export, "Include on Export", "check:keywordIncludeOnExport"),
-        (export_containing, "Export Containing Keywords", "check:keywordExportContaining"),
-        (export_synonyms, "Export Synonyms", "check:keywordExportSynonyms"),
-        (person, "Person", "check:keywordPerson"),
+        (include_on_export, "Include on Export", "keywordIncludeOnExport"),
+        (export_containing, "Export Containing Keywords", "keywordExportContaining"),
+        (export_synonyms, "Export Synonyms", "keywordExportSynonyms"),
+        (person, "Person", "keywordPerson"),
     ] {
-        let r = ui.checkbox(on, crate::i18n::tr(label));
-        crate::widgets::register(ui, id, r.rect);
+        check(ui, id, on, label);
     }
 }
 
@@ -1612,8 +1606,7 @@ fn keyword_set_body(ui: &mut egui::Ui, t: &Tokens, confirm: &mut bool, dlg: &mut
     });
     if replaces.is_some() {
         ui.add_space(6.0);
-        let r = ui.checkbox(as_new, crate::i18n::tr("Save as a new set"));
-        crate::widgets::register(ui, "check:keywordSetAsNew", r.rect);
+        check(ui, "keywordSetAsNew", as_new, "Save as a new set");
     }
     // Return in any field saves the set
     if returned {
@@ -1671,9 +1664,9 @@ fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
     ui.add_space(4.0);
-    let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
-    crate::widgets::register(ui, "check:moveDontAsk", c.rect);
-    c.on_hover_text(crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on"));
+    Check::new("moveDontAsk", dont_ask, "Don't ask again")
+        .tooltip("Settings → Confirm before moving photos to another folder on disk turns it back on")
+        .show(ui);
 }
 
 /// The body of the LightroomCatalog dialog.
@@ -1717,7 +1710,7 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for (i, (id, label)) in ABOUT_TABS.iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("aboutTab-{id}"), label, usize::from(tab) == i).clicked() {
+            if crate::widgets::choice_button(ui, &format!("aboutTab-{id}"), label, usize::from(tab) == i).clicked() {
                 tab = u8::try_from(i).unwrap_or(0);
             }
         }

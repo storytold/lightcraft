@@ -2,7 +2,7 @@ use super::histogram::preview_histogram;
 use super::sliders::control;
 use super::{
     Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PARAM_AMOUNTS, ParametricCurve, PhotoId, Point, Pos2, Rect, RichText, Sense, Stroke,
-    Tokens, Vertex, controls, hex, json, paint, pos2, register, text_button, vec2,
+    Tokens, Vertex, command_button, controls, hex, json, paint, pos2, register, vec2,
 };
 
 // ------------------------------------------------------------------------------ tone curve
@@ -449,7 +449,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let r = text_button(ui, "curveReset", crate::i18n::tr("Reset"), false).on_hover_text(crate::i18n::tr(
+                let r = command_button(ui, "curveReset", crate::i18n::tr("Reset")).on_hover_text(crate::i18n::tr(
                     "Reset all curves: point curves (all channels) and parametric (double-click a channel to reset only that one)",
                 ));
                 if r.clicked() {

@@ -4,6 +4,7 @@
 //! window (search, rename, update, duplicate, stars, groups, delete). Every change runs a
 //! `mask.*Effect` command.
 
+use crate::check::{Check, Emphasis, check};
 use egui::{Sense, vec2};
 use lightcraft_develop::Mask;
 use lightcraft_engine::cmd::mask_effects::{self as fx, FIELDS, MaskEffect};
@@ -418,10 +419,9 @@ pub fn save_body(
     ui.columns(2, |cols| {
         for (i, k) in list.iter().enumerate() {
             let mut on = fields.iter().any(|f| f == k);
-            let text = egui::RichText::new(crate::i18n::tr(field_label(k)));
             // the sliders this mask changes stand out; the others are dimmed
-            let text = if changed.iter().any(|c| c == k) { text.color(t.text).strong() } else { text.color(t.text_dim) };
-            let r = cols[i % 2].checkbox(&mut on, text);
+            let emphasis = if changed.iter().any(|c| c == k) { Emphasis::Strong } else { Emphasis::Muted };
+            let r = Check::new(&format!("effectInclude-{k}"), &mut on, field_label(k)).emphasis(emphasis).show(&mut cols[i % 2]);
             register_response(format!("effectInclude:{k}"), r.rect, &r);
             if r.changed() {
                 fields.retain(|f| f != k);
@@ -449,10 +449,8 @@ pub fn save_body(
             .color(t.text_dim)
             .size(11.0),
     );
-    let r = ui.checkbox(amount, crate::i18n::tr("Include Amount"));
-    register(ui, "check:effectAmount", r.rect);
-    let r = ui.checkbox(brush, crate::i18n::tr("Include brush size, feather and flow"));
-    register(ui, "check:effectBrush", r.rect);
+    check(ui, "effectAmount", amount, "Include Amount");
+    check(ui, "effectBrush", brush, "Include brush size, feather and flow");
     enter
 }
 

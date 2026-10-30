@@ -307,11 +307,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let on = chip.is_some_and(|c| c.on_all());
             let some = chip.is_some() && !on;
             let short = format!("{}{}", k.rsplit('|').next().unwrap_or(k), if some { " *" } else { "" });
-            let r = ui
-                .add_sized(
-                    [bw, 22.0],
-                    egui::Button::new(egui::RichText::new(short).size(11.5).color(if on { t.text } else { t.text_label })).selected(on).truncate(),
-                )
+            let r = crate::widgets::text_button_sized(ui, &format!("kwSetButton-{}", i + 1), &short, on, bw, 22.0, (!on).then_some(t.text_label))
                 .on_hover_text(format!("{} — ⌥{}", k.replace('|', " › "), i + 1));
             register(ui, format!("kwSet:{}", i + 1), r.rect);
             if on {

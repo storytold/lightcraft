@@ -23,7 +23,7 @@ pub(super) fn grading(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (key, tip, icon) in GRADING_TABS {
-                if crate::widgets::icon_button(ui, &format!("grading-{key}"), icon, vec2(28.0, 28.0), key == mode, true, crate::i18n::tr(tip))
+                if crate::widgets::icon_choice(ui, &format!("grading-{key}"), icon, vec2(28.0, 28.0), key == mode, true, crate::i18n::tr(tip))
                     .clicked()
                 {
                     app.ui.grading_mode = key.to_string();

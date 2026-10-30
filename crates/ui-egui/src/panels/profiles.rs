@@ -12,7 +12,7 @@ use super::presets::cover_uv;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, one_line, register};
+use crate::widgets::{divider, icon_command, one_line, register};
 use crate::{HoverPreview, LightcraftApp};
 
 /// Long edge of the variant thumbnails (px).
@@ -26,7 +26,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // header: back + title
     let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
     let mut back = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(hr.min + vec2(12.0, 9.0), vec2(28.0, 28.0))));
-    if icon_button(&mut back, "profilesBack", Icon::ChevronLeft, vec2(28.0, 28.0), false, true, "Back to Edit").clicked() {
+    if icon_command(&mut back, "profilesBack", Icon::ChevronLeft, vec2(28.0, 28.0), true, "Back to Edit").clicked() {
         app.ui.right = RightPanel::Edit;
     }
     ui.painter().text(pos2(hr.left() + 46.0, hr.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Profiles"), t.semibold(15.0), t.text);

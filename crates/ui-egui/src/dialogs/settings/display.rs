@@ -1,6 +1,6 @@
 use super::appearance::appearance;
-use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
+use super::widgets::{choices, heading, hint, path_label, row};
+use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, check, json, register};
 
 // ---------------------------------------------------------------------------------- Interface
 
@@ -118,7 +118,7 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
     use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
     heading(ui, t, crate::i18n::tr("Loupe View"));
     let mut show = app.ui.info_overlay != I::Off;
-    if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay") {
+    if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay").changed() {
         app.ui.info_overlay = if show { I::Basic } else { I::Off };
     }
     ui.add_enabled_ui(show, |ui| {
@@ -155,7 +155,7 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         // one Info at most shows briefly: ticking one unticks the other
         let info = if n == 1 { I::Basic } else { I::Exposure };
         let mut briefly = app.ui.settings.loupe_info.briefly == info;
-        if check(ui, &format!("viewOptions.briefly{n}"), &mut briefly, "Show briefly when photo changes") {
+        if check(ui, &format!("viewOptions.briefly{n}"), &mut briefly, "Show briefly when photo changes").changed() {
             app.ui.settings.loupe_info.briefly = if briefly { info } else { I::Off };
         }
     }

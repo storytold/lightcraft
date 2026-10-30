@@ -1,5 +1,6 @@
 //! The Masking panel: create masks, list them, edit components and local adjustments.
 
+use crate::check::{Check, check};
 use egui::{Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Track};
@@ -10,7 +11,7 @@ use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
+use crate::widgets::{choice_button, command_button, divider, icon_button, icon_command, one_line, register, slider, text_button};
 
 const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, step: f64, decimals: u8, track: Track) -> ControlSpec {
     ControlSpec { id, label, section: Section::Light, min, max, default: 0.0, step, decimals, track }
@@ -183,7 +184,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // the bar takes what the Details button leaves
                 let details = ui.spacing().interact_size.x + 30.0;
                 sam_download_bar(ui, download.done, download.total, (ui.available_width() - details).max(96.0));
-                if text_button(ui, "maskSamDetails", crate::i18n::tr("Details"), false).clicked() {
+                if command_button(ui, "maskSamDetails", crate::i18n::tr("Details")).clicked() {
                     app.offer_sam_download(None);
                 }
             });
@@ -289,9 +290,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // type; Describe… opens its field here)
                 ui.horizontal(|ui| {
                     ui.add_space(30.0);
-                    let plus = text_button(ui, &format!("maskPlus:{}", m.id), "+", false).on_hover_text(crate::i18n::tr("Add to this mask"));
+                    let plus = command_button(ui, &format!("maskPlus:{}", m.id), "+").on_hover_text(crate::i18n::tr("Add to this mask"));
                     egui::Popup::menu(&plus).show(|ui| component_menu(app, ui, "add"));
-                    let minus = text_button(ui, &format!("maskMinus:{}", m.id), "−", false).on_hover_text(crate::i18n::tr("Subtract from this mask"));
+                    let minus = command_button(ui, &format!("maskMinus:{}", m.id), "−").on_hover_text(crate::i18n::tr("Subtract from this mask"));
                     egui::Popup::menu(&minus).show(|ui| component_menu(app, ui, "subtract"));
                 });
                 describe_field(app, ui, false);
@@ -363,16 +364,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         // wraps: the five actions are wider than a narrow panel
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
-            let add = text_button(ui, "maskAddComp", crate::i18n::tr("Add"), false);
+            let add = command_button(ui, "maskAddComp", crate::i18n::tr("Add"));
             egui::Popup::menu(&add).show(|ui| component_menu(app, ui, "add"));
-            let sub = text_button(ui, "maskSubComp", crate::i18n::tr("Subtract"), false);
+            let sub = command_button(ui, "maskSubComp", crate::i18n::tr("Subtract"));
             egui::Popup::menu(&sub).show(|ui| component_menu(app, ui, "subtract"));
-            let int = text_button(ui, "maskIntComp", crate::i18n::tr("Intersect"), false);
+            let int = command_button(ui, "maskIntComp", crate::i18n::tr("Intersect"));
             egui::Popup::menu(&int).show(|ui| component_menu(app, ui, "intersect"));
             if text_button(ui, "maskInvert", crate::i18n::tr("Invert"), m.invert).clicked() {
                 let _ = app.run("mask.invert", json!({}));
             }
-            if icon_button(ui, "maskDelete", Icon::Trash, vec2(26.0, 24.0), false, true, "Delete mask").clicked() {
+            if icon_command(ui, "maskDelete", Icon::Trash, vec2(26.0, 24.0), true, "Delete mask").clicked() {
                 let _ = app.run("mask.delete", json!({}));
             }
         });
@@ -501,7 +502,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.ui.mask_overlay_opacity = v as f32;
     }
     let mut pins = app.ui.mask_pins;
-    if ui.checkbox(&mut pins, crate::i18n::tr("Show Pins")).changed() {
+    if check(ui, "maskPins", &mut pins, "Show Pins").changed() {
         let _ = app.run("view.maskPins", json!({"show": pins}));
     }
     if app.ui.mask_pins {
@@ -589,8 +590,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 app.run("mask.update", json!({"component": comp, "shape": MaskShape::LuminanceRange { lo, hi, lo_feather: f, hi_feather: f }}))
             });
             let mut map = app.ui.mask_overlay && app.ui.mask_overlay_mode == "colorOnBw";
-            let r = ui.checkbox(&mut map, crate::i18n::tr("Show Luminance Map"));
-            register(ui, format!("check:lumMap{comp}"), r.rect);
+            let r = check(ui, &format!("lumMap{comp}"), &mut map, "Show Luminance Map");
             if r.changed() {
                 // the luminance map: the photo in black & white with the selected range tinted
                 if map {
@@ -878,25 +878,21 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Brush")).font(t.semibold(13.0)));
-            if text_button(ui, "brushAdd", crate::i18n::tr("Add"), !app.ui.brush_erase).clicked() {
+            if choice_button(ui, "brushAdd", crate::i18n::tr("Add"), !app.ui.brush_erase).clicked() {
                 app.ui.brush_erase = false;
             }
-            if text_button(ui, "brushErase", crate::i18n::tr("Erase"), app.ui.brush_erase).clicked() {
+            if choice_button(ui, "brushErase", crate::i18n::tr("Erase"), app.ui.brush_erase).clicked() {
                 app.ui.brush_erase = true;
             }
         });
         let mut auto = app.ui.brush_auto_mask;
-        if ui
-            .checkbox(&mut auto, crate::i18n::tr("Auto Mask"))
-            .on_hover_text(crate::i18n::tr("Paint only areas like the one under the brush"))
-            .changed()
-        {
+        if Check::new("brushAutoMask", &mut auto, "Auto Mask").tooltip("Paint only areas like the one under the brush").show(ui).changed() {
             app.ui.brush_auto_mask = auto;
         }
         let mut pressure = app.ui.brush_pressure;
-        if ui
-            .checkbox(&mut pressure, crate::i18n::tr("Pen Pressure"))
-            .on_hover_text(crate::i18n::tr("A pen's pressure sets the size and flow of the brush"))
+        if Check::new("brushPressure", &mut pressure, "Pen Pressure")
+            .tooltip("A pen's pressure sets the size and flow of the brush")
+            .show(ui)
             .changed()
         {
             app.ui.brush_pressure = pressure;

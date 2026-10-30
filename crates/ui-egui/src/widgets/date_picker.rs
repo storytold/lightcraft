@@ -237,7 +237,7 @@ impl<'a> DatePicker<'a> {
     /// The button and, while open, the popup. The response is `changed()` when a date was picked.
     pub fn show(self, ui: &mut Ui) -> Response {
         let DatePicker { id, value, precisions, min, max, today } = self;
-        let mut button = crate::widgets::icon_button(ui, &format!("datePicker:{id}"), Icon::Calendar, vec2(24.0, 22.0), false, true, "Pick a date");
+        let mut button = crate::widgets::icon_command(ui, &format!("datePicker:{id}"), Icon::Calendar, vec2(24.0, 22.0), true, "Pick a date");
         register(ui, format!("datePicker:{id}"), button.rect);
         let state = egui::Id::unique(("datePicker", id.as_str()));
         if button.clicked() {
@@ -256,7 +256,7 @@ impl<'a> DatePicker<'a> {
             if precisions.len() > 1 {
                 ui.horizontal(|ui| {
                     for p in precisions {
-                        let r = ui.selectable_label(view.precision == *p, crate::i18n::tr(p.label()));
+                        let r = crate::widgets::choice_button(ui, &format!("datePickerPrecision-{}-{id}", p.id()), p.label(), view.precision == *p);
                         register(ui, format!("datePickerPrecision:{}:{id}", p.id()), r.rect);
                         if r.clicked() {
                             view.precision = *p;

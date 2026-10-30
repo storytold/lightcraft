@@ -34,7 +34,8 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 open = true;
                 set_tree_open(ui, open_id, true);
             }
-            let resp = Row::new(&format!("folder:{}", a.id.0), Icon::Folder, &a.name).indent(indent).sense(Sense::click_and_drag()).show(app, ui);
+            let resp =
+                Row::new(&format!("folder:{}", a.id.0), Icon::Folder, &a.name).indent(indent).sense(Sense::click_and_drag()).command().show(app, ui);
             // a folder is no source, so its row folds it too; the triangle is the same click, aimed
             let has_children = all.get(&Some(a.id)).is_some_and(|v| !v.is_empty());
             if resp.drag_started() {

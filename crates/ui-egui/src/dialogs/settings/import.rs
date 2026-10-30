@@ -1,6 +1,6 @@
 use super::general::{cameras, preset_combo};
-use super::widgets::{button_width, check, choices, heading, hint, path_label, row};
-use super::{LightcraftApp, RichText, Tokens, json, register};
+use super::widgets::{button_width, choices, heading, hint, path_label, row};
+use super::{LightcraftApp, RichText, Tokens, check, json, register};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
@@ -13,7 +13,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
     });
     let mut per = d.per_camera;
     row(ui, t, "", |ui| {
-        if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults") {
+        if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults").changed() {
             let _ = app.run("library.preferences", json!({"import": {"perCamera": per}}));
         }
     });
@@ -117,7 +117,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
     }
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
-    if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
+    if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars").changed() {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
     }
     row(ui, t, crate::i18n::tr("Sidecar names"), |ui| {
@@ -133,7 +133,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         check(ui, "settings.importDropped", &mut app.ui.settings.import_dropped_directly, "Import dropped files without review");
         heading(ui, t, crate::i18n::tr("Cameras and Cards"));
         let mut on_card = d.show_on_card;
-        if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected") {
+        if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected").changed() {
             let _ = app.run("library.preferences", json!({"import": {"showOnCard": on_card}}));
         }
         heading(ui, t, crate::i18n::tr("Auto Import"));
@@ -166,7 +166,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
-                if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
+                if check(ui, "settings.autoImportCopy", &mut copy, "Copy into the library (else use the files where they are)").changed() {
                     let _ = app.run("library.autoImport", json!({"copy": copy}));
                 }
             });

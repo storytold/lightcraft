@@ -91,11 +91,19 @@ pub(super) struct Row<'a> {
     sense: Sense,
     /// a colour label's dot, before the count
     mark: Option<egui::Color32>,
+    /// a row that does something when pressed (Browse Folder…, folding an album folder), not one that shows a place
+    command: bool,
 }
 
 impl<'a> Row<'a> {
     pub(super) fn new(id: &'a str, icon: Icon, label: &'a str) -> Self {
-        Row { id, icon, label, spoken: None, count: None, selected: false, indent: 0.0, sense: Sense::click(), mark: None }
+        Row { id, icon, label, spoken: None, count: None, selected: false, indent: 0.0, sense: Sense::click(), mark: None, command: false }
+    }
+
+    /// The row does something when pressed: a screen reader says "button", not whether it is selected.
+    pub(super) fn command(mut self) -> Self {
+        self.command = true;
+        self
     }
 
     pub(super) fn spoken(mut self, spoken: &'a str) -> Self {
@@ -136,7 +144,7 @@ impl<'a> Row<'a> {
 
 /// Draw a [`Row`].
 fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Response {
-    let Row { id, icon, label, spoken, count, selected, indent, sense, mark } = row;
+    let Row { id, icon, label, spoken, count, selected, indent, sense, mark, command } = row;
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);
@@ -151,7 +159,8 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
         Some(n) => crate::i18n::tr_format!("{label}, {n} photos", label = said, n = n),
         None => said.to_string(),
     };
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
+    let press = if command { crate::widgets::Press::Command } else { crate::widgets::Press::Toggle(selected) };
+    crate::widgets::announce_button(&resp, true, &name, press);
     // what is visible of the row: when the sidebar is scrolled sideways its bars and counts end at
     // the panel's edge, not at the end of the (wider) content
     let visible_right: f32 = ui.data(|d| d.get_temp(egui::Id::unique("left-visible-right"))).unwrap_or(f32::MAX);

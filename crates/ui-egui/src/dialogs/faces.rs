@@ -8,11 +8,12 @@
 //! size and SHA-256), installs it, starts using it and switches recognition on, with no further question. "Open
 //! page" opens the model's own page in the browser for anything else.
 
+use crate::check::{Check, check};
 use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::panels::settings::{check, heading, hint};
+use crate::panels::settings::{heading, hint};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -169,8 +170,7 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
     heading(ui, t, "Processor");
     let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
-    let r = ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only"));
-    register(ui, "check:settings.facesCpuOnly", r.rect);
+    let r = check(ui, "settings.facesCpuOnly", &mut cpu, "Run face models on the CPU only");
     if r.changed() {
         match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
             Ok(_) => app.caches.faces_epoch += 1,
@@ -254,10 +254,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // (issue #678), so it can only be switched off, with the hint below saying what to do first
     let usable =
         list["embedder"].as_str().is_some_and(|id| list["models"].as_array().into_iter().flatten().any(|m| m["id"] == id && m["installed"] == true));
-    let r = ui
-        .add_enabled(on || (runtime && usable), egui::Checkbox::new(&mut on, crate::i18n::tr("Recognise faces (experimental)")))
-        .on_disabled_hover_text(crate::i18n::tr("Choose a model below (Use) to start."));
-    register(ui, "check:settings.facesEnabled", r.rect);
+    let can_toggle = on || (runtime && usable);
+    let r = Check::new("settings.facesEnabled", &mut on, "Recognise faces (experimental)")
+        .enabled(can_toggle)
+        .disabled_reason("Choose a model below (Use) to start.")
+        .show(ui);
     if r.changed() {
         match app.run("faces.enable", json!({"enabled": on})) {
             Ok(_) => app.caches.faces_epoch += 1,

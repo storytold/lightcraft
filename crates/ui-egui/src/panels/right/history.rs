@@ -1,11 +1,11 @@
-use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Sense, Tokens, header, json, padded, paint, pos2, register, text_button, vec2};
+use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Sense, Tokens, command_button, header, json, padded, paint, pos2, register, vec2};
 
 pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Versions");
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
-        if text_button(ui, "versionCreate", crate::i18n::tr("Create Version"), false).clicked() {
+        if command_button(ui, "versionCreate", crate::i18n::tr("Create Version")).clicked() {
             let _ = app.run("version.create", json!({}));
         }
         ui.add_space(8.0);

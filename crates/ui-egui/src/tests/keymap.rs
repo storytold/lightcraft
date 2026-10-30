@@ -139,6 +139,32 @@ fn record(h: &mut Headless, search: &str, id: &str) {
     assert_eq!(h.app.recording_shortcut.as_deref(), Some(id));
 }
 
+/// "Press keys…" is drawn on the button's pressed fill, which is light in Silver and Paper.
+#[test]
+fn the_text_of_a_row_being_recorded_reads_on_its_button_in_every_theme() {
+    use crate::button::contrast;
+    use crate::theme::{ThemeKind, Tokens};
+    for kind in ThemeKind::ALL {
+        let mut h = demo();
+        h.app.ui.settings.select_theme(kind);
+        h.step();
+        h.step();
+        record(&mut h, "survey", "view.survey");
+        h.step();
+        let ink = h
+            .view
+            .painted_shapes()
+            .iter()
+            .find_map(|s| match s {
+                egui::Shape::Text(t) if t.galley.job.text == "Press keys…" => t.galley.job.sections.first().map(|s| s.format.color),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{kind:?}: no \"Press keys…\" on screen"));
+        let c = contrast(ink, Tokens::for_kind(kind).pressed);
+        assert!(c >= 4.5, "{kind:?}: \"Press keys…\" on the recording button is {c:.2}:1");
+    }
+}
+
 /// Pressing ⌘ (a key event of its own) before S used to record `Cmd+SuperLeft`, so no ⌘ shortcut
 /// could be set; ⌘C/⌘X/⌘V arrive as copy/cut/paste events, not keys, and were ignored.
 #[test]

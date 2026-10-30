@@ -139,7 +139,7 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &
     field(ui, label, |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for (i, (v, l)) in options.iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() {
+            if crate::widgets::choice_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() {
                 *value = *v;
             }
         }

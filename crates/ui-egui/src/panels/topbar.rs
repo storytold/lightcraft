@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{icon_button, register};
+use crate::widgets::{icon_button, icon_command, register};
 
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click acts as the system setting says. Made before the bar's widgets so they win the click.
@@ -69,10 +69,10 @@ fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
             let _ = app.run("view.leftPanel", json!({}));
         }
         ui.add_space(8.0);
-        if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
+        if icon_command(ui, "back", Icon::Back, vec2(30.0, 30.0), true, crate::i18n::tr("Back")).clicked() {
             let _ = app.run("view.back", json!({}));
         }
-        icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
+        icon_command(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, crate::i18n::tr("Forward"));
         if !app.native_menu {
             // no native menu bar (web, Windows, Linux): menus in the top bar
             ui.add_space(10.0);

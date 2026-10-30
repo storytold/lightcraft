@@ -1,6 +1,6 @@
 use super::display::duration_slider;
-use super::widgets::{check, choices, heading, hint, row};
-use super::{LightcraftApp, Tokens, Value, json, register};
+use super::widgets::{choices, heading, hint, row};
+use super::{LightcraftApp, Tokens, Value, check, json, register};
 
 /// The Slideshow tab: the slide preview, then the settings, in one column the width of the page
 /// (the page scrolls; a column beside the preview would be wider than the window). Without
@@ -48,7 +48,7 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Playback"));
     let s = app.session.slideshow.clone();
     let mut v = s.manual;
-    if check(ui, "settings.slideshowManual", &mut v, "Manual slideshow") {
+    if check(ui, "settings.slideshowManual", &mut v, "Manual slideshow").changed() {
         let _ = app.run("slideshow.playback", json!({"manual": v}));
     }
     hint(ui, t, crate::i18n::tr("A manual slideshow shows each slide until → or ← changes it. Exports still use the slide duration."));
@@ -94,15 +94,15 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     let mut v = s.random_order;
-    if check(ui, "settings.slideshowRandom", &mut v, "Random order") {
+    if check(ui, "settings.slideshowRandom", &mut v, "Random order").changed() {
         let _ = app.run("slideshow.playback", json!({"randomOrder": v}));
     }
     let mut v = s.repeat;
-    if check(ui, "settings.slideshowRepeat", &mut v, "Repeat (off: the slideshow ends after the last photo)") {
+    if check(ui, "settings.slideshowRepeat", &mut v, "Repeat (off: the slideshow ends after the last photo)").changed() {
         let _ = app.run("slideshow.playback", json!({"repeat": v}));
     }
     let mut v = s.prepare_previews;
-    if check(ui, "settings.slideshowPrepare", &mut v, "Prepare previews in advance") {
+    if check(ui, "settings.slideshowPrepare", &mut v, "Prepare previews in advance").changed() {
         let _ = app.run("slideshow.playback", json!({"preparePreviews": v}));
     }
     hint(

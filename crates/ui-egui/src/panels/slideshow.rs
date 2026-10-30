@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use crate::LightcraftApp;
 use crate::icons::Icon;
 use crate::render::Slot;
-use crate::widgets::{icon_button, register};
+use crate::widgets::{icon_command, register};
 
 /// Slides prepared ahead of the one up.
 pub const AHEAD: usize = 2;
@@ -403,14 +403,14 @@ fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, now: f64) 
     child.spacing_mut().item_spacing.x = 4.0;
     let size = vec2(36.0, 36.0);
     let mut fire = None;
-    if icon_button(&mut child, "slideshowPrevious", Icon::ChevronLeft, size, false, true, "Previous slide (←)").clicked() {
+    if icon_command(&mut child, "slideshowPrevious", Icon::ChevronLeft, size, true, "Previous slide (←)").clicked() {
         fire = Some("slideshow.previous");
     }
     let (icon, tip) = if paused { (Icon::Play, "Play (Space)") } else { (Icon::Pause, "Pause (Space)") };
-    if icon_button(&mut child, "slideshowPlayPause", icon, size, false, true, tip).clicked() {
+    if icon_command(&mut child, "slideshowPlayPause", icon, size, true, tip).clicked() {
         fire = Some("slideshow.togglePause");
     }
-    if icon_button(&mut child, "slideshowNext", Icon::ChevronRight, size, false, true, "Next slide (→)").clicked() {
+    if icon_command(&mut child, "slideshowNext", Icon::ChevronRight, size, true, "Next slide (→)").clicked() {
         fire = Some("slideshow.next");
     }
     let (r, _) = child.allocate_exact_size(vec2(118.0, 36.0), egui::Sense::hover());
@@ -420,7 +420,7 @@ fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, now: f64) 
         None => format!("{n} / {of}"),
     };
     child.painter().text(r.center(), Align2::CENTER_CENTER, label, t.font(13.0), Color32::from_gray(230).gamma_multiply(alpha));
-    if icon_button(&mut child, "slideshowEnd", Icon::Close, size, false, true, "End slideshow (Esc)").clicked() {
+    if icon_command(&mut child, "slideshowEnd", Icon::Close, size, true, "End slideshow (Esc)").clicked() {
         fire = Some("slideshow.end");
     }
     if let Some(id) = fire {

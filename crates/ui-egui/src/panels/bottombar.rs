@@ -8,7 +8,7 @@ use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
-use crate::widgets::{icon_button, register};
+use crate::widgets::{icon_button, icon_choice, icon_command, register};
 
 const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
@@ -35,7 +35,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if left_rect.width() >= 270.0 {
                         for &(id, icon, mode, tip) in VIEW_MODES {
-                            if icon_button(ui, id, icon, vec2(32.0, 32.0), app.ui.view == mode, true, tip).clicked() {
+                            if icon_choice(ui, id, icon, vec2(32.0, 32.0), app.ui.view == mode, true, tip).clicked() {
                                 let _ = app.run(&format!("view.{id}"), json!({}));
                             }
                         }
@@ -43,11 +43,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
                         ui.painter().rect_filled(sep, 0.0, t.button_border);
                         ui.add_space(10.0);
-                        let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, "Sort");
+                        let sort = icon_command(ui, "sort", Icon::Sort, vec2(30.0, 30.0), true, "Sort");
                         egui::Popup::menu(&sort).show(|ui| sort_menu(app, ui));
                     } else {
                         let current_icon = VIEW_MODES.iter().find(|(_, _, mode, _)| *mode == app.ui.view).map_or(Icon::More, |(_, icon, _, _)| *icon);
-                        let more = icon_button(ui, "viewOptions", current_icon, vec2(40.0, 32.0), true, true, "View");
+                        let more = crate::widgets::icon_menu(ui, "viewOptions", current_icon, vec2(40.0, 32.0), true, "View");
                         paint(
                             ui.painter(),
                             Rect::from_center_size(more.rect.right_bottom() - vec2(5.0, 5.0), vec2(7.0, 7.0)),
@@ -114,14 +114,15 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let flag = active.as_ref().map(|p| p.flag).unwrap_or_default();
     for (id, icon, f) in [("unflag", Icon::Circle, Flag::None), ("pick", Icon::FlagPick, Flag::Pick), ("reject", Icon::FlagReject, Flag::Reject)] {
         let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-        crate::widgets::announce_selected(
+        crate::widgets::announce_button(
             &resp,
+            resp.enabled(),
             crate::i18n::tr(match f {
                 Flag::None => "Unflagged",
                 Flag::Pick => "Pick",
                 Flag::Reject => "Reject",
             }),
-            flag == f,
+            crate::widgets::Press::Choice(flag == f),
         );
         register(&pill_ui, format!("flag:{id}"), r);
         let on = flag == f && f != Flag::None;

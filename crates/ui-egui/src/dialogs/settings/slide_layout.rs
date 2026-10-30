@@ -8,6 +8,7 @@
 //! by the same composer playback uses; it is requested once the layout has been still for
 //! [`DEBOUNCE`] seconds, so a drag doesn't queue a render per frame.
 
+use crate::check::{Check, check};
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::slide::{Aspect, SlideSettings};
 use lightcraft_engine::slide_template::SlideLook;
@@ -15,7 +16,7 @@ use lightcraft_slideshow::{MARGIN_MAX, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STR
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::panels::settings::{check, choices, heading, hint, row};
+use crate::panels::settings::{choices, heading, hint, row};
 use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -73,7 +74,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
 /// A checkbox (`check:settings.{id}`) for `key`; true when it is on.
 fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: bool, label: &str) -> bool {
     let mut v = value;
-    if check(ui, &format!("settings.{id}"), &mut v, label) {
+    if check(ui, &format!("settings.{id}"), &mut v, label).changed() {
         set(app, json!({ key: v }));
     }
     v
@@ -131,8 +132,8 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     let active = app.session.active();
     let mut on = s.background_image.is_some();
-    let r = ui.add_enabled(on || active.is_some(), egui::Checkbox::new(&mut on, crate::i18n::tr("Background image")));
-    register(ui, "check:settings.slideshowBackgroundImage", r.rect);
+    let can_toggle = on || active.is_some();
+    let r = Check::new("settings.slideshowBackgroundImage", &mut on, "Background image").enabled(can_toggle).show(ui);
     if r.changed() {
         set(app, json!({"backgroundImage": if on { active.map(|a| a.0) } else { None }}));
     }
@@ -142,7 +143,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let text = name.unwrap_or_else(|| crate::i18n::tr("(not in the library)").to_string());
             ui.label(egui::RichText::new(text).color(t.text));
             if let Some(a) = active.filter(|a| a.0 != bid)
-                && crate::widgets::text_button(ui, "slideshowUseSelected", "Use selected photo", false).clicked()
+                && crate::widgets::command_button(ui, "slideshowUseSelected", "Use selected photo").clicked()
             {
                 set(app, json!({"backgroundImage": a.0}));
             }
@@ -152,7 +153,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, "Select a photo, then turn this on to fill the slide behind every photo with it.");
     }
     ui.add_space(4.0);
-    if crate::widgets::text_button(ui, "slideshowResetLayout", "Reset layout", false).clicked() {
+    if crate::widgets::command_button(ui, "slideshowResetLayout", "Reset layout").clicked() {
         reset(app);
     }
 }

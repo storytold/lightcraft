@@ -11,6 +11,7 @@ use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, PhotoId, S
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::check::check;
 use crate::icons::{Icon, paint};
 use crate::render::Slot;
 use crate::state::ViewMode;
@@ -1019,8 +1020,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             ui.spacing_mut().item_spacing.x = 12.0;
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
             let mut sub = b.subfolders;
-            let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
-            register(ui, "check:includeSubfolders", c.rect);
+            let c = check(ui, "includeSubfolders", &mut sub, "Include subfolders");
             if c.changed() {
                 let _ = app.run("library.browse", json!({"path": b.path, "subfolders": sub}));
             }

@@ -1,4 +1,4 @@
-use super::{Icon, LightcraftApp, PhotoId, Sense, Tokens, divider, header, json, padded, register, text_button, vec2};
+use super::{Icon, LightcraftApp, PhotoId, Sense, Tokens, choice_button, command_button, divider, header, json, padded, register, vec2};
 
 pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
@@ -88,7 +88,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
         small(ui, "File Name");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::icon_button(ui, "infoRename", Icon::Pencil, vec2(20.0, 20.0), false, true, "Rename…").clicked() {
+            if crate::widgets::icon_command(ui, "infoRename", Icon::Pencil, vec2(20.0, 20.0), true, "Rename…").clicked() {
                 let _ = app.run("dialog.rename", json!({}));
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -105,9 +105,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.add(egui::Label::new(egui::RichText::new(path).size(12.0).color(t.text_label)).truncate());
             if crate::menus::ui_enabled(app, "app.showInFinder") {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::widgets::icon_button(ui, "infoReveal", Icon::Folder, vec2(20.0, 20.0), false, true, crate::menus::reveal_label())
-                        .clicked()
-                    {
+                    if crate::widgets::icon_command(ui, "infoReveal", Icon::Folder, vec2(20.0, 20.0), true, crate::menus::reveal_label()).clicked() {
                         let _ = app.run("app.showInFinder", json!({}));
                     }
                 });
@@ -116,7 +114,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(4.0);
         small(ui, "Captured");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::icon_button(ui, "editCaptureTime", Icon::Pencil, vec2(20.0, 20.0), false, true, "Edit Capture Time…").clicked() {
+            if crate::widgets::icon_command(ui, "editCaptureTime", Icon::Pencil, vec2(20.0, 20.0), true, "Edit Capture Time…").clicked() {
                 let _ = app.run("dialog.captureTime", json!({}));
             }
             let cap = p.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| "—".into());
@@ -160,7 +158,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
+                if command_button(ui, "showOnMap", crate::i18n::tr("Show on Map"))
                     .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
                     .clicked()
                 {
@@ -170,7 +168,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     }
                 }
             });
-            if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
+            if command_button(ui, "fillLocation", crate::i18n::tr("Fill Location"))
                 .on_hover_text(format!(
                     "{}\n{}",
                     crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
@@ -214,7 +212,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         ui.add_space(10.0);
-        if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
+        if command_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"))
             .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))
             .clicked()
         {
@@ -404,7 +402,7 @@ fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         let on = app.ui.settings.info_selected_photos;
         for (id, label, selected) in [("infoFor-target", "Target Photo", false), ("infoFor-selected", "Selected Photos", true)] {
-            if text_button(ui, id, label, on == selected).clicked() && on != selected {
+            if choice_button(ui, id, label, on == selected).clicked() && on != selected {
                 let _ = app.run("view.infoSelectedPhotos", json!({"on": selected}));
             }
         }

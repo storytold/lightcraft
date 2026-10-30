@@ -5,6 +5,7 @@
 //! [`crate::shortcuts::assign`] into [`crate::state::AppSettings::keymap`] (saved in `ui.json`),
 //! the same path as the `app.setShortcut` command.
 
+use crate::check::check;
 use egui::RichText;
 
 use crate::LightcraftApp;
@@ -28,8 +29,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(crate::i18n::tr("Search commands or keys")).desired_width(220.0));
         register(ui, "field:shortcutsSearch", r.rect);
-        let r = ui.checkbox(&mut show_all, crate::i18n::tr("Show commands without a shortcut"));
-        register(ui, "check:shortcuts.showAll", r.rect);
+        check(ui, "shortcuts.showAll", &mut show_all, "Show commands without a shortcut");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = ui.add_enabled(!app.ui.settings.keymap.is_empty(), egui::Button::new(crate::i18n::tr("Reset All")));
             register(ui, "button:shortcutsResetAll", r.rect);
@@ -85,7 +85,7 @@ fn menu_text(sc: &str, mac: bool) -> String {
 /// One editable command row: its label and id, a click-to-record shortcut button, and buttons
 /// that clear or restore it. The restore button is enabled when a saved binding exists or the
 /// declared default is currently yielded to another command.
-fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc: Option<&str>, mac: bool) {
+pub(crate) fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc: Option<&str>, mac: bool) {
     // a declared key that yields to another command's saved key counts as changed: ↺ takes it back
     let changed = app.ui.settings.keymap.contains_key(b.id) || (sc.is_none() && b.default.is_some());
     let mut name = RichText::new(crate::i18n::tr(b.label)).color(t.text);
@@ -100,16 +100,21 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     };
     ui.label(name).on_hover_text(hover);
     let recording = app.recording_shortcut.as_deref() == Some(b.id);
-    let text = if recording {
-        RichText::new(crate::i18n::tr("Press keys…")).color(egui::Color32::WHITE)
+    // an unset shortcut shows a dimmed dash; the button being recorded is filled with the pressed color, which the
+    // theme's own text reads on in every theme (white did not on Silver and Paper)
+    let (text, ink) = if recording {
+        (crate::i18n::tr("Press keys…").to_string(), None)
     } else {
         match sc {
-            Some(sc) => RichText::new(menu_text(sc, mac)).color(t.text),
-            None => RichText::new("—").color(t.text_dim),
+            Some(sc) => (menu_text(sc, mac), None),
+            None => ("—".to_string(), Some(t.text_dim)),
         }
     };
-    let r = ui.add(egui::Button::new(text).min_size(egui::vec2(110.0, 0.0)).selected(recording));
-    register(ui, format!("button:shortcut-{}", b.id), r.rect);
+    let r = crate::widgets::text_button_sized(ui, &format!("shortcut-{}", b.id), &text, recording, 110.0, 24.0, ink);
+    // the button is a fixed 110 pt and cuts what is wider (a spelled-out shortcut, a longer language's
+    // "Press keys…"); hovering shows it whole. The text is measured as the button lays it out.
+    let cut = crate::widgets::one_line(ui.painter(), &text, t.semibold(11.5), ink.unwrap_or(t.text), 110.0 - 12.0).elided;
+    let r = if cut { r.on_hover_text(&text) } else { r };
     if r.clicked() {
         app.recording_shortcut = if recording { None } else { Some(b.id.to_string()) };
     }

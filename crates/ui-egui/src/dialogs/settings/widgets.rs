@@ -77,19 +77,12 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
 }
 
-/// A checkbox addressable as `check:{id}`; true when toggled.
-pub(crate) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    let r = ui.checkbox(value, crate::i18n::tr(label));
-    register(ui, format!("check:{id}"), r.rect);
-    r.changed()
-}
-
 /// Mutually exclusive buttons (`button:{id}-{index}`).
 pub(crate) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options: &[(V, &str)], value: &mut V) -> bool {
     let mut changed = false;
     ui.spacing_mut().item_spacing.x = 4.0;
     for (i, (v, l)) in options.iter().enumerate() {
-        if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() && *value != *v {
+        if crate::widgets::choice_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() && *value != *v {
             *value = *v;
             changed = true;
         }

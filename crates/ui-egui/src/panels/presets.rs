@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, register, slider};
+use crate::widgets::{divider, icon_command, register, slider};
 use crate::{HoverPreview, LightcraftApp};
 
 /// Long edge of preset thumbnails (px).
@@ -95,20 +95,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .max_rect(Rect::from_min_max(pos2(hr.right() - 80.0, hr.top()), hr.right_bottom()))
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
-        if icon_button(
-            &mut hdr,
-            "presetCreate",
-            Icon::Plus,
-            vec2(28.0, 28.0),
-            false,
-            app.session.active().is_some(),
-            crate::i18n::tr("Create Preset…"),
-        )
-        .clicked()
+        if icon_command(&mut hdr, "presetCreate", Icon::Plus, vec2(28.0, 28.0), app.session.active().is_some(), crate::i18n::tr("Create Preset…"))
+            .clicked()
         {
             app.ui.dialog = Some(crate::state::Dialog::create_preset());
         }
-        let more = icon_button(&mut hdr, "presetMore", Icon::More, vec2(28.0, 28.0), false, true, crate::i18n::tr("More preset options"));
+        let more = icon_command(&mut hdr, "presetMore", Icon::More, vec2(28.0, 28.0), true, crate::i18n::tr("More preset options"));
         egui::Popup::menu(&more).show(|ui| {
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui, "presetMenu:thumbnails", r.rect);

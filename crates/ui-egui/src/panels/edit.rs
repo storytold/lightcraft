@@ -1,6 +1,7 @@
 //! The Edit panel: histogram, Auto/B&W, profile, and the Light / Color / Effects / Detail / Optics
 //! sections, built from the engine's control specs.
 
+use crate::check::{Check, check};
 use egui::epaint::{Mesh, Vertex};
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -15,7 +16,7 @@ use crate::icons::{Icon, paint};
 use crate::render::Slot;
 use crate::state::RightPanel;
 use crate::theme::Tokens;
-use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, section_header, slider, text_button};
+use crate::widgets::{BAND_COLORS, SliderOut, command_button, divider, flyout_row, hex, register, section_header, slider, text_button};
 
 mod curve;
 mod grading;
@@ -69,7 +70,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
+            if command_button(ui, "auto", crate::i18n::tr("Auto")).clicked() {
                 let _ = app.run("develop.auto", json!({}));
                 app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
             }
@@ -85,7 +86,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
+                if command_button(ui, "reset", crate::i18n::tr("Reset"))
                     .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
                     .clicked()
                 {
@@ -112,7 +113,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
+                    if command_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off")).clicked() {
                         let _ = app.run("develop.autoSync", json!({"on": false}));
                     }
                 });
@@ -132,16 +133,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let below = r.rect.bottom();
             egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::icon_button(
-                    ui,
-                    "profileBrowser",
-                    Icon::ProfileGrid,
-                    vec2(28.0, 28.0),
-                    false,
-                    true,
-                    crate::i18n::tr("Browse Profiles"),
-                )
-                .clicked()
+                if crate::widgets::icon_command(ui, "profileBrowser", Icon::ProfileGrid, vec2(28.0, 28.0), true, crate::i18n::tr("Browse Profiles"))
+                    .clicked()
                 {
                     let _ = app.run("panel.profiles", json!({}));
                 }
@@ -157,9 +150,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.session.source_info(id).local_tone.is_some() {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
             let mut on = d.profile.camera_local_tone;
-            let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
-            crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
-            if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
+            let tip = "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it";
+            if Check::new("profile.cameraLocalTone", &mut on, "Camera local tone mapping").tooltip(tip).show(ui).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
         });
@@ -328,11 +320,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
-            if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
+            if check(ui, "optics.removeCa", &mut ca, "Remove Chromatic Aberration").changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
             }
             let mut lp = d.optics.lens_profile;
-            if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
+            if check(ui, "optics.lensProfile", &mut lp, "Enable Lens Corrections").changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
             if lp && !has_lens {

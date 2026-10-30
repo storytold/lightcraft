@@ -61,7 +61,8 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
         let reveal = local.owner == Some(i);
         folder_tree(app, ui, path, name, path, 0.0, current, reveal, transient);
     }
-    if app.services.pick_folder.is_some() && Row::new("local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…")).show(app, ui).clicked() {
+    if app.services.pick_folder.is_some() && Row::new("local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…")).command().show(app, ui).clicked()
+    {
         let picked = app.services.pick_folder.as_mut().and_then(|f| f());
         if let Some(path) = picked {
             match app.run("library.browse", json!({"path": path})) {
@@ -80,6 +81,7 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
     if hidden > 0 {
         let label = crate::i18n::tr_format!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
         let resp = Row::new("local:restoreHidden", Icon::Folder, &label)
+            .command()
             .show(app, ui)
             .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"));
         if let [(_, only)] = now.hidden.as_slice() {
