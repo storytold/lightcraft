@@ -1,12 +1,18 @@
 //! Background tasks in flight (issue #345): imports, exports, preview builds, downloads, the face scan… Each one
 //! registers here while it runs, so every frontend can show them in one place (the desktop app's activity stack) and
-//! cancel the ones that can be cancelled (`activity.list`, `activity.cancel`).
+//! cancel the ones that can be cancelled (`activity.list`, `activity.cancel`), and skip what a task is stuck waiting
+//! on (`activity.skip`).
 //!
 //! A job holds a [`TaskGuard`] for as long as it runs; dropping it — when the job ends, fails or its thread unwinds
 //! from a panic — removes the row, so a dead worker never leaves a stuck bar. Jobs keep the cancel flag they already
 //! check between files or photos: the guard adopts it ([`Cancel::Flag`]), so the stack's ✕, `activity.cancel` and the
 //! job's own Cancel all set the same atomic. Numbers are worded by the frontend from `done`, `total` and [`Unit`]; a
 //! detail set here is a name (a file, a model), never a sentence, so the frontend can translate everything else.
+//!
+//! A job that is waiting on something that may never answer (a file on a network drive that stopped responding) says
+//! so ([`TaskGuard::waiting_on`]): the row then shows what it waits for and for how long ([`TaskInfo::stalled`]) and
+//! offers Skip (`activity.skip`, [`Activity::skip`]). The request reaches the job through [`TaskGuard::take_skip`];
+//! what skipping does is up to the job.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -87,6 +93,17 @@ pub struct TaskInfo {
     /// Cancel was asked for; the job stops at its next check.
     pub cancelling: bool,
     pub age_ms: u64,
+    /// What the task has been waiting on without an answer, and for how many seconds: set while a job reports it
+    /// ([`TaskGuard::waiting_on`]). Such a task can be skipped (`activity.skip`).
+    pub stalled: Option<Stalled>,
+}
+
+/// What a task waits on without an answer ([`TaskInfo::stalled`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Stalled {
+    /// A name (a file), never a sentence.
+    pub what: String,
+    pub secs: u64,
 }
 
 struct Entry {
@@ -106,6 +123,10 @@ struct Entry {
     /// accepted, or makes the cancel fail. Without it a cancel could pass the check, the step
     /// start, and the flag be set after the step's last look at it: accepted but ignored.
     gate: Mutex<()>,
+    /// What the job is stuck waiting on, and since when ([`TaskGuard::waiting_on`]).
+    stalled: Mutex<Option<(String, web_time::Instant)>>,
+    /// Skip was asked for while it waited ([`Activity::skip`]); the job takes it ([`TaskGuard::take_skip`]).
+    skip: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -163,7 +184,29 @@ impl Entry {
             cancellable: self.is_cancellable(),
             cancelling: self.is_cancelled(),
             age_ms: u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            stalled: lock(&self.stalled).as_ref().map(|(what, since)| Stalled { what: what.clone(), secs: since.elapsed().as_secs() }),
         }
+    }
+
+    fn waiting_on(&self, what: &str, waited: std::time::Duration) {
+        let now = web_time::Instant::now();
+        *lock(&self.stalled) = Some((capped(what), now.checked_sub(waited).unwrap_or(now)));
+    }
+
+    /// Nothing is waited on any more; a skip not taken yet is moot.
+    fn clear_waiting(&self) {
+        let mut stalled = lock(&self.stalled);
+        *stalled = None;
+        self.skip.store(false, Ordering::Relaxed);
+    }
+
+    /// Ask the job to skip what it waits on; false when it waits on nothing.
+    fn try_skip(&self) -> bool {
+        let stalled = lock(&self.stalled);
+        if stalled.is_some() {
+            self.skip.store(true, Ordering::Relaxed);
+        }
+        stalled.is_some()
     }
 }
 
@@ -189,6 +232,8 @@ impl Activity {
             cancellable: AtomicBool::new(cancel.is_some()),
             cancel,
             gate: Mutex::new(()),
+            stalled: Mutex::new(None),
+            skip: AtomicBool::new(false),
         });
         lock(&self.inner.tasks).push(entry.clone());
         TaskGuard { activity: self.clone(), entry }
@@ -205,6 +250,15 @@ impl Activity {
         let tasks = lock(&self.inner.tasks);
         let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
         if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", entry.label)) }
+    }
+
+    /// Ask task `id` to skip what it is stuck waiting on ([`TaskInfo::stalled`]): a file on a drive that stopped
+    /// responding is given up and the job goes on with the next. An unknown id (the task may have just ended) or a
+    /// task that waits on nothing is an error.
+    pub fn skip(&self, id: u64) -> Result<(), String> {
+        let tasks = lock(&self.inner.tasks);
+        let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
+        if entry.try_skip() { Ok(()) } else { Err(format!("{} is not waiting on anything to skip", entry.label)) }
     }
 
     /// Ask every cancellable task to stop; returns how many were asked.
@@ -255,6 +309,22 @@ impl TaskGuard {
 
     pub fn is_cancelled(&self) -> bool {
         self.entry.is_cancelled()
+    }
+
+    /// The job is stuck waiting on `what` (a file name) and has been for `waited`: the row says so and offers Skip.
+    /// Call it again to update the name or the time; [`TaskGuard::clear_waiting`] when it answers.
+    pub fn waiting_on(&self, what: &str, waited: std::time::Duration) {
+        self.entry.waiting_on(what, waited);
+    }
+
+    /// The job waits on nothing any more.
+    pub fn clear_waiting(&self) {
+        self.entry.clear_waiting();
+    }
+
+    /// Whether Skip was asked for (`activity.skip`) since the last time; asking clears it.
+    pub fn take_skip(&self) -> bool {
+        self.entry.skip.swap(false, Ordering::Relaxed)
     }
 
     /// For progress from another thread; it does not keep the row.

@@ -33,13 +33,17 @@ pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::res
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
     let bytes = match file_bytes {
         Some(r) => r(path)?,
-        None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
+        None => crate::files::fs::read_reporting(path).map_err(|e| format!("{path}: {e}"))?,
     };
+    // (the steps below are CPU work with no disk wait: their ends tell a pool's watch that the job goes on)
+    crate::import::progressed();
     let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    crate::import::progressed();
     crate::camera_preview::with_starting_colour(&mut raw, &bytes);
     drop(bytes);
     let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
         .map_err(|e| e.to_string())?;
+    crate::import::progressed();
     let back = lightcraft_raw::decode(&dng).map_err(|e| format!("{path}: the DNG written for it doesn't decode ({e}); the raw is kept"))?;
     let same = match (&back.data, &raw.data) {
         (lightcraft_raw::RawData::U16(a), lightcraft_raw::RawData::U16(b)) => a == b,
@@ -51,6 +55,7 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
     if (back.width, back.height, back.cpp) != (raw.width, raw.height, raw.cpp) || !same {
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
+    crate::import::progressed();
     drop((raw, back));
     let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;

@@ -6,8 +6,8 @@
 //! report more. A binary built with a heap profiler installs [`set_heap_stats`] (e.g.
 //! `lightcraft-cli` with `--features dhat-heap`) to add live/peak heap bytes.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use serde::Serialize;
 
@@ -99,56 +99,113 @@ pub fn cache_share(budget: usize) -> usize {
 /// A weighted semaphore over bytes of working memory: [`WorkGate::acquire`] waits while other
 /// holders already use the limit (one holder may always proceed, whatever its size).
 pub struct WorkGate {
-    state: Mutex<(usize, usize)>,
+    state: Mutex<GateState>,
     cv: Condvar,
+    /// How often a wait says it goes on ([`crate::import::progressed`]).
+    heartbeat: std::time::Duration,
+}
+
+struct GateState {
+    used: usize,
+    limit: usize,
+    /// Who holds what: (permit, bytes, the abandon flag of the pool reader that holds it, if it is one).
+    holders: Vec<(u64, usize, Option<Arc<AtomicBool>>)>,
+    next: u64,
+}
+
+impl GateState {
+    /// Some holder is not an abandoned reader: whoever waits is waiting for work that goes on.
+    fn live_holder(&self) -> bool {
+        self.holders.iter().any(|(_, _, flag)| flag.as_ref().is_none_or(|f| !f.load(Ordering::SeqCst)))
+    }
+
+    fn hold(&mut self, bytes: usize) -> u64 {
+        self.used = self.used.saturating_add(bytes);
+        self.next += 1;
+        self.holders.push((self.next, bytes, crate::import::abandon_flag()));
+        self.next
+    }
 }
 
 /// Bytes held from a [`WorkGate`] until dropped.
 pub struct Permit<'a> {
     gate: &'a WorkGate,
-    bytes: usize,
+    id: u64,
 }
 
 impl WorkGate {
     pub fn new(limit: usize) -> WorkGate {
-        WorkGate { state: Mutex::new((0, limit)), cv: Condvar::new() }
+        WorkGate {
+            state: Mutex::new(GateState { used: 0, limit, holders: Vec::new(), next: 0 }),
+            cv: Condvar::new(),
+            heartbeat: std::time::Duration::from_secs(1),
+        }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, (usize, usize)> {
+    /// This gate with another heartbeat (tests wait for it).
+    #[cfg(test)]
+    pub(crate) fn with_heartbeat(mut self, every: std::time::Duration) -> WorkGate {
+        self.heartbeat = every;
+        self
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, GateState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn set_limit(&self, limit: usize) {
-        self.lock().1 = limit;
+        self.lock().limit = limit;
         self.cv.notify_all();
     }
 
     /// Bytes held now and the limit.
     pub fn usage(&self) -> (usize, usize) {
-        *self.lock()
+        let g = self.lock();
+        (g.used, g.limit)
+    }
+
+    /// Of the bytes held, those held by reads that were given up ([`crate::import`]'s Skip): possibly still in use
+    /// until the drive answers, so they stay counted.
+    pub fn abandoned_bytes(&self) -> usize {
+        self.lock()
+            .holders
+            .iter()
+            .filter(|(_, _, f)| f.as_ref().is_some_and(|f| f.load(Ordering::SeqCst)))
+            .map(|(_, b, _)| *b)
+            .fold(0usize, usize::saturating_add)
     }
 
     /// Hold `bytes`, waiting until they fit (or nothing else is held).
     pub fn acquire(&self, bytes: usize) -> Permit<'_> {
         let mut g = self.lock();
-        while g.0 > 0 && g.0 + bytes > g.1 {
-            g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        while g.used > 0 && g.used.saturating_add(bytes) > g.limit {
+            // A wait for memory is not a read that stopped answering: say once a second that this one goes on, as
+            // long as some holder that was not given up is working. A wait that only abandoned reads block (they
+            // keep their memory until the drive answers) is not progress: the waiting read is named and can be
+            // skipped too.
+            let (guard, _) = self.cv.wait_timeout(g, self.heartbeat).unwrap_or_else(|e| e.into_inner());
+            g = guard;
+            if g.live_holder() {
+                crate::import::progressed();
+            }
         }
-        g.0 += bytes;
-        Permit { gate: self, bytes }
+        let id = g.hold(bytes);
+        Permit { gate: self, id }
     }
 
     /// Hold `bytes` without waiting (interactive work): counted, so background work waits for it.
     pub fn acquire_urgent(&self, bytes: usize) -> Permit<'_> {
-        self.lock().0 += bytes;
-        Permit { gate: self, bytes }
+        let id = self.lock().hold(bytes);
+        Permit { gate: self, id }
     }
 }
 
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
         let mut g = self.gate.lock();
-        g.0 = g.0.saturating_sub(self.bytes);
+        g.holders.retain(|(id, ..)| *id != self.id);
+        // recounted, not subtracted: a saturated `used` cannot be given back piece by piece
+        g.used = g.holders.iter().fold(0usize, |sum, (_, bytes, _)| sum.saturating_add(*bytes));
         drop(g);
         self.gate.cv.notify_all();
     }
@@ -314,5 +371,37 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::WorkGate;
+
+    /// Given sizes that saturated (`usize::MAX`, from a file size scaled with `saturating_mul`),
+    /// When they are held and waited for,
+    /// Then the gate's arithmetic saturates: no overflow panic, the huge read waits for the others and runs alone.
+    #[test]
+    fn sizes_that_saturate_do_not_overflow_the_gate() {
+        let g = WorkGate::new(100);
+        let huge = g.acquire_urgent(usize::MAX);
+        let more = g.acquire_urgent(usize::MAX);
+        assert_eq!(g.usage().0, usize::MAX);
+        assert_eq!(g.abandoned_bytes(), 0);
+        drop(huge);
+        assert_eq!(g.usage().0, usize::MAX, "the other huge hold is still counted");
+        drop(more);
+        assert_eq!(g.usage().0, 0);
+        let (big, small) = (g.acquire_urgent(usize::MAX), g.acquire_urgent(10));
+        drop(big);
+        assert_eq!(g.usage().0, 10, "the small hold stays counted");
+        drop(small);
+        assert_eq!(g.usage().0, 0);
+        // a small hold, then a huge one: it is the only holder after the small one lets go, so it fits
+        let small = g.acquire(10);
+        drop(small);
+        let alone = g.acquire(usize::MAX);
+        assert_eq!(g.usage().0, usize::MAX);
+        drop(alone);
     }
 }

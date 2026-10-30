@@ -62,7 +62,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     }
     let sources = paths.clone();
     let (input, paths) = ScanInput::new(&mut app.session, &paths);
-    let progress = std::sync::Arc::new(ScanProgress::default());
+    let progress = std::sync::Arc::new(ScanProgress::new(app.session.import_stall_after, app.session.stuck_readers.clone()));
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let job = move || {
@@ -107,7 +107,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     // the photos the library already knows from this folder show at once: keep or pick the active one
     app.session.keep_active_in_view();
     let (input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
-    let progress = std::sync::Arc::new(ScanProgress::default());
+    let progress = std::sync::Arc::new(ScanProgress::new(app.session.import_stall_after, app.session.stuck_readers.clone()));
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let root = dir_s.clone();
@@ -157,6 +157,8 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             task.guard.progress(done as u64, total as u64);
             // while the folders are listed the total isn't known: say what is happening instead
             task.guard.detail(if total == 0 { crate::i18n::tr("Looking for photos…") } else { "" });
+            // a file that has stopped answering is named on the row, which then offers Skip
+            crate::panels::activity::follow_reads(&task.guard, &task.progress.reads);
             return;
         }
         Err(_) => {
@@ -170,6 +172,14 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     app.session.import_probes = out.probes;
+    let stopped = out.stopped.as_ref().map(|why| format!("{}: {why}", crate::i18n::tr("Stopped")));
+    // the folder shows only what was reached before the drive stopped answering; a review says so when it opens (a
+    // dialog open at the scan's end can keep it waiting past the toast's time)
+    if let Some(text) = &stopped
+        && (task.browse || out.candidates.is_empty())
+    {
+        app.toast_error(ctx, text.clone());
+    }
     if task.browse {
         // the folder and the ones its photos are in count as browsed now, as `library.browse` records them, so
         // their untouched Local photos aren't forgotten while the folder is in use
@@ -214,6 +224,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;
     d.library = Some(app.session.library_generation());
+    d.stopped = stopped;
     app.review_pending = Some(crate::state::Dialog::Import { opts: Box::new(d) });
     show_pending_review(app, ctx);
 }
@@ -232,6 +243,11 @@ fn show_pending_review(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     if app.ui.dialog.is_none() {
+        if let Some(crate::state::Dialog::Import { opts }) = &mut app.review_pending
+            && let Some(text) = opts.stopped.take()
+        {
+            app.toast_error(ctx, text);
+        }
         app.ui.dialog = app.review_pending.take();
     } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));

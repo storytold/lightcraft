@@ -713,6 +713,26 @@ fn probed_original_is_counted_once_and_reimport_adds_nothing() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Given a drive that stopped answering (as many abandoned reads still blocked as are allowed),
+/// When a Lightroom catalog is prepared,
+/// Then the import is an error (so nothing is committed): its photos were never read, so none is added without its file.
+#[test]
+fn an_import_that_cannot_read_is_an_error_not_photos_without_files() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-stopped-reads-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"original").unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    s.stuck_readers = Arc::new(crate::import::StuckReaders::new(0));
+    s.media.file_probe = Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), width: 20, height: 10, ..Default::default() })));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let Err(e) = job.prepare(&AtomicBool::new(false)) else { panic!("an import that read nothing is not committed") };
+    assert_ne!(e.kind(), crate::ErrorKind::Cancelled, "{e}");
+    assert!(e.to_string().contains("still waiting"), "{e}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn a_root_missing_here_is_found_relative_to_the_catalog() {
     let dir = std::env::temp_dir().join(format!("lightcraft-relocated-catalog-{}", std::process::id()));
