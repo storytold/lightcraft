@@ -18,6 +18,7 @@ pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_
 
 pub mod menu_level;
 pub mod menubar;
+pub mod sort_menu;
 
 /// (id, label, shortcut, menu path)
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);

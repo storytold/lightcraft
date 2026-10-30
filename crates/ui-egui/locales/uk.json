@@ -2354,5 +2354,7 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Recently Added always shows the newest imports first.": "У «Нещодавно додані» завжди спершу показано найновіші імпорти.",
+  "Recently Deleted shows no date groups.": "У «Нещодавно видалені» немає груп за датою."
 }
