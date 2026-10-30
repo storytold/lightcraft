@@ -393,6 +393,13 @@ impl Catalog {
     pub fn photos(&self) -> impl Iterator<Item = &Arc<Photo>> {
         self.photos.values()
     }
+    /// The photos after `after` in id order (all of them for `None`): a long walk over the library
+    /// that must not hold the UI thread takes it up again from the last id it saw.
+    pub fn photos_after(&self, after: Option<PhotoId>) -> impl Iterator<Item = &Arc<Photo>> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let from = after.map_or(Unbounded, Excluded);
+        self.photos.range((from, Unbounded)).map(|(_, p)| p)
+    }
     pub fn len(&self) -> usize {
         self.photos.len()
     }

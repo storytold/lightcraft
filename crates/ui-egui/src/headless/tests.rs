@@ -2025,6 +2025,8 @@ fn the_photos_progress_line_is_in_the_users_language() {
     let params = json!({"ids": ids, "dir": out, "longEdge": 48, "addToPhotos": true, "background": true});
     let r = h.request("engine.execute", json!({"command": "app.export", "params": params}), t);
     assert_eq!(r["ok"], true, "{r}");
+    // (the photos are set up over the frames after the request: the worker asks Photos once they are)
+    h.finish_preparing();
     // Photos has been asked, and the window hasn't drawn a frame since (Codex review of #643):
     // the export's row already has no ✕, and a cancel is refused rather than half-honoured
     photos_asked.recv_timeout(Duration::from_secs(60)).expect("the export asks Photos");
@@ -2158,6 +2160,36 @@ fn a_headless_run_waits_for_its_exports_photos_import() {
     assert!(h.app.session.apple_photos_imports.running().is_some(), "reserved while writing");
     drop(h);
     assert!(marker.exists(), "the export's import finished before the run ended");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A run that ends in a panic while its export is still setting its photos up draws no more frames, and the
+/// export holds Photos' slot with no worker to free it: the drop lets the export go instead of waiting on
+/// the slot for the full hour of the writing limit.
+#[test]
+fn a_headless_run_that_panics_while_an_export_prepares_does_not_wait_on_photos() {
+    if !cfg!(target_os = "macos") {
+        return; // addToPhotos is refused before exporting elsewhere
+    }
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let mut h = demo([800.0, 600.0]);
+    let dir = std::env::temp_dir().join(format!("lc-photos-headless-panic-drop-{}", std::process::id()));
+    h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+    h.app.session.apple_photos = Some(Arc::new(|_: &[String], _| {
+        Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".into(), stderr: String::new() })
+    }));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(5).map(|p| p.0).collect();
+    let p = json!({"ids": ids, "dir": dir.join("out").to_string_lossy(), "longEdge": 32, "addToPhotos": true, "background": true});
+    let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.export.as_ref().is_some_and(|e| e.is_preparing()), "still setting the photos up");
+    let began = Instant::now();
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _run = h;
+        panic!("the script failed");
+    }));
+    assert!(run.is_err());
+    assert!(began.elapsed() < Duration::from_secs(60), "the drop waited on Photos: {:?}", began.elapsed());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

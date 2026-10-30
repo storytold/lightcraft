@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use lightcraft_catalog::safe_file::{same_file, same_file_strict};
-use lightcraft_catalog::{Catalog, Source};
+use lightcraft_catalog::{Catalog, PhotoId, Source};
 
 /// The directory entry a screenshot is about to write, pinned at request admission.
 ///
@@ -114,6 +114,21 @@ impl OriginalGuard {
             }
         }
         g
+    }
+
+    /// [`Self::new`] in slices: add the originals of the photos after `after` while `more()` says
+    /// to go on (at least one is added). `None` once every photo is in; else the last photo added,
+    /// to take the walk up again from. Lets a large library's guard be built a frame at a time.
+    pub fn extend(&mut self, catalog: &Catalog, after: Option<PhotoId>, more: &mut dyn FnMut() -> bool) -> Option<PhotoId> {
+        for p in catalog.photos_after(after) {
+            if let Source::File { path } = &p.source {
+                self.add(Path::new(path), &p.file_name);
+            }
+            if !more() {
+                return Some(p.id);
+            }
+        }
+        None
     }
 
     /// Protect `path` (an original named `label`) and its sidecars (`IMG_1.xmp`, `IMG_1.CR3.xmp`).
@@ -291,6 +306,46 @@ mod tests {
         assert!(g.check(&d.join("IMG_1.xmp")).unwrap_err().contains("sidecar"));
         assert!(g.check(&d.join("other.jpg")).is_ok(), "an ordinary existing file");
         assert!(g.check(&d.join("new.jpg")).is_ok(), "a free name");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The guard built in slices protects what [`OriginalGuard::new`] does, whatever the slice size, and
+    /// a slice that is told to stop still adds a photo (the walk always moves on).
+    #[test]
+    fn a_guard_built_in_slices_protects_the_same_originals() {
+        let d = std::env::temp_dir().join(format!("lc-guard-slices-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut c = Catalog::default();
+        for n in [3u64, 1, 7, 5] {
+            let path = d.join(format!("IMG_{n}.jpg"));
+            std::fs::write(&path, b"original").unwrap();
+            let name = format!("IMG_{n}.jpg");
+            let p = Photo::new(PhotoId(n), Source::File { path: path.to_string_lossy().to_string() }, &name, "JPEG", 10, 10, "2026-01-01");
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        let ids = |after| c.photos_after(after).map(|p| p.id.0).collect::<Vec<_>>();
+        assert_eq!((ids(None), ids(Some(PhotoId(3))), ids(Some(PhotoId(7)))), (vec![1, 3, 5, 7], vec![5, 7], Vec::<u64>::new()));
+        for stop_after in [1usize, 2, 100] {
+            let mut g = OriginalGuard::default();
+            let (mut after, mut calls) = (None, 0);
+            loop {
+                let mut left = stop_after;
+                let mut more = || {
+                    left -= 1;
+                    left > 0
+                };
+                calls += 1;
+                match g.extend(&c, after, &mut more) {
+                    Some(last) => after = Some(last),
+                    None => break,
+                }
+            }
+            assert!(calls >= 4usize.div_ceil(stop_after), "{stop_after}: {calls} calls");
+            for n in [1, 3, 5, 7] {
+                assert!(g.check(&d.join(format!("IMG_{n}.jpg"))).unwrap_err().contains(&format!("original of IMG_{n}.jpg")), "{stop_after}: IMG_{n}");
+            }
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 

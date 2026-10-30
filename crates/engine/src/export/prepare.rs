@@ -97,6 +97,67 @@ pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::Ph
     ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone())).collect()
 }
 
+/// [`prepare_batch`] a few photos at a time, so a window can keep drawing while a big batch is set
+/// up: [`Self::advance`] works while its `more` callback says to, then gives the thread back.
+/// The library's originals ([`crate::originals::OriginalGuard`]) are indexed in slices first, then
+/// the photos are prepared in order, so the items and the first error are those of
+/// [`prepare_batch`] on the library as it is when each photo's turn comes.
+pub struct BatchPrep {
+    ids: Vec<lightcraft_catalog::PhotoId>,
+    phase: PrepPhase,
+    items: Vec<PreparedExport>,
+}
+
+enum PrepPhase {
+    /// Indexing the originals; resumes after the photo given.
+    Guard(crate::originals::OriginalGuard, Option<lightcraft_catalog::PhotoId>),
+    Photos(std::sync::Arc<crate::originals::OriginalGuard>),
+}
+
+impl BatchPrep {
+    pub fn new(ids: Vec<lightcraft_catalog::PhotoId>) -> Self {
+        let items = Vec::with_capacity(ids.len());
+        Self { ids, phase: PrepPhase::Guard(Default::default(), None), items }
+    }
+
+    /// Photos in the batch.
+    pub fn total(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Photos prepared so far.
+    pub fn prepared(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Do some of the work: at least one step (one photo's originals, or one photo), then more
+    /// while `more()`. `Ok(true)` once every photo is prepared ([`Self::into_items`]); the first
+    /// photo that can't be exported is an error, as in [`prepare_batch`].
+    pub fn advance(&mut self, session: &mut crate::Session, o: &ExportOptions, more: &mut dyn FnMut() -> bool) -> Result<bool, String> {
+        if let PrepPhase::Guard(guard, after) = &mut self.phase {
+            if let Some(last) = guard.extend(&session.catalog, *after, more) {
+                *after = Some(last);
+                return Ok(false);
+            }
+            let guard = std::mem::take(guard);
+            self.phase = PrepPhase::Photos(std::sync::Arc::new(guard));
+        }
+        let PrepPhase::Photos(guard) = &self.phase else { return Ok(false) };
+        while let Some(&id) = self.ids.get(self.items.len()) {
+            self.items.push(prepare_guarded(session, id, o, self.items.len() + 1, guard.clone())?);
+            if !more() {
+                break;
+            }
+        }
+        Ok(self.items.len() == self.ids.len())
+    }
+
+    /// The prepared photos, in batch order.
+    pub fn into_items(self) -> Vec<PreparedExport> {
+        self.items
+    }
+}
+
 fn prepare_guarded(
     session: &mut crate::Session,
     id: lightcraft_catalog::PhotoId,

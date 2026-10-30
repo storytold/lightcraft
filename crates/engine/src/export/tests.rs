@@ -1478,3 +1478,41 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+// A big batch is prepared a slice at a time: each `advance` that is told to stop does one step, the
+// photos come out in order and as `prepare_batch` makes them, and the first photo that can't be
+// exported is the error
+#[test]
+fn a_batch_is_prepared_a_step_at_a_time() {
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
+    let o = ExportOptions::from_json(&json!({"format": "png", "width": 40}));
+    let whole: Vec<_> = prepare_batch(&mut s, &ids, &o).unwrap().iter().map(|i| (i.photo, i.file_name.clone())).collect();
+    let mut prep = BatchPrep::new(ids.clone());
+    assert_eq!((prep.total(), prep.prepared()), (5, 0));
+    let mut calls = 0;
+    while !prep.advance(&mut s, &o, &mut || false).unwrap() {
+        calls += 1;
+        assert!(prep.prepared() <= calls, "a stopped call prepares at most one photo");
+        assert!(calls < 10_000, "the batch gets prepared");
+    }
+    assert!(calls >= 5, "five photos took {calls} calls");
+    let got: Vec<_> = prep.into_items().iter().map(|i| (i.photo, i.file_name.clone())).collect();
+    assert_eq!(got, whole);
+    // told to go on, one call does it all
+    let mut prep = BatchPrep::new(ids.clone());
+    assert!(prep.advance(&mut s, &o, &mut || true).unwrap());
+    assert_eq!(prep.prepared(), 5);
+    // a photo that can't be prepared is the error, in its turn
+    let mut bad = ids.clone();
+    bad.insert(2, lightcraft_catalog::PhotoId(u64::MAX));
+    let mut prep = BatchPrep::new(bad);
+    let e = loop {
+        match prep.advance(&mut s, &o, &mut || true) {
+            Ok(false) => continue,
+            Ok(true) => panic!("a photo that is not in the library was prepared"),
+            Err(e) => break e,
+        }
+    };
+    assert_eq!((e.as_str(), prep.prepared()), ("no such photo", 2));
+}

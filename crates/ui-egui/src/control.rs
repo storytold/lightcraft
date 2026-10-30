@@ -574,8 +574,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     let after = app.session.after_export(&opts)?;
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false) && app.services.write_shared.is_some();
     let out = if background {
-        let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
-        crate::export_task::start(app, items, opts, to, after)?
+        crate::export_task::start(app, ids, opts, to, after)?
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;

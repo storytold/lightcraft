@@ -65,6 +65,8 @@ impl LightcraftApp {
         // gate cannot express that (a slow discarded first pass would re-run it).
         if import_tick_allowed(ctx) {
             import::tick(self, ctx);
+            // an export's photos are set up a few at a time, once per host frame like the import's batches
+            export_task::prepare(self, ctx);
         }
         lightroom_import::tick(self, ctx);
         recheck::tick(self);

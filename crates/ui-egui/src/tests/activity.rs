@@ -240,6 +240,136 @@ fn dead_export_worker_leaves_no_row() {
     assert!(h.app.session.activity.list().is_empty());
 }
 
+/// A writer that records every path it is given (and takes `ms` per file).
+fn recording_writer(ms: u64) -> (crate::SharedWrite, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let w = written.clone();
+    let write: crate::SharedWrite = std::sync::Arc::new(move |p: &str, _: &[u8]| {
+        std::thread::sleep(Duration::from_millis(ms));
+        w.lock().unwrap().push(p.to_string());
+        Ok(())
+    });
+    (write, written)
+}
+
+/// Starting an export answers at once, with its row in the stack and ✕: the photos are prepared over the
+/// frames that follow (a few milliseconds each, on the UI thread), not before the answer. Then the batch
+/// runs as ever.
+#[test]
+fn export_row_is_there_before_its_photos_are_prepared() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    start_export(&mut h, 5);
+    let seen = h.request("ui.inspect", json!({}), T)["result"].clone();
+    assert_eq!(seen["export"]["running"]["preparing"], true, "{}", seen["export"]);
+    assert_eq!(seen["export"]["running"]["total"], 5, "{}", seen["export"]);
+    assert_eq!(seen["activity"][0]["kind"], "export", "{}", seen["activity"]);
+    assert_eq!(seen["activity"][0]["cancellable"], true, "{}", seen["activity"]);
+    assert!(written.lock().unwrap().is_empty(), "nothing is written before the photos are prepared");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert_eq!(written.lock().unwrap().len(), 5, "{:?}", written.lock().unwrap());
+    let last = h.app.last_export_result.clone().expect("the export reports");
+    assert_eq!(last["files"].as_array().map(Vec::len), Some(5), "{last}");
+    assert!(h.app.session.activity.list().is_empty(), "the row is gone");
+}
+
+/// The ✕ works while the photos are being prepared: nothing is prepared further or written, and the export
+/// ends as a cancelled one does.
+#[test]
+fn export_can_be_stopped_while_its_photos_are_prepared() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    start_export(&mut h, 5);
+    let seen = h.request("ui.inspect", json!({}), T)["result"].clone();
+    assert_eq!(seen["export"]["running"]["preparing"], true, "{}", seen["export"]);
+    let id = seen["activity"][0]["id"].as_u64().unwrap();
+    assert_eq!(h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T)["ok"], true);
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert!(written.lock().unwrap().is_empty(), "{:?}", written.lock().unwrap());
+    assert!(h.app.last_export_result.as_ref().is_some_and(|r| r["cancelled"] == true), "{:?}", h.app.last_export_result);
+    assert!(h.app.session.activity.list().is_empty());
+}
+
+/// A photo that can't be exported (here: a demo photo has no original file to copy) used to be refused by
+/// `app.export` before anything started; now the export starts and ends with that error in a toast, with
+/// nothing written and no row left.
+#[test]
+fn a_photo_that_cannot_be_prepared_ends_the_export_with_its_error() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let params = json!({"ids": ids, "dir": "/lc-test-out", "format": "original", "background": true});
+    let r = h.request("engine.execute", json!({"command": "app.export", "params": params}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    assert!(toast.contains("generated demo photo"), "{toast}");
+    assert!(written.lock().unwrap().is_empty(), "nothing is written");
+    assert!(h.app.session.activity.list().is_empty(), "no row is left");
+}
+
+fn preparing(h: &Headless) -> bool {
+    h.app.export.as_ref().is_some_and(|e| e.status()["preparing"] == true)
+}
+
+/// The photos are set up whatever the window shows: a full-screen preview (which skips the panels' pass)
+/// doesn't hold the export at "Preparing photos…".
+#[test]
+fn an_exports_photos_are_prepared_in_a_full_screen_preview() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    start_export(&mut h, 5);
+    assert!(preparing(&h));
+    h.app.ui.fullscreen = true;
+    assert!(h.step_until(Duration::from_secs(60), |h| !preparing(h)), "still preparing in full screen");
+    h.app.ui.fullscreen = false;
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert_eq!(written.lock().unwrap().len(), 5, "{:?}", written.lock().unwrap());
+}
+
+/// Photo ids belong to one library: when another is opened while the photos are being prepared, the export
+/// ends as a cancelled one does, and nothing is exported from the new library.
+#[test]
+fn switching_library_while_an_export_prepares_stops_it() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    start_export(&mut h, 5);
+    assert!(preparing(&h));
+    let dir = std::env::temp_dir().join(format!("lc-export-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.app.session.open_library(&dir, true).unwrap();
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert!(written.lock().unwrap().is_empty(), "{:?}", written.lock().unwrap());
+    assert!(h.app.last_export_result.as_ref().is_some_and(|r| r["cancelled"] == true), "{:?}", h.app.last_export_result);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A one-shot headless run (`lightcraft-cli snapshot`) that ends, or waits for Apple Photos, while an export
+/// is still setting its photos up would leave Photos' slot held by an export nothing is working on: it
+/// first lets the photos get prepared and the worker start.
+#[test]
+fn a_headless_run_lets_an_exports_photos_get_prepared_before_it_ends() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, _written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    start_export(&mut h, 5);
+    assert!(preparing(&h));
+    h.finish_preparing();
+    assert!(!preparing(&h), "the worker has not started");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+}
+
 /// A folder of `n` stand-in JPEGs and an app whose file probe takes 100 ms each (a slow drive).
 fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
     gated_import(tag, n, None)

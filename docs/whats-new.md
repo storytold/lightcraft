@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Starting an export no longer freezes the window
+- Clicking Export (the Export dialog, File ▸ Export with Preset, Export with Previous) used to hold the window still for
+  about 3 ms per photo while the batch was set up: roughly a quarter of a second for 60 photos and a second for 300.
+  The export now starts at once, its activity row saying “Preparing photos…” (the stack shows a row once it is half a
+  second old, as for every task), and the photos are set up a few milliseconds per frame, so the window keeps
+  responding however big the batch is; ✕ stops the export during that time too. Each photo is read as it is when its
+  turn comes, so an edit made in those moments counts. A photo that can't be exported at all (for example a demo
+  photo with no original file when exporting the original, or one purged meanwhile) ends the export with its error in
+  a toast, and nothing is written; opening another library meanwhile stops the export as ✕ does.
+- Agents: `app.export {background: true}` still answers at once with `{background: true, total}`; `ui.inspect` →
+  `export.running.preparing` is true until the photos are set up. See [Control protocol](control-protocol.md).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
