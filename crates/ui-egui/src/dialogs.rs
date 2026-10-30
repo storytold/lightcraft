@@ -1312,8 +1312,9 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
                 trailing_button_row(ui, |ui| {
                     if app.services.pick_files.is_some()
                         && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
-                        && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
+                        && let Some(f) = crate::pick::choose(app, crate::pick::Field::ExportWatermarkImage)
                     {
+                        // (a synchronous answer; with a background dialog the image is set when it closes)
                         wm.image = f;
                     }
                     crate::widgets::named(
@@ -1440,9 +1441,9 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
             trailing_button_row(ui, |ui| {
                 if app.services.pick_folder.is_some()
                     && crate::widgets::text_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…"), false).clicked()
-                    && let Some(pick) = app.services.pick_folder.as_mut()
-                    && let Some(d) = pick()
+                    && let Some(d) = crate::pick::choose(app, crate::pick::Field::ExportFolder)
                 {
+                    // (a synchronous answer; with a background dialog the folder is set when it closes)
                     *dir = d;
                 }
                 crate::widgets::named(ui.add(egui::TextEdit::singleline(dir).desired_width(ui.available_width())), crate::i18n::tr("Folder"));

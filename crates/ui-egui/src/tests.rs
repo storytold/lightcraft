@@ -2,6 +2,7 @@ mod activity;
 mod album_picker;
 mod album_remove;
 mod appearance;
+mod background_dialogs;
 mod before_after;
 mod browse_active;
 mod button;

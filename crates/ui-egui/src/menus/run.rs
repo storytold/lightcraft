@@ -1216,13 +1216,20 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "dialog.mergeHdr" => crate::merge::open(app, "merge.hdr"),
         "dialog.faceModel" => {
             let path = match p.get("path").and_then(Value::as_str) {
-                Some(x) => Some(x.to_string()),
-                None => app.services.pick_model_file.as_mut().and_then(|f| f().into_iter().next()),
+                Some(x) => x.to_string(),
+                None => {
+                    // the dialog runs off the UI thread; the command runs again when it closes
+                    let req = PickRequest::file(crate::i18n::tr("Add a Face Recognition Model"), crate::i18n::tr("Face models (ONNX)"), &["onnx"]);
+                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_model_file.as_mut().map(|f| f())) {
+                        Picked::Now(paths) => match paths.into_iter().next() {
+                            Some(path) => path,
+                            None => return Some(Ok(Value::Null)),
+                        },
+                        Picked::Later | Picked::Unavailable => return Some(Ok(Value::Null)),
+                    }
+                }
             };
-            match path {
-                Some(path) => crate::panels::faces::open_dialog(app, &path),
-                None => Ok(Value::Null),
-            }
+            crate::panels::faces::open_dialog(app, &path)
         }
         "dialog.mergePanorama" => crate::merge::open(app, "merge.panorama"),
         "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),

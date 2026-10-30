@@ -10,6 +10,9 @@
 //! web, where browser pickers are asynchronous already; tests) answer through the synchronous
 //! services as before.
 
+mod field;
+pub use field::{Field, choose, choose_and_apply};
+
 use crate::{LightcraftApp, Services};
 use serde_json::{Value, json};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -66,14 +69,46 @@ pub const CURVE_PRESET_EXTENSIONS: &[&str] = &["lccurve", "json"];
 /// channel with the chosen paths (none = cancelled). `Err` when no dialog could be started.
 pub type Picker = Box<dyn FnMut(PickRequest) -> Result<Receiver<Vec<String>>, String>>;
 
-/// A dialog that is up for a command. When it closes, the command runs again with the answer
-/// under `key`.
+/// What happens when a dialog closes with something chosen.
+enum Then {
+    /// The command runs again with the answer under `key`.
+    Run { params: Value, key: &'static str, kind: PickKind },
+    /// The field takes the first path.
+    Field(Field),
+}
+
+/// A dialog that is up for a command or a field. When it closes, the answer is applied.
 pub struct Pending {
     pub command: String,
-    params: Value,
-    key: &'static str,
-    kind: PickKind,
+    then: Then,
     rx: Receiver<Vec<String>>,
+}
+
+/// Whether [`start`] showed the dialog.
+enum Started {
+    /// It is up (or was already); the answer is applied when it closes.
+    Later,
+    /// The host cannot show one elsewhere (or failed to start it).
+    No,
+}
+
+/// Show `request` through the host's [`Picker`] and note what to do with its answer. A dialog
+/// already up for `command` is not opened twice.
+fn start(app: &mut LightcraftApp, command: &str, request: PickRequest, then: Then) -> Started {
+    if app.pending_picks.iter().any(|p| p.command == command) {
+        return Started::Later;
+    }
+    let Some(show) = app.services.picker.as_mut() else { return Started::No };
+    match show(request) {
+        Ok(rx) => {
+            app.pending_picks.push(Pending { command: command.to_string(), then, rx });
+            Started::Later
+        }
+        Err(e) => {
+            log::warn!("{command}: no background file dialog ({e}); asking on the UI thread");
+            Started::No
+        }
+    }
 }
 
 /// How a command's request for a path was answered.
@@ -98,18 +133,9 @@ pub fn ask(
     request: PickRequest,
     now: impl FnOnce(&mut Services) -> Option<Vec<String>>,
 ) -> Picked {
-    if app.pending_picks.iter().any(|p| p.command == command) {
+    let kind = request.kind;
+    if let Started::Later = start(app, command, request, Then::Run { params: params.clone(), key, kind }) {
         return Picked::Later;
-    }
-    if let Some(start) = app.services.picker.as_mut() {
-        let kind = request.kind;
-        match start(request) {
-            Ok(rx) => {
-                app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
-                return Picked::Later;
-            }
-            Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
-        }
     }
     match now(&mut app.services) {
         Some(paths) => Picked::Now(paths),
@@ -138,6 +164,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut answered = Vec::new();
     let mut waiting = Vec::new();
     for p in std::mem::take(&mut app.pending_picks) {
+        if let Then::Field(f) = p.then
+            && !f.is_open(app)
+        {
+            // its dialog was closed meanwhile: a later answer has nowhere to go
+            log::info!("{}: its dialog closed while the file dialog was up; its answer is dropped", p.command);
+            continue;
+        }
         match p.rx.try_recv() {
             Ok(paths) if paths.is_empty() => {}
             Ok(paths) => answered.push((p, paths)),
@@ -151,9 +184,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.pending_picks = waiting;
     for (p, paths) in answered {
-        let params = with_answer(&p.params, p.key, p.kind, &paths);
-        if let Err(e) = app.run(&p.command, params) {
-            app.toast_error(ctx, e);
+        match p.then {
+            Then::Run { params, key, kind } => {
+                let params = with_answer(&params, key, kind, &paths);
+                if let Err(e) = app.run(&p.command, params) {
+                    app.toast_error(ctx, e);
+                }
+            }
+            Then::Field(f) => {
+                if let Some(path) = paths.into_iter().next()
+                    && f.is_open(app)
+                {
+                    field::apply(app, ctx, f, path);
+                }
+            }
         }
     }
 }

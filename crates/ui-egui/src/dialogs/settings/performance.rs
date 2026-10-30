@@ -137,49 +137,64 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         );
     }
     // what happens to the previews already built when the folder changes
-    let mode_id = egui::Id::unique("smart-existing");
-    let mut mode: u8 = ui.data(|d| d.get_temp(mode_id)).unwrap_or(0);
+    let mut mode: u8 = ui.data(|d| d.get_temp(smart_existing_id())).unwrap_or(0);
     if count > 0 {
         row(ui, t, crate::i18n::tr("Existing previews"), |ui| {
             if choices(ui, "settingsSmartExisting", &[(0u8, "Move them"), (1, "Leave them"), (2, "Delete them")], &mut mode) {
-                ui.data_mut(|d| d.insert_temp(mode_id, mode));
+                ui.data_mut(|d| d.insert_temp(smart_existing_id(), mode));
             }
         });
     }
-    let existing = ["move", "leave", "discard"][mode.min(2) as usize];
-    let mut result = None;
+    let existing = existing_previews(ui.ctx());
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W);
         if app.services.pick_folder.is_some() {
             let r = ui.button(crate::i18n::tr("Choose Folder…"));
             register(ui, "button:settingsSmartChoose", r.rect);
-            if r.clicked()
-                && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
-            {
-                result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
+            if r.clicked() {
+                // the dialog runs off the UI thread; the folder changes when it closes
+                crate::pick::choose_and_apply(app, ui.ctx(), crate::pick::Field::SmartPreviewsFolder);
             }
         }
         let r = ui.add_enabled(custom, egui::Button::new(crate::i18n::tr("Use Library Folder")));
         register(ui, "button:settingsSmartReset", r.rect);
         if r.clicked() {
-            result = Some(app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing})));
+            let result = app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing}));
+            smart_previews_changed(app, ui.ctx(), existing, result);
         }
     });
-    if let Some(r) = result {
-        ui.data_mut(|d| d.remove::<(f64, Value)>(cache));
-        match r {
-            Ok(v) => {
-                let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
-                    (_, 0) => "Smart previews folder changed".to_string(),
-                    ("move", n) => format!("Smart previews folder changed; moved {n}"),
-                    ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
-                    _ => "Smart previews folder changed".to_string(),
-                };
-                app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
-            }
-            Err(e) => app.toast(ui.ctx(), e),
-        }
-    }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+/// Where the "Existing previews" choice is kept between frames.
+#[cfg(not(target_arch = "wasm32"))]
+fn smart_existing_id() -> egui::Id {
+    egui::Id::unique("smart-existing")
+}
+
+/// What a change of the smart previews folder does to the previews already built: the choice in
+/// Settings now, so a folder chosen in a dialog that was up for a while gets the latest one.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn existing_previews(ctx: &egui::Context) -> &'static str {
+    let mode: u8 = ctx.data(|d| d.get_temp(smart_existing_id())).unwrap_or(0);
+    ["move", "leave", "discard"][mode.min(2) as usize]
+}
+
+/// The smart previews folder was changed (or reset): show how it went, and list the folder afresh.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn smart_previews_changed(app: &mut LightcraftApp, ctx: &egui::Context, existing: &str, result: Result<Value, String>) {
+    ctx.data_mut(|d| d.remove::<(f64, Value)>(egui::Id::unique("smart-location")));
+    match result {
+        Ok(v) => {
+            let failed = v["failed"].as_array().map_or(0, Vec::len);
+            let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
+                (_, 0) => "Smart previews folder changed".to_string(),
+                ("move", n) => format!("Smart previews folder changed; moved {n}"),
+                ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
+                _ => "Smart previews folder changed".to_string(),
+            };
+            app.toast(ctx, if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
+        }
+        Err(e) => app.toast(ctx, e),
+    }
 }

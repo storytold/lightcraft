@@ -153,11 +153,9 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             let can = app.services.pick_folder.is_some();
             let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
             register(ui, "button:settingsAutoFolder", r.rect);
-            if r.clicked()
-                && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
-                && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
-            {
-                app.toast(ui.ctx(), e);
+            if r.clicked() {
+                // the dialog runs off the UI thread; the folder is watched when it closes
+                crate::pick::choose_and_apply(app, ui.ctx(), crate::pick::Field::AutoImportFolder);
             }
             if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
                 let _ = app.run("library.autoImport", json!({"folder": null}));
