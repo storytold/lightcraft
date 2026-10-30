@@ -1020,6 +1020,42 @@ fn auto_sync_carries_only_the_changed_settings() {
 }
 
 #[test]
+fn auto_corrections_on_a_named_photo_leave_the_selection_and_auto_sync_alone() {
+    use lightcraft_catalog::PhotoId;
+    for (command, params) in [("develop.auto", json!({})), ("develop.wb", json!({"mode": "auto"}))] {
+        let mut s = demo();
+        let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+        let target = PhotoId(ids[2]);
+        let mut d = (*s.develop_of(target).unwrap()).clone();
+        (d.light.exposure, d.wb.tint) = (-2.0, 30.0);
+        s.set_develop(target, d, "Setup").unwrap();
+        // the user's selection: the first two photos, the first active, Auto Sync on; the named photo is not in it
+        s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+        s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+        let others = [ids[0], ids[1]].map(|id| s.develop_of(PhotoId(id)).unwrap());
+        let before = s.develop_of(target).unwrap();
+        let mut named = params.clone();
+        named["id"] = json!(target.0);
+        s.execute(command, &named).unwrap();
+        assert_ne!(s.develop_of(target).unwrap(), before, "{command} edits the named photo");
+        assert_eq!([ids[0], ids[1]].map(|id| s.develop_of(PhotoId(id)).unwrap()), others, "{command}: no Auto Sync");
+        assert_eq!((s.selection.ids.clone(), s.selection.active), (vec![PhotoId(ids[0]), PhotoId(ids[1])], Some(PhotoId(ids[0]))));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.develop_of(target).unwrap(), before, "{command}: one undo step");
+        // the named photo alone, also with nothing active; an unknown photo or a list of them is refused
+        s.selection.ids.clear();
+        s.selection.active = None;
+        s.execute(command, &named).unwrap();
+        assert_ne!(s.develop_of(target).unwrap(), before);
+        for bad in [json!({"id": 999_999}), json!({"id": "x"}), json!({"ids": [target.0]})] {
+            let mut p = params.clone();
+            p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+            assert!(s.execute(command, &p).is_err(), "{command} {p}");
+        }
+    }
+}
+
+#[test]
 fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();

@@ -65,6 +65,10 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 - 2026-10-22: PSD/PSB imports and metadata readers now expose embedded EXIF resource 1058 and XMP resource 1060 for capture dates, GPS and All Metadata (#2519); imported PSD edit copies retain their capture date, and the `removeLocation` Original-export guard sees embedded PSD/PSB GPS. No ranked gap or headline feature count closes.
 
+- 2026-10-13: agent photo-editing workflow shipped as a skill and MCP resource, with explicit-target
+  auto tone/white balance and before/after settings (`docs/mcp.md`). This improves agent operation;
+  the image-quality, model and plug-in ecosystem gaps above remain open.
+
 - 2026-10-20: the import review album picker follows the sidebar folder hierarchy and searches album paths (#2362, LR-IMP-ADD-DIALOG), retaining None/New album and existing destination IDs. This closes a usability subgap; no ranked gap or headline feature count closes.
 
 - 2026-10-12: original-pixel detail at 100% (gap 4, LR-VIEW-ZOOM, #323): soft proofing gets zoom windows like
@@ -106,6 +110,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-12 | minor | Gap 10: SR2/SRF folder discovery fixed; F828 imports as preview-only. Sensor decoding remains a gap; readiness scores unchanged |
 | 2026-10-23 | minor | Gap 28: ⌘L / Ctrl+L (Library ▸ Enable Filters) puts the filter aside and brings it back as it was; the entry drops ⌘L; hours unchanged |
 | 2026-10-15 | minor | Gap 28: `\` shows / hides the Filter Bar in the grids; the entry drops `[` `]` (#509), flag cycling (#1490) and F1 (Help), already on main; ⌘L is the filter-bar key left; hours unchanged |
+| 2026-10-13 | minor | Record agent workflow support without changing Lightroom parity gaps or estimates |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
 | 2026-10-14 | minor | Gap 10: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277) |
 | 2026-10-14 | minor | Gap 21: de, es, fr, ja and uk catalogs filled (97–99%); 55–90 h → 40–70 h |

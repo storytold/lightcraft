@@ -24,6 +24,9 @@ const INTERNAL_ERROR: i64 = -32603;
 const RESOURCE_NOT_FOUND: i64 = -32002;
 
 const INSTRUCTIONS: &str = "LightCraft is a non-destructive photo library and raw developer (a Lightroom alternative). \
+Read lightcraft://workflows/photo-editing for the photo-correction workflow. Capture the requested selection before editing. \
+Inspect get_develop and render_preview before and after corrections. auto_develop requires an explicit photo id and \
+an adjustment (tone or white_balance); each call edits only that photo with one undo step. Export only when requested. \
 Photos have integer ids; most editing acts on the *active* photo (`set_develop`, `crop` and `export` with an explicit photo id end the current edit interaction, replace the selection with that one photo and make it active; `get_develop` and `render_photo` do not change the selection). \
 Typical loop: query_photos → select_photos (or pass id) → list_controls → set_develop {values: {\"light.exposure\": 0.5}} → \
 render_preview to look at the result → export. Positions (crop rects, mask points, brush strokes) are normalized image \
@@ -38,6 +41,8 @@ pub const PHOTOS_URI: &str = "lightcraft://photos";
 pub const PHOTO_URI: &str = "lightcraft://photo/active";
 pub const DEVELOP_URI: &str = "lightcraft://develop/active";
 pub const CONTROLS_URI: &str = "lightcraft://controls";
+pub const PHOTO_EDITING_URI: &str = "lightcraft://workflows/photo-editing";
+const PHOTO_EDITING_WORKFLOW: &str = include_str!("../../../skills/lightcraft-photo-editing/SKILL.md");
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -204,10 +209,14 @@ impl Server {
                 resource(PHOTO_URI, "active-photo", "Active photo", "Everything about the active photo: file, metadata, develop settings, albums, history (photo.inspect)"),
                 resource(DEVELOP_URI, "develop", "Develop settings", "The active photo's full develop settings JSON (develop.get)"),
                 resource(CONTROLS_URI, "controls", "Develop controls", "Every develop slider with id, range, default and current value (develop.controls)"),
+                {"uri": PHOTO_EDITING_URI, "name": "photo-editing", "title": "Agent photo editing", "description": "Correct and finish existing photos: inspect, adjust, compare, batch, and export", "mimeType": "text/markdown"},
             ]})),
             "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
             "resources/read" => {
                 let uri = params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing `uri`".to_string()))?;
+                if uri == PHOTO_EDITING_URI {
+                    return Ok(json!({"contents": [{"uri": uri, "mimeType": "text/markdown", "text": PHOTO_EDITING_WORKFLOW}]}));
+                }
                 let cmd = match uri {
                     DOCUMENT_URI | COMMANDS_URI => "",
                     LIBRARY_URI => "library.state",

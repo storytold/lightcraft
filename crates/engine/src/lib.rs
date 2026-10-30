@@ -918,6 +918,16 @@ impl Session {
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+        self.set_develop_with(id, settings, label, true)
+    }
+
+    /// [`Self::set_develop`] for this photo alone: Auto Sync never carries the edit to the other selected photos
+    /// (a command that names its photo, such as `develop.auto {id}` from an agent).
+    pub fn set_develop_alone(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+        self.set_develop_with(id, settings, label, false)
+    }
+
+    fn set_develop_with(&mut self, id: PhotoId, settings: DevelopSettings, label: &str, sync: bool) -> Result<()> {
         let now = (self.clock)();
         // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990)
         let requested = settings;
@@ -930,7 +940,9 @@ impl Session {
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label));
+        if sync {
+            ops.extend(self.auto_sync_ops(id, &requested, label));
+        }
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }

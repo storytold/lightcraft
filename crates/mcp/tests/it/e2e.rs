@@ -76,6 +76,26 @@ fn exposure_roundtrip(server: &mut Server) {
     println!("mean sRGB: exposure 0 → {before:.1}, +1.5 → {brighter:.1}, -1.5 → {darker:.1} ({w}×{h})");
     assert!(brighter > before + 15.0, "exposure +1.5 should brighten: {before} → {brighter}");
     assert!(darker < before - 15.0, "exposure -1.5 should darken: {before} → {darker}");
+
+    // An agent can auto-correct this explicit photo, inspect the pixels, and undo the
+    // correction in one step. Exercise the same workflow over stdio and live transport.
+    let replies = session(
+        server,
+        &[
+            call(20, "auto_develop", json!({"id": id, "adjustment": "tone"})),
+            call(21, "render_preview", json!({"id": id, "max_side": 256})),
+            call(22, "command_run", json!({"id": "edit.undo"})),
+            call(23, "render_preview", json!({"id": id, "max_side": 256})),
+        ],
+    );
+    for r in &replies {
+        assert!(r["error"].is_null() && r["result"]["isError"] == false, "{r}");
+    }
+    assert_eq!(replies[0]["result"]["structuredContent"]["before"]["light"]["exposure"], -1.5);
+    let (corrected, _, _) = mean_of(&replies[1]["result"]);
+    let (restored, _, _) = mean_of(&replies[3]["result"]);
+    assert!(corrected > darker + 5.0, "auto tone should lift this darkened demo: {darker} → {corrected}");
+    assert_eq!(restored, darker, "one undo restores the previous render");
 }
 
 #[test]

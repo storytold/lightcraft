@@ -126,6 +126,55 @@ Every stdio MCP client takes the same shape: a `command` plus `args`. For exampl
 During development you can also point the client at `cargo run --release -p lightcraft-cli -- mcp`
 (with `"cwd"` set to the repository), at the cost of a slower start.
 
+## Agent photo correction
+
+The bundled [lightcraft-photo-editing skill](../skills/lightcraft-photo-editing/SKILL.md)
+guides an agent through existing-photo development: identify the requested photos, inspect
+their current settings and previews, correct tone/white balance, refine, compare, and export
+when requested. It covers individual photos and series with different lighting. It does not
+generate new images or replace visual judgement with fixed slider recipes.
+
+Every MCP client can read the same instructions via `resources/read` with
+`{"uri":"lightcraft://workflows/photo-editing"}` (`text/markdown`). The resource is embedded
+in the binary and works in headless and connect mode, even before the desktop app connects.
+The server's initialization instructions point agents to it. For skill-aware clients, install
+the whole `skills/lightcraft-photo-editing` directory in the client's skill directory; for
+Codex, that is `$CODEX_HOME/skills` (normally `~/.codex/skills`). Invoke it as
+`$lightcraft-photo-editing`, for example:
+
+> Correct the selected photos naturally. Keep the warm evening light, balance exposure
+> individually, inspect the results, and leave the edits in the library.
+
+Use the Codex connection examples above with a persistent `--library`, or `--connect` for
+the library already open in the app. A skill does not establish that connection itself.
+Use `--compact` to expose the helpers, including `auto_develop`, while retaining access to
+all engine commands through `command_run`.
+
+`auto_develop` requires both `id` (a positive integer) and `adjustment` (`tone` or
+`white_balance`). It runs `develop.auto {id}` or `develop.wb {mode:"auto", id}` as one
+request: the engine corrects that photo alone, leaves the selection as it is, and Auto Sync
+does not propagate the correction to other selected photos. With `--connect`, selecting
+another photo in the app meanwhile cannot redirect the correction: it always lands on `id`.
+Each correction is one undo step, separate from any pending slider interaction.
+It returns `{id, adjustment, before, after, result}`; `before` and `after` are full develop
+settings. Tone replaces the eight light/color values used by Auto Settings; white balance
+is a separate choice. When both are wanted, correct white balance before tone.
+
+Example tool calls (replace `42` with a queried photo ID):
+
+```json
+{"name":"get_develop","arguments":{"id":42}}
+{"name":"render_preview","arguments":{"id":42,"max_side":1600}}
+{"name":"auto_develop","arguments":{"id":42,"adjustment":"tone"}}
+{"name":"render_preview","arguments":{"id":42,"max_side":1600}}
+```
+
+Malformed explicit photo IDs (including strings, null, zero and negative values) are rejected
+by `get_develop`, `set_develop`, `auto_develop`, `crop`, `render_photo`, `render_preview` and
+`export`; they never silently fall back to the active photo. Omitting `id` still uses the
+active photo where documented, except `auto_develop`, which always requires a target.
+The generic command tools retain their existing engine parameter contracts.
+
 ## Shared core tools
 
 These follow the same conventions as [filmcraft #28](https://github.com/storytold/filmcraft/pull/28).
@@ -175,6 +224,7 @@ per-request `_meta` receive `resultType: complete` and list/read cache hints; re
 | `select_photos {ids, active?, mode?}` | Set the selection / active photo. Every id (and `active`) must be in the library: an unknown id is a tool error (`no such photo 9999`) and the selection and active photo are left as they were |
 | `list_controls {section?}` | Every develop slider: id (`light.exposure`…), range, default, current value |
 | `get_develop {id?}` | Full develop-settings JSON, with `process`: the rendering process the photo is on ([process-versions.md](process-versions.md)) |
+| `auto_develop {id, adjustment}` | Auto tone (`tone`) or auto white balance (`white_balance`) on exactly one photo; one undo step, before/after settings returned |
 | `set_develop {id?, values?, settings?, label?}` | `values`: `{controlId: number}`; `settings`: partial develop JSON deep-merged. Undoable. A `crop.angle` value turns the crop as `crop.straighten` does: kept if it still fits, else shrunk to the largest crop of its aspect inside the photo (`settings` is merged as given, unfitted). White balance: `values` with `wb.temp` / `wb.tint` is Kelvin on raws with colour matrices (DNG, and cameras LightCraft has matrices for) and relative (6500 = as shot) elsewhere; a `settings.wb` with `temp` / `tint` and no `"scale": "kelvin"` is read on the relative scale on every raw (see [control-protocol.md](control-protocol.md)) |
 | `apply_preset {preset, amount?, ids?}` | Apply a preset (ids from `cmd_presets_list`) |
 | `crop {id?, rect?, angle?, reset?}` | Normalized crop rect `[x0,y0,x1,y1]` and straighten angle; at least one of `rect`, `angle`, `reset: true`. The crop always ends inside the photo: an `angle` alone keeps the crop if it still fits, else shrinks it to the largest of its aspect that does |
@@ -244,7 +294,7 @@ develop settings and history.
 
 ## Resources
 
-`resources/list` / `resources/read` serve JSON snapshots:
+`resources/list` / `resources/read` serve JSON state snapshots and the Markdown workflow:
 
 | URI | Content |
 |---|---|
@@ -253,6 +303,7 @@ develop settings and history.
 | `lightcraft://photo/active` | Everything about the active photo (`photo.inspect`), including the camera's focus point as `meta.focus` when the file records one ([focus-points.md](focus-points.md); `run_command photo.readFocusPoints {wait: true}` reads it for photos imported before it was read, a few KB per file) |
 | `lightcraft://develop/active` | The active photo's develop settings (`develop.get`) |
 | `lightcraft://controls` | Every develop control with its current value (`develop.controls`) |
+| `lightcraft://workflows/photo-editing` | Bundled photo-correction skill (`text/markdown`, available without a connected app) |
 
 Read these resources again to poll current state; they are snapshots, and `initialize` advertises
 `resources.subscribe: false`. `lightcraft://photo/active` includes the photo's `id` and `develop`
