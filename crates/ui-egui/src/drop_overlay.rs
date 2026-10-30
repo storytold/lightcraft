@@ -52,8 +52,11 @@ fn lines(app: &LightcraftApp, paths: Vec<String>, unknown: bool) -> Vec<String> 
     } else if !drop.photos.is_empty() && app.lightroom.is_some() && !cfg!(target_arch = "wasm32") {
         // the drop is refused while a Lightroom catalog import owns the catalog
         out.push(crate::i18n::tr("Finish Lightroom catalog import before adding photos").to_string());
-    } else if !drop.photos.is_empty() && crate::import::running(app) && !cfg!(target_arch = "wasm32") {
-        out.push(crate::i18n::tr("An import is running. Drop photos when it has finished").to_string());
+    } else if !drop.photos.is_empty()
+        && !cfg!(target_arch = "wasm32")
+        && let Some(why) = crate::import::drop_refusal(app)
+    {
+        out.push(why);
     } else if !drop.photos.is_empty() {
         let n = drop.photos.len();
         // the web build has no review to open: its drops import at once

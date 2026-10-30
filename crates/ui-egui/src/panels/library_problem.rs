@@ -772,47 +772,55 @@ pub fn hold_dropped(app: &mut LightcraftApp, ctx: &egui::Context, photos: Vec<St
     None
 }
 
+/// A library is open: the problem is over, and the files that came with the command line are imported.
+pub(crate) fn opened(app: &mut LightcraftApp) {
+    let files = app.library_problem.take().map(|p| p.pending_import).unwrap_or_default();
+    // in the background, like files dropped on the window (issue #374)
+    if !files.is_empty()
+        && let Err(e) = crate::import::start_paths(app, files)
+    {
+        log::warn!("import: {e}");
+    }
+}
+
 /// Open `path` (`None`: ask for a folder) through `app.openLibrary`; on success the problem is
 /// over (and command-line files are imported), else it shows the new error.
-fn open(app: &mut LightcraftApp, path: Option<String>) {
+pub(crate) fn open(app: &mut LightcraftApp, path: Option<String>) {
     let params = match &path {
         Some(p) => json!({"path": p}),
         None => json!({}),
     };
     match app.run("app.openLibrary", params) {
         Ok(serde_json::Value::Null) => {} // folder dialog cancelled
-        Ok(_) => {
-            let files = app.library_problem.take().map(|p| p.pending_import).unwrap_or_default();
-            // in the background, like files dropped on the window (issue #374)
-            if !files.is_empty()
-                && let Err(e) = crate::import::start_paths(app, files)
-            {
-                log::warn!("import: {e}");
+        // asked about the tasks waiting in line first: the problem stays until the switch is confirmed
+        Ok(v) if v["asked"] == true => {}
+        Ok(_) => opened(app),
+        Err(e) => failed(app, path, e),
+    }
+}
+
+/// Opening `path` failed with `e`: the problem window shows the error (and the chooser marks the library unavailable).
+pub(crate) fn failed(app: &mut LightcraftApp, path: Option<String>, e: String) {
+    // a failed switch reopens the library that was open behind the launch list
+    let generation = app.session.library.as_ref().map(|_| app.session.library_generation());
+    if let Some(path) = path.as_deref() {
+        app.recent_checks.failed(path);
+    }
+    if let Some(p) = app.library_problem.as_mut() {
+        if let Some(c) = p.chooser.as_mut() {
+            if c.over.is_some() {
+                c.over = generation;
+            }
+            if let Some(l) = c.libraries.iter_mut().find(|l| path.as_deref() == Some(l.path.as_str())) {
+                l.unavailable = Some(e.clone());
+                l.checking = false;
             }
         }
-        Err(e) => {
-            // a failed switch reopens the library that was open behind the launch list
-            let generation = app.session.library.as_ref().map(|_| app.session.library_generation());
-            if let Some(path) = path.as_deref() {
-                app.recent_checks.failed(path);
-            }
-            if let Some(p) = app.library_problem.as_mut() {
-                if let Some(c) = p.chooser.as_mut() {
-                    if c.over.is_some() {
-                        c.over = generation;
-                    }
-                    if let Some(l) = c.libraries.iter_mut().find(|l| path.as_deref() == Some(l.path.as_str())) {
-                        l.unavailable = Some(e.clone());
-                        l.checking = false;
-                    }
-                }
-                if let Some(path) = path {
-                    p.path = path;
-                }
-                p.error = e;
-                p.dismissed = false;
-            }
+        if let Some(path) = path {
+            p.path = path;
         }
+        p.error = e;
+        p.dismissed = false;
     }
 }
 
@@ -926,10 +934,11 @@ fn alt_at_launch(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
-/// The launch list on screen (not covered by the New Library name dialog it opened).
+/// The launch list on screen (not covered by the New Library name dialog it opened, nor by the question about the
+/// tasks waiting in line).
 fn chooser_shown(app: &LightcraftApp) -> Option<&Chooser> {
     let p = app.library_problem.as_ref().filter(|p| !p.dismissed)?;
-    p.chooser.as_ref().filter(|_| !chooser_owns_dialog(app))
+    p.chooser.as_ref().filter(|_| !chooser_owns_dialog(app) && app.switch_prompt.is_none())
 }
 
 /// ↑ / ↓ move the selection, Return opens it (unless a button has the keyboard focus: it acts
@@ -1002,9 +1011,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         return;
     }
     if let Some(chooser) = &problem.chooser {
-        // its own New Library name dialog goes first; the list comes back after it. An unrelated
-        // dialog (Settings) does not hide the list: the blocking window stays above it.
-        if !chooser_owns_dialog(app) {
+        // its own New Library name dialog or the question about the tasks waiting in line goes first; the list
+        // comes back after it. An unrelated dialog (Settings) does not hide the list: the blocking window stays
+        // above it.
+        if !chooser_owns_dialog(app) && app.switch_prompt.is_none() {
             note_first_draw(app, WindowMode::Chooser);
             show_chooser(app, ctx, &problem, chooser);
             app.library_window_input.drawn = Some(WindowMode::Chooser);

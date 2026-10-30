@@ -251,7 +251,7 @@
   "{size} GB": "{size} GB",
   "{stage}… {:.0}%": "{stage}… {:.0} %",
   "{s} s of AV1 video": "{s} s AV1-video",
-  "{verb} {n} Photo{}": "{verb} {n} foto{}",
+  "{verb} {n} Photo{}": "{verb} foton: {n}{:.0}",
   "{weekday}, {day}": "{weekday} {day}",
   "{weekday}, {day} {month} {year}": "{weekday} {day} {month} {year}",
   "{what} merge added": "{what}-sammanfogning tillagd",
@@ -305,5 +305,14 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Queued: it starts after {n} more": "I kö: startar efter {n} till",
+  "Left alone: {n} (synchronize again to review them)": "Lämnade orörda: {n} (synkronisera igen för att granska dem)",
+  "Starts after {n} more": "Startar efter {n} till",
+  "Remove from Queue: {label}": "Ta bort från kön: {label}",
+  "Starts after: {what}": "Startar efter: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 uppgift väntar i kön: {names}. Om du byter bibliotek tas den bort.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n} uppgifter väntar i kön: {names}. Om du byter bibliotek tas de bort.",
+  "Waiting tasks dropped: {n}": "Väntande uppgifter som togs bort: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "För många uppgifter väntar ({n}): vänta tills några är klara"
 }

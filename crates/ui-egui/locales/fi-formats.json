@@ -305,5 +305,14 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Queued: it starts after {n} more": "Jonossa: alkaa {n} muun jälkeen",
+  "Left alone: {n} (synchronize again to review them)": "Jätetty ennalleen: {n} (synkronoi uudelleen tarkistaaksesi)",
+  "Starts after {n} more": "Alkaa {n} muun jälkeen",
+  "Remove from Queue: {label}": "Poista jonosta: {label}",
+  "Starts after: {what}": "Alkaa tämän jälkeen: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 tehtävä odottaa jonossa: {names}. Kirjaston vaihtaminen hylkää sen.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "Jonossa odottavia tehtäviä: {n}: {names}. Kirjaston vaihtaminen hylkää ne.",
+  "Waiting tasks dropped: {n}": "Hylättyjä odottavia tehtäviä: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Liian monta tehtävää odottaa: {n}. Odota, että osa valmistuu"
 }

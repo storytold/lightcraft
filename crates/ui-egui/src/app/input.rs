@@ -31,7 +31,7 @@ impl LightcraftApp {
         // because a dialog, Lightroom catalog import, a running Synchronize Folder or the import
         // a library open started is still running when the barrier goes. Keep it queued and try
         // the next pass. A drop made outside the barrier keeps the deliberate "close the
-        // dialog"/"An import is running" refusal below.
+        // dialog" and scan/review refusals below.
         if self.deferred_dropped_file_count > 0
             && (self.ui.dialog.is_some() || self.lightroom.is_some() || self.sync_run.is_some() || import::running(self))
         {
@@ -97,8 +97,8 @@ impl LightcraftApp {
             self.toast(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
             return;
         }
-        if import::running(self) {
-            self.toast(ctx, crate::i18n::tr("An import is running"));
+        if let Some(why) = import::drop_refusal(self) {
+            self.toast(ctx, why);
             return;
         }
         let started = if self.ui.settings.import_dropped_directly {

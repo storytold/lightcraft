@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Queued: it starts after {n} more": "რიგშია: დაიწყება კიდევ {n}-ის შემდეგ",
+  "Left alone: {n} (synchronize again to review them)": "უცვლელი დარჩა: {n} (გადასახედად თავიდან დაასინქრონეთ)",
+  "Starts after {n} more": "დაიწყება კიდევ {n}-ის შემდეგ",
+  "Remove from Queue: {label}": "რიგიდან ამოღება: {label}",
+  "Starts after: {what}": "დაიწყება ამის შემდეგ: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "რიგში ელოდება 1 ამოცანა: {names}. ბიბლიოთეკის შეცვლა მას გააუქმებს.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "რიგში ელოდება ამოცანები ({n}): {names}. ბიბლიოთეკის შეცვლა მათ გააუქმებს.",
+  "Waiting tasks dropped: {n}": "გაუქმებული მოლოდინის ამოცანები: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "ძალიან ბევრი ამოცანა ელოდება ({n}): დაელოდეთ, სანამ ზოგი დასრულდება"
 }

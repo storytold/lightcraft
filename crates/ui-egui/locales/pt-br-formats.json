@@ -126,7 +126,7 @@
   "{n} selected photos · {pages} pages": "{n} fotos selecionadas · {pages} páginas",
   "{sel_n} selected · {counted}": "{sel_n} selecionadas · {counted}",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
-  "{verb} {n} Photo{}": "{verb} {n} foto{}",
+  "{verb} {n} Photo{}": "{verb}: {n} foto{}",
   "{weekday}, {day}": "{weekday}, {day}",
   "{weekday}, {day} {month} {year}": "{weekday}, {day}/{month}/{year}",
   "{what} merge added": "{what} mesclagem adicionada",
@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Queued: it starts after {n} more": "Na fila: começa depois de mais {n}",
+  "Left alone: {n} (synchronize again to review them)": "Deixados como estavam: {n} (sincronize de novo para revisá-los)",
+  "Starts after {n} more": "Começa depois de mais {n}",
+  "Remove from Queue: {label}": "Remover da fila: {label}",
+  "Starts after: {what}": "Começa depois de: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 tarefa espera na fila: {names}. Trocar de biblioteca a descarta.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n} tarefas esperam na fila: {names}. Trocar de biblioteca as descarta.",
+  "Waiting tasks dropped: {n}": "Tarefas na fila descartadas: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Há tarefas demais na fila ({n}): espere algumas terminarem"
 }

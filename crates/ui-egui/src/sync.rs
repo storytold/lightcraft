@@ -3,11 +3,17 @@
 //! changed and what to do about it. Synchronize runs `folder.synchronize`, which acts on exactly
 //! the scan the dialog showed (see `lightcraft_engine::sync`). Both the scan and the run show a row in the activity
 //! stack (issue #345); its ✕ stops them like the dialog's Cancel.
+//!
+//! A Synchronize asked for while an import or another synchronize runs waits in line behind it (the library lane,
+//! [`lightcraft_engine::activity::Lane::Library`]). When its turn comes it scans the folder again ([`SyncRescan`]) and
+//! then runs as it was asked, but it removes, relinks or reads sidecars of only the photos its dialog showed: one that
+//! went missing, moved or got a sidecar update meanwhile was never shown to the person, so it is left alone, and the
+//! end says so.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use lightcraft_engine::activity::{Cancel, TaskGuard};
+use lightcraft_engine::activity::{Cancel, Request, TaskGuard};
 use lightcraft_engine::sync::{FolderChanges, SyncChoice, SyncCommit, SyncInput, SyncJob, SyncProgress, SyncStep, scan_with};
 use serde_json::{Value, json};
 
@@ -58,7 +64,8 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
+    // (kind `scan`, not `sync`: it only reads, and doesn't hold up an import)
+    let guard = app.session.activity.start("scan", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
     app.sync = Some(SyncTask { path: path.to_string(), name: name.to_string(), progress, rx, guard });
     let d = SyncChoice::default();
@@ -221,25 +228,44 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// thread at once ([`SyncRun`]); nothing is read from disk on the UI thread. A scan that went
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
 /// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
+/// While an import or another synchronize runs it waits in line instead ([`SyncRescan`]).
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg
     else {
         return Err("the folder is still being scanned".into());
     };
-    // (before the busy checks: nothing is imported or written, so a running import or
-    // synchronize can't clash with it, and the dialog closes either way. Like every result the
+    // (before the line: nothing is imported or written, so a running import or
+    // synchronize can't clash with it and it has nothing to wait for; the dialog closes either way. Like every result the
     // dialog shows, it is the scan's: a file added since is found by the next Synchronize)
     if counts.up_to_date() {
         return Ok(json!({"upToDate": true}));
     }
-    if app.sync_run.is_some() {
-        return Err(crate::i18n::tr("A folder is already being synchronized").to_string());
-    }
-    // (an import readies its files against the library as it was: both could add the same file)
-    if app.import.is_some() {
-        return Err(crate::i18n::tr("Wait for the import to finish").to_string());
-    }
     let choice = SyncChoice { import_new: *import_new, relink_moved: *relink_moved, remove_missing: *remove_missing, read_metadata: *read_metadata };
+    // (an import readies its files against the library as it was: both could add the same file)
+    if crate::import::library_busy(app) {
+        // what the dialog showed: only these are removed, relinked or read, whenever the run comes
+        let shown = app
+            .session
+            .folder_changes
+            .as_ref()
+            .filter(|c| lightcraft_catalog::query::folder_key(&c.path) == lightcraft_catalog::query::folder_key(path));
+        let shown = shown.map(|c| Shown {
+            missing: c.missing.iter().map(|m| m.id).collect(),
+            moved: c.moved.iter().map(|m| m.id).collect(),
+            metadata: c.metadata.iter().map(|m| m.id).collect(),
+        });
+        let request = sync_request(path, name, *disk, choice, &shown.unwrap_or_default());
+        // (the dialog's scan is let go only once the line has room: refused, the dialog stays open holding it)
+        if app.session.activity.line_full() {
+            return Err(crate::panels::activity::line_full_text());
+        }
+        let (id, place) = app.session.activity.enqueue("sync", "Synchronizing folder", request)?;
+        if std::mem::take(&mut app.sync_owns_changes) {
+            app.session.folder_changes = None;
+        }
+        app.queued_toast(place as u64);
+        return Ok(json!({"queued": id, "place": place}));
+    }
     app.sync_owns_changes = false;
     let started = match app.session.take_folder_changes(path) {
         Some(changes) => SyncJob::start(&mut app.session, changes, choice).map_err(|e| e.to_string()),
@@ -259,6 +285,23 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
         }
     };
     let progress = Arc::new(SyncProgress::default());
+    let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
+    guard.detail(name);
+    run(app, name, work, commit, progress, guard, 0);
+    Ok(json!({"started": true}))
+}
+
+/// Hand the work of a synchronize to a worker thread, its steps committed between frames ([`poll_run`]). `left_alone`:
+/// photos found missing, moved or with a sidecar update that its dialog never showed, said at the end.
+fn run(
+    app: &mut LightcraftApp,
+    name: &str,
+    work: lightcraft_engine::sync::SyncWork,
+    commit: SyncCommit,
+    progress: Arc<SyncProgress>,
+    guard: TaskGuard,
+    left_alone: usize,
+) {
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
     let (p, c) = (progress.clone(), crashed.clone());
@@ -273,10 +316,162 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
+    app.sync_run = Some(SyncRun {
+        name: name.to_string(),
+        progress,
+        crashed,
+        rx,
+        commit: Some(commit),
+        stopping: false,
+        not_saved: Vec::new(),
+        guard,
+        left_alone,
+    });
+}
+
+/// The command of a Synchronize Folder's request ([`Request`]): the app runs it ([`start_request`]).
+pub const SYNC_REQUEST: &str = "app:synchronize";
+
+/// The photos a Synchronize Folder dialog listed: the only ones its run may act on if it waits in line.
+#[derive(Default)]
+struct Shown {
+    missing: Vec<u64>,
+    moved: Vec<u64>,
+    metadata: Vec<u64>,
+}
+
+/// What a synchronize was asked, to run it later in line or again: the folder, the dialog's choices, and the missing,
+/// moved and metadata-updated photos it showed (the only ones it may remove, relink or read).
+fn sync_request(path: &str, name: &str, disk: bool, choice: SyncChoice, shown: &Shown) -> Request {
+    Request {
+        command: SYNC_REQUEST.into(),
+        params: json!({
+            "path": path, "name": name, "disk": disk,
+            "importNew": choice.import_new, "relinkMoved": choice.relink_moved, "removeMissing": choice.remove_missing, "readMetadata": choice.read_metadata,
+            "missing": shown.missing, "moved": shown.moved, "metadata": shown.metadata,
+        }),
+        subject: name.to_string(),
+        facts: String::new(),
+    }
+}
+
+/// A synchronize that waited in line, scanning its folder again on a worker thread before it runs ([`poll_rescan`]).
+pub struct SyncRescan {
+    name: String,
+    choice: SyncChoice,
+    /// The missing, moved and metadata-updated photos its dialog showed.
+    missing: std::collections::HashSet<u64>,
+    moved: std::collections::HashSet<u64>,
+    metadata: std::collections::HashSet<u64>,
+    /// The library it was asked in ([`lightcraft_engine::Session::library_generation`]): its photo ids mean nothing in
+    /// another one.
+    library: u64,
+    progress: Arc<SyncProgress>,
+    rx: std::sync::mpsc::Receiver<FolderChanges>,
+    /// Its row, from the line through the scan to the end of the run.
+    guard: TaskGuard,
+}
+
+/// Start a synchronize that waited in line (`request`, made by [`sync_request`]): it scans the folder again, under the
+/// row it had while it waited, and runs when the scan is in ([`poll_rescan`]).
+pub fn start_request(app: &mut LightcraftApp, _ctx: &egui::Context, request: &Request) -> Result<(), String> {
+    let p = &request.params;
+    let path = p["path"].as_str().ok_or("no folder to synchronize")?;
+    let name = p["name"].as_str().unwrap_or(path).to_string();
+    let flag = |k: &str| p[k].as_bool().unwrap_or(false);
+    let ids = |k: &str| p[k].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+    let choice = SyncChoice {
+        import_new: flag("importNew"),
+        relink_moved: flag("relinkMoved"),
+        remove_missing: flag("removeMissing"),
+        read_metadata: flag("readMetadata"),
+    };
+    let input = SyncInput::new(&mut app.session, path, flag("disk")).map_err(|e| e.to_string())?;
+    let progress = Arc::new(SyncProgress::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let pr = progress.clone();
+    let job = move || {
+        let _ = tx.send(scan_with(input, &pr));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(job);
+    #[cfg(target_arch = "wasm32")]
+    job();
     let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
-    guard.detail(name);
-    app.sync_run = Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new(), guard });
-    Ok(json!({"started": true}))
+    guard.detail(&name);
+    let library = app.session.library_generation();
+    app.sync_queued =
+        Some(SyncRescan { name, choice, missing: ids("missing"), moved: ids("moved"), metadata: ids("metadata"), library, progress, rx, guard });
+    Ok(())
+}
+
+/// Run the waiting synchronize once its scan is in (called every frame): only the missing, moved and metadata-updated
+/// photos its dialog showed are acted on.
+pub fn poll_rescan(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(task) = app.sync_queued.as_ref() else { return };
+    // (how many folders and files were listed first: a count stuck at "0 of N" looks like a scan that stopped)
+    let (done, total, detail) = scan_row(&task.progress, &task.name);
+    task.guard.progress(done, total);
+    task.guard.detail(&detail);
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let got = task.rx.try_recv();
+    // (another library opened: it ends at once, not when a scan of the old library's folder is done)
+    let stale = task.library != app.session.library_generation();
+    if matches!(got, Err(std::sync::mpsc::TryRecvError::Empty)) && !task.guard.is_cancelled() && !stale {
+        return;
+    }
+    let Some(task) = app.sync_queued.take() else { return };
+    let SyncRescan { name, choice, missing, moved, metadata, library, progress, guard, .. } = task;
+    if library != app.session.library_generation() {
+        // another library was opened while it scanned: its photos are not these
+        progress.files.cancel.store(true, Ordering::Relaxed);
+        app.toast(ctx, format!("{name}: {}", crate::i18n::tr("Another library was opened: nothing was done")));
+        return;
+    }
+    let mut changes = match got {
+        _ if guard.is_cancelled() => {
+            progress.files.cancel.store(true, Ordering::Relaxed);
+            return;
+        }
+        Ok(c) => c,
+        Err(_) => {
+            // the scan's worker died (a panic, logged)
+            app.toast(ctx, crate::i18n::tr("Scan failed"));
+            return;
+        }
+    };
+    if changes.offline {
+        let why = crate::i18n::tr("This folder isn't there: it was moved or renamed, or its disk isn't connected.").to_string();
+        app.toast(ctx, format!("{name}: {why}"));
+        return;
+    }
+    // (the library moved on while the folder was read, on a share that can take minutes: a photo it relinked or edited
+    // since is not removed or overwritten from a scan that did not see it)
+    if !app.session.scan_is_current(&changes) {
+        app.toast(ctx, format!("{name}: {}", crate::i18n::tr("Photos of the folder changed while it was read: nothing was done")));
+        return;
+    }
+    // only what the person saw is removed, relinked or read; what they would have been asked about is said
+    let (missing_before, moved_before, metadata_before) = (changes.missing.len(), changes.moved.len(), changes.metadata.len());
+    changes.missing.retain(|m| missing.contains(&m.id));
+    changes.moved.retain(|m| moved.contains(&m.id));
+    changes.metadata.retain(|m| metadata.contains(&m.id));
+    let left_alone = if choice.remove_missing { missing_before - changes.missing.len() } else { 0 }
+        + if choice.relink_moved { moved_before - changes.moved.len() } else { 0 }
+        + if choice.read_metadata { metadata_before - changes.metadata.len() } else { 0 };
+    match SyncJob::start(&mut app.session, changes, choice) {
+        Ok((work, commit)) => {
+            // (a fresh count, the same ✕: its row's flag stops the run as it stopped the scan)
+            let run_progress = Arc::new(SyncProgress {
+                files: lightcraft_engine::import::ScanProgress { cancel: progress.files.cancel.clone(), ..Default::default() },
+                ..Default::default()
+            });
+            run(app, &name, work, commit, run_progress, guard, left_alone);
+        }
+        Err(e) => {
+            app.toast(ctx, format!("{name}: {e}"));
+        }
+    }
 }
 
 /// A synchronize at work: the file-system half on a worker thread, its steps committed here
@@ -294,6 +489,9 @@ pub struct SyncRun {
     stopping: bool,
     /// Its row in the activity stack (its ✕ is Cancel).
     guard: TaskGuard,
+    /// Photos found missing, moved or with a sidecar update that its dialog never showed (a run that waited in line):
+    /// left alone, and said.
+    left_alone: usize,
 }
 
 impl SyncRun {
@@ -333,6 +531,7 @@ pub(crate) fn stall_run(app: &mut LightcraftApp, name: &str) -> Box<dyn std::any
         stopping: false,
         not_saved: Vec::new(),
         guard,
+        left_alone: 0,
     });
     Box::new(tx)
 }
@@ -372,8 +571,8 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
         run.commit = Some(commit);
         return;
     }
-    let (name, stopped, crashed, mut not_saved) =
-        (run.name.clone(), run.stopping, run.crashed.load(Ordering::Relaxed), std::mem::take(&mut run.not_saved));
+    let (name, stopped, crashed, mut not_saved, left_alone) =
+        (run.name.clone(), run.stopping, run.crashed.load(Ordering::Relaxed), std::mem::take(&mut run.not_saved), run.left_alone);
     app.sync_run = None;
     let mut report = None;
     if let Err(e) = app.session.execute_fn("folder.synchronize", |s| {
@@ -403,6 +602,9 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     if let Some(e) = not_saved.first() {
         parts.push(format!("{}: {e}", crate::i18n::tr("Not saved")));
+    }
+    if left_alone > 0 {
+        parts.push(crate::i18n::tr_format!("Left alone: {n} (synchronize again to review them)", n = left_alone));
     }
     let text = if parts.is_empty() { crate::i18n::tr("The library is up to date with this folder.").to_string() } else { parts.join(" · ") };
     if not_saved.is_empty() && !crashed {

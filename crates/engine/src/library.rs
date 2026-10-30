@@ -413,7 +413,19 @@ impl Session {
     /// created ([`crate::lightroom_folder`]); a LightCraft library always opens, whatever else
     /// its folder holds.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
-        let dir = dir.as_ref().to_path_buf();
+        self.open_library_dropping(dir.as_ref(), seed_demo, true)
+    }
+
+    /// Open the library this session had open before an attempt to open another one failed (the old one was closed
+    /// first): [`Session::open_library`], except that the tasks waiting in line stay. They were asked for in this very
+    /// library, which is the one open again, and nothing was switched.
+    pub fn reopen_library(&mut self, dir: impl AsRef<Path>) -> Result<&LoadReport> {
+        self.open_library_dropping(dir.as_ref(), false, false)
+    }
+
+    /// `drop_waiting`: the line empties when the library opens.
+    fn open_library_dropping(&mut self, dir: &Path, seed_demo: bool, drop_waiting: bool) -> Result<&LoadReport> {
+        let dir = dir.to_path_buf();
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
@@ -427,7 +439,7 @@ impl Session {
             Some(l) => Some(l),
             None => Some(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?),
         };
-        if let Err(e) = self.open_stores(stores, seed_demo, &mut lock) {
+        if let Err(e) = self.open_stores(stores, seed_demo, &mut lock, drop_waiting) {
             if reusing && let Some(lib) = self.library.as_mut() {
                 lib.lock = lock.take();
             }
@@ -440,7 +452,7 @@ impl Session {
     /// this session's catalog. Not locked: the host guards against a second opener (see
     /// [`Session::open_library`] for directories).
     pub fn open_library_in(&mut self, stores: LibraryStores, seed_demo: bool) -> Result<&LoadReport> {
-        self.open_stores(stores, seed_demo, &mut None)?;
+        self.open_stores(stores, seed_demo, &mut None, true)?;
         self.loaded_report()
     }
 
@@ -451,8 +463,9 @@ impl Session {
         }
     }
 
-    /// Open `stores`; the new library takes `lock` once nothing can fail any more.
-    fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
+    /// Open `stores`; the new library takes `lock` once nothing can fail any more. `drop_waiting`: the tasks waiting in
+    /// line are the old library's and go with it.
+    fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>, drop_waiting: bool) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
@@ -475,6 +488,13 @@ impl Session {
         static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         catalog.revision = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1) << 32;
         self.catalog = catalog;
+        // nor do tasks waiting in line carry over: they name the old library's photos and folders
+        if drop_waiting {
+            let dropped = self.activity.library_changed();
+            if dropped > 0 {
+                log::info!("library: {dropped} task(s) waiting in line were dropped with the old library");
+            }
+        }
         // (nothing of the list the last library showed is this one's)
         self.refresh_view();
         self.library_generation = crate::LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

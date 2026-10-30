@@ -115,7 +115,7 @@ fn busy(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("a Lightroom catalog task is already running; wait for it to finish".into());
     }
-    if app.import.is_some() || app.scan.is_some() {
+    if app.import.is_some() || app.scan.is_some() || crate::import::library_busy(app) {
         return Err("an import is running; wait for it to finish before importing a Lightroom catalog".into());
     }
     Ok(())
@@ -161,6 +161,13 @@ pub fn import(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Valu
 /// empty library behind.
 fn into_new_library(app: &mut LightcraftApp, path: &str, req: &Request) -> Result<Value, String> {
     busy(app)?;
+    // (a new library drops the tasks waiting in line, which `app.newLibrary` asks about first: the catalog would be
+    // merged into the library that stays open)
+    if !app.session.activity.waiting().is_empty() {
+        return Err(
+            "file.importLightroom: tasks are waiting in line, and a new library would drop them; wait for them to finish or remove them first".into(),
+        );
+    }
     if !Path::new(path).is_file() {
         return Err(format!("{path}: there is no Lightroom catalog file here"));
     }

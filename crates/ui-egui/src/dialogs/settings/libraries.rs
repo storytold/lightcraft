@@ -54,16 +54,63 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
         app.ui.settings.recent_libraries.retain(|r| r != &path);
         return Err(format!("{path}: the library is no longer there (moved, renamed or on a disconnected drive); removed from Open Recent Library"));
     }
-    switch_library(app, &path)
+    switch_library(app, &path, p.get("dropWaiting").and_then(Value::as_bool) == Some(true))
+}
+
+/// Stop to ask before leaving the library while tasks wait in line: the other library would drop them (their photos
+/// and folders are this one's), as quitting asks before stopping what runs. A control call that already agrees says
+/// `dropWaiting: true`. `create`: the folder is made when it is confirmed (a New Library).
+fn ask_before_dropping_the_line(app: &mut LightcraftApp, path: &str, create: bool) -> Value {
+    let waiting = app.session.activity.waiting();
+    // (the first few: the window has no room for a hundred)
+    const NAMED: usize = 5;
+    let mut shown = waiting.iter().take(NAMED).map(crate::panels::activity::waiting_name).collect::<Vec<_>>();
+    if waiting.len() > NAMED {
+        shown.push(crate::i18n::tr_format!("+{n} more", n = waiting.len() - NAMED));
+    }
+    let names = shown.join(", ");
+    let text = if waiting.len() == 1 {
+        crate::i18n::tr_format!("1 task is waiting in line: {names}. Switching libraries drops it.", names = names)
+    } else {
+        crate::i18n::tr_format!("{n} tasks are waiting in line: {names}. Switching libraries drops them.", n = waiting.len(), names = names)
+    };
+    let ids = waiting.iter().map(|t| t.id).collect();
+    app.switch_prompt =
+        Some(crate::SwitchPrompt { path: path.to_string(), create, text, generation: app.session.library_generation(), waiting: ids });
+    // (held from now: a lane that frees before the next frame must not start what the question is about)
+    app.session.activity.hold_line(true);
+    json!({"opened": false, "asked": true, "waiting": waiting.len()})
+}
+
+/// The question was answered with Switch Library: make the folder of a New Library, then switch.
+pub(crate) fn confirm_switch(app: &mut LightcraftApp, prompt: &crate::SwitchPrompt) -> Result<Value, String> {
+    // (an import may have begun while the question was up)
+    can_switch_library(app)?;
+    // (so may a task have been put in line: the question did not name it, so it is asked again, with the whole line)
+    if app.session.activity.waiting().iter().any(|t| !prompt.waiting.contains(&t.id)) {
+        return Ok(ask_before_dropping_the_line(app, &prompt.path, prompt.create));
+    }
+    if prompt.create {
+        std::fs::create_dir_all(&prompt.path).map_err(|e| format!("{}: can't create the library folder: {e}", prompt.path))?;
+    }
+    let opened = switch_library(app, &prompt.path, true)?;
+    // (the question may have come from the library chooser)
+    crate::panels::library_problem::opened(app);
+    Ok(opened)
 }
 
 /// Close the current library and open the one at `path`. If it can't be opened (locked by
 /// another program, unreadable, a file), the error is returned and the current library stays open:
 /// the target is checked before anything is closed, and if opening it still fails the previous
-/// library is opened again (both errors are reported if that fails too).
-fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> {
+/// library is opened again (both errors are reported if that fails too). Tasks waiting in line are dropped with the
+/// old library: unless `agreed`, that is asked first.
+fn switch_library(app: &mut LightcraftApp, path: &str, agreed: bool) -> Result<Value, String> {
     let dir = app.session.check_library(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     let path = dir.to_string_lossy().into_owned();
+    if !agreed && !app.session.activity.waiting().is_empty() {
+        return Ok(ask_before_dropping_the_line(app, &path, false));
+    }
+    let dropped = app.session.activity.waiting().len();
     // the library being left goes in the list too (also when it was opened at launch)
     let previous_dir = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
     let previous = previous_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
@@ -77,7 +124,7 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     app.renderer.forget_all();
     if let Err(err) = opened {
         let Some(prev) = previous_dir else { return Err(err) };
-        return match app.session.open_library(&prev, false) {
+        return match app.session.reopen_library(&prev) {
             Ok(_) => Err(err),
             Err(e) => Err(format!("{err}; reopening the previous library {} failed too: {e}", prev.display())),
         };
@@ -95,6 +142,9 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
         remember_library(&mut app.ui.settings.recent_libraries, &prev);
     }
     remember_library(&mut app.ui.settings.recent_libraries, &path);
+    if dropped > 0 {
+        app.say(crate::i18n::tr_format!("Waiting tasks dropped: {n}", n = dropped));
+    }
     Ok(json!({"path": path, "name": library_name(&dir), "photos": app.session.catalog.len()}))
 }
 
@@ -168,8 +218,11 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
     if std::fs::read_dir(&dir).is_ok_and(|mut d| d.next().is_some()) {
         return Err(format!("{}: the folder isn't empty; choose an empty folder or a new name", dir.display()));
     }
+    if p.get("dropWaiting").and_then(Value::as_bool) != Some(true) && !app.session.activity.waiting().is_empty() {
+        return Ok(ask_before_dropping_the_line(app, &dir.to_string_lossy(), true));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: can't create the library folder: {e}", dir.display()))?;
-    switch_library(app, &dir.to_string_lossy())
+    switch_library(app, &dir.to_string_lossy(), true)
 }
 
 /// Characters a folder name can't hold on Windows (and `/`, which no system allows).

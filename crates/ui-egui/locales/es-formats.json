@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "No se pudo leer {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} añadida{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "¿Dónde debe ir el catálogo de Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})",
+  "Queued: it starts after {n} more": "En cola: empieza tras {n} más",
+  "Left alone: {n} (synchronize again to review them)": "Sin tocar: {n} (sincroniza de nuevo para revisarlos)",
+  "Starts after {n} more": "Empieza tras {n} más",
+  "Remove from Queue: {label}": "Quitar de la cola: {label}",
+  "Starts after: {what}": "Empieza tras: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 tarea espera en la cola: {names}. Cambiar de biblioteca la descarta.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n} tareas esperan en la cola: {names}. Cambiar de biblioteca las descarta.",
+  "Waiting tasks dropped: {n}": "Tareas en espera descartadas: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Hay demasiadas tareas en espera ({n}): espera a que terminen algunas"
 }

@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Queued: it starts after {n} more": "已加入佇列：再過 {n} 個後開始",
+  "Left alone: {n} (synchronize again to review them)": "未處理：{n}（再次同步以檢視）",
+  "Starts after {n} more": "再過 {n} 個後開始",
+  "Remove from Queue: {label}": "從佇列中移除：{label}",
+  "Starts after: {what}": "在此之後開始：{what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "有 1 個工作在排隊等待：{names}。切換照片庫將捨棄它。",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "有 {n} 個工作在排隊等待：{names}。切換照片庫將捨棄它們。",
+  "Waiting tasks dropped: {n}": "已捨棄排隊等待的工作：{n} 個",
+  "Too many tasks are waiting ({n}): wait for some to finish": "等待中的工作過多（{n} 個）：請等待部分工作完成"
 }

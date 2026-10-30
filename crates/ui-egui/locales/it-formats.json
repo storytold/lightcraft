@@ -164,7 +164,7 @@
   "{pid} (missing)": "{pid} (mancante)",
   "{sel_n} selected · {counted}": "Selezionate: {sel_n} · {counted}",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
-  "{verb} {n} Photo{}": "{verb} {n} foto{:.0}",
+  "{verb} {n} Photo{}": "{verb}: {n} foto{:.0}",
   "{weekday}, {day}": "{weekday} {day}",
   "{weekday}, {day} {month} {year}": "{weekday} {day}/{month:02}/{year}",
   "{what} merge added": "Unione {what} aggiunta",
@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "Queued: it starts after {n} more": "In coda: parte dopo altre attività ({n})",
+  "Left alone: {n} (synchronize again to review them)": "Lasciati invariati: {n} (sincronizza di nuovo per rivederli)",
+  "Starts after {n} more": "Parte dopo altre attività ({n})",
+  "Remove from Queue: {label}": "Rimuovi dalla coda: {label}",
+  "Starts after: {what}": "Parte dopo: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 attività è in coda: {names}. Cambiando libreria viene scartata.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n} attività sono in coda: {names}. Cambiando libreria vengono scartate.",
+  "Waiting tasks dropped: {n}": "Attività in coda scartate: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Troppe attività in coda ({n}): attendi che alcune finiscano"
 }

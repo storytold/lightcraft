@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Queued: it starts after {n} more": "已加入队列：再过 {n} 个后开始",
+  "Left alone: {n} (synchronize again to review them)": "未处理：{n}（再次同步以查看）",
+  "Starts after {n} more": "再过 {n} 个后开始",
+  "Remove from Queue: {label}": "从队列中移除：{label}",
+  "Starts after: {what}": "在此之后开始：{what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "有 1 个任务在排队等待：{names}。切换图库将丢弃它。",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "有 {n} 个任务在排队等待：{names}。切换图库将丢弃它们。",
+  "Waiting tasks dropped: {n}": "已丢弃排队等待的任务：{n} 个",
+  "Too many tasks are waiting ({n}): wait for some to finish": "等待中的任务过多（{n} 个）：请等待部分任务完成"
 }

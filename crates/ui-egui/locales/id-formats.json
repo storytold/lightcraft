@@ -138,7 +138,7 @@
   "Updated “{name}”": "“{name}” diperbarui",
   "{month}": "{month:02}",
   "{month} {year}": "{month:02}/{year}",
-  "{verb} {n} Photo{}": "{verb} {n} foto{:.0}",
+  "{verb} {n} Photo{}": "{verb}: {n} foto{:.0}",
   "{weekday}, {day}": "{weekday}, {day}",
   "{weekday}, {day} {month} {year}": "{weekday}, {day:02}/{month:02}/{year}",
   "{year}": "{year}",
@@ -305,5 +305,14 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Queued: it starts after {n} more": "Dalam antrean: dimulai setelah {n} lagi",
+  "Left alone: {n} (synchronize again to review them)": "Dibiarkan: {n} (sinkronkan lagi untuk meninjau)",
+  "Starts after {n} more": "Dimulai setelah {n} lagi",
+  "Remove from Queue: {label}": "Hapus dari antrean: {label}",
+  "Starts after: {what}": "Dimulai setelah: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 tugas mengantre: {names}. Jika pustaka diganti, tugas ini akan dibuang.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n} tugas mengantre: {names}. Jika pustaka diganti, semua tugas ini akan dibuang.",
+  "Waiting tasks dropped: {n}": "Tugas antrean yang dibuang: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Terlalu banyak tugas mengantre ({n}): tunggu sampai sebagian selesai"
 }

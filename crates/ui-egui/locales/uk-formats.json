@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Queued: it starts after {n} more": "У черзі: почнеться після ще {n}",
+  "Left alone: {n} (synchronize again to review them)": "Залишено без змін: {n} (синхронізуйте знову, щоб переглянути)",
+  "Starts after {n} more": "Почнеться після ще {n}",
+  "Remove from Queue: {label}": "Прибрати з черги: {label}",
+  "Starts after: {what}": "Почнеться після: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 завдання чекає в черзі: {names}. Зміна бібліотеки скасує його.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "Завдання чекають у черзі ({n}): {names}. Зміна бібліотеки скасує їх.",
+  "Waiting tasks dropped: {n}": "Скасовано завдань із черги: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "У черзі забагато завдань: {n}. Зачекайте, поки частина завершиться"
 }

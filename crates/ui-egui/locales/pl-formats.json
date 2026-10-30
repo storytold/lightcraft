@@ -305,5 +305,14 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Queued: it starts after {n} more": "W kolejce: rozpocznie się po kolejnych zadaniach ({n})",
+  "Left alone: {n} (synchronize again to review them)": "Pominięto: {n} (zsynchronizuj ponownie, aby je sprawdzić)",
+  "Starts after {n} more": "Rozpocznie się po kolejnych zadaniach ({n})",
+  "Remove from Queue: {label}": "Usuń z kolejki: {label}",
+  "Starts after: {what}": "Rozpocznie się po: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "W kolejce czeka 1 zadanie: {names}. Przełączenie biblioteki je odrzuci.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "W kolejce czekają zadania: {n}: {names}. Przełączenie biblioteki je odrzuci.",
+  "Waiting tasks dropped: {n}": "Odrzucone zadania z kolejki: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Zbyt wiele zadań czeka ({n}): poczekaj, aż część się zakończy"
 }

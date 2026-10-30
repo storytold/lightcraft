@@ -61,6 +61,7 @@ mod print;
 mod profile_menu;
 mod profiles_layout;
 mod progress;
+mod queue_ux;
 mod quit_unsaved;
 mod rating;
 mod recheck;

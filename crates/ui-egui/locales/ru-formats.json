@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Queued: it starts after {n} more": "В очереди: начнётся после ещё {n}",
+  "Left alone: {n} (synchronize again to review them)": "Оставлено без изменений: {n} (синхронизируйте снова, чтобы проверить)",
+  "Starts after {n} more": "Начнётся после ещё {n}",
+  "Remove from Queue: {label}": "Убрать из очереди: {label}",
+  "Starts after: {what}": "Начнётся после: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "В очереди ждёт задача: {names}. При смене библиотеки она будет отброшена.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "В очереди ждёт задач: {n} — {names}. При смене библиотеки они будут отброшены.",
+  "Waiting tasks dropped: {n}": "Отброшено задач из очереди: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "В очереди слишком много задач: {n}. Подождите, пока часть завершится"
 }

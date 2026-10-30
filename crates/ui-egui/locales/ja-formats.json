@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Queued: it starts after {n} more": "キューに追加: あと {n} 件の後に開始します",
+  "Left alone: {n} (synchronize again to review them)": "そのまま: {n} 件（再度同期して確認してください）",
+  "Starts after {n} more": "あと {n} 件の後に開始します",
+  "Remove from Queue: {label}": "キューから削除: {label}",
+  "Starts after: {what}": "次の後に開始: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1件のタスクが待機中です：{names}。ライブラリを切り替えると破棄されます。",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n}件のタスクが待機中です：{names}。ライブラリを切り替えると破棄されます。",
+  "Waiting tasks dropped: {n}": "破棄した待機中のタスク：{n}件",
+  "Too many tasks are waiting ({n}): wait for some to finish": "待機中のタスクが多すぎます（{n}件）：いくつか完了するまでお待ちください"
 }

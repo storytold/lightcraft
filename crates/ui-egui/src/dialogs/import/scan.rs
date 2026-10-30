@@ -1,5 +1,5 @@
 use super::task::ImportTask;
-use super::{ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanProgress, Value, json, scan_with};
+use super::{ImportDialog, Lane, LightcraftApp, Ordering, Request, ScanInput, ScanOutput, ScanProgress, Value, json, scan_with};
 
 /// A folder scan running on a worker thread (a network share can take minutes to read; the
 /// window must keep answering meanwhile).
@@ -11,7 +11,7 @@ pub struct ScanTask {
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
     pub album: Option<u64>,
     /// Browsing a folder (Local): the photos are read in place instead of opening the review.
-    pub(super) browse: bool,
+    pub(crate) browse: bool,
     /// What is being scanned (the review's source).
     sources: Vec<String>,
     /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
@@ -24,10 +24,110 @@ fn scan_guard(app: &LightcraftApp, progress: &ScanProgress, browse: bool) -> lig
     app.session.activity.start("scan", label, lightcraft_engine::activity::Cancel::Flag(progress.cancel.clone()))
 }
 
-/// An import and a Synchronize Folder never run at once: each readies its files against the
-/// library as it was when it started, so both could add the same file.
-pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
-    if app.sync_run.is_some() { Err(crate::i18n::tr("A folder is being synchronized").to_string()) } else { Ok(()) }
+/// The command of an import's request ([`Request`]): the app runs it ([`start_request`]), with its files and its
+/// `library.import` params.
+pub const IMPORT_REQUEST: &str = "app:import";
+
+/// `sources`: the folders or files the person chose, which name the import; `counted`: `paths` are the photos the
+/// review counted (dropped folders are not counted until they are read).
+pub(super) fn import_request(paths: &[String], params: &Value, auto: bool, sources: &[String], counted: bool) -> Request {
+    Request {
+        command: IMPORT_REQUEST.into(),
+        params: json!({"paths": paths, "params": params, "auto": auto}),
+        subject: subject_of(sources),
+        facts: facts_of(counted.then_some(paths.len()), params["mode"].as_str().unwrap_or("add")),
+    }
+}
+
+/// What an import is about, for its rows: the source folder's (or file's) name, or how many sources there are. Empty
+/// when it is not known where the photos come from.
+pub(super) fn subject_of(sources: &[String]) -> String {
+    match sources {
+        [] => String::new(),
+        [one] => {
+            std::path::Path::new(one.trim_end_matches(['/', '\\'])).file_name().map_or_else(|| one.clone(), |n| n.to_string_lossy().into_owned())
+        }
+        many => crate::i18n::tr_format!("{} item{}", many.len(), "s"),
+    }
+}
+
+/// What else an import waiting in line says: how many photos (when the review counted them) and how they come in.
+fn facts_of(photos: Option<usize>, mode: &str) -> String {
+    let how = match mode {
+        "copy" => crate::i18n::tr("Copy"),
+        "move" => crate::i18n::tr("Move"),
+        _ => crate::i18n::tr("Add in place"),
+    };
+    match photos {
+        Some(n) => format!("{} · {how}", crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)),
+        None => how.to_string(),
+    }
+}
+
+/// The library lane is taken: an import (or the reading of a Local folder) or a Synchronize Folder runs, or waits
+/// to. Each readies its files against the library as it is when it starts, so two side by side could add the same
+/// file: one asked for now waits in line ([`Lane::Library`]).
+pub(crate) fn library_busy(app: &LightcraftApp) -> bool {
+    app.import.is_some()
+        || app.scan.as_ref().is_some_and(|t| t.browse)
+        || app.sync_run.is_some()
+        || app.sync_queued.is_some()
+        || app.session.activity.lane_busy(Lane::Library)
+        || app.session.activity.lane_waiting(Lane::Library)
+}
+
+/// What a task asked for now would start after, as its dialog says it ("Importing · Rome"): what runs in the library
+/// lane, else the last task waiting there. `None` when the lane is free.
+pub(crate) fn lane_ahead_text(app: &LightcraftApp) -> Option<String> {
+    if !library_busy(app) {
+        return None;
+    }
+    let rows = app.session.activity.list();
+    let in_lane = |t: &&lightcraft_engine::activity::TaskInfo| t.lane == Some(Lane::Library);
+    let ahead = rows.iter().filter(in_lane).find(|t| !t.waiting).or_else(|| rows.iter().rev().find(in_lane));
+    // (a Local folder being read holds the lane with a row of its own kind, which has no lane)
+    let reading = || app.scan.as_ref().is_some_and(|t| t.browse).then(|| crate::i18n::tr("Reading folder").to_string());
+    Some(ahead.map(crate::panels::activity::waiting_name).or_else(reading).unwrap_or_else(|| crate::i18n::tr("Importing").to_string()))
+}
+
+/// Put an import of `paths` with `params` in line behind what runs in the library lane, and say so (an Auto Import
+/// quietly: nobody asked for it).
+pub(super) fn wait_in_line(app: &mut LightcraftApp, request: Request) -> Result<Value, String> {
+    if app.session.activity.line_full() {
+        return Err(crate::panels::activity::line_full_text());
+    }
+    let auto = request.params["auto"].as_bool().unwrap_or(false);
+    let (id, place) = app.session.activity.enqueue("import", "Importing", request)?;
+    if !auto {
+        app.queued_toast(place as u64);
+    }
+    Ok(json!({"queued": id, "place": place}))
+}
+
+/// The watched folder was listed (Auto Import): import what is new in it, as an Auto Import. The engine has noted
+/// those files as tried by now, so while the library lane is taken (it was free when the listing began) they wait in
+/// line instead of being dropped.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn auto_import_listed(app: &mut LightcraftApp, listing: Vec<(String, u64)>) {
+    // no room in the line: leave the folder to its next listing, because the scan below notes its files as tried
+    if library_busy(app) && app.session.activity.waiting().len() >= lightcraft_engine::activity::MAX_WAITING {
+        return;
+    }
+    let p = json!({"listing": listing, "start": false});
+    let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
+    let Some(mut params) = r.get("import").cloned() else { return };
+    let paths: Vec<String> = params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    if let Some(o) = params.as_object_mut() {
+        o.remove("paths");
+    }
+    if library_busy(app) {
+        if let Err(e) = wait_in_line(app, import_request(&paths, &params, true, &[], true)) {
+            log::warn!("auto import: {e}");
+        }
+        return;
+    }
+    let undo0 = app.session.undo.len();
+    app.import = Some(ImportTask::new(paths, params, undo0, false).auto());
 }
 
 /// Settings → Import → "Show the import review when a camera or card is connected", called with
@@ -254,11 +354,25 @@ pub(crate) fn stall_scan_of(app: &mut LightcraftApp, browse: bool) -> Box<dyn st
     Box::new(tx)
 }
 
-/// Whether an import or any scan (the review's, or a Local folder browse) is running, or a finished scan's
-/// review waits for a dialog to close, which a drop of photos must not replace: `open` refuses while a scan
-/// runs, and a browse that finishes replaces `app.import`.
+/// Whether an import or any scan (the review's, or a Local folder browse) is running, or a finished scan's review waits
+/// for a dialog to close. A drop that was held behind a barrier is tried again only when this is over (a fresh drop
+/// while an import runs is not refused: it waits in line, see [`drop_refusal`]).
 pub fn running(app: &LightcraftApp) -> bool {
     app.import.is_some() || app.scan.is_some() || app.review_pending.is_some()
+}
+
+/// Why a drop of photos is refused now, in the person's language, if it is: a scan (the review's, or a Local folder
+/// browse) is running, or a finished scan's review waits for a dialog to close. A drop must not replace them: `open`
+/// refuses while a scan runs, and a browse that finishes replaces `app.import`. A drop while an import runs is not
+/// refused: it waits in line ([`library_busy`]).
+pub fn drop_refusal(app: &LightcraftApp) -> Option<String> {
+    let why = match app.scan.as_ref() {
+        Some(scan) if scan.browse => "A folder is still being read for the Local view: drop photos when it has finished",
+        Some(_) => "A folder is still being scanned for the import review: drop photos when it has finished",
+        None if app.review_pending.is_some() => "An import review is waiting to open: drop photos when it is closed",
+        None => return None,
+    };
+    Some(crate::i18n::tr(why).to_string())
 }
 
 impl ScanTask {

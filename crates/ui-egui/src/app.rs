@@ -44,6 +44,7 @@ impl LightcraftApp {
             updates_rt: Default::default(),
             quit_prompt: None,
             notice_input: Default::default(),
+            switch_prompt: None,
             quit_confirmed: false,
             control_rx: None,
             pending_screenshots: vec![],
@@ -105,6 +106,7 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            sync_queued: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
@@ -286,6 +288,59 @@ impl LightcraftApp {
         r
     }
 
+    /// Say that a task waits in line at `place` of its lane: without it, asking for it seems to do nothing.
+    pub(crate) fn queued_toast(&mut self, place: u64) {
+        // (counted as its row counts: the waiting tasks ahead of it, after the running one)
+        let text = if place <= 1 {
+            i18n::tr("Queued: it starts when the task ahead of it ends").to_string()
+        } else {
+            i18n::tr_format!("Queued: it starts after {n} more", n = place - 1)
+        };
+        self.say(text);
+    }
+
+    /// A toast from code that has no frame context at hand.
+    pub(crate) fn say(&mut self, text: String) {
+        let now = self.tick_now();
+        self.ui.toast = Some((text, now + TOAST_SECONDS, None));
+    }
+
+    /// Start the tasks waiting in line whose lane is free: the engine's ([`lightcraft_engine::Session::start_waiting`])
+    /// and the app's own (`app:import`, `app:synchronize`), each the way it was asked. One that can't start says why
+    /// in a toast; the next in line goes on.
+    fn start_waiting(&mut self, ctx: &egui::Context) {
+        // nothing leaves the line while the question about dropping it is open: a task started now would refuse the
+        // switch (an import) or escape the drop the person is agreeing to (a build). A question about a library no
+        // longer open is stale (the next drawn frame drops it; a hidden window draws none) and holds nothing.
+        let asked = self.switch_prompt.as_ref().is_some_and(|p| p.generation == self.session.library_generation());
+        self.session.activity.hold_line(asked);
+        self.session.start_waiting();
+        // The app's own wait while its slots are taken, row or no row yet: an import set this frame (Auto Import, its
+        // row comes at the next tick), a synchronize, or a Local folder being read (it becomes an import when read).
+        let held = self.lightroom.is_some()
+            || self.import.is_some()
+            || self.sync_run.is_some()
+            || self.sync_queued.is_some()
+            || self.scan.as_ref().is_some_and(|t| t.browse);
+        if held {
+            return;
+        }
+        // (bounded: each turn takes one task out of a line that is at most this long)
+        for _ in 0..lightcraft_engine::activity::MAX_WAITING {
+            let Some(w) = self.session.activity.take_ready_if(|r| r.command.starts_with("app:")) else { break };
+            let r = match w.request.command.as_str() {
+                import::IMPORT_REQUEST => import::start_request(self, ctx, &w.request),
+                sync::SYNC_REQUEST => sync::start_request(self, ctx, &w.request),
+                other => Err(format!("unknown request {other}")),
+            };
+            self.session.activity.started();
+            if let Err(e) = r {
+                log::warn!("{}: a task that waited could not start: {e}", w.request.command);
+                self.toast_error(ctx, e);
+            }
+        }
+    }
+
     /// The remembered ratio belongs to the tool until the user starts editing the crop.
     pub(crate) fn crop_tool_aspect(&self) -> Option<(u32, u32)> {
         let photo = self.session.active()?;
@@ -361,32 +416,48 @@ impl LightcraftApp {
         panels::slideshow::tick(self, ctx, now);
     }
 
-    /// Announce the end of a Build Previews run.
+    /// A task waiting in line whose lane freed while nothing was asked starts now (commands start them too); then the
+    /// run in progress is looked at, so that one started here is polled for its end from this frame on.
+    pub(crate) fn tick_preview_builds(&mut self, ctx: &egui::Context) {
+        self.start_waiting(ctx);
+        self.preview_build_status(ctx);
+    }
+
+    /// Announce the end of a Build Previews run, and of those a build waiting in line replaced before it was announced
+    /// (in one toast, oldest first). A build is announced once: its `reported` flag says so, not where it lives.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
-        let Some(b) = self.session.preview_build.clone() else { return };
-        let key = std::sync::Arc::as_ptr(&b) as usize;
-        if b.finished.load(Ordering::Relaxed) {
-            if self.ui.preview_build_seen != Some((key, true)) {
-                self.ui.preview_build_seen = Some((key, true));
-                let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
-                let plural = if done == 1 { "" } else { "s" };
-                let mut msg = match (b.error(), b.what) {
-                    (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
-                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
-                    (None, what) => {
-                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
-                    }
-                };
-                if failed > 0 {
-                    msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
-                }
-                self.toast(ctx, msg);
+        let mut ended = self.session.take_unreported_builds();
+        match self.session.preview_build.clone() {
+            Some(b) if b.finished.load(Ordering::Relaxed) => ended.push(b),
+            Some(_) => {
+                // The activity stack shows the run while it works; poll for the end.
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
-        } else {
-            // The activity stack shows the run while it works; poll for the end.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            None => {}
         }
+        let msgs: Vec<String> = ended.iter().filter(|b| !b.reported.swap(true, Ordering::Relaxed)).map(|b| Self::build_message(b)).collect();
+        if !msgs.is_empty() {
+            self.toast(ctx, msgs.join("; "));
+        }
+    }
+
+    /// How a finished Build Previews run ended, as the toast words it.
+    fn build_message(b: &lightcraft_engine::cmd::previews::PreviewBuild) -> String {
+        use std::sync::atomic::Ordering;
+        let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
+        let plural = if done == 1 { "" } else { "s" };
+        let mut msg = match (b.error(), b.what) {
+            (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
+            (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
+            (None, what) => {
+                crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
+            }
+        };
+        if failed > 0 {
+            msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
+        }
+        msg
     }
 
     /// Announce when saving the library starts failing (changes then live only in memory and are

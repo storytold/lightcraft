@@ -305,5 +305,14 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Queued: it starts after {n} more": "Trong hàng đợi: bắt đầu sau {n} tác vụ nữa",
+  "Left alone: {n} (synchronize again to review them)": "Để nguyên: {n} (đồng bộ lại để xem xét)",
+  "Starts after {n} more": "Bắt đầu sau {n} tác vụ nữa",
+  "Remove from Queue: {label}": "Xóa khỏi hàng đợi: {label}",
+  "Starts after: {what}": "Bắt đầu sau: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "Có 1 tác vụ đang chờ trong hàng đợi: {names}. Chuyển thư viện sẽ bỏ tác vụ này.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "Có {n} tác vụ đang chờ trong hàng đợi: {names}. Chuyển thư viện sẽ bỏ các tác vụ này.",
+  "Waiting tasks dropped: {n}": "Tác vụ chờ đã bị bỏ: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Có quá nhiều tác vụ đang chờ ({n}): hãy đợi một số tác vụ hoàn tất"
 }

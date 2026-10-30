@@ -34,7 +34,7 @@ pub(super) use display::view_options;
 use display::{display_tab, interface_tab};
 use general::general_tab;
 use import::import_tab;
-pub(crate) use libraries::{can_switch_library, free_name};
+pub(crate) use libraries::{can_switch_library, confirm_switch, free_name};
 pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
 use performance::performance_tab;
 use slideshow::slideshow_tab;

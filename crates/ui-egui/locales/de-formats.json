@@ -305,5 +305,14 @@
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "Queued: it starts after {n} more": "In der Warteschlange: startet nach {n} weiteren",
+  "Left alone: {n} (synchronize again to review them)": "Unangetastet: {n} (zum Prüfen erneut synchronisieren)",
+  "Starts after {n} more": "Startet nach {n} weiteren",
+  "Remove from Queue: {label}": "Aus der Warteschlange entfernen: {label}",
+  "Starts after: {what}": "Startet nach: {what}",
+  "1 task is waiting in line: {names}. Switching libraries drops it.": "1 Aufgabe wartet in der Warteschlange: {names}. Beim Wechseln der Bibliothek wird sie verworfen.",
+  "{n} tasks are waiting in line: {names}. Switching libraries drops them.": "{n} Aufgaben warten in der Warteschlange: {names}. Beim Wechseln der Bibliothek werden sie verworfen.",
+  "Waiting tasks dropped: {n}": "Verworfene wartende Aufgaben: {n}",
+  "Too many tasks are waiting ({n}): wait for some to finish": "Zu viele Aufgaben warten ({n}): Warte, bis einige fertig sind"
 }
