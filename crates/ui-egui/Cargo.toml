@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
+lightcraft-print = { workspace = true }
 craft-window = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-meta = { workspace = true }
@@ -29,6 +30,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+# The in-process fake WS-Print printer for the network print tests (`craft_print::wsd::testing`).
+craft-print = { workspace = true, features = ["wsd", "ipp", "testing"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # The model-setup tests install and resume a real denoise model. Without this the engine's

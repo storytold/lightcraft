@@ -27,6 +27,9 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Slot {
     Thumb(PhotoId),
+    /// The Print dialog's preview thumbnail in grayscale (Rec. 709, the conversion the printed pages use): a slot of
+    /// its own, so a gray and a colour thumbnail of one photo are never each other's cache entry.
+    PrintGray(PhotoId),
     /// A thumbnail's stand-in (embedded preview of an unedited raw).
     ThumbQuick(PhotoId),
     Main,
@@ -65,6 +68,9 @@ pub enum Slot {
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
 }
+
+/// Most gray Print-preview thumbnails kept while the Print dialog pages through photos ([`Renderer::request_print_gray`]).
+pub const PRINT_GRAY_KEEP: usize = 24;
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
 /// hidden grading wheels, must not discard a decoded RAW's actual aspect ratio.
@@ -138,6 +144,19 @@ pub(crate) fn color_image(img: &lightcraft_raster::Rgba8) -> egui::ColorImage {
         .map(|p| if p[3] == 255 { egui::Color32::from_rgb(p[0], p[1], p[2]) } else { egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]) })
         .collect();
     egui::ColorImage { size: [img.width, img.height], source_size: egui::vec2(img.width as f32, img.height as f32), pixels }
+}
+
+/// `image` in shades of gray, with the conversion the printed pages use ([`lightcraft_engine::print::gray_u8`]); alpha is kept.
+pub(crate) fn gray_image(image: &egui::ColorImage) -> egui::ColorImage {
+    let pixels = image
+        .pixels
+        .iter()
+        .map(|c| {
+            let y = lightcraft_engine::print::gray_u8(c.r(), c.g(), c.b());
+            egui::Color32::from_rgba_premultiplied(y, y, y, c.a())
+        })
+        .collect();
+    egui::ColorImage { size: image.size, source_size: image.source_size, pixels }
 }
 
 /// How far over the budget the open photo's window and before caches may run before they are cut.
@@ -223,6 +242,10 @@ pub struct Renderer {
     /// (photo, size bucket, job key, whether the request went through an embedded stand-in, and the
     /// priority of the caller that queued it — a stand-in's background render runs below that)
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool, u32)>,
+    /// Last inputs of the Print dialog's gray previews (photo, size bucket).
+    print_gray_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize)>,
+    /// The frame each gray preview was last drawn in ([`Renderer::print_gray_shown`]): the ones on screen are never trimmed.
+    print_gray_used: HashMap<PhotoId, u64>,
     /// Photos whose grid thumbnail is the camera's embedded preview itself (no render behind it).
     embedded_thumbs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64)>,
     pool: JobPool<Slot, Finished>,
@@ -312,6 +335,8 @@ impl Renderer {
             preview_generation: None,
             pool: JobPool::new(threads),
             thumb_inputs: HashMap::new(),
+            print_gray_inputs: HashMap::new(),
+            print_gray_used: HashMap::new(),
             embedded_thumbs: HashMap::new(),
             offload: None,
             queue: Vec::new(),
@@ -378,6 +403,12 @@ impl Renderer {
             return !self.request_needed(slot, key, crate::panels::grid::BACKGROUND_THUMB_PRIORITY);
         }
         !self.request_needed(slot, key, priority)
+    }
+
+    /// The size bucket `id`'s thumbnail was last requested at, while it has a texture.
+    pub fn thumb_bucket_of(&self, id: PhotoId) -> Option<usize> {
+        self.thumb(id)?;
+        self.thumb_inputs.get(&id).map(|&(_, size, _, _, _)| size)
     }
 
     /// Remember the inputs of the thumbnail just requested (`quick`: through a stand-in).
@@ -591,7 +622,7 @@ impl Renderer {
             return;
         }
         let key = job.key;
-        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::PrintGray(_) | Slot::Prefetch(_));
         let display = self.display.clone();
         self.pool.submit(
             slot,
@@ -710,6 +741,8 @@ impl Renderer {
         self.preview_generation = None;
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
+        self.print_gray_inputs.clear();
+        self.print_gray_used.clear();
         self.textures.clear();
         self.stages.clear();
         self.quick_tried.clear();
@@ -739,6 +772,70 @@ impl Renderer {
     /// The texture to show for a grid/filmstrip thumbnail: the rendered one, else its stand-in.
     pub fn thumb(&self, id: PhotoId) -> Option<&Tex> {
         self.textures.get(&Slot::Thumb(id)).or_else(|| self.textures.get(&Slot::ThumbQuick(id)))
+    }
+
+    /// The Print dialog's gray thumbnail of `id` (only ever gray: never the colour thumbnail), once rendered.
+    pub fn print_gray(&self, id: PhotoId) -> Option<&Tex> {
+        self.textures.get(&Slot::PrintGray(id))
+    }
+
+    /// Would asking for the gray thumbnail of `photo` at `bucket` again change nothing?
+    pub fn print_gray_current(&self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize) -> bool {
+        let slot = Slot::PrintGray(photo.id);
+        let Some((old, size)) = self.print_gray_inputs.get(&photo.id) else { return false };
+        old.as_ptr() == Arc::as_ptr(photo)
+            && *size == bucket
+            // A failure only stands for the catalog revision it happened at: a later one retries (as `request_needed` does).
+            && (self.textures.contains_key(&slot)
+                || self.pending.contains_key(&slot)
+                || self.failed.get(&slot).is_some_and(|f| f.2 == self.catalog_rev))
+    }
+
+    /// Ask for the gray thumbnail `job` makes (the thumbnail job of `photo` at `bucket`); the texture comes out gray.
+    pub fn request_print_gray(&mut self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, job: RenderJob, priority: u32) {
+        // Paging through a large selection must not keep a texture for every photo visited.
+        self.trim_print_gray(photo.id, PRINT_GRAY_KEEP);
+        self.print_gray_inputs.insert(photo.id, (Arc::downgrade(photo), bucket));
+        self.request(Slot::PrintGray(photo.id), job, priority);
+    }
+
+    /// The Print dialog draws the gray thumbnail of `id` in this frame (call it for every cell, before asking for it).
+    pub fn print_gray_shown(&mut self, id: PhotoId) {
+        self.print_gray_used.insert(id, self.frame);
+    }
+
+    /// The Print dialog shows colour (or is closed): drop the gray thumbnails and their queued renders.
+    pub fn forget_print_gray(&mut self) {
+        self.drop_print_gray(|_| false);
+    }
+
+    /// Once `max` gray thumbnails are held or requested (rendered, or still queued or running), drop all but the
+    /// one for `keep` (the photo being asked for) and the ones drawn in this frame: a sheet of more cells than `max`
+    /// keeps them all, rather than evicting and asking again for the same ones every frame.
+    fn trim_print_gray(&mut self, keep: PhotoId, max: usize) {
+        let held: std::collections::HashSet<PhotoId> =
+            self.textures.keys().chain(self.pending.keys()).filter_map(|s| if let Slot::PrintGray(id) = s { Some(*id) } else { None }).collect();
+        if held.len() >= max {
+            let (frame, used) = (self.frame, std::mem::take(&mut self.print_gray_used));
+            self.drop_print_gray(|id| id == keep || used.get(&id) == Some(&frame));
+            self.print_gray_used = used.into_iter().filter(|(_, f)| *f == frame).collect();
+        }
+    }
+
+    /// Drop the gray thumbnails, their inputs and their queued renders, except the ones `kept` picks.
+    fn drop_print_gray(&mut self, kept: impl Fn(PhotoId) -> bool) {
+        let dropped = |s: &Slot| matches!(s, Slot::PrintGray(id) if !kept(*id));
+        if self.print_gray_inputs.is_empty() && !self.textures.keys().any(dropped) && !self.pending.keys().any(dropped) {
+            return;
+        }
+        self.print_gray_inputs.retain(|id, _| kept(*id));
+        self.print_gray_used.retain(|id, _| kept(*id));
+        self.pool.reprioritize(|s, p| if dropped(s) { None } else { Some(p) });
+        self.queue.retain(|q| !dropped(&q.slot));
+        self.pending.retain(|s, _| !dropped(s));
+        self.requests.retain(|s, _| !dropped(s));
+        self.textures.retain(|s, _| !dropped(s));
+        self.failed.retain(|s, _| !dropped(s));
     }
 
     pub fn queued(&self) -> usize {
@@ -1040,6 +1137,7 @@ impl Renderer {
             }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
+            let color = if matches!(slot, Slot::PrintGray(_)) { Arc::new(gray_image(&color)) } else { color };
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
@@ -1205,6 +1303,57 @@ mod stage_budget_tests {
 
     // Given a zoomed view showing a window, the app idling does not free the GPU copy of the
     // original the next window is cut from; once the windows are gone the idle trim runs again
+    fn gray_thumb(ctx: &egui::Context, id: u64) -> (Slot, Tex) {
+        let tex = ctx.load_texture("gray", egui::ColorImage::new([1, 1], vec![egui::Color32::GRAY]), Default::default());
+        (
+            Slot::PrintGray(PhotoId(id)),
+            Tex { look: None, key: 1, photo: PhotoId(id), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+        )
+    }
+
+    // Paging through a big selection with Grayscale on must not keep a gray thumbnail for every photo visited, and
+    // leaving the Print dialog releases them all; colour thumbnails are never touched.
+    #[test]
+    fn gray_print_previews_are_bounded_and_released() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        for id in 1..=5 {
+            let (slot, tex) = gray_thumb(&ctx, id);
+            r.textures.insert(slot, tex);
+        }
+        r.textures.insert(Slot::Thumb(PhotoId(1)), gray_thumb(&ctx, 1).1);
+        let gray = |r: &Renderer| r.textures.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count();
+        r.trim_print_gray(PhotoId(9), 6);
+        assert_eq!(gray(&r), 5, "under the bound nothing is dropped");
+        r.trim_print_gray(PhotoId(3), 5);
+        assert_eq!(gray(&r), 1, "at the bound all but the photo being asked for go");
+        assert!(r.textures.contains_key(&Slot::PrintGray(PhotoId(3))));
+        assert!(r.textures.contains_key(&Slot::Thumb(PhotoId(1))), "colour thumbnails stay");
+        r.forget_print_gray();
+        assert_eq!(gray(&r), 0, "leaving the dialog releases the last one too");
+        assert!(r.textures.contains_key(&Slot::Thumb(PhotoId(1))));
+    }
+
+    // Requests that have not rendered yet count towards the bound, or a burst of requests is never trimmed.
+    #[test]
+    fn pending_gray_requests_count_towards_the_bound() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        for id in 1..=3 {
+            let (slot, tex) = gray_thumb(&ctx, id);
+            r.textures.insert(slot, tex);
+        }
+        for id in 4..=8 {
+            r.pending.insert(Slot::PrintGray(PhotoId(id)), (1, 10));
+        }
+        let gray = |r: &Renderer| r.textures.keys().chain(r.pending.keys()).filter(|s| matches!(s, Slot::PrintGray(_))).count();
+        r.trim_print_gray(PhotoId(9), 9);
+        assert_eq!(gray(&r), 8, "under the bound nothing is dropped");
+        r.trim_print_gray(PhotoId(5), 8);
+        assert_eq!(gray(&r), 1, "textures and pending requests together reach the bound");
+        assert!(r.pending.contains_key(&Slot::PrintGray(PhotoId(5))), "the photo being asked for stays");
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_zoomed_view_is_not_trimmed_while_idle() {

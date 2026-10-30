@@ -284,6 +284,24 @@ fn composes_pages_from_real_photos() {
 }
 
 #[test]
+fn a_grayscale_job_composes_gray_pages_and_a_colour_one_does_not() {
+    let mut s = Session::with_demo();
+    let ids = first_ids(&s, 1);
+    let mut set = settings(Style::ContactSheet);
+    set.layout.grid = GridSpec { columns: 1, rows: 1, spacing_x: 0.0, spacing_y: 0.0, keep_square: false };
+    set.page.background = [200, 30, 30];
+    let colour = prepare(&mut s, &set, &ids).unwrap().run(&mut |_, _| true).unwrap();
+    assert!(colour[0].rgb.as_chunks::<3>().0.iter().any(|p| p[0] != p[1] || p[1] != p[2]), "the page has colour");
+    set.job.grayscale = true;
+    let gray = prepare(&mut s, &set, &ids).unwrap().run(&mut |_, _| true).unwrap();
+    assert!(gray[0].rgb.as_chunks::<3>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel is gray");
+    // and the exported 8-bit sRGB (what goes to a printer that lists no PDF) is gray too
+    let srgb = crate::print::output::page_to_srgb8(&gray[0]).unwrap();
+    assert!(srgb.data.iter().all(|p| p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1));
+    assert!(crate::print::output::write(&gray, &set.job, "t").unwrap().starts_with(b"%PDF-"));
+}
+
+#[test]
 fn package_renders_each_size_and_border() {
     let mut s = Session::with_demo();
     let ids = first_ids(&s, 1);

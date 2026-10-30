@@ -1152,6 +1152,9 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         }
         "dialog.print" => {
             app.ui.print = Default::default();
+            app.print_out.dialog_opened();
+            #[cfg(not(target_arch = "wasm32"))]
+            app.print_net.dialog_opened();
             app.ui.dialog = Some(Dialog::Print);
             Ok(Value::Null)
         }

@@ -564,6 +564,8 @@ pub struct Prepared {
     marks: Marks,
     /// Print sharpening, applied to each photo once it's rendered at its print size.
     color: crate::print_color::PrintColorSettings,
+    /// Turn each composed page gray ([`super::gray_rgb16_in_place`]).
+    grayscale: bool,
 }
 
 impl Prepared {
@@ -612,7 +614,11 @@ impl Prepared {
                 placed.push(draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?);
             }
             self.marks.draw(&mut page, &placed, index + 1);
-            out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb });
+            let mut rgb = page.rgb;
+            if self.grayscale {
+                super::gray_rgb16_in_place(&mut rgb);
+            }
+            out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb });
         }
         if !progress(done, "") {
             return Err("Print cancelled".into());
@@ -672,6 +678,7 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
         style,
         marks: Marks::of(&settings, ppi, pw, ph),
         color: settings.job.color.clone(),
+        grayscale: settings.job.grayscale,
     })
 }
 

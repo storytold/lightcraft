@@ -218,6 +218,18 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
     assert!(r.thumb_current(&p, 256, 10), "the recorded key's larger texture serves the smaller bucket");
 }
 
+// A gray-preview failure belongs to the catalog revision it happened at: after a catalog change the preview asks again.
+#[test]
+fn a_gray_preview_failure_is_retried_after_a_catalog_revision() {
+    let p = photo();
+    let mut r = Renderer::default();
+    r.print_gray_inputs.insert(p.id, (Arc::downgrade(&p), 384));
+    r.failed.insert(Slot::PrintGray(p.id), (77, "no decoder".into(), 0, p.id));
+    assert!(r.print_gray_current(&p, 384), "the failure stands at its own revision");
+    r.catalog_rev = 1;
+    assert!(!r.print_gray_current(&p, 384), "a later revision asks again");
+}
+
 #[test]
 fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     let mut s = Session::new();
@@ -293,6 +305,36 @@ fn finish(app: &mut crate::LightcraftApp, work: &std::rc::Rc<std::cell::RefCell<
 }
 fn request(app: &mut crate::LightcraftApp) {
     crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
+}
+
+// A sheet of more cells than the bound, with Grayscale on: the previews drawn in the frame are kept, so the next
+// frame asks for none of them again (it used to drop all but one at the bound and re-request them every frame).
+#[test]
+fn a_sheet_of_more_cells_than_the_bound_asks_for_each_gray_preview_once() {
+    let mut s = Session::new();
+    let cells = PRINT_GRAY_KEEP as u64 + 6;
+    for id in 2..=cells {
+        let name = format!("p{id}.jpg");
+        let p = Photo::new(PhotoId(id), Source::File { path: name.clone() }, &name, "JPEG", 600, 400, "2026-01-01");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let (mut app, _work, ctx) = fixture_with(s, (*photo()).clone());
+    let cell = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
+    let frame = |app: &mut crate::LightcraftApp| {
+        app.renderer.poll(&ctx, &mut app.session);
+        for id in 1..=cells {
+            crate::print_view::gray_thumb(app, PhotoId(id), cell);
+        }
+        app.renderer.requests.iter().filter(|(s, _)| matches!(s, Slot::PrintGray(_))).map(|(s, r)| (*s, r.id)).collect::<HashMap<_, _>>()
+    };
+    let first = frame(&mut app);
+    assert_eq!(first.len() as u64, cells, "every cell's gray preview is asked for");
+    assert_eq!(frame(&mut app), first, "the next frame asks for none of them again");
+    // paging on to other photos still trims the ones no longer drawn
+    app.renderer.poll(&ctx, &mut app.session);
+    crate::print_view::gray_thumb(&mut app, PhotoId(1), cell);
+    app.renderer.trim_print_gray(PhotoId(1), 1);
+    assert_eq!(app.renderer.requests.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count(), 1);
 }
 
 fn relink_destination() -> std::path::PathBuf {

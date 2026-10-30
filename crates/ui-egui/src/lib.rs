@@ -32,8 +32,11 @@ pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+#[cfg(not(target_arch = "wasm32"))]
+mod network_glue;
 pub mod panels;
 pub mod pick;
+pub mod print_dest;
 pub mod recheck;
 pub mod region;
 pub mod reload;
@@ -316,6 +319,11 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Where the Print dialog sends the print (a PDF file, a printer of this computer, a network printer).
+    pub print_out: print_dest::PrintOut,
+    /// The network-printer destination: its state, query and tracked print (not on the web).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) print_net: network_glue::NetTasks,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

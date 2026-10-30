@@ -111,6 +111,9 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            print_out: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            print_net: Default::default(),
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,

@@ -2,6 +2,7 @@ use super::{
     LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
     shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
+use crate::print_dest;
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -424,6 +425,7 @@ impl LightcraftApp {
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
+        print_dest::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);

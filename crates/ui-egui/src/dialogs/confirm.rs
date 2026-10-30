@@ -194,6 +194,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         ),
         Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
         Dialog::SlideshowExport { settings } => app.run("app.slideshowExport", json!(settings)),
+        Dialog::Print if app.print_out.dest != crate::print_dest::Destination::Pdf => crate::print_dest::start(app),
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),

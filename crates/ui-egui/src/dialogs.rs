@@ -338,7 +338,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
         Dialog::SlideshowExport { .. } => "Export…",
-        Dialog::Print => "Print to PDF…",
+        Dialog::Print => app.print_out.confirm_label(),
         Dialog::Merge { .. } => "Merge",
         Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
         Dialog::DenoiseModel { .. } => "Install",
@@ -391,7 +391,7 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     );
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
-    !rename_blocked && (informational || (!waiting && !bad_rules))
+    !rename_blocked && (!matches!(dlg, Dialog::Print) || app.print_out.can_confirm()) && (informational || (!waiting && !bad_rules))
 }
 
 /// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
@@ -515,7 +515,8 @@ const BACKDROP_SHOWN: &str = "dialog-backdrop-shown";
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
 /// downloads).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
-    matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+    (matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed())
+        || (matches!(dlg, Dialog::Print) && app.print_out.keeps_dialog_open())
 }
 
 /// The body of the AutoStack dialog.

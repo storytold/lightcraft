@@ -8,6 +8,9 @@ pub mod layout;
 pub mod output;
 pub mod template;
 
+use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+use lightcraft_color::{REC2020, SRGB};
+use lightcraft_pipeline::OutputSpace;
 use serde::{Deserialize, Serialize};
 
 /// Lowest and highest print resolution, pixels per inch.
@@ -40,11 +43,46 @@ pub struct PrintJob {
     pub ppi: f32,
     /// Profile, rendering intent, black point compensation, print adjustment, print sharpening.
     pub color: crate::print_color::PrintColorSettings,
+    /// Print in grayscale: the composed pages are turned gray ([`gray_rgb16_in_place`]: the gray of
+    /// [`gray_u8`], taken from the sRGB rendition of the colours) so the PDF, the raster sent to a
+    /// printer and the dialog's preview agree, whatever the driver does with its own monochrome hint.
+    pub grayscale: bool,
 }
 
 impl Default for PrintJob {
     fn default() -> Self {
-        Self { ppi: 240.0, color: crate::print_color::PrintColorSettings::default() }
+        Self { ppi: 240.0, color: crate::print_color::PrintColorSettings::default(), grayscale: false }
+    }
+}
+
+/// Gray of an 8-bit sRGB colour with Rec. 709 weights applied to the encoded values, as integers that sum
+/// to 256 (white stays 255, black 0). It is the gray the Print dialog's preview shows, and the definition
+/// [`gray_rgb16_in_place`] follows for the printed pages.
+pub fn gray_u8(r: u8, g: u8, b: u8) -> u8 {
+    ((u32::from(r) * 54 + u32::from(g) * 183 + u32::from(b) * 19) >> 8) as u8
+}
+
+/// Turn a composed page (interleaved 16-bit RGB in the `Rec2020` output encoding) gray, to the gray the
+/// preview shows for the same colours ([`gray_u8`]): the colours are taken to sRGB, the Rec. 709 weights
+/// are applied to those encoded values, and the result is the neutral of that luma in the page's own
+/// encoding. Applying the weights to the page's own samples instead would not agree with the preview: the
+/// primaries and the transfer curves differ (a pure red is 53 in the preview and was 100 on the page).
+/// Neutral colours, white and black stay as they are.
+pub fn gray_rgb16_in_place(rgb: &mut [u16]) {
+    let trc = OutputSpace::Rec2020.trc();
+    // 16-bit Rec. 2020 code to linear light, once per code value.
+    let lut: Vec<f32> = (0..=u16::MAX).map(|v| trc.decode(f32::from(v) / 65535.0)).collect();
+    let m = REC2020.to_space(&SRGB).to_f32();
+    for px in rgb.as_chunks_mut::<3>().0 {
+        let l = px.map(|v| lut.get(usize::from(v)).copied().unwrap_or(0.0));
+        let encoded = |r: usize| {
+            let linear = m.get(r).map_or(0.0, |m| m[0] * l[0] + m[1] * l[1] + m[2] * l[2]);
+            linear_to_srgb(linear.clamp(0.0, 1.0))
+        };
+        let luma = (54.0 * encoded(0) + 183.0 * encoded(1) + 19.0 * encoded(2)) / 256.0;
+        let neutral = trc.encode(srgb_to_linear(luma.clamp(0.0, 1.0))).clamp(0.0, 1.0);
+        let y = (neutral * 65535.0 + 0.5) as u16;
+        *px = [y, y, y];
     }
 }
 
@@ -87,5 +125,46 @@ mod tests {
         assert!(j.color.black_point_compensation && j.validate().is_ok());
         let j: PrintJob = serde_json::from_str(r#"{"color": {"contrast": 500}}"#).unwrap();
         assert!(j.validate().is_err());
+    }
+
+    #[test]
+    fn gray_is_rec709_and_keeps_the_extremes() {
+        assert_eq!((gray_u8(255, 0, 0), gray_u8(0, 255, 0), gray_u8(0, 0, 255)), (53, 182, 18));
+        assert_eq!((gray_u8(255, 255, 255), gray_u8(0, 0, 0), gray_u8(90, 90, 90)), (255, 0, 90));
+        let mut px = [65535u16, 65535, 65535, 0, 0, 0];
+        gray_rgb16_in_place(&mut px);
+        assert_eq!(px, [65535, 65535, 65535, 0, 0, 0], "white and black stay");
+    }
+
+    /// The printed gray is the preview's gray: composing an sRGB colour onto the page and turning the page
+    /// gray gives, once the page is shown as sRGB, the value `gray_u8` gives for that colour.
+    #[test]
+    fn the_printed_gray_is_the_previews_gray() {
+        use crate::print::compose::rec2020_from_srgb8;
+        let mut colours = vec![[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [220, 30, 40], [10, 20, 250], [128, 128, 128], [90, 90, 90]];
+        for r in (0..=255u8).step_by(51) {
+            for g in (0..=255u8).step_by(51) {
+                colours.push([r, g, 255 - r / 2]);
+            }
+        }
+        for c in colours {
+            let mut rgb = rec2020_from_srgb8(c).to_vec();
+            gray_rgb16_in_place(&mut rgb);
+            assert!(rgb[0] == rgb[1] && rgb[1] == rgb[2], "{c:?} is gray");
+            let page = PageRaster { width: 1, height: 1, ppi: 100.0, rgb };
+            let shown = output::page_to_srgb8(&page).unwrap().data[0];
+            let want = gray_u8(c[0], c[1], c[2]);
+            assert!(
+                shown[..3].iter().all(|&v| (i32::from(v) - i32::from(want)).abs() <= 2),
+                "{c:?}: the page shows {shown:?}, the preview shows {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_grayscale_flag_is_a_job_setting_off_by_default() {
+        assert!(!PrintJob::default().grayscale);
+        let j: PrintJob = serde_json::from_str(r#"{"grayscale": true}"#).unwrap();
+        assert!(j.grayscale);
     }
 }

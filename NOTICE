@@ -69,6 +69,14 @@ downloads cities15000.zip, admin1CodesASCII.txt and countryInfo.txt from GeoName
 under Creative Commons Attribution 4.0 (https://creativecommons.org/licenses/by/4.0/);
 attribution: "GeoNames, geonames.org". The lookup code (crates/geocode) is our own.
 
+Windows printing
+
+LightCraft's Windows builds print through craft-print (storytold/craft-libs), which uses winprint
+(https://github.com/ArcticLampyrid/winprint.rs; storytold's fork https://github.com/storytold/winprint.rs keeps its
+licence unchanged), BSD-3-Clause, Copyright (c) 2021 - 2024, alampy.com. The licence text is retained in
+licenses/winprint/LICENSE-BSD-3-Clause.txt: redistributions in source or binary form must reproduce that notice,
+the conditions and the disclaimer, and the names of the copyright holder and contributors may not be used to
+endorse products derived from it without written permission.
 
 epaint_default_fonts, the egui default-font crate LightCraft builds with, also bundles Hack Regular
 and Ubuntu Light, and Noto Emoji Regular when egui's `monochrome_emoji_fonts` feature is on (the

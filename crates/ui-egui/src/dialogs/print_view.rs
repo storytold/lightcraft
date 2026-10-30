@@ -293,6 +293,8 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     ui.spacing_mut().item_spacing.y = 5.0;
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
 
+    crate::print_dest::section(app, ui, t, photos);
+
     templates_section(app, ui, t, pu);
 
     heading(ui, t, "Layout Style");
@@ -316,9 +318,13 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             let g = &l.grid;
             row(ui, t, "Grid", |ui| {
                 let (mut c, mut r) = (g.columns, g.rows);
-                let a = ui.add(egui::DragValue::new(&mut c).range(1..=layout::MAX_GRID).suffix(" cols"));
+                let a = ui
+                    .add(egui::DragValue::new(&mut c).range(1..=layout::MAX_GRID).suffix(" cols"))
+                    .accessible_name(format!("{} cols", crate::i18n::tr("Grid")));
                 register(ui, "drag:printColumns", a.rect);
-                let b = ui.add(egui::DragValue::new(&mut r).range(1..=layout::MAX_GRID).suffix(" rows"));
+                let b = ui
+                    .add(egui::DragValue::new(&mut r).range(1..=layout::MAX_GRID).suffix(" rows"))
+                    .accessible_name(format!("{} rows", crate::i18n::tr("Grid")));
                 register(ui, "drag:printRows", b.rect);
                 if a.changed() || b.changed() {
                     patch(app, &ctx, json!({"layout": {"grid": {"columns": c, "rows": r}}}));
@@ -549,7 +555,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     for (key, label, value) in [("brightness", "Brightness", color.brightness), ("contrast", "Contrast", color.contrast)] {
         row(ui, t, label, |ui| {
             let mut v = value;
-            let r = ui.add(egui::DragValue::new(&mut v).range(-100.0..=100.0).speed(0.5).max_decimals(0));
+            let r = ui.add(egui::DragValue::new(&mut v).range(-100.0..=100.0).speed(0.5).max_decimals(0)).accessible_name(crate::i18n::tr(label));
             register(ui, format!("drag:print{label}"), r.rect);
             if r.changed() {
                 patch_color(app, &ctx, key, json!(v));
@@ -623,8 +629,8 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
     register(ui, "print:page", sheet.page);
 
     painter.rect_filled(sheet.page.translate(vec2(2.0, 3.0)), 0.0, Color32::from_black_alpha(70));
-    let bg = st.page.background;
-    painter.rect_filled(sheet.page, 0.0, Color32::from_rgb(bg[0], bg[1], bg[2]));
+    let bg = ink(st.page.background, crate::print_dest::grayscale_wanted(app));
+    painter.rect_filled(sheet.page, 0.0, bg);
     let guide = Stroke::new(1.0, Color32::from_rgb(90, 160, 240));
     if g.show_rulers {
         rulers(&painter, t, &sheet, area, pw, ph, g.units);
@@ -846,6 +852,7 @@ fn paint_cell(
     inches: &layout::Rect,
 ) -> Option<Rect> {
     let im = &st.image;
+    let gray = crate::print_dest::grayscale_wanted(app);
     if st.guides.show_cells {
         painter.rect_stroke(cell, 0.0, Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 150, 190, 150)), StrokeKind::Inside);
     }
@@ -871,20 +878,10 @@ fn paint_cell(
     let visible = shown.intersect(avail);
     if border > 0.0 {
         let frame = visible.expand(border);
-        let c = im.border_color;
-        painter.rect_filled(frame.intersect(cell), 0.0, Color32::from_rgb(c[0], c[1], c[2]));
+        painter.rect_filled(frame.intersect(cell), 0.0, ink(im.border_color, gray));
     }
     let clip = painter.with_clip_rect(avail.intersect(painter.clip_rect()));
-    let tex = photo.and_then(|id| {
-        // Use the library's thumbnail when there is one. A thumbnail is kept at one size, so asking
-        // for another size here every frame made the preview and the grid behind the dialog
-        // re-render each other's thumbnail for as long as the dialog stayed open.
-        if app.renderer.thumb(id).is_none() {
-            let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
-            crate::panels::grid::request_thumb(app, id, px, 10);
-        }
-        app.renderer.thumb(id).map(|tex| tex.tex.id())
-    });
+    let tex = photo.and_then(|id| if gray { gray_thumb(app, id, shown) } else { colour_thumb(app, id, shown) });
     match tex {
         Some(id) => {
             let mut mesh = egui::Mesh::with_texture(id);
@@ -910,8 +907,7 @@ fn paint_cell(
     }
     if im.stroke_enabled && im.stroke_width_pt > 0.0 {
         let w = (im.stroke_width_pt as f32 / 72.0 * sheet.scale).max(1.0).min(visible.width().min(visible.height()) / 2.0);
-        let c = im.stroke_color;
-        painter.rect_stroke(visible, 0.0, Stroke::new(w, Color32::from_rgb(c[0], c[1], c[2])), StrokeKind::Inside);
+        painter.rect_stroke(visible, 0.0, Stroke::new(w, ink(im.stroke_color, gray)), StrokeKind::Inside);
     }
     if st.guides.show_dimensions {
         let text = format!("{} × {}", fmt_len(inches.w, st.guides.units), fmt_len(inches.h, st.guides.units));
@@ -955,6 +951,43 @@ fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, phot
     if p.page_info {
         painter.text(pos2(area.left(), y), Align2::LEFT_CENTER, compose::page_info_text(st), font, ink);
     }
+}
+
+/// A page colour as it prints: itself, or its gray when the print is grayscale.
+fn ink(c: [u8; 3], gray: bool) -> Color32 {
+    if gray {
+        let y = lightcraft_engine::print::gray_u8(c[0], c[1], c[2]);
+        Color32::from_gray(y)
+    } else {
+        Color32::from_rgb(c[0], c[1], c[2])
+    }
+}
+
+/// The photo's thumbnail for the preview, in colour: the library's when there is one. A thumbnail is kept at
+/// one size, so asking for another size here every frame made the preview and the grid behind the dialog
+/// re-render each other's thumbnail for as long as the dialog stayed open. So once a thumbnail exists it is
+/// asked for again at the size it already has: `request_thumb` then only renders when the photo's develop
+/// settings (and so the job's key) changed, and a photo the grid isn't showing doesn't keep its stale picture.
+pub(crate) fn colour_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) -> Option<egui::TextureId> {
+    app.renderer.forget_print_gray();
+    let px = app.renderer.thumb_bucket_of(id).unwrap_or_else(|| (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize);
+    crate::panels::grid::request_thumb(app, id, px, 10);
+    app.renderer.thumb(id).map(|tex| tex.tex.id())
+}
+
+/// The photo's thumbnail for the preview, in gray, from a slot of its own: the colour thumbnail is never drawn
+/// (not even for the frames the gray one is rendering), and a toggle back finds the colour one still cached.
+pub(crate) fn gray_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) -> Option<egui::TextureId> {
+    let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
+    let bucket = lightcraft_engine::media::thumb_bucket(px);
+    app.renderer.print_gray_shown(id);
+    if let Some(photo) = app.session.catalog.photo(id).cloned()
+        && !app.renderer.print_gray_current(&photo, bucket)
+        && let Some(job) = app.session.thumb_job(id, px)
+    {
+        app.renderer.request_print_gray(&photo, bucket, job, 10);
+    }
+    app.renderer.print_gray(id).map(|tex| tex.tex.id())
 }
 
 fn dashed(painter: &egui::Painter, r: Rect, stroke: Stroke) {
