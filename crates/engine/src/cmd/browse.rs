@@ -543,6 +543,10 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     let label = if renamed { format!("Rename Folder to “{name}”") } else { format!("Move Folder “{name}”") };
     let folder = crate::FolderMove { from: to.to_string(), to: from.to_string() };
     if let Err(e) = s.commit_with_folder(&label, Op::Batch { ops }, folder) {
+        if matches!(e, crate::EngineError::Catalog(lightcraft_catalog::CatalogError::PartlyApplied { .. })) {
+            // part of it stays, and the undo step that takes it back renames the folder: it stays where it is
+            return Err(e.to_string());
+        }
         // the catalog didn't take it: put the folder back where the photos still point
         let back = rename_folder_on_disk(to, from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();
         return Err(format!("{e}{back}"));
