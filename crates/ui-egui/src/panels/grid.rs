@@ -292,26 +292,35 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let total = app.session.source_total();
     let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
     let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
+    // a shuffle of a source that follows the sort says so, with Reshuffle beside it
+    let shuffled = !ids.is_empty() && source_follows_sort(app.session.source) && app.session.sort.key == SortKey::Random;
     match app.session.browse.clone().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder) {
         Some(b) => {
             let local = app.caches.grid.local(&app.session.catalog, &ids, generation);
-            folder_header(app, ui, &b, &ids, local, &cnt);
+            folder_header(app, ui, &b, &ids, local, &cnt, shuffled);
         }
         None => {
             let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
             ui.painter().rect_filled(hr, 0.0, t.canvas);
             let full = crate::i18n::source_title(&app.session);
             let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.font(12.5), t.text_dim).size().x;
-            // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+            // the title gives way to the count and the chip: a long album or folder name is trimmed, in full on hover
+            let before_title = 20.0 + count_w + 36.0;
+            // a long count leaves the title no room beside the chip: the chip gives way, never the count
+            let chip = if shuffled { chip_plan(ui, hr.width() - before_title, MIN_TITLE_W, CHIP_GAP) } else { None };
+            let room = (hr.width() - before_title - chip.map_or(0.0, |(_, w)| w + CHIP_GAP)).max(0.0);
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, &cnt, t.font(12.5), t.text_dim);
             crate::widgets::register(ui, "grid:title", title_rect);
             crate::widgets::register(ui, "grid:count", count_rect);
             if title != full {
                 ui.interact(title_rect, ui.scope_id().with("grid-title"), Sense::hover()).on_hover_text(full);
+            }
+            if let Some((compact, chip_w)) = chip {
+                let right = hr.right() - 20.0 - count_w - CHIP_GAP;
+                shuffle_chip(app, ui, Rect::from_min_size(pos2(right - chip_w, hr.center().y - 12.0), vec2(chip_w, 24.0)), compact);
             }
         }
     }
@@ -995,9 +1004,81 @@ struct BadgeFlags {
     hovered: bool,
 }
 
+/// The gap between a shuffled view's chip and the count.
+const CHIP_GAP: f32 = 12.0;
+
+/// The gap between "Shuffled" and the button: the state and the action read as two things.
+const LABEL_GAP: f32 = 8.0;
+
+/// The least width the title keeps (a few letters and the ellipsis) before the chip gives way.
+const MIN_TITLE_W: f32 = 48.0;
+
+/// The least width a Local folder's breadcrumb keeps (the ellipsis, a chevron and the folder's
+/// first letters) before the chip gives way.
+const MIN_PATH_W: f32 = 80.0;
+
+/// Whether the view's order is the sort's at all: Recently Added is always newest import first,
+/// whatever the sort says (Recently Deleted is sorted like any other view).
+fn source_follows_sort(source: lightcraft_engine::LibrarySource) -> bool {
+    source != lightcraft_engine::LibrarySource::RecentlyAdded
+}
+
+/// How the chip fits in a header: `free` is the width left for the title (or path) and the chip,
+/// the chip keeps `gap` from it, and the title is left at least `min_title`. The button stands
+/// alone (`compact`) when the whole chip would leave the title little room, and there is no chip
+/// (`None`) when even the button would take the title under `min_title`: the count never moves.
+/// Returns whether the chip is compact and how wide it is.
+fn chip_plan(ui: &egui::Ui, free: f32, min_title: f32, gap: f32) -> Option<(bool, f32)> {
+    let whole = chip_width(ui, false);
+    let compact = free < whole + 200.0;
+    let w = if compact { chip_width(ui, true) } else { whole };
+    (free - w - gap >= min_title).then_some((compact, w))
+}
+
+fn chip_width(ui: &egui::Ui, compact: bool) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    let button = crate::button::Button::new("Reshuffle").secondary().small().desired_size(ui).x;
+    if compact {
+        return button;
+    }
+    let word = ui.painter().layout_no_wrap(crate::i18n::tr("Shuffled").to_string(), t.font(12.5), t.text_dim).size().x;
+    word.ceil() + LABEL_GAP + button
+}
+
+/// The chip in `rect` (as wide as [`chip_width`]): "Shuffled" in the count's quiet voice and the
+/// Reshuffle button (bordered at rest, so it reads as an action beside the state), one click for a
+/// new shuffle.
+fn shuffle_chip(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, compact: bool) {
+    let t = Tokens::get(ui.ctx());
+    let button_w = crate::button::Button::new("Reshuffle").secondary().small().desired_size(ui).x;
+    if !compact {
+        let word = ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Shuffled"), t.font(12.5), t.text_dim);
+        register(ui, "grid:shuffled", word);
+    }
+    let at = Rect::from_min_size(pos2(rect.right() - button_w, rect.center().y - 12.0), vec2(button_w, 24.0));
+    if crate::button::Button::new("Reshuffle")
+        .secondary()
+        .small()
+        .widget("button:reshuffle")
+        .tooltip("Shown in a random order. Reshuffle for a new one.")
+        .show_at(ui, at)
+        .clicked()
+    {
+        let _ = app.run("library.shuffle", json!({}));
+    }
+}
+
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),
 /// Include subfolders, Add to My Photos.
-fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engine::Browse, ids: &[PhotoId], local_n: usize, cnt: &str) -> Rect {
+fn folder_header(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    b: &lightcraft_engine::Browse,
+    ids: &[PhotoId],
+    local_n: usize,
+    cnt: &str,
+    shuffled: bool,
+) -> Rect {
     let t = Tokens::get(ui.ctx());
     // The path/count and actions need independent rows. The frame reserves the actual height,
     // including any wrapped actions, so the grid below never paints under the header.
@@ -1007,10 +1088,15 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             ui.spacing_mut().item_spacing.x = 8.0;
             let count_w =
                 ui.painter().layout_no_wrap(cnt.to_owned(), t.font(12.5), t.text_dim).size().x.ceil().min((ui.available_width() * 0.45).floor());
-            let path_w = (ui.available_width() - count_w - 8.0).max(0.0).floor();
+            let chip = if shuffled { chip_plan(ui, ui.available_width() - count_w - 8.0, MIN_PATH_W, 8.0) } else { None };
+            let path_w = (ui.available_width() - count_w - 8.0 - chip.map_or(0.0, |(_, w)| w + 8.0)).max(0.0).floor();
             ui.allocate_ui_with_layout(vec2(path_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 folder_breadcrumbs(app, ui, &b.path);
             });
+            if let Some((compact, chip_w)) = chip {
+                let (rect, _) = ui.allocate_exact_size(vec2(chip_w, 24.0), Sense::hover());
+                shuffle_chip(app, ui, rect, compact);
+            }
             let count = ui.add_sized(vec2(count_w, 24.0), egui::Label::new(egui::RichText::new(cnt).size(12.5).color(t.text_dim)).truncate());
             register(ui, "grid:count", count.rect);
             count.on_hover_text(cnt);

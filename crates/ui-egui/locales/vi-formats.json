@@ -180,6 +180,8 @@
   "Skipped {problem}": "Skipped {problem}",
   "Slideshow exported: {what}": "Slideshow exported: {what}",
   "Smart album: {}": "Album thông minh: {}",
+  "Sort: {key}": "Sắp xếp: {key}",
+  "Sort: {key}, {direction}": "Sắp xếp: {key}, {direction}",
   "Tagged {n} photo{} from the tracklog": "Đã gắn thẻ {n} ảnh{:.0} từ nhật ký tuyến",
   "Template preview: {name}": "Template preview: {name}",
   "The SAM 3 download failed: {e}": "Tải SAM 3 thất bại: {e}",

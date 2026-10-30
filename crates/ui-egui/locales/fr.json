@@ -42,6 +42,8 @@
   "Add to Local": "Ajouter à Local",
   "Add to My Photos": "Ajouter à Mes photos",
   "Can't be moved here": "Impossible de les déplacer ici",
+  "Shown in a random order. Reshuffle for a new one.": "Affichées dans un ordre aléatoire. Mélanger à nouveau en donne un autre.",
+  "Shuffled": "Mélangées",
   "This row covers more than one disk: drop on a folder inside it": "Cette ligne couvre plusieurs disques : déposez-les sur un dossier qu’elle contient",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Les photos locales ne sont pas encore dans la bibliothèque : Ajouter à Mes photos d’abord, puis déplacez-les",
   "Add to Selected Photos": "Ajouter aux photos sélectionnées",

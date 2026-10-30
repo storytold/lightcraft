@@ -44,6 +44,8 @@
   "Add to Local": "添加到本地",
   "Add to My Photos": "添加到我的照片",
   "Can't be moved here": "无法移到这里",
+  "Shown in a random order. Reshuffle for a new one.": "按随机顺序显示。重新随机排序可得到新的顺序。",
+  "Shuffled": "已随机排序",
   "This row covers more than one disk: drop on a folder inside it": "此行涵盖多个磁盘：请拖放到其中的文件夹",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "本地照片尚未在图库中：请先“添加到我的照片”，再移动",
   "Add to Selected Photos": "添加到所选照片",

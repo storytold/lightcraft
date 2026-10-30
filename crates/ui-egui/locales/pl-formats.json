@@ -114,6 +114,8 @@
   "Show {hidden} hidden location{}": "Pokaż ukryte lokalizacje: {hidden}{:.0}",
   "Showing {n} of {}": "Wyświetlono {n} z {}",
   "Smart album: {}": "Album inteligentny: {}",
+  "Sort: {key}": "Sortowanie: {key}",
+  "Sort: {key}, {direction}": "Sortowanie: {key}, {direction}",
   "Tagged {n} photo{} from the tracklog": "Geotagi ze śladu GPS dodane do zdjęć: {n}{:.0}",
   "The SAM 3 download failed: {e}": "Nie udało się pobrać SAM 3: {e}",
   "Undo {}": "Cofnij {}",

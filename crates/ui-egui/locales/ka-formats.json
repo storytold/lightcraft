@@ -149,6 +149,8 @@
   "Showing {n} of {}": "ნაჩვენებია {n} / {}",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "აჩვენებს მოდელის პირობებს, შემდეგ ჩამოტვირთავს {}-ს {host}-დან, დააყენებს და დაიწყებს მის გამოყენებას. სხვა არაფერი იგზავნება.",
   "Smart album: {}": "სმარტ-ალბომი: {}",
+  "Sort: {key}": "სორტირება: {key}",
+  "Sort: {key}, {direction}": "სორტირება: {key}, {direction}",
   "Tagged {n} photo{} from the tracklog": "მარშრუტის ჟურნალით მოინიშნა ფოტო: {n}{:.0}",
   "The SAM 3 download failed: {e}": "SAM 3-ის ჩამოტვირთვა ვერ მოხერხდა: {e}",
   "There is a keyword set “{name}” already": "საკვანძო სიტყვების ნაკრები „{name}“ უკვე არსებობს",

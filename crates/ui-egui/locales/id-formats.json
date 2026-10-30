@@ -71,6 +71,8 @@
   "Show {hidden} hidden location{}": "Tampilkan {hidden} lokasi tersembunyi{:.0}",
   "Showing {n} of {}": "Menampilkan {n} dari {}",
   "Smart album: {}": "Album pintar: {}",
+  "Sort: {key}": "Urutan: {key}",
+  "Sort: {key}, {direction}": "Urutan: {key}, {direction}",
   "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.": "File sidecar XMP untuk {n} foto tidak dapat ditulis (apakah foldernya sedang offline?). LightCraft akan terus mencoba.",
   "Undo {}": "Urungkan {}",
   "Version {} — a clean-room, pure-Rust photo library and raw developer.": "Versi {} — pustaka foto dan pengolah raw yang dibuat secara clean-room dengan Rust murni.",

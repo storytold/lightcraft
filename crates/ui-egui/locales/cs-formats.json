@@ -149,6 +149,8 @@
   "Showing {n} of {}": "Zobrazeno {n} z {}",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "Zobrazí podmínky modelu, poté stáhne {} z {host}, nainstaluje jej a začne používat. Nic dalšího se neodesílá.",
   "Smart album: {}": "Inteligentní album: {}",
+  "Sort: {key}": "Řazení: {key}",
+  "Sort: {key}, {direction}": "Řazení: {key}, {direction}",
   "Tagged {n} photo{} from the tracklog": "Poloha doplněna ze záznamu trasy u fotografií: {n}{:.0}",
   "The SAM 3 download failed: {e}": "Stažení SAM 3 selhalo: {e}",
   "There is a keyword set “{name}” already": "Sada klíčových slov „{name}“ již existuje",

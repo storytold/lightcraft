@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### A shuffled grid says so, and Reshuffle is one click away
+- When the photos are sorted at random, the grid's header now shows "Shuffled" beside the photo count with a Reshuffle
+  button (bordered, so it reads as an action beside the state): one click gives a new order, with the Sort menu's
+  Reshuffle unchanged. Recently Added keeps its own order
+  (newest import first), so it shows no chip. In a narrow window the button stands alone, and when even it would
+  leave the title no room (a very narrow window or a very long count) the chip is left out, so the count always stays in view.
+- The sort button's tooltip and its name for screen readers now say which sort is chosen ("Sort: Capture
+  Date, Descending", "Sort: Random") instead of just "Sort".
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

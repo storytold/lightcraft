@@ -71,6 +71,8 @@
   "Show {hidden} hidden location{}": "显示 {hidden} 个隐藏位置{0:.0}",
   "Showing {n} of {}": "显示 {0} 张中的 {n} 张",
   "Smart album: {}": "智能相册：{0}",
+  "Sort: {key}": "排序：{key}",
+  "Sort: {key}, {direction}": "排序：{key}，{direction}",
   "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.": "无法写入 {n} 张照片的 XMP 附属文件（其文件夹是否离线？）。LightCraft 会继续重试。",
   "Undo {}": "撤销 {0}",
   "Version {} — a clean-room, pure-Rust photo library and raw developer.": "版本 {0} — 净室实现的纯 Rust 照片图库与 RAW 编辑工具。",

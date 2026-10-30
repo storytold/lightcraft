@@ -62,6 +62,8 @@
   "Import cancelled · {} photo{} added": "Importación cancelada · {0} foto{1} añadida{1}",
   "Import failed: {e}": "Error de importación: {e}",
   "Import warnings ({n}):\n{warnings}": "Avisos de importación ({n}):\n{warnings}",
+  "Sort: {key}": "Orden: {key}",
+  "Sort: {key}, {direction}": "Orden: {key}, {direction}",
   "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.": "No se pudieron escribir los archivos XMP de {n} fotos (¿su carpeta está desconectada?). LightCraft lo sigue intentando.",
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "El perfil XMP \"{profile}\" no se aplicó a {path}; los colores pueden diferir de Lightroom.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "La geometría de Lightroom no se conservó para {path}; {mode} se recalculará.",

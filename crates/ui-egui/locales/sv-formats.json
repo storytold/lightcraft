@@ -127,6 +127,8 @@
   "Moved; {} photo(s) relinked": "Flyttat; {} foto(n) har länkats om",
   "Named ({named_n})": "Namngivna ({named_n})",
   "New Folder in “{name}”": "Ny mapp i ”{name}”",
+  "Sort: {key}": "Sortering: {key}",
+  "Sort: {key}, {direction}": "Sortering: {key}, {direction}",
   "new, inside {parent}": "ny, inuti {parent}",
   "none (CPU rendering): {why}": "ingen (CPU-rendering): {why}",
   "not added to Apple Photos: {e}": "inte tillagt i Apple Photos: {e}",

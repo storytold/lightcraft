@@ -29,7 +29,7 @@ fn text_bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
 fn local_folder_header_text_and_controls_do_not_overlap() {
     for locale in [Locale::En, Locale::De, Locale::PtBr] {
         for width in [136.0, 200.0, 320.0, 590.0, 1100.0] {
-            for scale in [1.0, 2.0] {
+            for (scale, shuffled) in [(1.0, false), (2.0, false), (1.0, true), (2.0, true)] {
                 for (path, local_n) in [
                     ("/Volumes/External drive/Photography archive/Trips and holidays/A very long folder name with many photographs to import", 2408),
                     ("/A very long folder name with many photographs to import", 2408),
@@ -50,7 +50,7 @@ fn local_folder_header_text_and_controls_do_not_overlap() {
                         let raw = HeadlessView::raw_input(vec2(width, 300.0), scale, frame as f64 / 60.0, vec![]);
                         let mut out = ctx.run_ui(raw, |ui| {
                             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                                header = super::folder_header(&mut app, ui, &browse, &[], local_n, &counted);
+                                header = super::folder_header(&mut app, ui, &browse, &[], local_n, &counted, shuffled);
                                 let (grid, _) = ui.allocate_exact_size(vec2(ui.available_width(), 100.0), egui::Sense::hover());
                                 assert!(grid.top() >= header.bottom(), "wrapped controls must reserve space above the grid");
                             });
@@ -67,6 +67,10 @@ fn local_folder_header_text_and_controls_do_not_overlap() {
                     let check = widgets.iter().find(|(id, _)| id == "check:includeSubfolders").unwrap().1;
                     assert!(widgets.iter().any(|(id, _)| id.starts_with("crumb:")));
                     assert_eq!(widgets.iter().any(|(id, _)| id == "button:addToLibrary"), local_n > 0);
+                    let count = widgets.iter().find(|(id, _)| id == "grid:count").unwrap().1;
+                    if let Some((_, chip)) = widgets.iter().find(|(id, _)| id == "button:reshuffle") {
+                        assert!(shuffled && chip.right() <= count.left() + 0.5, "{locale:?} {width}: Reshuffle {chip:?} before the count {count:?}");
+                    }
                     for (id, rect) in &widgets {
                         assert!(header.contains_rect(*rect), "{locale:?} {width} {scale}: {id} outside header: {rect:?}");
                         if id.starts_with("crumb:") {

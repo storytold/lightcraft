@@ -180,6 +180,8 @@
   "Skipped {problem}": "Ohitettu {problem}",
   "Slideshow exported: {what}": "Diaesitys viety: {what}",
   "Smart album: {}": "Älyalbumi: {}",
+  "Sort: {key}": "Lajittelu: {key}",
+  "Sort: {key}, {direction}": "Lajittelu: {key}, {direction}",
   "Tagged {n} photo{} from the tracklog": "Reittilokista merkittyjä kuvia: {n}{:.0}",
   "Template preview: {name}": "Mallipohjan esikatselu: {name}",
   "The SAM 3 download failed: {e}": "SAM 3:n lataus epäonnistui: {e}",

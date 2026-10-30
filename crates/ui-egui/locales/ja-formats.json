@@ -71,6 +71,8 @@
   "Show {hidden} hidden location{}": "非表示の{hidden}か所を表示{:.0}",
   "Showing {n} of {}": "{}枚中{n}枚を表示",
   "Smart album: {}": "スマートアルバム：{}",
+  "Sort: {key}": "並べ替え：{key}",
+  "Sort: {key}, {direction}": "並べ替え：{key}、{direction}",
   "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.": "{n} 枚の写真の XMP サイドカーを書き込めませんでした（フォルダーがオフラインではありませんか？）。LightCraft は再試行を続けます。",
   "Undo {}": "取り消す：{}",
   "Version {} — a clean-room, pure-Rust photo library and raw developer.": "バージョン{} — Rust製の写真管理・RAW現像アプリ",

@@ -43,7 +43,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
                         ui.painter().rect_filled(sep, 0.0, t.button_border);
                         ui.add_space(10.0);
-                        let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, "Sort");
+                        let name = sort_summary(&app.session.sort);
+                        let sort = icon_button(ui, "sort", Icon::Sort, vec2(30.0, 30.0), false, true, &name);
                         egui::Popup::menu(&sort).show(|ui| sort_menu(app, ui));
                     } else {
                         let current_icon = VIEW_MODES.iter().find(|(_, _, mode, _)| *mode == app.ui.view).map_or(Icon::More, |(_, icon, _, _)| *icon);
@@ -320,6 +321,23 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("library.sort", json!({"group": k}));
         }
     }
+}
+
+/// What the sort button's tooltip and screen-reader name say: "Sort: Capture Date, Descending", or
+/// "Sort: Random" (a shuffle has no direction), worded as the Sort menu words them.
+fn sort_summary(sort: &lightcraft_catalog::Sort) -> String {
+    use lightcraft_catalog::SortKey::*;
+    let key = crate::i18n::tr(match sort.key {
+        CaptureDate => "Capture Date",
+        ImportDate => "Import Date",
+        EditDate => "Modified Date",
+        FileName => "File Name",
+        Rating => "Rating",
+        FileSize => "File Size",
+        Random => return crate::i18n::tr_format!("Sort: {key}", key = crate::i18n::tr("Random")),
+    });
+    let direction = crate::i18n::tr(if sort.ascending { "Ascending" } else { "Descending" });
+    crate::i18n::tr_format!("Sort: {key}, {direction}", key = key, direction = direction)
 }
 
 #[cfg(test)]
