@@ -31,7 +31,7 @@ pub fn time_scale() -> f64 {
         let value = std::env::var(TIME_SCALE_ENV).ok();
         let (scale, note) = parse_time_scale(value.as_deref());
         if let Some(note) = note {
-            eprintln!("{TIME_SCALE_ENV}: {note}");
+            crate::note(&format!("{TIME_SCALE_ENV}: {note}"));
         }
         scale
     })
