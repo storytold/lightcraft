@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Close or group panels from the tool icons
+- Right-click a tool icon to close Tools without closing Presets, even when Tools is collapsed to
+  icons or behind another tab. With both panels open, Move to group → Presets combines them as tabs;
+  the Presets icon offers the reverse action. Existing panel keys reopen a closed panel in its saved
+  place. Locked workspaces keep both actions disabled.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

@@ -4,6 +4,7 @@ use egui::vec2;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::docking::Panel;
 use crate::icons::Icon;
 use crate::state::RightPanel;
 use crate::theme::Tokens;
@@ -30,7 +31,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+                let presets = icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo || app.ui.presets, "Presets (Shift+P)");
+                panel_menu(app, &presets, Panel::Presets);
+                if presets.clicked() {
                     let _ = app.run("panel.presets", json!({}));
                 }
                 for (id, icon, panel, tip) in [
@@ -41,7 +44,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
                 ] {
                     let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
+                    let response = icon_button(ui, id, icon, sz, on, has_photo || on, tip);
+                    panel_menu(app, &response, Panel::Tools);
+                    if response.clicked() {
                         let _ = app.run(&format!("panel.{id}"), json!({}));
                     }
                     if id == "edit" {
@@ -49,10 +54,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                 }
                 separator(ui, &t);
-                if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
+                let response = icon_button(
+                    ui,
+                    "versions",
+                    Icon::Versions,
+                    sz,
+                    app.ui.right == RightPanel::Versions,
+                    has_photo || app.ui.right == RightPanel::Versions,
+                    "Versions (Shift+V)",
+                );
+                panel_menu(app, &response, Panel::Tools);
+                if response.clicked() {
                     let _ = app.run("panel.versions", json!({}));
                 }
-                if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
+                let response = icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)");
+                panel_menu(app, &response, Panel::Tools);
+                if response.clicked() {
                     let _ = app.run("panel.activity", json!({}));
                 }
                 if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
@@ -70,14 +87,68 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             child.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
+                let response = icon_button(
+                    ui,
+                    "keywords",
+                    Icon::Tag,
+                    sz,
+                    app.ui.right == RightPanel::Keywords,
+                    has_photo || app.ui.right == RightPanel::Keywords,
+                    "Keywords (K)",
+                );
+                panel_menu(app, &response, Panel::Tools);
+                if response.clicked() {
                     let _ = app.run("panel.keywords", json!({}));
                 }
-                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
+                let response = icon_button(
+                    ui,
+                    "info",
+                    Icon::Info,
+                    sz,
+                    app.ui.right == RightPanel::Info,
+                    has_photo || app.ui.right == RightPanel::Info,
+                    "Info (I)",
+                );
+                panel_menu(app, &response, Panel::Tools);
+                if response.clicked() {
                     let _ = app.run("panel.info", json!({}));
                 }
             });
         });
+}
+
+/// The fixed tool rail remains reachable when a panel is an icon, a background tab or floating.
+/// Reuse the docking commands so closing keeps the other panel and grouping remembers its place.
+fn panel_menu(app: &mut LightcraftApp, response: &egui::Response, panel: Panel) {
+    let (open, target, target_open, target_label) = match panel {
+        Panel::Presets => (app.ui.presets, Panel::Tools, app.ui.right != RightPanel::None, "Tools"),
+        _ => (app.ui.right != RightPanel::None, Panel::Presets, app.ui.presets, "Presets"),
+    };
+    let unlocked = app.ui.docking.as_ref().is_none_or(|workspace| !workspace.locked);
+    crate::widgets::context_menu(response, |ui| {
+        let mut action = None;
+        let close = ui.add_enabled(open && unlocked, egui::Button::new(crate::i18n::tr("Close panel")));
+        crate::widgets::register(ui, format!("menu:panel-close-{}", panel.id()), close.rect);
+        if close.clicked() {
+            action = Some(json!({"operation": "close", "panel": panel}));
+        }
+        ui.add_enabled_ui(open && target_open && unlocked, |ui| {
+            let group = crate::widgets::menu_button(ui, crate::i18n::tr("Move to group"), |ui| {
+                let choice = ui.button(crate::i18n::tr(target_label));
+                crate::widgets::register(ui, format!("menu:panel-target-{}", target.id()), choice.rect);
+                if choice.clicked() {
+                    action = Some(json!({"operation": "move", "panel": panel, "target": target, "zone": "center"}));
+                }
+            });
+            crate::widgets::register(ui, format!("menu:panel-group-{}", panel.id()), group.response.rect);
+        });
+        if let Some(params) = action {
+            if let Err(error) = app.run("ui.dock", params) {
+                app.toast_error(ui.ctx(), error);
+            }
+            ui.close();
+        }
+    });
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {

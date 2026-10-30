@@ -1,7 +1,10 @@
 //! Real library/tool panel moves preserve the selected tool and saved arrangement.
 use craft_ui::docking::{DockArea, Hit, Node, Side};
 use egui::{Event, Modifiers, PointerButton, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use lightcraft_ui_egui::{LightcraftApp, Services, UiState, docking::Panel, state::RightPanel};
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -188,4 +191,88 @@ fn docking_renders_real_photo_panels_default_floating_and_redocked() {
             }
         }
     }
+}
+
+#[test]
+fn tool_rail_menu_closes_a_collapsed_panel_without_closing_presets() {
+    let mut h = harness(None, 1400.0, 1.0);
+    h.state_mut().ui.presets = true;
+    h.run_steps(4);
+    h.state_mut().run("ui.dock", json!({"action": {"SetIconic": {"panel": "tools", "iconic": true}}})).unwrap();
+    h.run_steps(4);
+    let before = serde_json::to_value(h.state().session.catalog.photos().map(|p| p.as_ref()).collect::<Vec<_>>()).unwrap();
+    let undo = h.state().session.undo.len();
+    h.get_by_label("Edit (E)").click_button(PointerButton::Secondary);
+    h.run_steps(3);
+    h.get_by_label("Close panel").click();
+    h.run_steps(5);
+    assert_eq!(h.state().ui.right, RightPanel::None);
+    assert!(h.state().ui.presets);
+    assert!(!h.state().ui.docking.as_ref().unwrap().layout.contains(&Panel::Tools));
+    assert_eq!(h.state().session.undo.len(), undo);
+    assert_eq!(serde_json::to_value(h.state().session.catalog.photos().map(|p| p.as_ref()).collect::<Vec<_>>()).unwrap(), before);
+}
+
+#[test]
+fn tool_rail_menu_groups_panels_and_close_keeps_the_other_tab_across_reload() {
+    let mut h = harness(None, 1400.0, 1.0);
+    h.state_mut().ui.presets = true;
+    h.run_steps(4);
+    h.get_by_label("Edit (E)").click_button(PointerButton::Secondary);
+    h.run_steps(3);
+    h.get_by_label("Move to group     ").hover();
+    h.run_steps(5);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Presets").click();
+    h.run_steps(5);
+    let workspace = h.state().ui.docking.as_ref().unwrap();
+    assert_eq!(workspace.layout.location(&Panel::Tools).unwrap().anchor, Some(Panel::Presets));
+    assert_eq!(h.state().ui.right, RightPanel::Edit);
+    h.get_by_label("Presets (Shift+P)").click_button(PointerButton::Secondary);
+    h.run_steps(3);
+    h.get_by_label("Close panel").click();
+    h.run_steps(5);
+    assert!(!h.state().ui.presets);
+    assert_eq!(h.state().ui.right, RightPanel::Edit);
+    let state: UiState = serde_json::from_str(&serde_json::to_string(&h.state().ui).unwrap()).unwrap();
+    let mut reloaded = harness(Some(state), 1400.0, 1.0);
+    reloaded.state_mut().run("panel.presets", json!({})).unwrap();
+    reloaded.run_steps(4);
+    assert_eq!(reloaded.state().ui.docking.as_ref().unwrap().layout.location(&Panel::Presets).unwrap().anchor, Some(Panel::Tools));
+}
+
+#[test]
+fn tool_rail_menu_respects_locked_workspaces_and_missing_group_targets() {
+    for locked in [false, true] {
+        let mut h = harness(None, 1400.0, 1.0);
+        h.state_mut().ui.presets = locked;
+        h.run_steps(4);
+        h.state_mut().ui.docking.as_mut().unwrap().locked = locked;
+        h.run_steps(3);
+        let before = serde_json::to_value(&h.state().ui.docking).unwrap();
+        h.get_by_label("Edit (E)").click_button(PointerButton::Secondary);
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Close panel").accesskit_node().is_disabled(), locked);
+        assert!(h.get_by_label("Move to group     ").accesskit_node().is_disabled());
+        assert_eq!(serde_json::to_value(&h.state().ui.docking).unwrap(), before);
+    }
+}
+
+#[test]
+fn tool_rail_menu_can_close_open_presets_without_a_selected_photo() {
+    let mut h = harness(None, 1400.0, 1.0);
+    h.state_mut().ui.presets = true;
+    h.state_mut().run("library.select", json!({"ids": []})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().session.active().is_none());
+    h.get_by_label("Presets (Shift+P)").click_button(PointerButton::Secondary);
+    h.run_steps(3);
+    h.get_by_label("Close panel").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.presets);
+    assert_eq!(h.state().ui.right, RightPanel::Edit);
+    h.get_by_label("Edit (E)").click_button(PointerButton::Secondary);
+    h.run_steps(3);
+    h.get_by_label("Close panel").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.right, RightPanel::None);
 }
