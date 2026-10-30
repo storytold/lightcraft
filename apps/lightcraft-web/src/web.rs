@@ -9,7 +9,7 @@ use std::sync::Arc;
 use lightcraft_engine::Session;
 use lightcraft_engine::catalog::Source;
 use lightcraft_engine::library::LibraryStores;
-use lightcraft_ui_egui::{LightcraftApp, Services, UiState};
+use lightcraft_ui_egui::{LightcraftApp, Services, UiState, WriteFn};
 use serde_json::json;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -18,6 +18,7 @@ use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
+use crate::host::{Incoming, Outgoing};
 use crate::safety::{self, notice};
 use crate::store::{Originals, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
@@ -68,13 +69,15 @@ pub(crate) fn request_repaint() {
     });
 }
 
-/// URL options (`?bench&store=idb&workers=2&reset`).
+/// URL options (`?bench&store=idb&workers=2&reset&host=parent`).
 struct Options {
     bench: bool,
     /// "opfs" (default: OPFS, falling back to IndexedDB), "idb" or "memory".
     store: String,
     workers: Option<usize>,
     reset: bool,
+    /// `host=parent`: a same-origin page frames LightCraft and speaks to it (see [`crate::host`]).
+    host: bool,
 }
 
 impl Options {
@@ -95,6 +98,7 @@ impl Options {
             store: get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()),
             workers: get("workers").and_then(|v| v.parse().ok()),
             reset: get("reset").is_some(),
+            host: get("host").as_deref() == Some("parent"),
         }
     }
 }
@@ -171,9 +175,21 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
 /// Build the browser host's `Services`: library backup/restore through browser storage and a
 /// download, asynchronous file picking, downloads for writes, and PNG encoding. Desktop-only
 /// services (native pickers, reveal, model folders) stay unset.
-fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen: Rc<Cell<bool>>, ctx: egui::Context) -> Services {
-    let (backup_backend, backup_files) = (backend.clone(), files);
+fn services(
+    originals: Originals,
+    backend: Option<Backend>,
+    files: Files,
+    frozen: Rc<Cell<bool>>,
+    ctx: egui::Context,
+    bridge: Option<crate::host::Bridge>,
+) -> Services {
+    let (backup_backend, backup_files, backup_bridge) = (backend.clone(), files, bridge.clone());
     let restore_backend = backend.clone();
+    // what would be downloaded goes to the page framing LightCraft instead, when there is one
+    let write: WriteFn = match bridge {
+        Some(bridge) => Box::new(move |path: &str, bytes: &[u8]| bridge.save(path, bytes)),
+        None => Box::new(download),
+    };
     Services {
         local_places: None,
         picker: None,
@@ -194,9 +210,18 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
                 })
                 .collect();
             let files = backup_files.clone();
-            notice("Backing up the library… (the download starts when it's ready)");
+            // awaited by `backup`: "backed up" is said only once the page has the file
+            let deliver: safety::Deliver = match backup_bridge.clone() {
+                Some(bridge) => Box::new(move |name: String, blob: web_sys::Blob| Box::pin(async move { bridge.save_blob(name, blob).await })),
+                None => Box::new(|name: String, blob: web_sys::Blob| Box::pin(async move { safety::download_blob(&name, &blob) })),
+            };
+            notice(if backup_bridge.is_some() {
+                "Backing up the library… (handed to the page when it's ready)"
+            } else {
+                "Backing up the library… (the download starts when it's ready)"
+            });
             wasm_bindgen_futures::spawn_local(async move {
-                match safety::backup(files, b, names).await {
+                match safety::backup(files, b, names, deliver).await {
                     Ok((n, bytes)) => notice(format!(
                         "Library backed up: {n} original{} ({:.1} MB). Keep the file somewhere safe.",
                         if n == 1 { "" } else { "s" },
@@ -234,7 +259,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         save_slideshow_template: None,
         pick_print_templates: None,
         save_print_template: None,
-        write: Some(Box::new(download)),
+        write: Some(write),
         // the browser download path has no meaningful create-new file write; the control channel
         // (and therefore screenshot paths) is not available on the web
         write_new: None,
@@ -286,7 +311,8 @@ async fn flush(files: Files, backend: Backend, dir: String, flushing: Rc<Cell<bo
         }
     }
     flushing.set(false);
-    // the page title drops its unsaved • now, even when nothing else wakes the page
+    // the page title drops its unsaved • now, and the page framing LightCraft hears `dirty: false`,
+    // even when nothing else wakes the page
     request_repaint();
 }
 
@@ -298,12 +324,14 @@ struct Boot {
     index: ThumbIndex,
     /// The library folder in storage (`library`, or a restored backup's).
     lib_dir: String,
+    /// The page framing LightCraft (`?host=parent`), when there is one.
+    bridge: Option<crate::host::Bridge>,
     /// Library files that exist but couldn't be read (#1507): the library isn't opened and
     /// nothing is saved, so the stored copy stays as it was.
     load_error: Option<String>,
 }
 
-async fn boot(opts: Options) -> Boot {
+async fn boot(opts: Options, bridge: Option<crate::host::Bridge>) -> Boot {
     let t0 = perf_now();
     let backend = if opts.store == "memory" {
         None
@@ -400,7 +428,7 @@ async fn boot(opts: Options) -> Boot {
         index.len(),
         index.total() as f64 / 1e6
     );
-    Boot { opts, backend, files, index, lib_dir, load_error }
+    Boot { opts, backend, files, index, lib_dir, bridge, load_error }
 }
 
 struct WebApp {
@@ -421,6 +449,7 @@ struct WebApp {
     title: String,
     last_save: f64,
     ui_written: Vec<u8>,
+    bridge: Option<crate::host::Bridge>,
 }
 
 /// The browser host's drop queues, taken only through the shared gate: a prompt or blocking
@@ -455,7 +484,7 @@ impl WebApp {
     /// browser storage (a read failure starts an empty session and a blocking `LibraryProblem`),
     /// load the stored UI state, start render workers and the optional benchmark.
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
-        let Boot { opts, backend, files, index, lib_dir, load_error } = boot;
+        let Boot { opts, backend, files, index, lib_dir, bridge, load_error } = boot;
         let originals = Originals::default();
         let t = perf_now();
         let mut session = Session::new();
@@ -506,8 +535,8 @@ impl WebApp {
         session.media.preview_capacity = 3;
         // nothing is saved while the stored library couldn't be read
         let frozen = Rc::new(Cell::new(read_failed));
-        let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
-            .with_chinese_font(chinese_font);
+        let services = services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone(), bridge.clone());
+        let mut app = LightcraftApp::new(session, services).with_chinese_font(chinese_font);
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
@@ -540,6 +569,13 @@ impl WebApp {
         }
         log::info!("lightcraft: {n} render workers");
         CTX.with(|c| *c.borrow_mut() = Some(cc.egui_ctx.clone()));
+        if let Some(b) = &bridge {
+            // hear the page from now on, and tell it the app is listening
+            b.listen(cc.egui_ctx.clone());
+            if !b.post(&Outgoing::Ready) {
+                log::warn!("lightcraft: the page framing LightCraft could not be told the app is ready");
+            }
+        }
         let origin = lightcraft_ui_egui::monotonic_ms();
         WebApp {
             app,
@@ -556,7 +592,47 @@ impl WebApp {
             title: String::new(),
             last_save: 0.0,
             ui_written,
+            bridge,
         }
+    }
+
+    /// What the page framing LightCraft sent since the last frame: photos to add (as if dropped
+    /// on the window) and commands to run, each answered with `lightcraft:response`.
+    fn run_host(&mut self, ctx: &egui::Context) {
+        let Some(bridge) = self.bridge.clone() else { return };
+        for m in bridge.take_incoming() {
+            match m {
+                Incoming::Open { name, bytes } => {
+                    wasm_bindgen_futures::spawn_local(store_file(self.originals.clone(), self.backend.clone(), name, bytes, ctx.clone()));
+                }
+                Incoming::Refused(error) => {
+                    if !bridge.post(&Outgoing::Failed(error)) {
+                        log::warn!("lightcraft: a refused open could not be reported to the page");
+                    }
+                }
+                Incoming::Cmd { id, params } => {
+                    let r = match crate::automation::params(&params) {
+                        Err(e) => Err(format!("{id}: {e}")),
+                        Ok(_) if id == "web.stats" => Ok(self.web_stats()),
+                        Ok(params) => self.app.run(&id, params),
+                    };
+                    let response = match r {
+                        Ok(v) => Outgoing::Response { ok: true, value: v.to_string() },
+                        Err(e) => Outgoing::Response { ok: false, value: e },
+                    };
+                    if !bridge.post(&response) {
+                        log::warn!("lightcraft: the answer to {id} could not reach the page");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether closing the page now would lose something: a write to browser storage still
+    /// queued or running, or changes storage refused (quota). The page framing LightCraft hears
+    /// when this changes (`lightcraft:dirty`), so it can ask before closing a window with edits.
+    fn dirty_for_host(&self) -> bool {
+        self.files.is_dirty() || self.flushing.get() || self.app.session.unsaved().is_some()
     }
 
     /// Consume the drops the raw-input hook queued once (never re-read `raw.dropped_files` in a
@@ -735,6 +811,7 @@ impl eframe::App for WebApp {
             self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
         }
         self.run_inbox();
+        self.run_host(ctx);
         self.load_originals(ctx);
         if let Some(w) = &self.workers {
             // `library.preferences ▸ cacheMb` is read by the session; the worker index prunes on
@@ -743,6 +820,9 @@ impl eframe::App for WebApp {
         }
         self.app.logic(ctx);
         self.save();
+        if let Some(b) = &self.bridge {
+            b.report_dirty(self.dirty_for_host());
+        }
     }
 
     /// Pass the browser's raw input to the app hook before egui processes it, so prompt barriers
@@ -830,6 +910,12 @@ pub fn start(chinese_font: Vec<u8>) {
         log::warn!("lightcraft: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");
     }
     let opts = Options::from_url();
+    // `?host=parent`: a same-origin page framing LightCraft hands photos in, stores what would
+    // be downloaded and hears about unsaved changes (see `host`)
+    let bridge = opts.host.then(crate::host::Bridge::new).flatten();
+    if opts.host && bridge.is_none() {
+        log::warn!("lightcraft: ?host=parent, but this page is not framed or has an opaque origin; no page to speak to");
+    }
     wasm_bindgen_futures::spawn_local(async move {
         // one tab per library: two would each keep their own copy and overwrite each other's saves
         if opts.store != "memory" && safety::acquire_tab_lock().await == Some(false) {
@@ -837,6 +923,9 @@ pub fn start(chinese_font: Vec<u8>) {
                 "LightCraft is already open in another tab or window of this browser.\n\n\
                  Switch to that tab, or close it and reload this page. (Two tabs would overwrite each other's changes.)",
             );
+            if let Some(b) = &bridge {
+                b.post(&Outgoing::Failed("LightCraft is already open in another tab or window of this browser".into()));
+            }
             return;
         }
         let Some(canvas) = window()
@@ -845,9 +934,12 @@ pub fn start(chinese_font: Vec<u8>) {
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
         else {
             log::error!("missing <canvas id=\"lightcraft_canvas\">");
+            if let Some(b) = &bridge {
+                b.post(&Outgoing::Failed("the page has no <canvas id=\"lightcraft_canvas\">".into()));
+            }
             return;
         };
-        let boot = boot(opts).await;
+        let boot = boot(opts, bridge.clone()).await;
         let runner = eframe::WebRunner::new();
         let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font))))).await;
         match r {
@@ -859,6 +951,9 @@ pub fn start(chinese_font: Vec<u8>) {
             Err(e) => {
                 log::error!("LightCraft failed to start: {e:?}");
                 set_status(&format!("LightCraft failed to start: {e:?}"));
+                if let Some(b) = &bridge {
+                    b.post(&Outgoing::Failed(format!("{e:?}")));
+                }
             }
         }
     });

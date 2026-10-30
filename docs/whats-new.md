@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### The web build can be embedded
+- A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
+  protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of
+  downloads, runs commands and hears whether closing would lose unsaved changes (issue #2270; `docs/web.md`).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
