@@ -393,6 +393,11 @@ pub struct Session {
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
     pub cache_mb: u32,
+    /// The face chosen to show each person by in the People view (lower-cased name → face), instead of their largest
+    /// one (`faces.setCover`; persisted in people.json, outside the catalog).
+    pub person_covers: std::collections::BTreeMap<String, lightcraft_catalog::PersonCover>,
+    /// Bumped whenever [`Session::person_covers`] changes, which the catalog revision doesn't say.
+    pub people_gen: u64,
     /// Slideshow playback settings (`slideshow.playback`; persisted in prefs.json).
     pub slideshow: slideshow::PlaybackSettings,
     /// Slideshow slide layout: Layout, Options and Backdrop (`slideshow.layout`; persisted in
@@ -528,6 +533,8 @@ impl Session {
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
+            person_covers: Default::default(),
+            people_gen: 0,
             slideshow: slideshow::PlaybackSettings::default(),
             slide_layout: slide::SlideSettings::default(),
             slide_overlays: slide_overlay::OverlaySettings::default(),
