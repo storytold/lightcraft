@@ -3,7 +3,7 @@
 O LightCraft pode ser exibido em inglês, chinês simplificado, chinês tradicional (Taiwan), japonês e
 português do Brasil. A preferência de idioma é gravada em `language` no `ui.json`.
 
-- Troque em **Editar → Idioma** ou em **Configurações → Geral → Idioma**. A escolha é mantida nas
+- Troque em **Configurações → Geral → Idioma**. A escolha é mantida nas
   próximas inicializações.
 - Traduzimos menus, edição de fotos, máscaras, recorte, configurações, importação, exportação e as
   principais mensagens de progresso.

@@ -823,3 +823,20 @@ fn no_two_menu_commands_share_a_label() {
     }
     assert!(clashes.is_empty(), "{clashes:#?}");
 }
+
+/// The interface language is chosen in Settings ▸ General (one choice per language), so Edit has no
+/// Language submenu of 18 rows. The commands stay: agents and tests still switch language by id.
+#[test]
+fn edit_menu_has_no_language_submenu_because_settings_has_the_choice() {
+    let mut a = app();
+    let bar = menu_bar(&a);
+    let edit = bar.iter().find(|(t, _)| t == "Edit").expect("Edit menu").1.as_slice();
+    assert!(!edit.iter().any(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Language")), "Edit still has a Language submenu");
+    for (title, nodes) in &bar {
+        for command in crate::menus::LANGUAGE_COMMANDS {
+            assert!(find(nodes, command.0).is_none(), "{} is in {title}", command.0);
+        }
+    }
+    run_item(&mut a, "app.language.german", Value::Null).expect("the command still switches language");
+    assert_eq!(a.ui.language, crate::i18n::Locale::De);
+}

@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### The Edit menu loses its Language submenu
+- Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

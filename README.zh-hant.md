@@ -419,8 +419,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 不指定它時，LightCraft 一樣能建置與執行，只是中文和日文文字沒有字形。字型從不提交到
 本儲存庫，字型的收錄規範記載在該儲存庫：見 [craft-fonts README](https://github.com/storytold/craft-fonts#readme)。
 
-**介面語言：** **編輯 → 語言**（English、简体中文、繁體中文（台灣）、日本語、Português (Brasil)、Español、Deutsch、Русский、Français、Українська、Čeština、ქართული）或 **設定 → 一般 →
-語言**；選擇後立即生效並會保留。詳見 [docs/localization.md](docs/localization.md)。
+**介面語言：** **設定 → 一般 → 語言**（English、简体中文、繁體中文（台灣）、日本語、Português (Brasil)、Español、Deutsch、Русский、Français、Українська、Čeština、ქართული）；選擇後立即生效並會保留。詳見 [docs/localization.md](docs/localization.md)。
 
 **記錄檔：** 桌面應用程式會把記錄檔寫到標準錯誤輸出，以及設定資料夾裡的 `logs/lightcraft.log`
 （Linux `$XDG_CONFIG_HOME/lightcraft/logs/`，預設為 `~/.config/lightcraft/logs/`；macOS
