@@ -434,7 +434,9 @@ memory) and takes no CI slot. It has `ci`'s caps and waits for its slot, builds 
 once (the same build as `ci`'s, so neither rebuilds the other) and runs each test binary, or those
 of the `-p PKG` packages, with whatever follows `--` (`cargo xtask test -p lightcraft-ui-egui --
 i18n::`). It stops at the first failing binary, as `ci` does; `--keep-going` runs them all and
-names each that failed. `--doc` adds the doctests; `LIGHTCRAFT_NEXTEST=1` applies here too.
+names each that failed. `--doc` adds the doctests; `LIGHTCRAFT_NEXTEST=1` applies here too, where
+`--test-threads N` and `--nocapture` become nextest's own options and only filters, `--exact`,
+`--skip`, `--ignored` and `--include-ignored` may follow `--`.
 
 **Release builds on memory-constrained machines:** [#1196](https://github.com/storytold/lightcraft/issues/1196)
 reports Arch/AUR release-link OOM kills on a 16 GB machine when the desktop and CLI build concurrently

@@ -250,7 +250,12 @@ pub fn selected(root: &Path, packages: &BTreeSet<String>, skip_log: &Path) -> Re
 
 /// The `cargo nextest run` arguments for `args`: the workspace build, the `-p` packages as a
 /// filter expression (so the build is still the workspace's), `--no-fail-fast` for `--keep-going`.
-pub fn nextest_args<'a>(args: &Args<'a>) -> Vec<String> {
+///
+/// Nextest doesn't hand `ARGS` to the test binaries: after its `--` it takes only filters,
+/// `--exact`, `--skip NAME`, `--ignored` and `--include-ignored`. `--test-threads N` (or `=N`) and
+/// `--nocapture` become its runner options before `--`; any other option is an error naming it,
+/// rather than nextest's own refusal after the slot was taken.
+pub fn nextest_args<'a>(args: &Args<'a>) -> Result<Vec<String>, String> {
     let mut v: Vec<String> = crate::ci::with_test_targets(&["--workspace"]).into_iter().map(str::to_owned).collect();
     if !args.packages.is_empty() {
         let filter = args.packages.iter().map(|p| format!("package(={p})")).collect::<Vec<_>>().join(" | ");
@@ -259,11 +264,45 @@ pub fn nextest_args<'a>(args: &Args<'a>) -> Vec<String> {
     if args.keep_going {
         v.push("--no-fail-fast".to_owned());
     }
-    if !args.test_args.is_empty() {
-        v.push("--".to_owned());
-        v.extend(args.test_args.iter().map(|a| (*a).to_owned()));
+    let mut filters = Vec::new();
+    let mut it = args.test_args.iter().copied();
+    while let Some(arg) = it.next() {
+        match arg {
+            "--" => {
+                // nextest reads what follows its own `--` as filters too, `-`-prefixed or not
+                filters.push(arg.to_owned());
+                filters.extend(it.by_ref().map(str::to_owned));
+            }
+            "--exact" | "--ignored" | "--include-ignored" => filters.push(arg.to_owned()),
+            "--skip" => {
+                let Some(name) = it.next() else {
+                    return Err("test: --skip needs a test name".to_owned());
+                };
+                filters.extend([arg.to_owned(), name.to_owned()]);
+            }
+            "--nocapture" | "--no-capture" => v.push("--no-capture".to_owned()),
+            "--test-threads" => {
+                let Some(n) = it.next() else {
+                    return Err("test: --test-threads needs a number".to_owned());
+                };
+                v.extend(["--test-threads".to_owned(), n.to_owned()]);
+            }
+            _ if arg.starts_with("--test-threads=") => {
+                v.extend(["--test-threads".to_owned(), arg.trim_start_matches("--test-threads=").to_owned()]);
+            }
+            _ if arg.starts_with('-') => {
+                return Err(format!(
+                    "test: `{arg}` can't reach the tests under nextest (LIGHTCRAFT_NEXTEST=1), which takes filters, --exact, --skip, --ignored, --include-ignored, --nocapture and --test-threads"
+                ));
+            }
+            _ => filters.push(arg.to_owned()),
+        }
     }
-    v
+    if !filters.is_empty() {
+        v.push("--".to_owned());
+        v.extend(filters);
+    }
+    Ok(v)
 }
 
 /// The `cargo test --doc` arguments for `args`: the workspace's doctests, or those of the `-p`
@@ -297,14 +336,14 @@ pub fn run(raw: &[&str]) -> Result<(), String> {
     let args = parse(raw)?;
     super::use_ci_caps();
     let root = super::root();
+    let nextest = if crate::ci::nextest() { Some(nextest_args(&args)?) } else { None };
     let command = std::iter::once("cargo xtask test").chain(raw.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until the run ends: one ci or test run at a time per machine (ci_lock.rs)
     let _slot = ci_lock::acquire(&root, &command)?;
     let packages = packages(&super::metadata()?, &args.packages)?;
     let mut failed = Vec::new();
     let mut summary = Vec::new();
-    if crate::ci::nextest() {
-        let nextest = nextest_args(&args);
+    if let Some(nextest) = nextest {
         let mut c = super::cargo();
         c.args(["nextest", "run"]).args(&nextest);
         if let Err(e) = super::run(c, &format!("cargo nextest run {}", nextest.join(" "))) {
@@ -456,12 +495,28 @@ mod tests {
     #[test]
     fn nextest_keeps_the_workspace_build_and_filters_packages() {
         let all = parse(&[]).unwrap();
-        assert_eq!(nextest_args(&all), ["--workspace", "--lib", "--bins", "--tests"]);
+        assert_eq!(nextest_args(&all).unwrap(), ["--workspace", "--lib", "--bins", "--tests"]);
         let some = parse(&["-p", "b", "-p", "a", "--keep-going", "--", "foo"]).unwrap();
         assert_eq!(
-            nextest_args(&some),
+            nextest_args(&some).unwrap(),
             ["--workspace", "--lib", "--bins", "--tests", "-E", "package(=a) | package(=b)", "--no-fail-fast", "--", "foo"]
         );
+    }
+
+    #[test]
+    fn nextest_takes_test_threads_and_nocapture_before_its_separator() {
+        let targets = ["--workspace", "--lib", "--bins", "--tests"];
+        let nextest = |a: &[&str]| nextest_args(&parse(a).unwrap()).map(|v| v[targets.len()..].to_vec());
+        assert_eq!(nextest(&["--", "--test-threads=1"]).unwrap(), ["--test-threads", "1"], "a runner option, not a filter");
+        assert_eq!(
+            nextest(&["--", "foo", "--test-threads", "2", "--nocapture", "--exact", "--skip", "bar", "--ignored"]).unwrap(),
+            ["--test-threads", "2", "--no-capture", "--", "foo", "--exact", "--skip", "bar", "--ignored"]
+        );
+        assert_eq!(nextest(&["--", "--include-ignored", "--", "-odd"]).unwrap(), ["--", "--include-ignored", "--", "-odd"]);
+        let err = nextest(&["--", "--show-output"]).unwrap_err();
+        assert!(err.contains("`--show-output`") && err.contains("--test-threads"), "{err}");
+        assert!(nextest(&["--", "--test-threads"]).unwrap_err().contains("needs a number"));
+        assert!(nextest(&["--", "--skip"]).unwrap_err().contains("needs a test name"));
     }
 
     #[test]

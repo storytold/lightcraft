@@ -71,6 +71,7 @@ commands:
                   --exact, --skip, --nocapture); stops at the first failing binary unless --keep-going
                   (alias --no-fail-fast), which runs them all and names each that failed; --doc runs the
                   doctests after them. LIGHTCRAFT_NEXTEST=1 runs the tests under cargo nextest
+                  (--test-threads N and --nocapture become its options; ARGS are its filters)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
