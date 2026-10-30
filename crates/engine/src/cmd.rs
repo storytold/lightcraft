@@ -222,6 +222,15 @@ pub(crate) fn photo_id(p: &Value, cmd: &str) -> Result<Option<lightcraft_catalog
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
+/// A filter object (`catalog.query {filter}`, `library.filter`) with a key that isn't a filter
+/// field is refused, naming the key: ignored, it would match every photo (issue #2241).
+pub(crate) fn filter_keys(p: &Value, cmd: &str) -> Result<()> {
+    let known = lightcraft_catalog::Filter::KEYS;
+    match p.as_object().and_then(|o| o.keys().find(|k| !known.contains(&k.as_str()))) {
+        Some(k) => Err(bad(cmd, crate::export::unknown_key("filter key", k, known))),
+        None => Ok(()),
+    }
+}
 pub(crate) fn f64_req(p: &Value, key: &str, cmd: &str) -> Result<f64> {
     p.get(key).and_then(Value::as_f64).ok_or_else(|| bad(cmd, format!("missing number `{key}`")))
 }

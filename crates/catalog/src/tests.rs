@@ -1005,6 +1005,19 @@ fn history_handles_loaded_revisions_failed_batches_and_retention() {
     assert_eq!(c.touched_since(c.revision - 10), Some(vec![a]));
 }
 
+/// `Filter::KEYS` names exactly the fields a filter serializes, so a new field can't be refused.
+#[test]
+fn filter_keys_match_its_fields() {
+    let f =
+        Filter { only: vec![PhotoId(1)], only_none: true, labels: vec![ColorLabel::Red], rule_set: Some(Default::default()), ..Default::default() };
+    let v = serde_json::to_value(&f).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut known = Filter::KEYS.to_vec();
+    keys.sort_unstable();
+    known.sort_unstable();
+    assert_eq!(keys, known);
+}
+
 /// An op that fails leaves nothing behind in what the catalog remembers of its ops: no photo it never changed (one
 /// that does not even exist), and, for a batch rolled back, none of what its first ops had touched.
 #[test]

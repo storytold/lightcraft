@@ -33,6 +33,7 @@ pub use options::{
     Conflict, DestinationMode, ExportFormat, ExportPreset, HdrCurve, MAX_ENLARGED_PIXELS, MetadataPolicy, Resize, ResizeMode, SharpenAmount,
     SharpenFor, builtin_presets,
 };
+pub(crate) use params::unknown_key;
 pub use params::{
     OPTION_PARAMS, TARGET_PARAMS, WATERMARK_IMAGE_WIDTH_RANGE, WATERMARK_INSET_RANGE, WATERMARK_PARAMS, WATERMARK_SIZE_RANGE,
     apple_photos_unsupported,

@@ -118,7 +118,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 /// `unknown parameter \`k\``, naming the closest known key when one is near.
-fn unknown_key(what: &str, k: &str, known: &[&str]) -> String {
+pub(crate) fn unknown_key(what: &str, k: &str, known: &[&str]) -> String {
     let near = known.iter().map(|n| (edit_distance(&k.to_ascii_lowercase(), &n.to_ascii_lowercase()), *n)).filter(|(d, _)| *d <= 2).min();
     match near {
         Some((_, n)) => format!("unknown {what} `{k}` (did you mean `{n}`?)"),

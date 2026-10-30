@@ -258,6 +258,11 @@
 
 ## 2026-10-18
 
+### An unknown filter key is an error
+- `catalog.query {filter}` and `library.filter` refuse a key that isn't a filter field (`cameraModel` instead of
+  `camera`, say) and name it, suggesting the nearest one (issue #2241). The key used to be ignored, so a script
+  thinking it had a few photos got the whole library.
+
 ### Thumbnails of Lightroom HDR and panorama merges in a second
 - Grid and filmstrip thumbnails of DNGs that Lightroom merged (HDR, Panorama, HDR Panorama) now develop from the
   small copies of the raw image Lightroom keeps inside the file (256 to 2048 px), not from the whole merge. A 23836 ×

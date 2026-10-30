@@ -839,3 +839,24 @@ fn the_hold_of_the_view_is_kept_with_the_library_and_holds_nothing_over_from_ano
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An unknown filter key is an error naming it, not a filter that quietly matches every photo
+/// (issue #2241): a script would otherwise export or keyword the whole library.
+#[test]
+fn an_unknown_filter_key_is_refused() {
+    let mut s = crate::Session::with_demo();
+    let all = s.execute("catalog.query", &json!({"filter": {}})).unwrap()["total"].as_u64().unwrap();
+    assert!(all > 0);
+    let e = s.execute("catalog.query", &json!({"filter": {"cameraModel": "Nonexistent"}})).unwrap_err().to_string();
+    assert!(e.contains("unknown filter key `cameraModel`"), "{e}");
+    let e = s.execute("catalog.query", &json!({"filter": {"foo": 1}})).unwrap_err().to_string();
+    assert!(e.contains("unknown filter key `foo`") && e.contains("camera"), "{e}");
+    let before = s.filter.clone();
+    let e = s.execute("library.filter", &json!({"cameraModel": "Nonexistent"})).unwrap_err().to_string();
+    assert!(e.contains("unknown filter key `cameraModel`"), "{e}");
+    assert_eq!(s.filter, before, "a refused filter changes nothing");
+    // known keys still work
+    assert_eq!(s.execute("catalog.query", &json!({"filter": {"camera": "Nonexistent"}})).unwrap()["total"], 0);
+    s.execute("library.filter", &json!({"rating": 3, "ratingOp": "atLeast"})).unwrap();
+    assert_eq!(s.filter.rating, 3);
+}

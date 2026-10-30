@@ -72,6 +72,39 @@ pub struct Filter {
     pub rule_set: Option<crate::RuleSet>,
 }
 
+impl Filter {
+    /// Every key a filter object may have, as JSON spells them: commands refuse any other key
+    /// instead of ignoring it and matching every photo.
+    pub const KEYS: &'static [&'static str] = &[
+        "text",
+        "rating",
+        "ratingOp",
+        "flag",
+        "label",
+        "only",
+        "onlyNone",
+        "labels",
+        "kind",
+        "edited",
+        "album",
+        "deleted",
+        "date",
+        "libraryFolder",
+        "keyword",
+        "person",
+        "camera",
+        "lens",
+        "dateFrom",
+        "dateTo",
+        "imported",
+        "importedFrom",
+        "merged",
+        "folder",
+        "subfolders",
+        "ruleSet",
+    ];
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SortKey {
