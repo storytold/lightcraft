@@ -279,12 +279,14 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
         Dialog::SynchronizeFolder { .. } => "Synchronize Folder",
+        Dialog::SynchronizeFolders { .. } => "Synchronize Folders",
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
         Dialog::ViewOptions => "View Options",
+        Dialog::Several(s) => crate::panels::side_select::several_title(s),
     }
     .to_string()
 }
@@ -315,6 +317,12 @@ impl SamState {
             by_hand: sam_by_hand(sam),
         }
     }
+}
+
+/// The label the dialog's confirm button has now, for tests.
+#[cfg(test)]
+pub(crate) fn confirm_label(app: &LightcraftApp, dlg: &Dialog) -> String {
+    ok_label(app, dlg, is_informational(dlg), &SamState::of(app))
 }
 
 /// The label of a dialog's cancel button.
@@ -353,10 +361,11 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::KeywordTag { editing: None, .. } => "Create",
         Dialog::KeywordTag { .. } => "Save",
         Dialog::RemoveFolder { .. } => "Remove",
+        Dialog::Several(s) => crate::panels::side_select::several_button(s),
         Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
-        Dialog::SynchronizeFolder { .. } if informational => "Close",
-        Dialog::SynchronizeFolder { .. } => "Synchronize",
+        Dialog::SynchronizeFolder { .. } | Dialog::SynchronizeFolders { .. } if informational => "Close",
+        Dialog::SynchronizeFolder { .. } | Dialog::SynchronizeFolders { .. } => "Synchronize",
         Dialog::SamModel { .. } => return sam_ok_label(dlg, sam).to_string(),
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
         _ if informational => "Close",
@@ -388,7 +397,7 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
     let waiting = matches!(
         dlg,
         Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
-    );
+    ) || (matches!(dlg, Dialog::SynchronizeFolders { .. }) && !crate::sync::many_scanned(dlg));
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
     !rename_blocked && (informational || (!waiting && !bad_rules))
@@ -458,12 +467,16 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::KeywordTag { .. }
                     | Dialog::KeywordSet { .. }
                     | Dialog::SynchronizeFolder { .. }
+                    | Dialog::SynchronizeFolders { .. }
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
             ) =>
         {
             app.toast(ctx, e)
         }
+        // several rows: one that can't be deleted or removed refuses them all; `several_run`
+        // already toasted the reason, which says which
+        Err(_) if matches!(dlg, Dialog::Several(_)) => closed = true,
         // the SAM 3 dialog stays open to show the download (or why it can't start)
         Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
             if let Dialog::SamModel { error, .. } = dlg {
@@ -717,13 +730,20 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     );
     crate::widgets::register(ui, "field:smartName", r.rect);
     ui.add_space(6.0);
-    // the folder an album made from a folder view carries is not in the editor, but it counts
-    let folder = id
+    // the albums and folders an album made from a view of several carries are not in the editor, but they count
+    let carried: lightcraft_catalog::Filter = id
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)))
-        .and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
+        .and_then(|a| a.smart.as_deref())
+        .map(|f| lightcraft_catalog::Filter {
+            library_folders: f.library_folder.iter().chain(&f.library_folders).cloned().collect(),
+            album: f.album,
+            albums: f.albums.clone(),
+            ..Default::default()
+        })
+        .unwrap_or_default();
     // problems, count and albums: cached until the catalog or the rules change (not per frame)
     let now = (app.session.clock)();
-    let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
+    let view = app.caches.rules_view(&app.session.catalog, rules, *id, carried, &now);
     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
@@ -1835,8 +1855,10 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
+        d @ Dialog::SynchronizeFolders { .. } => crate::sync::many_body(app, ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
+        Dialog::Several(s) => crate::panels::side_select::several_body(ui, s, &app.session.catalog),
         Dialog::RemoveFolder { .. } => remove_folder_body(ui, t, dlg),
         Dialog::About => about_body(app, ui, t, dlg),
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),

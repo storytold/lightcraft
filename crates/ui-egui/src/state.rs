@@ -6,7 +6,7 @@ mod dialog;
 mod settings;
 mod view;
 
-pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
+pub use dialog::{Dialog, NameEdit, SyncCounts, SyncFolder, default_preset_groups};
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,
     LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES, STANDARD_PREVIEW_EDGE, StartupView,
@@ -33,9 +33,6 @@ pub struct UiState {
     pub docking_version: u32,
     #[serde(default = "crate::i18n::default_language")]
     pub language: crate::i18n::Locale,
-    /// The Build Previews run last announced (its identity, finished?).
-    #[serde(skip)]
-    pub preview_build_seen: Option<(usize, bool)>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).
     #[serde(skip)]
@@ -305,6 +302,10 @@ pub struct UiState {
     /// A keyword being dragged in the Keyword List (onto another to nest it).
     #[serde(skip)]
     pub dragging_keyword: Option<String>,
+    /// Choosing several rows of a sidebar list: the rows drawn and the anchor of each list, and
+    /// the other keywords picked in the Keyword List.
+    #[serde(skip)]
+    pub side: crate::panels::side_select::SideState,
     /// A running slideshow (full screen; see [`crate::panels::slideshow`]).
     #[serde(skip)]
     pub slideshow: Option<Box<crate::panels::slideshow::Run>>,
@@ -361,7 +362,6 @@ impl Default for UiState {
             docking: None,
             docking_version: crate::docking::DOCKING_VERSION,
             language: crate::i18n::default_language(),
-            preview_build_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
             luminance_map_restore: None,
@@ -473,6 +473,7 @@ impl Default for UiState {
             keyword_list_open: Vec::new(),
             keyword_list_selected: None,
             dragging_keyword: None,
+            side: Default::default(),
             info_overlay: InfoOverlay::Off,
             brief_info: BriefInfo::default(),
             layout_image: LayoutImage::default(),

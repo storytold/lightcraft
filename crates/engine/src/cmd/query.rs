@@ -106,14 +106,13 @@ pub fn specs() -> Vec<CommandSpec> {
             }))
         }),
         cmd!(query "library.state", "Library State", [], None, "{}", always, |s, _| {
-            let label = match (s.source, s.library_folder.as_deref()) {
-                (LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
-                _ => s.source.label(&s.catalog),
-            };
             let n = s.visible().len();
+            let label = s.source_label();
             Ok(json!({
                 "source": s.source,
+                "albums": s.source_albums().iter().map(|a| a.0).collect::<Vec<_>>(),
                 "libraryFolder": s.library_folder.as_ref().filter(|_| s.source == LibrarySource::LibraryFolder),
+                "libraryFolders": s.source_library_folders(),
                 "sourceLabel": label,
                 "filter": s.filter,
                 "sort": s.sort,

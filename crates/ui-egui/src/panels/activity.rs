@@ -1,7 +1,8 @@
 //! The activity stack (issue #345): every long-running task in one place, floating in the top-left corner under the
 //! top bar while something runs — a row each with its name, a progress bar, what it is working on, and ✕ for the ones
-//! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
-//! `activity.cancel` like any other frontend would.
+//! that can be cancelled. A task waiting in line behind another of its lane has a row too, at once: its name, when it
+//! starts, and ✕ to take it out of the line. The tasks come from the engine's registry
+//! ([`lightcraft_engine::activity`]); ✕ runs `activity.cancel` like any other frontend would.
 
 use egui::{Align, Layout, Margin, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::activity::{TaskInfo, Unit};
@@ -55,14 +56,16 @@ fn detail_line(t: &TaskInfo) -> String {
 
 /// Draw the stack (called every frame, after the panels and dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let all = app.session.activity.list();
+    // (a task waiting in line has a row without a bar: its name, when it starts, and ✕)
+    let all: Vec<TaskInfo> = app.session.activity.list();
     if all.is_empty() {
         app.activity_expanded = false;
         return;
     }
     // look again soon: a young task becomes due, bars move
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
+    // a running task shows once it has run a while; one waiting in line was just asked for, so it shows now
+    let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.waiting || t.age_ms >= SHOW_AFTER_MS).collect();
     if tasks.is_empty() {
         return;
     }
@@ -115,7 +118,12 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 
-/// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.
+/// What ✕ on `task`'s row is called, for screen readers and its tooltip.
+pub(crate) fn cross_name(task: &TaskInfo) -> String {
+    if task.waiting { tr_format!("Remove from Queue: {label}", label = waiting_name(task)) } else { tr("Cancel").to_string() }
+}
+
+/// One task: name and ✕, the bar, the detail line (a waiting one: name and ✕, when it starts). True when ✕ was clicked.
 fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
     let mut clicked = false;
     let r = ui.vertical(|ui| {
@@ -130,14 +138,19 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
             });
             if cross {
                 let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
+                let name = cross_name(task);
+                crate::widgets::announce(&resp, name.clone());
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
                 register(ui, format!("activity:cancel:{}", task.id), rect);
-                clicked = resp.on_hover_text(tr("Cancel")).clicked();
+                clicked = resp.on_hover_text(name).clicked();
             }
         });
-        bar(ui, task, width);
-        let line = detail_line(task);
+        let line = if task.waiting {
+            waiting_line(task)
+        } else {
+            bar(ui, task, width);
+            detail_line(task)
+        };
         if !line.is_empty() {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
         }
@@ -153,4 +166,16 @@ pub(crate) fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) -> egui::Respo
     let response = crate::progress::Progress::new(fraction).width(width).dimmed(task.cancelling).show(ui);
     crate::widgets::screen_reader_name(ui.ctx(), response.id, tr(&task.label));
     response
+}
+
+/// A waiting task as the ✕ announces it: its label, and what it is about if it says ("Synchronizing folder: Trip").
+fn waiting_name(task: &TaskInfo) -> String {
+    if task.detail.is_empty() { tr(&task.label).to_string() } else { format!("{}: {}", tr(&task.label), task.detail) }
+}
+
+/// The line under a waiting task's name: what it is about if it says, then when it starts ("photos/Garden · Starts next").
+/// (Counted as the Queued toast counts: the waiting tasks ahead of it, after the running one.)
+pub(crate) fn waiting_line(task: &TaskInfo) -> String {
+    let when = if task.place <= 1 { tr("Starts next").to_string() } else { tr_format!("Starts after {n} more", n = task.place - 1) };
+    if task.detail.is_empty() { when } else { format!("{} · {when}", task.detail) }
 }

@@ -489,8 +489,9 @@ impl Catalog {
     /// A loop through `filter`'s own album field (not its rules): smart album `owner` filtered to
     /// itself, or to an album that leads back to it.
     pub fn album_filter_problem(&self, filter: &Filter, owner: Option<AlbumId>) -> Option<rules::Problem> {
-        let (a, owner) = (filter.album?, owner?);
-        (a == owner || self.album_reaches(a, owner)).then(|| rules::Problem {
+        let owner = owner?;
+        let a = filter.albums_wanted().into_iter().find(|a| *a == owner || self.album_reaches(*a, owner))?;
+        Some(rules::Problem {
             path: Vec::new(),
             field: Some("album".into()),
             issue: rules::Issue::AlbumLoop,
@@ -528,9 +529,7 @@ impl Catalog {
         if rules.deleted {
             return Err(CatalogError::Invalid("smart album rules can't select deleted photos".into()));
         }
-        if let Some(a) = rules.album
-            && self.albums.get(&a).is_some_and(Album::is_smart)
-        {
+        if rules.albums_wanted().iter().any(|a| self.albums.get(a).is_some_and(Album::is_smart)) {
             return Err(CatalogError::Invalid("smart album rules can't reference another smart album".into()));
         }
         Ok(())

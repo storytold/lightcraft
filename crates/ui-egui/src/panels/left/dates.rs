@@ -23,15 +23,14 @@ pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, count: usize, indent: f32) -> bool {
     let open_id = egui::Id::unique(("date-open", key.to_string()));
     let mut open = tree_open(ui, open_id, false);
-    let sel = app.session.filter.date.as_deref() == Some(key);
+    let sel = crate::panels::side_select::date_shown(app, key);
+    app.ui.side.dates.saw(key.to_string());
     let resp = Row::new(&format!("date:{key}"), Icon::Clock, label).count(Some(count)).selected(sel).indent(indent).show(app, ui);
     if key.len() < 10 {
         tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));
     }
     if resp.clicked() {
-        let v = if sel { serde_json::Value::Null } else { json!(key) };
-        browse_all_photos(app, !sel);
-        let _ = app.run("library.filter", json!({"date": v}));
+        crate::panels::side_select::date_clicked(app, ui, key);
     }
     open
 }

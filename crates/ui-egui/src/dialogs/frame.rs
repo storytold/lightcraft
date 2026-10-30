@@ -189,7 +189,9 @@ pub enum ConfirmStyle {
 
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. } => {
+        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. }
+        // (every several-rows action deletes or removes)
+        | Dialog::Several(_) => {
             ConfirmStyle::Plain
         }
         _ if only_shows(dlg) => ConfirmStyle::Plain,
@@ -211,4 +213,5 @@ pub(super) fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::ManageEffects { .. }
             | Dialog::ViewOptions
     ) || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.up_to_date())
+        || matches!(dlg, Dialog::SynchronizeFolders { folders, .. } if crate::sync::all_up_to_date(folders))
 }

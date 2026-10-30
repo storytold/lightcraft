@@ -371,10 +371,13 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     }
 }
 
-/// The library shows an album that holds its photos (not a smart album, not a folder of albums).
+/// The library shows one album that holds its photos (not a smart album, not a folder of albums,
+/// not several albums at once: Remove from Album would take the photos out of the one chosen last).
 pub(crate) fn in_normal_album(app: &LightcraftApp) -> bool {
     match app.session.source {
-        lightcraft_engine::LibrarySource::Album(a) => app.session.catalog.album(a).is_some_and(|a| !a.folder && !a.is_smart()),
+        lightcraft_engine::LibrarySource::Album(a) => {
+            app.session.also_albums.is_empty() && app.session.catalog.album(a).is_some_and(|a| !a.folder && !a.is_smart())
+        }
         _ => false,
     }
 }
@@ -817,7 +820,7 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     let shortcut = match e.id.as_str() {
         "view.photoGrid" | "view.squareGrid" => shortcut.or_else(|| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.gridToggle")),
         "album.removePhotos" => delete_key,
-        "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
+        "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) && app.session.also_albums.is_empty() => None,
         _ => shortcut,
     };
     item(&e.id, Value::Null, live_label(app, &e.id, &e.label), shortcut, e.enabled, checked(app, &e.id))

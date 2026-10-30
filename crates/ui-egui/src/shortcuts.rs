@@ -557,9 +557,10 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         up_down_key(app, ctx, f);
         return;
     }
-    // an export that can't start (e.g. no folder) says why instead of doing nothing
+    // an export that can't start (e.g. no folder), or a view that can't be saved as a smart
+    // album, says why instead of doing nothing
     if let Err(e) = app.run(f, json!({}))
-        && matches!(f, "app.export" | "app.exportPrevious")
+        && matches!(f, "app.export" | "app.exportPrevious" | "dialog.newSmartAlbum")
     {
         app.toast(ctx, e);
     }
@@ -685,6 +686,10 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
         }
         R::RedEye => return true,
         _ => {}
+    }
+    // several sidebar rows just chosen with Cmd/Shift+click: it asks about them
+    if crate::panels::side_select::delete_asked(app, ctx) {
+        return true;
     }
     // in an album, Delete takes the photos out of the album only, as in Lightroom: they
     // stay in the library and their folder (issue #1805)
