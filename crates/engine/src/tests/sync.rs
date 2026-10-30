@@ -588,7 +588,7 @@ fn the_work_of_synchronizing_runs_apart_from_its_commits() {
     write_png(&dir.path("trip/c.png"), 3);
     std::fs::remove_file(dir.path("trip/day1/b.png")).unwrap();
     write_sidecar(&dir.path("trip/a.png"), 5, Duration::ZERO);
-    let choice = crate::sync::SyncChoice { import_new: true, relink_moved: true, remove_missing: true, read_metadata: true };
+    let choice = crate::sync::SyncChoice { import_new: true, relink_moved: true, remove_missing: true, read_metadata: true, ..Default::default() };
     let r = sync_in_halves(&mut s, &dir.path("trip"), choice);
     assert_eq!((r.imported, r.removed, r.read), (1, 1, 1), "{r:?}");
     assert_eq!(s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().rating, 5);

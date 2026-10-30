@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use lightcraft_engine::activity::{Cancel, TaskGuard};
+use lightcraft_engine::import::{ReadChoice, ReadDialog};
 use lightcraft_engine::sync::{FolderChanges, SyncChoice, SyncCommit, SyncInput, SyncJob, SyncProgress, SyncStep, scan_with};
 use serde_json::{Value, json};
 
@@ -71,6 +72,8 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
         relink_moved: d.relink_moved,
         remove_missing: d.remove_missing,
         read_metadata: d.read_metadata,
+        // as the dialog was last used, else as the library has it
+        read: app.session.import_defaults.read_in(ReadDialog::Synchronize),
     });
     Ok(())
 }
@@ -160,7 +163,9 @@ fn progress(app: &LightcraftApp) -> Option<ScanStage> {
 
 /// The dialog's body.
 pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
-    let Dialog::SynchronizeFolder { path, name, counts, import_new, relink_moved, remove_missing, read_metadata, .. } = dlg else { return };
+    let Dialog::SynchronizeFolder { path, name, counts, import_new, relink_moved, remove_missing, read_metadata, read, .. } = dlg else {
+        return;
+    };
     let t = Tokens::get(ui.ctx());
     ui.set_min_width(420.0);
     ui.label(crate::i18n::tr("Bring the library up to date with this folder and the folders inside it:"));
@@ -204,6 +209,22 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
         return;
     }
     choice(ui, import_new, c.new, count("Import new photos", c.new), "syncImportNew");
+    if c.new > 0 {
+        // what the new photos themselves carry: each kind is read, or left in the files (as in
+        // the Import Photos review; widgets `check:syncRead.<kind>`)
+        // (indented as a whole, so the kinds that wrap stay under the option they belong to)
+        ui.indent("syncRead", |ui| {
+            ui.add_enabled_ui(*import_new, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(crate::i18n::tr("Read")).color(t.text_dim));
+                    for (kind, label, on) in crate::import::read_choices(read) {
+                        let r = ui.checkbox(on, crate::i18n::tr(label)).on_hover_text(crate::i18n::tr(crate::import::READ_HINT));
+                        crate::widgets::register(ui, format!("check:syncRead.{kind}"), r.rect);
+                    }
+                });
+            });
+        });
+    }
     choice(ui, relink_moved, c.moved, count("Relink photos whose file was renamed or moved", c.moved), "syncRelinkMoved");
     choice(ui, remove_missing, c.missing, count("Remove missing photos from the library", c.missing), "syncRemoveMissing");
     choice(ui, read_metadata, c.metadata, count("Read metadata updates from XMP sidecars", c.metadata), "syncReadMetadata");
@@ -222,7 +243,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
 /// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
-    let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg
+    let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, read, .. } = dlg
     else {
         return Err("the folder is still being scanned".into());
     };
@@ -239,7 +260,13 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     if app.import.is_some() {
         return Err(crate::i18n::tr("Wait for the import to finish").to_string());
     }
-    let choice = SyncChoice { import_new: *import_new, relink_moved: *relink_moved, remove_missing: *remove_missing, read_metadata: *read_metadata };
+    let choice = SyncChoice {
+        import_new: *import_new,
+        relink_moved: *relink_moved,
+        remove_missing: *remove_missing,
+        read_metadata: *read_metadata,
+        read: ReadChoice::of(*read),
+    };
     app.sync_owns_changes = false;
     let started = match app.session.take_folder_changes(path) {
         Some(changes) => SyncJob::start(&mut app.session, changes, choice).map_err(|e| e.to_string()),
@@ -250,14 +277,19 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
         Err(e) => {
             // look again, in the background, keeping what was ticked
             if open(app, path, name, *disk).is_ok()
-                && let Some(Dialog::SynchronizeFolder { import_new: i, relink_moved: l, remove_missing: m, read_metadata: x, .. }) =
+                && let Some(Dialog::SynchronizeFolder { import_new: i, relink_moved: l, remove_missing: m, read_metadata: x, read: r, .. }) =
                     &mut app.ui.dialog
             {
-                (*i, *l, *m, *x) = (*import_new, *relink_moved, *remove_missing, *read_metadata);
+                (*i, *l, *m, *x, *r) = (*import_new, *relink_moved, *remove_missing, *read_metadata, *read);
             }
             return Err(e);
         }
     };
+    // the Read row opens next time as it was used now (when it was there to be used, and only
+    // for a synchronize that was taken: a refused one remembers nothing)
+    if counts.new > 0 && *import_new {
+        crate::import::remember_read(app, ReadDialog::Synchronize, *read);
+    }
     let progress = Arc::new(SyncProgress::default());
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();

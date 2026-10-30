@@ -338,6 +338,10 @@ pub enum Dialog {
         relink_moved: bool,
         remove_missing: bool,
         read_metadata: bool,
+        /// What is read from the new photos themselves as they are imported (the Read row; it
+        /// opens as it was last used, see `ImportDefaults::read_in`).
+        #[serde(default)]
+        read: lightcraft_engine::import::ReadFromPhotos,
     },
     About,
     Shortcuts,

@@ -1,5 +1,5 @@
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, pos2, register, vec2};
+use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, json, pos2, register, vec2};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
@@ -380,6 +380,44 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         let r = ui.add(egui::TextEdit::singleline(&mut d.keywords).hint_text(crate::i18n::tr("comma, separated")).desired_width(f32::INFINITY));
         register(ui, "field:importKeywords", r.rect);
     });
+    // what the photos themselves carry: each kind is read, or left in the files
+    field(ui, "Read", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (kind, label, read) in read_choices(&mut d.read) {
+                let r = ui.checkbox(read, crate::i18n::tr(label)).on_hover_text(crate::i18n::tr(READ_HINT));
+                register(ui, format!("check:importRead.{kind}"), r.rect);
+            }
+        });
+    });
+}
+
+/// Remember how a dialog's Read row was used, with the library (`library.preferences` →
+/// `import.readLast`): the dialog opens that way next time. Ticks that are the library's own
+/// choice are not kept, so a dialog nobody changed goes on following Settings ▸ Import.
+pub(crate) fn remember_read(app: &mut LightcraftApp, dialog: lightcraft_engine::import::ReadDialog, read: lightcraft_engine::import::ReadFromPhotos) {
+    if app.session.import_defaults.read_in(dialog) == read {
+        return;
+    }
+    // (not the person's action, and nothing of theirs is lost when it can't be saved: the
+    // dialog opens as the library has it)
+    if let Err(e) = app.session.execute("library.preferences", &json!({"import": {"readLast": {dialog.name(): read}}})) {
+        log::warn!("the Read choice of {} was not remembered: {e}", dialog.name());
+    }
+}
+
+/// What "Read" is about, in the import review and in Settings ▸ Import.
+pub(crate) const READ_HINT: &str = "What imports take from the photos themselves and the sidecars beside them. What is not read stays in the files, and LightCraft does not write it back into their sidecars either.";
+
+/// The kinds of thing an import reads from the photos, each by its command name, its label and
+/// whether it is read.
+pub(crate) fn read_choices(read: &mut lightcraft_engine::import::ReadFromPhotos) -> [(&'static str, &'static str, &mut bool); 5] {
+    [
+        ("keywords", "Keywords", &mut read.keywords),
+        ("ratings", "Ratings and labels", &mut read.ratings),
+        ("descriptions", "Titles and captions", &mut read.descriptions),
+        ("location", "Location", &mut read.location),
+        ("develop", "Develop settings", &mut read.develop),
+    ]
 }
 
 /// Draw one import-dialog candidate cell: register `import:{i}`, request the cell's thumbnail,
@@ -489,6 +527,8 @@ pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<Stri
     // the probe's metadata, so {camera}, {title}… preview as they will import
     if let Some(info) = app.session.import_probes.get(&c.path) {
         q.meta = info.meta.clone();
+        // what is not read names no file or folder either, as in the import itself
+        d.read.of_the_file(&mut q.meta);
     }
     let name = if d.rename.trim().is_empty() { c.name.clone() } else { lightcraft_engine::rename::expand(d.rename.trim(), &q, 1) };
     let root = if d.destination.trim().is_empty() {

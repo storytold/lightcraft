@@ -1,5 +1,5 @@
 use super::scan::{busy_synchronizing, running};
-use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, LightcraftApp, Ordering, Value, json};
+use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, LightcraftApp, Ordering, Value, json, remember_read};
 
 /// Files per batch in the browser build (each batch joins the catalog as it is ready, so the
 /// progress window updates); the desktop's worker uses [`lightcraft_engine::import::batch_size`].
@@ -219,7 +219,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         (true, false) => "copy",
         (true, true) => "move",
     };
-    let mut params = json!({"mode": mode, "keywords": d.keywords()});
+    let mut params = json!({"mode": mode, "keywords": d.keywords(), "read": d.read});
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }
@@ -249,6 +249,8 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     }
     let total = queue.len();
     app.import = Some(ImportTask::new(queue, params, undo0, false));
+    // the Read row opens next time as it was used now
+    remember_read(app, lightcraft_engine::import::ReadDialog::Import, d.read);
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))
 }

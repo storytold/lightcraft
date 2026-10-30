@@ -150,13 +150,16 @@ pub struct SyncChoice {
     pub relink_moved: bool,
     pub remove_missing: bool,
     pub read_metadata: bool,
+    /// What is read from the new photos themselves as they are imported; a part that is `None`
+    /// goes by the library's choice (as for any import, see [`crate::import::ReadChoice`]).
+    pub read: crate::import::ReadChoice,
 }
 
 impl Default for SyncChoice {
     /// Lightroom Classic's defaults: import the new files, leave the rest to be looked at; and
     /// photos whose file moved follow it (nothing is lost, and undo puts them back).
     fn default() -> Self {
-        SyncChoice { import_new: true, relink_moved: true, remove_missing: false, read_metadata: false }
+        SyncChoice { import_new: true, relink_moved: true, remove_missing: false, read_metadata: false, read: Default::default() }
     }
 }
 
@@ -618,7 +621,8 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing:
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
-    let sc = sc.resolve_label(labels);
+    // (what was left in the file at import is no news: the library never had it)
+    let sc = crate::import::ReadFromPhotos::but(p.left_in_file).of_the_sidecar(sc).resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
     (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop) != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop)
@@ -692,7 +696,7 @@ impl SyncJob {
             return Err(not_there(&changes.path));
         }
         let FolderChanges { new, missing, metadata, moved, probes, .. } = changes;
-        let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
+        let opts = ImportOptions { mode: ImportMode::Add, read: choice.read, ..Default::default() };
         let import = if choice.import_new && !new.is_empty() {
             s.import_probes = probes;
             let job = crate::import::ImportJob::new(s, opts.clone())?;
@@ -860,6 +864,10 @@ impl SyncCommit {
             SyncStep::Sidecars(read) => {
                 let mut ops = Vec::new();
                 for (id, path, sc) in read {
+                    // (a changed sidecar is read for what the library has of the photo: what was
+                    // left in the file at import stays there)
+                    let left = s.catalog.photo(id).map(|p| p.left_in_file).unwrap_or_default();
+                    let sc = sc.map(|sc| crate::import::ReadFromPhotos::but(left).of_the_sidecar(sc));
                     match sc.map_err(EngineError::Other).and_then(|sc| s.sidecar_op(id, sc)) {
                         Ok(op) => ops.push(op),
                         Err(e) => report.failed.push((path, e.to_string())),

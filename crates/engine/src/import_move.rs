@@ -167,9 +167,7 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
     let Some(dst) = dst else { return Err(format!("move {}: no free name in {}", src.display(), dir.display())) };
     let mut placed = Placed { src: src.to_path_buf(), dst, sidecars: Vec::new() };
     for (sc, stem_named) in sidecars_of(src) {
-        let sc_ext = sc.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "xmp".into());
-        let sc_dst =
-            if stem_named { placed.dst.with_extension(&sc_ext) } else { PathBuf::from(format!("{}.{sc_ext}", placed.dst.to_string_lossy())) };
+        let sc_dst = sidecar_dst(&sc, stem_named, &placed.dst);
         let r = if sc_dst.exists() {
             match same_bytes(&sc, &sc_dst) {
                 Ok(true) => Ok(false),
@@ -188,6 +186,32 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
         }
     }
     Ok(placed)
+}
+
+/// Where the sidecar `sc` of a photo goes beside that photo's new place `photo_dst`: named as it was
+/// (after the stem, `IMG_1.xmp`, or after the whole name, `IMG_1.CR3.xmp`), for the photo's new name.
+fn sidecar_dst(sc: &Path, stem_named: bool, photo_dst: &Path) -> PathBuf {
+    let sc_ext = sc.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "xmp".into());
+    if stem_named { photo_dst.with_extension(&sc_ext) } else { PathBuf::from(format!("{}.{sc_ext}", photo_dst.to_string_lossy())) }
+}
+
+/// Import → **Copy**, when a sidecar has to go with the photo (what the import leaves unread is in it): copy `sc`,
+/// the sidecar of a photo that was copied to `photo_dst`, beside that copy, as `copy_new` copies a photo (a new
+/// file, synced to disk and verified byte for byte). An identical sidecar already there (a raw and a JPEG that
+/// share `IMG_1.xmp`) is the same sidecar: left alone. Anything else there is an error, and nothing is left behind.
+/// Returns the sidecar's new path.
+pub(crate) fn copy_sidecar_beside(sc: &Path, stem_named: bool, photo_dst: &Path) -> Result<PathBuf, String> {
+    let dst = sidecar_dst(sc, stem_named, photo_dst);
+    let refused = |why: String| format!("copy {}: {why} (nothing was imported from it; the original is untouched)", sc.display());
+    if dst.exists() {
+        return match same_bytes(sc, &dst) {
+            Ok(true) => Ok(dst),
+            Ok(false) => Err(refused(format!("a different sidecar is already at {}", dst.display()))),
+            Err(e) => Err(refused(format!("{}: {e}", dst.display()))),
+        };
+    }
+    copy_verified(sc, &dst, None).map_err(|e| refused(e.to_string()))?;
+    Ok(dst)
 }
 
 /// Import → **Copy**: copy `src` into `dir` as `name` (-1, -2… when taken) with the same checks as

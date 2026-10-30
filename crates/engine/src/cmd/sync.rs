@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Synchronize Folder",
             [],
             None,
-            "{path, disk?: bool, scanned?: bool, importNew?: true, relinkMoved?: true, removeMissing?: false, readMetadata?: false} — bring a folder of the library up to date with the disk (see folder.scanChanges): import its new files in place, relink photos whose file was renamed or moved within it, move photos whose file is gone to Recently Deleted, read XMP sidecars saved by other apps (the sidecar wins); acts on the last folder.scanChanges of the folder while it is current (the folder's photos unchanged), else scans again — or, with `scanned: true`, refuses; one undo step, no file is touched → {imported, relinked, removed, read, failed: [[path, error]]}",
+            "{path, disk?: bool, scanned?: bool, importNew?: true, relinkMoved?: true, removeMissing?: false, readMetadata?: false, read?: {keywords?, ratings?, descriptions?, location?, develop?: bool} (what is read from the new photos themselves as they are imported, as for `library.import`: a kind that is false is left in the files; one left out goes by the library's choice)} — bring a folder of the library up to date with the disk (see folder.scanChanges): import its new files in place, relink photos whose file was renamed or moved within it, move photos whose file is gone to Recently Deleted, read XMP sidecars saved by other apps (the sidecar wins); acts on the last folder.scanChanges of the folder while it is current (the folder's photos unchanged), else scans again — or, with `scanned: true`, refuses; one undo step, no file is touched → {imported, relinked, removed, read, failed: [[path, error]]}",
             always,
             sync
         ),
@@ -49,6 +49,10 @@ fn sync(s: &mut Session, p: &Value) -> Result<Value> {
         relink_moved: bool_or(p, "relinkMoved", d.relink_moved),
         remove_missing: bool_or(p, "removeMissing", d.remove_missing),
         read_metadata: bool_or(p, "readMetadata", d.read_metadata),
+        read: match p.get("read").filter(|r| !r.is_null()) {
+            Some(read) => crate::import::ReadChoice::parse(read).map_err(|e| bad(C, e))?,
+            None => d.read,
+        },
     };
     let changes = match s.take_folder_changes(&path) {
         Some(c) => c,

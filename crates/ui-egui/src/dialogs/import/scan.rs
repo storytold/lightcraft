@@ -200,6 +200,8 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.renderer.forget_imports();
     let mut d = ImportDialog::new(out.candidates);
+    // as the review was last used, else as the library has it
+    d.read = app.session.import_defaults.read_in(lightcraft_engine::import::ReadDialog::Import);
     let trashed = d
         .candidates
         .iter()

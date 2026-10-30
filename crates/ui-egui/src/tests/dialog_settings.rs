@@ -76,6 +76,20 @@ fn same(a: egui::Rect, b: egui::Rect) -> bool {
     (a.min - b.min).abs().max_elem() < 0.5 && (a.max - b.max).abs().max_elem() < 0.5
 }
 
+/// Where `id` is once a wheel scroll has ended. A wheel scroll eases in over many frames, and settling runs a fixed
+/// number of them, fewer than the ease takes when the page doesn't stop the scroll at its end, so a settled page can
+/// still be a point short of where it stops. egui says when the scroll is over.
+fn at_rest(h: &mut Headless, id: &str) -> egui::Rect {
+    for _ in 0..240 {
+        if !h.view.ctx.input(|i| i.is_scrolling()) {
+            h.step();
+            return rect(h, id);
+        }
+        h.step();
+    }
+    panic!("the scroll never ended");
+}
+
 #[test]
 fn the_window_keeps_its_size_and_place_from_tab_to_tab() {
     for size in SIZES {
@@ -375,7 +389,7 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
         h.step();
     }
     h.settle(T);
-    let scrolled = rect(&h, "check:settings.perCamera").top();
+    let scrolled = at_rest(&mut h, "check:settings.perCamera").top();
     assert!(scrolled < top - 50.0);
     // When another tab is opened, it starts at its top
     show(&mut h, "interface");

@@ -42,7 +42,7 @@ mod types;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use commit::workers;
 pub use commit::{batch_size, civil, commit_prepared, system_clock};
-pub use defaults::{CameraDefault, ImportDefaults, apply_import_defaults, has_import_look, import_defaults};
+pub use defaults::{CameraDefault, ImportDefaults, ReadDialog, ReadLast, apply_import_defaults, has_import_look, import_defaults};
 pub use files::{EXTENSIONS, LaunchPath, accept_list, expand, expand_within, is_supported, launch_path};
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
@@ -54,7 +54,7 @@ pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
 use scan::{library_files, library_hashes};
 pub use types::{
     Duplicate, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved, OnDeleted,
-    Organize,
+    Organize, ReadChoice, ReadFromPhotos,
 };
 
 #[cfg(test)]
