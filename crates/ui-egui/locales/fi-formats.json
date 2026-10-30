@@ -195,6 +195,7 @@
   "Version {} — a clean-room, pure-Rust photo library and raw developer.": "Versio {} — clean-room-menetelmällä tehty, puhtaasti Rustilla toteutettu kuvakirjasto ja raw-kehitin.",
   "Version: {}": "Versio: {}",
   "Virtual copy “{name}” of {of}": "Virtuaalikopio ”{name}” kuvasta {of}",
+  "Waiting for {name} · {secs} s": "Odotetaan: {name} · {secs} s",
   "Working on {what} for {} photos…": "Käsitellään {what} {} kuvalle…",
   "XMP adjustments were not imported for {path}: {fields}.": "XMP-säätöjä ei tuotu kohteelle {path}: {fields}.",
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "XMP-profiilia ”{profile}” ei käytetty kohteelle {path}; värit voivat poiketa Lightroomista.",

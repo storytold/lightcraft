@@ -75,6 +75,7 @@
   "Rated {}": "Avaliada {}",
   "Reading Lightroom catalog… {done} of {total}": "Lendo catálogo do Lightroom… {done} de {total}",
   "Reading photos… {done} of {total}": "Lendo fotos… {done} de {total}",
+  "Waiting for {name} · {secs} s": "Aguardando {name} · {secs} s",
   "Reading photos… {} of {}": "Lendo fotos… {} de {}",
   "Redo {}": "Refazer {}",
   "Remove “{name}” and its {count} photo{} from the library?": "Remover “{name}” e {count} foto{} da biblioteca?",

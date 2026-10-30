@@ -78,7 +78,9 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let probe: FileProbe = Arc::new(|path: &str| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        // (the wait for memory is over, and each chunk read says the read goes on: see `import::progressed`)
+        crate::import::progressed();
+        let bytes = read_reporting(path).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
         info.file_modified = file_modified(path);
         Ok(info)
@@ -102,6 +104,35 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();
     r
+}
+
+/// How much is read between two reports of progress: small enough that a slow but working share reports well inside
+/// [`crate::import::STALL_AFTER`].
+const READ_STEP: u64 = 64 << 10;
+
+/// [`std::fs::read`] in chunks, saying after each that the read goes on ([`crate::import::progressed`]).
+pub(crate) fn read_reporting(path: &str) -> std::io::Result<Vec<u8>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    // sized first, as `std::fs::read` does (growing by doubling would peak at twice the file); a file too big to
+    // reserve is read as it comes
+    if let Some(len) = file.metadata().ok().and_then(|m| usize::try_from(m.len()).ok()) {
+        let _ = bytes.try_reserve_exact(len);
+    }
+    read_steps(&mut file, &mut bytes)?;
+    Ok(bytes)
+}
+
+/// Everything `reader` has, appended to `bytes` in steps of [`READ_STEP`], each followed by a report of progress.
+pub(crate) fn read_steps(reader: &mut impl std::io::Read, bytes: &mut Vec<u8>) -> std::io::Result<()> {
+    use std::io::Read;
+    loop {
+        let n = reader.by_ref().take(READ_STEP).read_to_end(bytes)?;
+        crate::import::progressed();
+        if n == 0 {
+            return Ok(());
+        }
+    }
 }
 
 /// `path`'s modification time as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the

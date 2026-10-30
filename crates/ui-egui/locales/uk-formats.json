@@ -103,6 +103,7 @@
   "Rated {}": "Оцінено: {}",
   "Reading Lightroom catalog… {done} of {total}": "Читання каталогу Lightroom… {done} із {total}",
   "Reading photos… {done} of {total}": "Читання фото… {done} із {total}",
+  "Waiting for {name} · {secs} s": "Очікування {name} · {secs} с",
   "Reading photos… {} of {}": "Читання фото… {} із {}",
   "Redo {}": "Повторити {}",
   "Remove “{name}” and its {count} photo{} from the library?": "Вилучити «{name}» і фото ({count}){:.0} з бібліотеки?",

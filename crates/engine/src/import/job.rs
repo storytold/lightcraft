@@ -1,7 +1,8 @@
-use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{expand, probe_all};
+use super::commit::{How, Plan, Slot, Transfer, commit_prepared, discard, name_family, run_transfers, system_clock};
+use super::files::{Read, ReadJob, expand, read_files};
+use super::scan::cache_holds_for_import;
 use super::types::{ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
-use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, ReadWatch, Session, Source};
 
 /// Import files/folders. See the module docs.
 pub fn import(s: &mut Session, paths: &[String], mode: ImportMode) -> crate::Result<ImportReport> {
@@ -18,6 +19,11 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
     let prepared = job.prepare(paths, &std::sync::atomic::AtomicBool::new(false));
     // probes a scan left for files not imported now stay for a later import
     s.import_probes.extend(std::mem::take(&mut job.cache));
+    if let Some(why) = prepared.stopped() {
+        let why = why.to_string();
+        prepared.discard();
+        return Err(crate::EngineError::Other(why));
+    }
     commit_prepared(s, &job.opts, &job.now, prepared)
 }
 
@@ -42,7 +48,7 @@ pub struct ImportJob {
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     pub(super) probe: Option<crate::media::FileProbe>,
-    file_bytes: Option<crate::merge::ByteReader>,
+    pub(super) file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
     cache: HashMap<String, ProbeInfo>,
     naming: crate::sidecar::SidecarNaming,
@@ -55,6 +61,8 @@ pub struct ImportJob {
     /// ones read so far: the step before they are handled.
     pub read_total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub read_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// What the file reads are doing: which file has stopped answering, and Skip for it (see [`ReadWatch`]).
+    pub reads: std::sync::Arc<ReadWatch>,
 }
 
 /// The outcome of [`ImportJob::prepare`] for one batch, in file order.
@@ -62,6 +70,8 @@ pub struct ImportJob {
 pub struct Prepared {
     pub scanned: usize,
     pub(super) items: Vec<PreparedItem>,
+    /// Why the import cannot go on, when it ended early for a reason of its own (the drive stopped answering).
+    pub(super) stopped: Option<String>,
 }
 
 #[derive(Debug)]
@@ -99,6 +109,18 @@ impl Prepared {
                 crate::import_move::rollback(pl);
             }
         }
+    }
+
+    /// Throw the batch away: [`Prepared::rollback`], and the copies it made are removed too. For a batch that will not
+    /// be committed at all (an import that stopped), where nothing would ever catalog its copies.
+    pub fn discard(self) {
+        self.items.into_iter().for_each(discard);
+    }
+
+    /// Why the import ended early for a reason of its own, if it did: the drive stopped answering (the
+    /// [`MAX_SKIPPED`]th read was skipped) or a reader could not be started. What was readied before is in the batch.
+    pub fn stopped(&self) -> Option<&str> {
+        self.stopped.as_deref()
     }
 
     /// Entries in the batch (after expanding folders).
@@ -197,6 +219,7 @@ impl ImportJob {
             done: Default::default(),
             read_total: Default::default(),
             read_done: Default::default(),
+            reads: std::sync::Arc::new(ReadWatch::with_stuck(s.import_stall_after, s.stuck_readers.clone())),
         })
     }
 
@@ -250,7 +273,10 @@ impl ImportJob {
         let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), items: Vec::new() };
+        let mut out = Prepared { scanned: files.len(), items: Vec::new(), stopped: None };
+        // ✕ stops the planning. An import that cannot go on does not: the reads that already returned are planned (the
+        // failures of the files skipped, and the files added in place), and the files it never reached are passed over.
+        let halted = || cancel.load(Relaxed);
         let mut todo = Vec::new();
         for f in files {
             match self.by_path.get(f.as_str()).copied() {
@@ -269,38 +295,31 @@ impl ImportJob {
         }
 
         // files a preceding scan already probed are not read again (a network share is slow to read),
-        // as long as they are still there, as they were: a file gone or changed since is probed again
-        let cached: Vec<Option<ProbeInfo>> = todo
-            .iter()
-            .map(|f| {
-                // (the web's files are not std::fs files: kept as probed)
-                self.cache
-                    .remove(f)
-                    .filter(|info| cfg!(target_arch = "wasm32") || std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() == info.file_size))
-            })
-            .collect();
-        let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
+        // as long as they are still there, as they were: a file gone or changed since is probed again.
+        // The readers check that, and look up and read each file's sidecar: no disk access is made on this thread.
+        let jobs: Vec<ReadJob> = todo.iter().map(|f| ReadJob { path: f.clone(), cached: self.cache.remove(f) }).collect();
         // Reading the files is the slow part of adding them where they are: it is counted on its
         // own, and `cancel` stops it too (a large library takes long enough to want both).
-        self.read_total.fetch_add(missing.len(), Relaxed);
-        let mut fresh = probe_all(self.probe.as_ref(), &missing, &self.read_done, cancel).into_iter();
-        let probed: Vec<Result<ProbeInfo, String>> =
-            cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
+        self.read_total.fetch_add(jobs.len(), Relaxed);
+        let read = read_files(self.probe.as_ref(), jobs, cache_holds_for_import, Some(self.naming), &self.read_done, cancel, &self.reads);
         crate::memory::release();
         // Who owns the shared stem sidecar (`IMG_0001.xmp`) among the library's files and the ones
         // arriving with this import: a JPEG or a TIFF arriving beside its raw reads its own sidecar
         // and never the raw's packet (issue #1905).
         let stems = crate::sidecar::ImportStems::for_import(
             library.as_ref(),
-            todo.iter().zip(&probed).filter_map(|(path, info)| info.as_ref().ok().map(|i| (path.as_str(), i.kind))),
+            todo.iter().zip(&read).filter_map(|(path, r)| r.info.as_ref().ok().map(|i| (path.as_str(), i.kind))),
         );
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
         let mut plan = Plan::default();
-        for (path, info) in todo.into_iter().zip(probed) {
-            if cancel.load(Relaxed) {
+        for (path, Read { info, sidecars, unreached }) in todo.into_iter().zip(read) {
+            if halted() {
                 break;
+            }
+            if unreached {
+                continue;
             }
             let mut info = match info {
                 Ok(i) => i,
@@ -311,14 +330,24 @@ impl ImportJob {
                     continue;
                 }
             };
+            // an ended run starts no transfer (`Pool::run`), so what it would copy or move is passed over, with no word
+            // about it and no question to the drive that stopped answering (a path is looked at for that); a file
+            // that is only added in place needs no disk and is planned
+            if matches!(mode, ImportMode::Copy | ImportMode::Move) && self.reads.ended().is_some() {
+                continue;
+            }
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
                 && let Some(h) = &info.content_hash
                 && plan.transfers.iter().any(|t| t.info.content_hash.as_ref() == Some(h))
             {
                 self.run_plan(&mut plan, &mut out, cancel);
-                if cancel.load(Relaxed) {
+                if halted() {
                     break;
+                }
+                // (a skipped transfer can have ended the run: this file is passed over, as the ones read after it)
+                if self.reads.ended().is_some() {
+                    continue;
                 }
             }
             if let Some(h) = &info.content_hash
@@ -332,9 +361,7 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar_for_import(&stems, self.naming, &path)
-                .and_then(|f| std::fs::read_to_string(f).ok())
-                .or_else(|| info.xmp.clone().filter(|_| raw));
+            let packet = if stems.owns(&path) { sidecars.owner } else { sidecars.own }.or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),
@@ -373,8 +400,12 @@ impl ImportJob {
                     let family = (dir.to_string_lossy().to_lowercase(), name_family(as_named));
                     if plan.transfers.iter().any(|t| t.family == family) {
                         self.run_plan(&mut plan, &mut out, cancel);
-                        if cancel.load(Relaxed) {
+                        if halted() {
                             break;
+                        }
+                        // (a skipped transfer can have ended the run: this file is passed over, as the ones read after it)
+                        if self.reads.ended().is_some() {
+                            continue;
                         }
                     }
                     let how = if mode == ImportMode::Move && !crate::import_move::is_symlink(Path::new(&path)) {
@@ -406,13 +437,14 @@ impl ImportJob {
             plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
+        out.stopped = self.reads.ended();
         out
     }
 
     /// Run the transfers `plan` collected (on several threads) and append its items to `out` in
     /// file order. Transfers not started because `cancel` was set leave no item.
     fn run_plan(&mut self, plan: &mut Plan, out: &mut Prepared, cancel: &std::sync::atomic::AtomicBool) {
-        let mut done = run_transfers(std::mem::take(&mut plan.transfers), self.file_bytes.as_ref(), cancel, &self.done).into_iter();
+        let mut done = run_transfers(std::mem::take(&mut plan.transfers), self.file_bytes.clone(), cancel, &self.done, &self.reads).into_iter();
         for slot in std::mem::take(&mut plan.slots) {
             let item = match slot {
                 Slot::Item(it) => it,

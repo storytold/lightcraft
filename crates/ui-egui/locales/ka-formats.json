@@ -124,6 +124,7 @@
   "Rated {}": "შეფასება: {}",
   "Reading Lightroom catalog… {done} of {total}": "იკითხება Lightroom-ის კატალოგი… {done} / {total}",
   "Reading photos… {done} of {total}": "იკითხება ფოტოები… {done} / {total}",
+  "Waiting for {name} · {secs} s": "ელოდება: {name} · {secs} წმ",
   "Reading photos… {} of {}": "იკითხება ფოტოები… {} / {}",
   "Redo {}": "{}-ის გამეორება",
   "Remove “{name}”": "„{name}“-ის მოშორება",

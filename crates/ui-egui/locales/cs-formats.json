@@ -124,6 +124,7 @@
   "Rated {}": "Hodnocení: {}",
   "Reading Lightroom catalog… {done} of {total}": "Načítání katalogu Lightroom… {done} z {total}",
   "Reading photos… {done} of {total}": "Načítání fotografií… {done} z {total}",
+  "Waiting for {name} · {secs} s": "Čekání na {name} · {secs} s",
   "Reading photos… {} of {}": "Načítání fotografií… {} z {}",
   "Redo {}": "Znovu {}",
   "Remove “{name}”": "Odebrat „{name}“",

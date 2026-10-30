@@ -195,6 +195,7 @@
   "Version {} — a clean-room, pure-Rust photo library and raw developer.": "Phiên bản {} — thư viện ảnh và trình phát triển raw thuần Rust, clean-room.",
   "Version: {}": "Phiên bản: {}",
   "Virtual copy “{name}” of {of}": "Bản sao ảo «{name}» của {of}",
+  "Waiting for {name} · {secs} s": "Đang chờ {name} · {secs} giây",
   "Working on {what} for {} photos…": "Đang xử lý {what} cho {} ảnh…",
   "XMP adjustments were not imported for {path}: {fields}.": "Điều chỉnh XMP không được nhập cho {path}: {fields}.",
   "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.": "Hồ sơ XMP «{profile}» không được áp dụng cho {path}; màu có thể khác Lightroom.",

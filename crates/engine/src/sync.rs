@@ -68,6 +68,12 @@ pub struct SyncProgress {
 }
 
 impl SyncProgress {
+    /// Progress of a scan or run whose reads count as stalled after `stall_after` ([`Session::import_stall_after`])
+    /// and whose abandoned reads are counted in `stuck` ([`Session::stuck_readers`]).
+    pub fn new(stall_after: std::time::Duration, stuck: std::sync::Arc<crate::import::StuckReaders>) -> Self {
+        SyncProgress { files: ScanProgress::new(stall_after, stuck), ..Default::default() }
+    }
+
     /// (done, of how many), both halves together.
     pub fn counts(&self) -> (usize, usize) {
         use std::sync::atomic::Ordering::Relaxed;
@@ -119,6 +125,12 @@ pub struct FolderChanges {
     /// The folder itself is not there (moved or renamed whole, or on a disk that isn't
     /// connected): nothing else is reported, rather than every photo as missing.
     pub offline: bool,
+    /// Why the scan ended early, if it did: the drive stopped answering (the fourth read was skipped). What is listed
+    /// is only what was reached: a photo whose check did not run is not reported as anything.
+    pub stopped: Option<String>,
+    /// Photos of the folder whose check was given up with Skip (the drive did not answer): not looked at, so the folder
+    /// is not known to be up to date. Each is also in `unreadable`, with the reason.
+    pub unchecked: usize,
     /// The probes of the new files, kept for the import that follows.
     #[serde(skip)]
     probes: HashMap<String, ProbeInfo>,
@@ -169,6 +181,9 @@ pub struct SyncReport {
     pub read: usize,
     /// (path or photo, why) for what couldn't be done.
     pub failed: Vec<(String, String)>,
+    /// Why the run ended early, if it did: the drive stopped answering. Not one of `failed`, which only
+    /// lists files.
+    pub stopped: Option<String>,
 }
 
 fn invalid(msg: impl Into<String>) -> EngineError {
@@ -247,6 +262,7 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     if progress.files.cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return FolderChanges { path: folder, seen, ..Default::default() };
     }
+    let listing = Arc::new(listing);
     let listing = &listing;
     // (no threads on the web: one after the other there)
     #[cfg(target_arch = "wasm32")]
@@ -265,7 +281,8 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
         listing.folders.len(),
         listing.asked.load(std::sync::atomic::Ordering::Relaxed)
     );
-    let mut changes = FolderChanges { path: folder, seen, ..Default::default() };
+    let mut changes =
+        FolderChanges { path: folder, seen, stopped: out.stopped.clone().or_else(|| progress.files.reads.ended()), ..Default::default() };
     for ((p, _), check) in photos.iter().zip(checks) {
         let Some(file) = crate::cmd::missing::checked_path(p) else { continue };
         let found = FolderPhoto { id: p.id.0, path: file.to_string() };
@@ -273,6 +290,11 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
             Check::Missing => changes.missing.push(found),
             Check::News => changes.metadata.push(found),
             Check::Nothing => {}
+            Check::Skipped(why) => {
+                changes.unchecked += 1;
+                let name = Path::new(file).file_name().map_or_else(|| file.to_string(), |n| n.to_string_lossy().to_string());
+                changes.unreadable.push(ImportCandidate { path: file.to_string(), name, error: Some(why), ..Default::default() });
+            }
         }
     }
     let moved_from = match_moved(&changes.missing, &out.candidates, &out.probes, &labels);
@@ -377,12 +399,14 @@ fn match_moved(
 }
 
 /// What checking one photo of the folder found.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum Check {
     #[default]
     Nothing,
     Missing,
     News,
+    /// Given up with Skip: why.
+    Skipped(String),
 }
 
 /// The listings of the folders a scan walked: what is in each, by name. It answers "is this file
@@ -509,9 +533,50 @@ impl Listing {
     }
 }
 
+/// What tests run before the check of a photo whose path starts with a prefix they registered (a scratch folder of
+/// their own, so that tests running side by side don't see each other's): to make a check that does not answer.
+#[cfg(test)]
+type CheckHook = (String, Arc<dyn Fn() + Send + Sync>);
+
+#[cfg(test)]
+static CHECK_HOOKS: std::sync::Mutex<Vec<CheckHook>> = std::sync::Mutex::new(Vec::new());
+
+/// Run `hook` before the checks of photos under `prefix`, until the returned guard is dropped.
+#[cfg(test)]
+pub(crate) fn hook_checks_under(prefix: &str, hook: Arc<dyn Fn() + Send + Sync>) -> CheckHookGuard {
+    CHECK_HOOKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((prefix.to_string(), hook));
+    CheckHookGuard(prefix.to_string())
+}
+
+#[cfg(test)]
+pub(crate) struct CheckHookGuard(String);
+
+#[cfg(test)]
+impl Drop for CheckHookGuard {
+    fn drop(&mut self) {
+        CHECK_HOOKS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(p, _)| *p != self.0);
+    }
+}
+
+#[cfg(test)]
+fn check_hook(file: &Path) {
+    let name = file.to_string_lossy();
+    let hook = CHECK_HOOKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(p, _)| name.starts_with(p.as_str()))
+        .map(|(_, h)| h.clone());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing) -> Check {
     let Some(file) = crate::cmd::missing::checked_path(p) else { return Check::Nothing };
     let file = Path::new(file);
+    #[cfg(test)]
+    check_hook(file);
     if !listing.or_ask(listing.exists(file), || file.exists()) {
         Check::Missing
     } else if p.copy_of.is_none() && sidecar_has_news(labels, p, naming, listing) {
@@ -521,50 +586,55 @@ fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Lis
     }
 }
 
-/// [`check_photo`] for each photo, in order, on several threads (each file is a wait on the
-/// disk, not work for the CPU). Photos not reached before a cancel count as nothing found.
-fn check_photos(photos: &[(Arc<Photo>, SidecarNaming)], labels: &Catalog, listing: &Listing, progress: &SyncProgress) -> Vec<Check> {
+/// [`check_photo`] for each photo, in order, on the read pool's threads (each file is a wait on the disk, not work for
+/// the CPU; one that stops answering is named by `progress.files.reads`, and given up when Skip is asked for: never
+/// reported as missing, but listed as unreadable and counted in `FolderChanges::unchecked`). Photos not reached before
+/// a cancel count as nothing found.
+fn check_photos(photos: &[(Arc<Photo>, SidecarNaming)], labels: &Arc<Catalog>, listing: &Arc<Listing>, progress: &SyncProgress) -> Vec<Check> {
     use std::sync::atomic::Ordering::Relaxed;
     progress.to_check.store(photos.len(), Relaxed);
-    let cancel = &progress.files.cancel;
-    let check = |p: &Photo, naming: SidecarNaming| {
-        let c = check_photo(p, naming, labels, listing);
-        progress.checked.fetch_add(1, Relaxed);
-        c
-    };
-    if cfg!(target_arch = "wasm32") {
-        return vec![Check::Nothing; photos.len()];
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (labels, listing);
+        vec![Check::Nothing; photos.len()]
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let n = crate::import::workers(photos.len());
-        if n > 1 {
-            let next = std::sync::atomic::AtomicUsize::new(0);
-            let found = std::sync::Mutex::new(vec![Check::Nothing; photos.len()]);
-            std::thread::scope(|sc| {
-                for _ in 0..n {
-                    sc.spawn(|| {
-                        while !cancel.load(Relaxed) {
-                            let i = next.fetch_add(1, Relaxed);
-                            let Some((p, naming)) = photos.get(i) else { break };
-                            let c = check(p, *naming);
-                            if let Some(slot) = found.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(i) {
-                                *slot = c;
-                            }
-                        }
-                    });
-                }
-            });
-            return found.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
+        let (labels, listing) = (labels.clone(), listing.clone());
+        // (only the one that stalls is named)
+        let label = |i: usize| {
+            photos
+                .get(i)
+                .and_then(|(p, _)| crate::cmd::missing::checked_path(p))
+                .map(|f| Path::new(f).file_name().map_or_else(|| f.to_string(), |n| n.to_string_lossy().to_string()))
+                .unwrap_or_default()
+        };
+        crate::import::pooled(
+            &progress.files.reads,
+            &progress.files.cancel,
+            "lc-sync-check",
+            photos.to_vec(),
+            &label,
+            move |(p, naming): (Arc<Photo>, SidecarNaming)| check_photo(&p, naming, &labels, &listing),
+            &|| {
+                progress.checked.fetch_add(1, Relaxed);
+            },
+        )
+        .into_iter()
+        .map(|c| match c {
+            crate::import::Pooled::Done(c) => c,
+            crate::import::Pooled::Failed(why) => Check::Skipped(why),
+            crate::import::Pooled::Unreached => Check::Nothing,
+        })
+        .collect()
     }
-    photos.iter().map(|(p, naming)| if cancel.load(Relaxed) { Check::Nothing } else { check(p, *naming) }).collect()
 }
 
 /// [`scan_with`] on the calling thread.
 pub fn scan(s: &mut Session, path: &str, disk: bool) -> Result<FolderChanges> {
+    let progress = SyncProgress::new(s.import_stall_after, s.stuck_readers.clone());
     let input = SyncInput::new(s, path, disk)?;
-    let changes = scan_with(input, &SyncProgress::default());
+    let changes = scan_with(input, &progress);
     if changes.offline {
         return Err(not_there(&changes.path));
     }
@@ -628,9 +698,10 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing:
 /// whose file is back by now is left alone. Once the import is in, a part that fails is
 /// reported in `failed` and the rest is still done (and still one step).
 pub fn synchronize(s: &mut Session, changes: FolderChanges, choice: SyncChoice) -> Result<SyncReport> {
+    let progress = SyncProgress::new(s.import_stall_after, s.stuck_readers.clone());
     let (work, mut commit) = SyncJob::start(s, changes, choice)?;
     let mut steps = Vec::new();
-    work.run(&SyncProgress::default(), |step| {
+    work.run(&progress, |step| {
         steps.push(step);
         true
     });
@@ -651,6 +722,8 @@ pub struct SyncJob;
 pub struct SyncWork {
     /// The import of the new files, and the files.
     import: Option<(crate::import::ImportJob, Vec<String>)>,
+    /// Why the scan ended early, if it did ([`FolderChanges::stopped`]).
+    stopped: Option<String>,
     moved: Vec<FolderMoved>,
     missing: Vec<FolderPhoto>,
     /// (photo, its file, how its sidecar is named)
@@ -683,6 +756,8 @@ pub enum SyncStep {
     Remove(Vec<PhotoId>),
     /// Sidecars read (photo, its file, what the sidecar says or why it couldn't be read).
     Sidecars(Vec<(PhotoId, String, std::result::Result<crate::sidecar::SidecarData, String>)>),
+    /// The run ended early because the drive stopped answering: why. Nothing after it was done.
+    Stopped(String),
 }
 
 impl SyncJob {
@@ -691,7 +766,7 @@ impl SyncJob {
         if changes.offline {
             return Err(not_there(&changes.path));
         }
-        let FolderChanges { new, missing, metadata, moved, probes, .. } = changes;
+        let FolderChanges { new, missing, metadata, moved, probes, stopped, .. } = changes;
         let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
         let import = if choice.import_new && !new.is_empty() {
             s.import_probes = probes;
@@ -716,6 +791,7 @@ impl SyncJob {
         };
         let work = SyncWork {
             import,
+            stopped,
             moved: if choice.relink_moved { moved } else { Vec::new() },
             missing: if choice.remove_missing { missing } else { Vec::new() },
             sidecars,
@@ -740,7 +816,7 @@ impl SyncWork {
     pub fn run(self, progress: &SyncProgress, mut send: impl FnMut(SyncStep) -> bool) {
         use std::sync::atomic::Ordering::Relaxed;
         let cancel = &progress.files.cancel;
-        let SyncWork { import, moved, missing, sidecars } = self;
+        let SyncWork { import, stopped, moved, missing, sidecars } = self;
         let pieces = import.as_ref().map_or(0, |(_, f)| f.len()) + moved.len() + missing.len() + sidecars.len();
         progress.to_check.store(pieces, Relaxed);
         progress.checked.store(0, Relaxed);
@@ -748,17 +824,32 @@ impl SyncWork {
             progress.checked.fetch_add(n, Relaxed);
         };
         if let Some((mut job, files)) = import {
+            // (the new files' reads are named on the run's row, and can be skipped there)
+            job.reads = progress.files.reads.clone();
             for chunk in files.chunks(crate::import::batch_size()) {
                 if cancel.load(Relaxed) {
                     return;
                 }
                 let prepared = job.prepare_files(chunk.to_vec(), cancel);
                 step(chunk.len());
+                let stopped = prepared.stopped().map(str::to_string);
                 // (the files are added in place: a batch nobody takes leaves nothing behind on disk)
                 if !send(SyncStep::Import(prepared)) {
                     return;
                 }
+                // the drive stopped answering: nothing more is asked of it (no relinking, removing or reading
+                // sidecars on the strength of a disk that does not answer)
+                if let Some(why) = stopped {
+                    send(SyncStep::Stopped(why));
+                    return;
+                }
             }
+        }
+        // the scan itself ended early (the drive stopped answering): what it listed is only what it reached, and the
+        // disk is not asked again for relinking, removing or sidecars
+        if let Some(why) = stopped {
+            send(SyncStep::Stopped(why));
+            return;
         }
         if cancel.load(Relaxed) {
             return;
@@ -857,6 +948,7 @@ impl SyncCommit {
                     }
                 }
             }
+            SyncStep::Stopped(why) => report.stopped = Some(why),
             SyncStep::Sidecars(read) => {
                 let mut ops = Vec::new();
                 for (id, path, sc) in read {

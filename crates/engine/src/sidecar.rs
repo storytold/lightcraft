@@ -76,16 +76,21 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
     sidecar_candidates(original, naming).find(|p| p.is_file())
 }
 
-/// Find the sidecar for a file an import is adding, by the ownership [`ImportStems`] worked out
-/// (issue #1905): [`find_sidecar`] with the library's naming, except that a file which does not
-/// own its stem sidecar reads its own `<file>.xmp` (the name it writes) and never the packet of
-/// the sibling that owns the stem one.
-pub(crate) fn find_sidecar_for_import(stems: &ImportStems, naming: SidecarNaming, original: &str) -> Option<PathBuf> {
-    if stems.owns(original) {
-        return find_sidecar(original, naming);
-    }
+/// The two sidecars a file an import is adding may read, by the ownership [`ImportStems`] works out (issue #1905),
+/// which is only known once every file of the import is probed: what [`find_sidecar`] finds with the library's naming
+/// (read by a file that owns its stem sidecar), and the file's own `<file>.xmp`, the name it writes (read by a file
+/// that does not own it, which never reads the packet of the sibling that does).
+pub(crate) fn find_sidecars_for_import(original: &str, naming: SidecarNaming) -> (Option<PathBuf>, Option<PathBuf>) {
+    let owner = find_sidecar(original, naming);
     let shared = xmp_cases(sidecar_path(original, SidecarNaming::Stem));
-    sidecar_candidates(original, SidecarNaming::Full).filter(|p| !shared.contains(p)).find(|p| p.is_file())
+    let own = match &owner {
+        // (its own names are among the ones looked for above: none found there, none here)
+        None => None,
+        // (found under a name that is not the shared one: it is the file's own, the first of them in either order)
+        Some(p) if !shared.contains(p) => Some(p.clone()),
+        Some(_) => sidecar_candidates(original, SidecarNaming::Full).filter(|p| !shared.contains(p)).find(|p| p.is_file()),
+    };
+    (owner, own)
 }
 
 /// The names `original`'s sidecar can have, in the order they are looked for: under `naming`,

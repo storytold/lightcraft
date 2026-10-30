@@ -1445,6 +1445,12 @@
   "Size (% of short edge)": "Größe (% der kurzen Kante)",
   "Size limit": "Größenbegrenzung",
   "Skip": "Überspringen",
+  "Skip Stalled File": "Hängende Datei überspringen",
+  "✕ ends an import or scan at once when a file stops answering": "× beendet Import oder Suche sofort, auch wenn eine Datei nicht mehr antwortet",
+  "Synchronize Folder reads the same way: ✕ ends its scan and the import of its run at once, and when the drive stops answering the scan says so, lists only what it reached and offers only Import new photos.": "Ordner synchronisieren liest genauso: × beendet die Suche und den Import ihres Laufs sofort, und wenn das Laufwerk nicht mehr antwortet, meldet die Suche das, listet nur, was sie erreicht hat, und bietet nur „Neue Fotos importieren“ an.",
+  "✕ now ends an import within about a second while files are being read or copied, however long a read has been waiting; a copy that was under way is taken back. While folders are being listed, ✕ still waits for the listing.": "× beendet einen Import jetzt innerhalb von etwa einer Sekunde, solange Dateien gelesen oder kopiert werden, egal wie lange ein Lesevorgang schon wartet; eine laufende Kopie wird zurückgenommen. Während Ordner aufgelistet werden, wartet × weiterhin auf die Auflistung.",
+  "After four skipped files the import or scan stops with an error that the drive is not answering. Agents use `activity.skip {id}`; `activity.list` shows `stalled` for the task.": "Nach vier übersprungenen Dateien bricht der Import oder die Suche mit der Meldung ab, dass das Laufwerk nicht antwortet. Agenten verwenden `activity.skip {id}`; `activity.list` zeigt für die Aufgabe `stalled` an.",
+  "While 32 or more given-up reads are still blocked on a drive that stopped answering, a new import or scan ends at once with an error saying so, even from another drive: try again later, or restart LightCraft.": "Solange 32 oder mehr aufgegebene Lesevorgänge noch auf ein Laufwerk warten, das nicht mehr antwortet, bricht ein neuer Import oder eine neue Suche sofort mit einer entsprechenden Meldung ab, auch von einem anderen Laufwerk: Versuche es später erneut oder starte LightCraft neu.",
   "Sky": "Himmel",
   "Slideshow": "Diashow",
   "Slideshow paused": "Diashow pausiert",
@@ -2064,6 +2070,7 @@
   "Remove missing photos from the library": "Fehlende Fotos aus der Bibliothek entfernen",
   "Read metadata updates from XMP sidecars": "Metadaten-Änderungen aus XMP-Begleitdateien lesen",
   "The library is up to date with this folder.": "Die Bibliothek ist mit diesem Ordner auf dem neuesten Stand.",
+  "The scan stopped when the drive stopped answering: only new photos can be imported from it.": "Die Suche wurde angehalten, weil das Laufwerk nicht mehr antwortete: Daraus können nur neue Fotos importiert werden.",
   "Missing photos move to Recently Deleted and can be restored; no file on disk is touched.": "Fehlende Fotos werden nach „Zuletzt gelöscht“ verschoben und können wiederhergestellt werden; keine Datei auf dem Datenträger wird verändert.",
   "Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says.": "Beim Lesen einer Begleitdatei werden Bewertung, Markierungen, Metadaten und Bearbeitungen des Fotos durch ihren Inhalt ersetzt.",
   "Skipped: files already in the library elsewhere": "Übersprungen: Dateien, die bereits an anderer Stelle in der Bibliothek sind",
@@ -3440,5 +3447,9 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "Skip a file that stops answering during an import or scan": "Eine Datei überspringen, die bei Import oder Suche nicht mehr antwortet",
+  "When a file on a network drive stops answering while an import, the Add Photos review, a Local folder or Synchronize Folder reads it, the task's row in the activity stack says \"Waiting for IMG_0457.jpg\" with the seconds it has gone without progress, and offers Skip next to ✕. A big file that is slow but still being read is not reported.": "Antwortet eine Datei auf einem Netzlaufwerk nicht mehr, während ein Import, die Prüfung von „Fotos hinzufügen“, ein lokaler Ordner oder „Ordner synchronisieren“ sie liest, steht in der Zeile der Aufgabe in der Aktivitätsliste „Warten auf IMG_0457.jpg“ mit den Sekunden ohne Fortschritt, und neben × erscheint „Überspringen“. Eine große Datei, die langsam, aber weiter gelesen wird, wird nicht gemeldet.",
+  "Skip gives up that one file: an import lists it as not readable (\"skipped: no answer after 14 s\"), the review and Synchronize Folder list it as unreadable, and the work goes on with the next files. When several files wait, Skip takes the one that is named, then the next is named.": "„Überspringen“ gibt genau diese Datei auf: Ein Import führt sie als nicht lesbar auf („übersprungen: keine Antwort nach 14 s“), die Prüfung und „Ordner synchronisieren“ ebenso, und die Arbeit geht mit den nächsten Dateien weiter. Warten mehrere Dateien, nimmt „Überspringen“ die genannte, danach wird die nächste genannt.",
+  "Give up on this file and go on": "Diese Datei aufgeben und weitermachen"
 }

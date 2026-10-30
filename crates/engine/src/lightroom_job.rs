@@ -259,6 +259,13 @@ impl LightroomJob {
             normal.rollback();
             return Err(cancelled());
         }
+        // the drive stopped answering: the photos not reached were not read, so this is an error, as in `import_with`,
+        // not a batch of photos to add without their files
+        if let Some(why) = normal.stopped() {
+            let why = why.to_string();
+            normal.rollback();
+            return Err(crate::EngineError::Other(why));
+        }
         let archive_path = stage_archive(self.archive_dir.as_deref(), &mut data)?;
         let index_path = self.archive_dir.as_ref().map(|dir| dir.join("lightroom-index.json"));
         let index = lightroom_catalog::load_index(index_path.as_deref())?;
