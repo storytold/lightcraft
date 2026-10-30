@@ -2327,5 +2327,9 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "No photo in this folder is in the library yet": "Tämän kansion kuvia ei ole vielä kirjastossa",
+  "Select the photos to move in the grid first": "Valitse ensin siirrettävät kuvat ruudukosta",
+  "This place is kept in Local already": "Tämä paikka on jo säilytetty Paikallisessa",
+  "Only a place at the top of Local can be removed from it": "Paikallisesta voi poistaa vain sen ylimmän tason paikan"
 }

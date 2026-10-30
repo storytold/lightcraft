@@ -2349,5 +2349,9 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "No photo in this folder is in the library yet": "Ни одного фото из этой папки пока нет в библиотеке",
+  "Select the photos to move in the grid first": "Сначала выберите в сетке фото, которые нужно переместить",
+  "This place is kept in Local already": "Это место уже оставлено в «Локальном»",
+  "Only a place at the top of Local can be removed from it": "Убрать из «Локального» можно только место верхнего уровня"
 }

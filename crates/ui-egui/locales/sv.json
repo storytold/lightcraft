@@ -2429,5 +2429,9 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "No photo in this folder is in the library yet": "Inget foto i den här mappen finns i biblioteket än",
+  "Select the photos to move in the grid first": "Markera först de foton som ska flyttas i rutnätet",
+  "This place is kept in Local already": "Den här platsen är redan behållen i Lokalt",
+  "Only a place at the top of Local can be removed from it": "Bara en plats högst upp i Lokalt kan tas bort därifrån"
 }

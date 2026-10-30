@@ -2200,5 +2200,9 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "No photo in this folder is in the library yet": "此文件夹中还没有照片在图库中",
+  "Select the photos to move in the grid first": "请先在网格视图中选择要移动的照片",
+  "This place is kept in Local already": "此位置已保留在本地",
+  "Only a place at the top of Local can be removed from it": "只有本地最上层的位置才能从本地移除"
 }

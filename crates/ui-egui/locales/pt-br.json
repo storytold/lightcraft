@@ -2202,5 +2202,9 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "No photo in this folder is in the library yet": "Nenhuma foto desta pasta está na biblioteca ainda",
+  "Select the photos to move in the grid first": "Primeiro selecione na grade as fotos que quer mover",
+  "This place is kept in Local already": "Este lugar já é mantido em Local",
+  "Only a place at the top of Local can be removed from it": "Só um lugar no nível superior de Local pode ser removido de Local"
 }

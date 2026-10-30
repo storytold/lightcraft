@@ -2339,5 +2339,9 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "No photo in this folder is in the library yet": "Belum ada foto dari folder ini di pustaka",
+  "Select the photos to move in the grid first": "Pilih dulu foto yang akan dipindahkan di grid",
+  "This place is kept in Local already": "Tempat ini sudah disimpan di Lokal",
+  "Only a place at the top of Local can be removed from it": "Hanya tempat di tingkat teratas Lokal yang bisa dikeluarkan dari Lokal"
 }

@@ -2734,5 +2734,9 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "No photo in this folder is in the library yet": "ამ საქაღალდის არცერთი ფოტო ჯერ ბიბლიოთეკაში არ არის",
+  "Select the photos to move in the grid first": "ჯერ ბადეში მონიშნეთ გადასატანი ფოტოები",
+  "This place is kept in Local already": "ეს ადგილი უკვე დატოვებულია ლოკალურში",
+  "Only a place at the top of Local can be removed from it": "ლოკალურიდან ამოშლა მხოლოდ მის ზედა დონეზე მყოფ ადგილს შეუძლია"
 }
