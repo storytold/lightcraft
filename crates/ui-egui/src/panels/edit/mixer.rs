@@ -8,7 +8,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
     let t = Tokens::get(ui.ctx());
     let bands = lightcraft_develop::MIXER_BANDS;
     let sel = bands.iter().position(|b| *b == app.ui.mixer_mode).unwrap_or(0);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             for (i, b) in bands.iter().enumerate() {
@@ -27,7 +27,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
         });
     });
     // targeted adjustment: pick the attribute, then drag on the photo
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(2, 2)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
@@ -85,7 +85,7 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
         app.ui.point_color = n - 1;
     }
     let sel = app.ui.point_color;
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             let active = app.ui.tool == "pointColor";
@@ -118,7 +118,7 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
         });
     });
     if n == 0 {
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 8 }).show(ui, |ui| {
+        egui::Frame::NONE.inner_margin(crate::widgets::row_margin(2, 4)).show(ui, |ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Pick a colour on the photo with the eyedropper.")).size(12.0).color(t.text_dim));
         });
         return;
@@ -130,7 +130,7 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
     for k in ["range", "hueRange", "satRange", "lumRange"] {
         control(app, ui, d, &format!("pointColor.{sel}.{k}"), true);
     }
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 8 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(4, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             let mut v = app.ui.point_color_visualize;
             if ui.checkbox(&mut v, crate::i18n::tr("Visualize range")).changed() {

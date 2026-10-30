@@ -72,7 +72,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let max_height = (ctx.content_rect().height() - t.top_bar_h - 60.0).max(80.0);
     let mut cancel = None;
     let mut toggle = false;
-    let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
+    let frame = egui::Frame::NONE
+        .fill(t.chrome)
+        .stroke(Stroke::new(1.0, t.field_border))
+        .corner_radius(crate::theme::RADIUS_PANEL)
+        .inner_margin(Margin::same(MARGIN));
     egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
         // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
         // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead

@@ -136,6 +136,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 step: 1.0,
                 decimals: 0,
                 track: Track::Plain,
+                shade: lightcraft_develop::Shade::Plain,
             };
             let out = slider(ui, &spec, last.amount, true, None);
             if let Some(v) = out.value

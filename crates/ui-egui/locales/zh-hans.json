@@ -162,6 +162,7 @@
   "Blue channel": "蓝色通道",
   "Blue label": "蓝色标签",
   "Blue/Yellow Fringe": "蓝/黄边缘",
+  "Blue/Yellow": "蓝/黄",
   "Blurry photos below the score are flagged as rejects.": "低于该分值的模糊照片将被标记为排除。",
   "Boundary Warp": "边界变形",
   "Bright & Airy": "明亮通透",
@@ -787,6 +788,8 @@
   "Horizontal": "水平",
   "Horizontal text": "横排文字",
   "Hue": "色相",
+  "Hue Low": "色相下限",
+  "Hue High": "色相上限",
   "Hue Range": "色相范围",
   "If file exists": "如果文件已存在",
   "Image": "图像",
@@ -1165,6 +1168,7 @@
   "Red Saturation": "红色饱和度",
   "Red channel": "红色通道",
   "Red/Cyan Fringe": "红/青边缘",
+  "Red/Cyan": "红/青",
   "Redo": "重做",
   "Reference": "参考",
   "Reference View": "参考视图",
@@ -2200,5 +2204,6 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Brightness": "亮度"
 }

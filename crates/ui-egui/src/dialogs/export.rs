@@ -172,7 +172,18 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
 pub(super) const LABEL_W: f32 = 78.0;
 
 const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, default: f64, step: f64) -> ControlSpec {
-    ControlSpec { id, label, section: Section::Light, min, max, default, step, decimals: 0, track: Track::Plain }
+    ControlSpec {
+        id,
+        label,
+        section: Section::Light,
+        min,
+        max,
+        default,
+        step,
+        decimals: 0,
+        track: Track::Plain,
+        shade: lightcraft_develop::Shade::Plain,
+    }
 }
 
 pub(super) const QUALITY: ControlSpec = spec("export.quality", "Quality", 1.0, 100.0, 90.0, 1.0);

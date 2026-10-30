@@ -228,7 +228,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     let t = Tokens::get(ui.ctx());
     let m = &p.meta;
-    egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    egui::Frame::NONE.fill(t.canvas).corner_radius(crate::theme::RADIUS_PANEL).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
         if !m.camera.is_empty() {
@@ -240,7 +240,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
         ui.horizontal(|ui| {
             ui.label(dim(&format!("{} × {}  ·  {}", p.width, p.height, human_size(p.file_size))));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
+                egui::Frame::NONE.fill(t.chrome).corner_radius(crate::theme::RADIUS).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
                     ui.label(egui::RichText::new(p.format.to_uppercase()).size(10.5).color(t.text_label));
                 });
             });

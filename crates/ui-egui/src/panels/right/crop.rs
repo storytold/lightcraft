@@ -331,6 +331,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         step: 1.0,
         decimals: 0,
         track: lightcraft_develop::Track::Plain,
+        shade: lightcraft_develop::Shade::Plain,
     };
     let sliders = [
         (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
@@ -380,6 +381,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         step: 1.0,
         decimals: 0,
         track: lightcraft_develop::Track::Plain,
+        shade: lightcraft_develop::Shade::Plain,
     };
     let out = slider(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots, None);
     if let Some(v) = out.value {

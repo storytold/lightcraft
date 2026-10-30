@@ -158,6 +158,7 @@
   "Blue channel": "Canal bleu",
   "Blue label": "Étiquette bleue",
   "Blue/Yellow Fringe": "Frange bleue/jaune",
+  "Blue/Yellow": "Bleu/jaune",
   "Blurry photos below the score are flagged as rejects.": "Les photos floues en dessous du score sont marquées comme rejetées.",
   "Boundary Warp": "Déformation des bords",
   "Bright & Airy": "Lumineux et aérien",
@@ -653,6 +654,8 @@
   "Hours": "Heures",
   "How to install the model": "Comment installer le modèle",
   "Hue": "Teinte",
+  "Hue Low": "Teinte basse",
+  "Hue High": "Teinte haute",
   "Hue Range": "Plage de teintes",
   "ISO Speed": "Sensibilité ISO",
   "ISO speed": "Sensibilité ISO",
@@ -1139,6 +1142,7 @@
   "Red channel": "Canal rouge",
   "Red label": "Étiquette rouge",
   "Red/Cyan Fringe": "Frange rouge/cyan",
+  "Red/Cyan": "Rouge/cyan",
   "Redo": "Rétablir",
   "Reference": "Référence",
   "Reference View": "Vue de référence",
@@ -2390,5 +2394,6 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Brightness": "Luminosité"
 }
