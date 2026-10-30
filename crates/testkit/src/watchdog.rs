@@ -334,6 +334,13 @@ mod tests {
         no_core: bool,
     }
 
+    /// How long a stuck child may run before the parent kills it: 45 s stretched by the time scale,
+    /// never shrunk, since the child's watchdog runs at scale 1 and the child still has to start.
+    fn child_deadline() -> Duration {
+        let d = Duration::from_secs(45);
+        crate::scaled(d).max(d)
+    }
+
     /// Run the ignored test `name` of this binary as a child under a watchdog of 0.3 s (and `env`),
     /// killing it if it still runs after `deadline`.
     fn run_stuck_child(name: &str, env: &[(&str, &str)], deadline: Duration) -> Child {
@@ -393,7 +400,7 @@ mod tests {
 
     #[test]
     fn a_stuck_test_ends_its_binary_with_the_tests_still_running() {
-        let c = run_stuck_child("watchdog::tests::stuck_child", &[], crate::scaled(Duration::from_secs(45)));
+        let c = run_stuck_child("watchdog::tests::stuck_child", &[], child_deadline());
         let (ran, stderr) = (c.ran, &c.stderr);
         let status = c.status.unwrap_or_else(|| panic!("the watchdog didn't end the stuck test in {ran:?}: {stderr}"));
         assert_eq!(status.code(), Some(WATCHDOG_EXIT_CODE), "the watchdog ends the run: {stderr}");
@@ -406,7 +413,7 @@ mod tests {
     #[test]
     fn a_stuck_test_holding_stderr_still_ends_its_binary() {
         let grace = Duration::from_millis(500);
-        let c = run_stuck_child("watchdog::tests::stuck_child_holding_stderr", &[(GRACE_ENV, "500")], crate::scaled(Duration::from_secs(45)));
+        let c = run_stuck_child("watchdog::tests::stuck_child_holding_stderr", &[(GRACE_ENV, "500")], child_deadline());
         let (ran, stderr) = (c.ran, &c.stderr);
         let status = c.status.unwrap_or_else(|| panic!("the stuck test still ran after {ran:?}: {stderr}"));
         assert!(!status.success(), "{status:?}");
