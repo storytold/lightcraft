@@ -2390,5 +2390,10 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Reduce Motion": "Réduire les animations",
+  "Reduce motion": "Réduire les animations",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Désactive les animations du zoom et des indicateurs d’activité. Les fondus restent. Suit le réglage Réduire les animations du système tant que vous ne le changez pas ici.",
+  "Use the system setting": "Utiliser le réglage du système",
+  "Turns off zoom and spinner animations. Fades stay.": "Désactive les animations du zoom et des indicateurs d’activité. Les fondus restent."
 }

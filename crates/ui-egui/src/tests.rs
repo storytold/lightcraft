@@ -64,6 +64,7 @@ mod progress;
 mod quit_unsaved;
 mod rating;
 mod recheck;
+mod reduce_motion;
 mod rename_person;
 mod rules_editor;
 mod sam_setup;

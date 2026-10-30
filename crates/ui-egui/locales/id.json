@@ -2339,5 +2339,10 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Reduce Motion": "Kurangi gerakan",
+  "Reduce motion": "Kurangi gerakan",
+  "Turns off zoom and spinner animations. Fades stay.": "Menonaktifkan animasi zoom dan indikator putar. Efek memudar tetap ada.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Menonaktifkan animasi zoom dan indikator putar. Efek memudar tetap ada. Mengikuti pengaturan Kurangi Gerakan sistem sampai Anda mengubahnya di sini.",
+  "Use the system setting": "Gunakan pengaturan sistem"
 }

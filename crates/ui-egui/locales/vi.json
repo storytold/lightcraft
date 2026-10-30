@@ -2235,5 +2235,10 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Reduce Motion": "Giảm chuyển động",
+  "Reduce motion": "Giảm chuyển động",
+  "Turns off zoom and spinner animations. Fades stay.": "Tắt hiệu ứng phóng to và biểu tượng xoay. Hiệu ứng mờ dần vẫn được giữ nguyên.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Tắt hiệu ứng phóng to và biểu tượng xoay. Hiệu ứng mờ dần vẫn được giữ nguyên. Theo cài đặt Giảm chuyển động của hệ thống cho đến khi bạn thay đổi tại đây.",
+  "Use the system setting": "Dùng cài đặt của hệ thống"
 }

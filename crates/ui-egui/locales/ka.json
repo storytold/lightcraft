@@ -2734,5 +2734,10 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Reduce Motion": "მოძრაობის შემცირება",
+  "Reduce motion": "მოძრაობის შემცირება",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება. სანამ აქ არ შეცვლით, სისტემის „მოძრაობის შემცირების“ პარამეტრს მისდევს.",
+  "Use the system setting": "სისტემის პარამეტრის გამოყენება",
+  "Turns off zoom and spinner animations. Fades stay.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება."
 }

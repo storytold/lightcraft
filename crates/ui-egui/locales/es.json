@@ -2358,5 +2358,10 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Reduce Motion": "Reducir movimiento",
+  "Reduce motion": "Reducir movimiento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen. Sigue el ajuste Reducir movimiento del sistema hasta que lo cambies aquí.",
+  "Use the system setting": "Usar el ajuste del sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Desactiva las animaciones del zoom y de los indicadores de actividad. Los fundidos se mantienen."
 }

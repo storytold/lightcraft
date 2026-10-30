@@ -2157,5 +2157,10 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Reduce Motion": "減少動態效果",
+  "Reduce motion": "減少動態效果",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "關閉縮放與旋轉指示器的動畫。淡入淡出效果保留。在你於此處更改之前，跟隨系統的「減少動態效果」設定。",
+  "Use the system setting": "使用系統設定",
+  "Turns off zoom and spinner animations. Fades stay.": "關閉縮放與旋轉指示器的動畫。淡入淡出效果保留。"
 }
