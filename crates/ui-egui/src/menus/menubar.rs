@@ -471,7 +471,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             vec![
                 item(
                     "library.buildPreviews",
-                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
+                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge(), "percent": app.ui.settings.preview_percent}),
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
                     !running,

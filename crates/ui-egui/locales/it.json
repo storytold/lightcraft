@@ -2361,5 +2361,10 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Pixel limit": "Limite in pixel",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Percentuale del lato lungo della foto. Si applica il limite minore; -1 indica nessun limite in pixel. Lo 0% mantiene un’anteprima minima. Le anteprime più piccole sono più veloci.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "I limiti si applicano alle anteprime dell’intera immagine. I dettagli ingranditi restano nitidi; esportazioni e anteprime 1:1 mantengono le proprie dimensioni.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Inserisci un limite in pixel positivo, oppure -1 per nessun limite.",
+  "No pixel limit": "Nessun limite in pixel"
 }

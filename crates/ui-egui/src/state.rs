@@ -9,7 +9,7 @@ mod view;
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,
-    LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES, STANDARD_PREVIEW_EDGE, StartupView,
+    LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, RECENT_LIBRARIES, STANDARD_PREVIEW_EDGE, StartupView,
     WINDOW_FRAME_CEILING,
 };
 pub use view::{
@@ -575,9 +575,7 @@ impl UiState {
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
         self.dialog = None;
         self.fullscreen = false;
-        if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
-            self.settings.preview_limit = AppSettings::default().preview_limit;
-        }
+        self.settings.preview_percent = self.settings.preview_percent.min(100);
         match self.settings.startup_view {
             StartupView::Last => {}
             StartupView::Grid => self.view = ViewMode::PhotoGrid,

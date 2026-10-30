@@ -240,7 +240,17 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, max_h: f3
     // the first preview (or another photo's) at once, a changing layout once it has settled
     if current.is_none() || still >= DEBOUNCE {
         let side = crate::panels::detail::texture_side(ui.ctx());
-        let edge = app.ui.settings.loupe_edge(pw.max(ph) as f32, usize::MAX, side);
+        let native = app.session.catalog.photo(id).map_or(8, |photo| {
+            let frame = lightcraft_engine::pipeline::geometry::Frame::with_lens(
+                photo.width.max(1) as usize,
+                photo.height.max(1) as usize,
+                &photo.develop,
+                true,
+                photo.embedded_lens.as_ref(),
+            );
+            crate::panels::detail::output_px(&frame).into_iter().max().unwrap_or(8)
+        });
+        let edge = app.ui.settings.loupe_edge(pw.max(ph) as f32, native, side);
         if let Some(job) = app.session.slide_job_look(&s, &overlays, id, pw, ph, Some(edge), false) {
             app.renderer.request(Slot::SlidePreview, job, 90);
         }

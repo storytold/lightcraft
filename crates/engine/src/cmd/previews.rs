@@ -16,6 +16,34 @@ use crate::{Result, Session};
 /// The long edge of a standard-sized preview.
 pub const STANDARD_EDGE: usize = 2048;
 
+/// Cap a photo's long edge to 0–100%, with an 8 px usable minimum. Division before
+/// multiplication keeps even hostile `usize::MAX` dimensions from overflowing.
+pub fn percentage_edge(native: usize, percent: u32) -> usize {
+    let percent = percent.min(100) as usize;
+    (native / 100 * percent + native % 100 * percent / 100).max(8)
+}
+
+/// Standard previews share the displayed photo's cropped/rotated long edge with
+/// the loupe. A full 1:1 build deliberately ignores these optional preview caps.
+fn sized_jobs(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: Option<usize>, percent: u32) -> Vec<RenderJob> {
+    let edge = edge.map(|e| {
+        let native = s.catalog.photo(id).map_or(8, |photo| {
+            let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+                photo.width.max(1) as usize,
+                photo.height.max(1) as usize,
+                &photo.develop,
+                true,
+                photo.embedded_lens.as_ref(),
+            );
+            let (w, h) = frame.native_size();
+            let long = w.max(h);
+            if long.is_finite() { long.round().clamp(1.0, 1e9) as usize } else { 8 }
+        });
+        e.min(percentage_edge(native, percent))
+    });
+    jobs_for(s, id, edge)
+}
+
 /// A preview build in progress.
 #[derive(Debug, Default)]
 pub struct PreviewBuild {
@@ -277,8 +305,12 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     // tests: this invocation's gate, consumed here so an early error cannot attach it to a later build
     #[cfg(test)]
     let gate = test_gate::take();
+    let percent = match p.get("percent") {
+        None => 100,
+        Some(v) => v.as_u64().filter(|n| *n <= 100).ok_or_else(|| bad(C, "percent must be an integer from 0 to 100"))? as u32,
+    };
     let edge = match str_param(p, "size").unwrap_or("standard") {
-        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
+        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(8, 8192) as usize)),
         "full" | "1:1" => None,
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
@@ -287,7 +319,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
-    let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
+    let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| sized_jobs(s, *id, edge, percent)).filter(|j| !j.is_empty()).collect();
     #[cfg(test)]
     let state = Arc::new(PreviewBuild { total: jobs.len(), gate, ..Default::default() });
     #[cfg(not(test))]
@@ -667,7 +699,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
+            "{size?: standard (2048 px, or `edge`: 8..8192) | full (1:1), percent?: integer 0..100 (default 100, standard only), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache; standard views use the smaller pixel/percentage cap (0% = 8 px minimum), full builds and grid thumbnails are independent; in the background unless `wait` → {total, done, failed, running}",
             always,
             build
         ),
@@ -690,6 +722,38 @@ mod tests {
     use super::{jobs_for, run_photo};
     use crate::Session;
     use crate::media::SourceRef;
+
+    /// Standard jobs obey the percentage for each photo and keep the independent grid thumbnail.
+    #[test]
+    fn standard_preview_jobs_obey_each_photos_percentage_and_pixel_cap() {
+        let mut s = Session::with_demo();
+        let ids: Vec<_> = s.catalog.photos().take(3).map(|p| p.id).collect();
+        for id in ids {
+            let photo = s.catalog.photo(id).unwrap();
+            let native = photo.width.max(photo.height) as usize;
+            for (percent, edge) in [(37, 1700), (1, 8192), (0, 2560), (100, 113)] {
+                let jobs = super::sized_jobs(&mut s, id, Some(edge), percent);
+                let view = jobs.iter().find(|j| j.view_cache.is_some()).unwrap();
+                assert_eq!(view.request.max_w, edge.min(super::percentage_edge(native, percent)));
+                assert_eq!(view.request.max_h, view.request.max_w);
+                assert!(jobs.iter().any(|j| j.cache.is_some() && j.request.max_w >= 512));
+                let rendered = view.clone().run().rendered.unwrap().image;
+                assert!(rendered.width.max(rendered.height) <= edge.min(super::percentage_edge(native, percent)));
+            }
+            let jobs = super::sized_jobs(&mut s, id, None, 0);
+            assert_eq!(jobs.iter().find(|j| j.view_cache.is_some()).unwrap().request.max_w, native);
+        }
+    }
+
+    /// Invalid percentages fail before a worker or activity is created.
+    #[test]
+    fn preview_build_refuses_bad_percent_before_starting() {
+        let mut s = Session::with_demo();
+        for percent in [json!(-1), json!(101), json!(0.5), json!(null), json!("25")] {
+            assert!(s.execute("library.buildPreviews", &json!({"percent": percent})).is_err());
+            assert!(s.preview_build.is_none());
+        }
+    }
 
     // Given a photo's preview jobs, the grid thumbnail is made from the source the view decoded, not
     // by reading the file again (here: a thumbnail job pointing at a file that is not there)

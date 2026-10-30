@@ -2356,5 +2356,10 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Pixel limit": "ピクセル上限",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "写真の長辺に対する割合です。小さい方の上限を適用します。-1 はピクセル上限なしを意味します。0% でも最小サイズのプレビューを維持します。小さいプレビューほど高速です。",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "上限は画像全体のプレビューに適用されます。拡大時の細部は鮮明に表示され、書き出しと1:1プレビューの作成にはそれぞれのサイズが使われます。",
+  "Enter a positive pixel limit, or -1 for no limit.": "正のピクセル上限を入力するか、上限なしの場合は -1 を入力してください。",
+  "No pixel limit": "ピクセル上限なし"
 }

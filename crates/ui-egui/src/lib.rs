@@ -34,6 +34,7 @@ pub mod menus;
 mod model_setup;
 pub mod panels;
 pub mod pick;
+pub mod preview_size;
 pub mod recheck;
 pub mod region;
 pub mod reload;

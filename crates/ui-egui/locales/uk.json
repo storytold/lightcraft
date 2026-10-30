@@ -2354,5 +2354,10 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Pixel limit": "Межа в пікселях",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Відсоток довгої сторони фотографії. Застосовується менша межа; -1 означає відсутність межі в пікселях. За 0% зберігається мінімальний попередній перегляд. Менші перегляди працюють швидше.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Межі застосовуються до попереднього перегляду всього кадру. Збільшені деталі залишаються чіткими; експорт і створення переглядів 1:1 зберігають власні розміри.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Введіть додатну межу в пікселях або -1, щоб зняти обмеження.",
+  "No pixel limit": "Без межі в пікселях"
 }

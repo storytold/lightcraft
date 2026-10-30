@@ -158,11 +158,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let split_view = matches!(app.ui.before_after, BeforeAfter::Split | BeforeAfter::SplitTopBottom);
     let areas = view_areas(app.ui.before_after, area);
     let main_area = *areas.last().unwrap_or(&area);
-    let visible_texture_aspect = visible_texture_aspect(app, id, &d, crop_tool);
+    let visible_texture_aspect = visible_texture_aspect(app, id, &d, crop_tool, aspect);
     // Follow the texture only where it really differs (an unsupported raw's embedded JPEG with
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
     // tool's overlays need the frame's own geometry.
-    let display_aspect = visible_texture_aspect.filter(|a| !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
+    let display_aspect = visible_texture_aspect.filter(|_| !crop_tool).unwrap_or(aspect);
     let resp = ui.interact(canvas, egui::Id::unique("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
@@ -271,7 +271,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let windows = request_windows(app, &window_ctx, window_views);
     let p = ui.painter_at(canvas);
-    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
+    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, slot, [r, clip], ppp, aspect);
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
     if app.ui.soft_proof && !fullscreen {
         proof_surround(app, &p, &t, canvas);
@@ -298,7 +298,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else if let Some((_key, label)) = &hover_key
         && let Some(tex) = app.renderer.textures.get(&Slot::Hover).filter(|t| t.photo == id)
     {
-        draw_hover(&p, &t, tex, label, [img_rect, canvas], badge_top_inset);
+        draw_hover(&p, &t, tex, label, [img_rect, canvas], badge_top_inset, aspect);
         shown = "hover";
     } else {
         shown = draw(Slot::Main, img_rect, canvas);
@@ -308,7 +308,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.loupe_shown = Some((id, shown));
     let line = crate::region::wipe_line(img_rect, canvas);
-    draw_wipe_before(app, &p, id, img_rect, line);
+    draw_wipe_before(app, &p, id, img_rect, line, aspect);
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
     for (v, view) in &windows {
@@ -427,11 +427,11 @@ fn face_boxes(
 }
 
 /// A wipe shows the Before whole-frame render on its side of the line.
-fn draw_wipe_before(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rect: Rect, line: Pos2) {
+fn draw_wipe_before(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rect: Rect, line: Pos2, aspect: f32) {
     if app.ui.before_after == BeforeAfter::Split
         && let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id)
     {
-        let before_rect = fit_texture_rect(img_rect, tex.size);
+        let before_rect = fit_frame_texture_rect(img_rect, tex.size, aspect);
         let u = ((line.x - before_rect.left()) / before_rect.width().max(1.0)).clamp(0.0, 1.0);
         let left = Rect::from_min_max(before_rect.min, pos2(before_rect.left() + u * before_rect.width(), before_rect.bottom()));
         p.image(tex.tex.id(), left, Rect::from_min_max(pos2(0.0, 0.0), pos2(u, 1.0)), Color32::WHITE);
@@ -439,7 +439,7 @@ fn draw_wipe_before(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rec
     if app.ui.before_after == BeforeAfter::SplitTopBottom
         && let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id)
     {
-        let before_rect = fit_texture_rect(img_rect, tex.size);
+        let before_rect = fit_frame_texture_rect(img_rect, tex.size, aspect);
         let v = ((line.y - before_rect.top()) / before_rect.height().max(1.0)).clamp(0.0, 1.0);
         let top = Rect::from_min_max(before_rect.min, pos2(before_rect.right(), before_rect.top() + v * before_rect.height()));
         p.image(tex.tex.id(), top, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, v)), Color32::WHITE);
@@ -609,7 +609,7 @@ fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowVi
 }
 
 /// The aspect of the texture on screen for this photo and geometry, if one is.
-fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings, crop_tool: bool) -> Option<f32> {
+fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings, crop_tool: bool, aspect: f32) -> Option<f32> {
     // A previous crop/rotation can stay visible while its replacement renders. Its pixels
     // must not override the current frame geometry, even when it is the same photo.
     let current_texture = |t: &&crate::render::Tex| t.photo == id && t.look == Some((crate::render::geometry_look(d), !crop_tool));
@@ -619,7 +619,7 @@ fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings,
         .filter(current_texture)
         .or_else(|| app.renderer.textures.get(&Slot::Preview).filter(current_texture))
         .or_else(|| app.renderer.thumb(id).filter(current_texture))
-        .map(|tex| tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32)
+        .map(|tex| crate::region::texture_aspect(tex.size, aspect))
 }
 
 /// Whether the GPU draws the view (by the GPU's own rule, `handles`; `ready` first: `available`
@@ -698,9 +698,9 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
 
 /// The loupe's render plan, without a window for a view the GPU already refused one for.
 fn loupe_plan(app: &LightcraftApp, id: PhotoId, look: u64, sizes: crate::region::ViewSizes) -> crate::region::LoupePlan {
-    let plan = crate::region::plan(&app.ui.settings, sizes);
+    let plan = crate::region::plan_for_zoom(&app.ui.settings, sizes, app.ui.zoom);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
-        return crate::region::plan(&app.ui.settings, crate::region::ViewSizes { windows: false, ..sizes });
+        return crate::region::plan_for_zoom(&app.ui.settings, crate::region::ViewSizes { windows: false, ..sizes }, app.ui.zoom);
     }
     plan
 }
@@ -709,8 +709,8 @@ fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region
     if interacting || plan.window_edge.is_some() {
         plan.main_edge
     } else {
-        // (a user's explicit Preview size below the preview level still caps it)
-        let limit = if app.ui.settings.preview_limit == 0 { usize::MAX } else { app.ui.settings.preview_limit as usize };
+        // Both user caps apply to the settled sharpness floor as well as the draft plan.
+        let limit = app.ui.settings.preview_edge_limit(native_long);
         let floor = lightcraft_engine::SourceLevel::Preview.max_edge().min(limit).min(native_long);
         plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE))
     }
@@ -775,7 +775,7 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
 
 /// What a view slot shows: its own render of this photo, else the stand-ins (no blank frame
 /// between photos, and the full render replaces them in place). Returns what it drew.
-fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
+fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, slot: Slot, [r, clip]: [Rect; 2], ppp: f32, aspect: f32) -> &'static str {
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
     let (tex, what) = if let Some(t) = mine(slot) {
         (t, "render")
@@ -786,18 +786,33 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot
     } else {
         return "none";
     };
-    let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
+    let image_rect = snap_fit_rect(fit_frame_texture_rect(r, tex.size, aspect), tex.size, ppp);
     p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     what
 }
 
 /// The hovered look's render over the photo, with its label.
-fn draw_hover(p: &egui::Painter, t: &Tokens, tex: &crate::render::Tex, label: &str, [img_rect, canvas]: [Rect; 2], badge_top_inset: f32) {
-    let hover_rect = fit_texture_rect(img_rect, tex.size);
+fn draw_hover(
+    p: &egui::Painter,
+    t: &Tokens,
+    tex: &crate::render::Tex,
+    label: &str,
+    [img_rect, canvas]: [Rect; 2],
+    badge_top_inset: f32,
+    aspect: f32,
+) {
+    let hover_rect = fit_frame_texture_rect(img_rect, tex.size, aspect);
     p.image(tex.tex.id(), hover_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     let g = p.layout_no_wrap(label.to_string(), t.font(12.0), Color32::WHITE);
     let bg = label_badge_rect(hover_rect, canvas, g.size(), badge_top_inset);
     paint_badge(p, bg, g);
+}
+
+/// Tiny previews keep the frame's geometry; truly cropped embedded previews keep their own.
+fn fit_frame_texture_rect(area: Rect, size: [usize; 2], aspect: f32) -> Rect {
+    let aspect = crate::region::texture_aspect(size, aspect);
+    let height = area.height().min(area.width() / aspect);
+    Rect::from_center_size(area.center(), vec2(height * aspect, height))
 }
 
 /// A label on a dark pill.

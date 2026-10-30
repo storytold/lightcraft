@@ -2390,5 +2390,10 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Pixel limit": "Limite en pixels",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Pourcentage du grand côté de la photo. La plus petite limite est retenue ; -1 signifie aucune limite en pixels. À 0 %, un aperçu minimal est conservé. Les petits aperçus sont plus rapides.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Les limites concernent les aperçus de toute l’image. Les détails agrandis restent nets ; les exports et les aperçus 1:1 conservent leurs propres dimensions.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Saisissez une limite en pixels positive, ou -1 pour aucune limite.",
+  "No pixel limit": "Aucune limite en pixels"
 }

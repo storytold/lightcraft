@@ -2235,5 +2235,10 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Pixel limit": "Giới hạn điểm ảnh",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Tỷ lệ phần trăm cạnh dài của ảnh. Giới hạn nhỏ hơn được áp dụng; -1 nghĩa là không giới hạn điểm ảnh. 0% vẫn giữ bản xem trước tối thiểu. Bản xem trước nhỏ hơn sẽ nhanh hơn.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Giới hạn áp dụng cho bản xem trước toàn bộ ảnh. Chi tiết khi phóng to vẫn sắc nét; xuất ảnh và tạo bản xem trước 1:1 giữ kích thước riêng.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Nhập giới hạn điểm ảnh dương hoặc -1 để không giới hạn.",
+  "No pixel limit": "Không giới hạn điểm ảnh"
 }

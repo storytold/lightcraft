@@ -139,7 +139,12 @@ pub struct AppSettings {
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
     /// drawn at, up to the photo's own pixels and [`LOUPE_EDGE_CEILING`]). Not the old
     /// `previewEdge` key: its 2560 px default was the soft-image bug (issue #323).
+    #[serde(deserialize_with = "preview_limit_from_disk")]
     pub preview_limit: u32,
+    /// Maximum whole-frame preview long edge as a percentage of the photo (0–100).
+    /// Absent in older preferences: 100 preserves Automatic and fixed-pixel limits.
+    #[serde(deserialize_with = "preview_percent_from_disk")]
+    pub preview_percent: u32,
     /// Edit in Other Editor: the application ("" = the system's default for the file type).
     pub external_editor: String,
     /// The file Edit in Other Editor hands over.
@@ -221,6 +226,7 @@ impl Default for AppSettings {
             import_dropped_directly: false,
             gpu: true,
             preview_limit: 0,
+            preview_percent: 100,
             external_editor: String::new(),
             external_file: EditFile::default(),
             photocraft_path: String::new(),
@@ -304,9 +310,6 @@ impl EditFile {
     }
 }
 
-/// Preview size limits offered in Settings → Performance (0 = Automatic).
-pub const PREVIEW_LIMITS: [u32; 5] = [0, 1600, 2560, 3840, 5120];
-
 /// The most the loupe ever renders in one go (memory and GPU texture size), whatever the setting.
 pub const LOUPE_EDGE_CEILING: u32 = 8192;
 
@@ -324,6 +327,19 @@ pub const LOUPE_EDGE_STEP: usize = 64;
 pub const STANDARD_PREVIEW_EDGE: u32 = 2560;
 
 impl AppSettings {
+    /// The user's whole-frame preview cap; zero percent still produces an 8 px preview.
+    /// A missing pixel cap does not remove image, allocation or texture safety bounds.
+    pub fn preview_edge_limit(&self, native_long_edge: usize) -> usize {
+        let percent = lightcraft_engine::cmd::previews::percentage_edge(native_long_edge, self.preview_percent);
+        let pixels = if self.preview_limit == 0 { LOUPE_EDGE_CEILING } else { self.preview_limit.clamp(8, LOUPE_EDGE_CEILING) };
+        percent.min(pixels as usize).min(native_long_edge.max(8))
+    }
+
+    /// Whether the user chose a whole-frame cap (sharp zoom windows remain independent).
+    pub fn preview_is_limited(&self) -> bool {
+        self.preview_limit != 0 || self.preview_percent < 100
+    }
+
     /// The theme to show: the light theme in Light mode, or in Auto when `system` is light; the
     /// dark theme otherwise (Auto with no answer from the system included).
     pub fn theme(&self, system: Option<egui::Theme>) -> crate::theme::ThemeKind {
@@ -353,7 +369,7 @@ impl AppSettings {
     /// or `texture_side`, the largest texture the GPU allows (egui_glow, i.e. the browser build,
     /// panics on a bigger one, and many WebGL devices allow only 2048 or 4096).
     pub fn loupe_edge(&self, wanted_px: f32, native_long_edge: usize, texture_side: usize) -> usize {
-        let limit = if self.preview_limit == 0 { LOUPE_EDGE_CEILING } else { self.preview_limit.clamp(512, LOUPE_EDGE_CEILING) } as usize;
+        let limit = self.preview_edge_limit(native_long_edge);
         let ceiling = limit.min(texture_side.max(MIN_TEXTURE_SIDE));
         let wanted = if wanted_px.is_nan() { 8.0 } else { wanted_px.clamp(8.0, ceiling as f32) } as usize;
         let stepped = wanted.div_ceil(LOUPE_EDGE_STEP) * LOUPE_EDGE_STEP;
@@ -384,7 +400,7 @@ impl AppSettings {
 
     /// The edge Build Standard-Sized Previews uses.
     pub fn standard_preview_edge(&self) -> u32 {
-        if self.preview_limit == 0 { STANDARD_PREVIEW_EDGE } else { self.preview_limit }
+        if self.preview_limit == 0 { STANDARD_PREVIEW_EDGE } else { self.preview_limit.clamp(8, LOUPE_EDGE_CEILING) }
     }
 }
 
@@ -416,6 +432,18 @@ fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result
         }
     }
     Ok(values)
+}
+
+/// A malformed app preference falls back independently, preserving the rest of ui.json.
+fn preview_limit_from_disk<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0))
+}
+
+/// Invalid percentages use full quality, as an older file without this preference does.
+fn preview_percent_from_disk<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_u64().filter(|n| *n <= 100).map_or(100, |n| n as u32))
 }
 
 #[cfg(test)]

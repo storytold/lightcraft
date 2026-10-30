@@ -245,6 +245,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.importCurvePresets", "Import Point Curve Presets…", None, ""),
     ("file.exportCurvePresets", "Export Point Curve Presets…", None, ""),
     ("app.settings", "Settings…", Some("Cmd+,"), "Edit"),
+    ("app.previewSize", "Preview size", None, ""),
     ("app.newLibrary", "New Library…", None, "File"),
     ("app.openLibrary", "Open Library…", Some("Cmd+O"), "File"),
     ("app.recentLibraries", "Recent Libraries", None, ""),

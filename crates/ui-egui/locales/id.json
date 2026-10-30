@@ -2339,5 +2339,10 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Pixel limit": "Batas piksel",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Persentase sisi panjang foto. Batas yang lebih kecil berlaku; -1 berarti tanpa batas piksel. 0% mempertahankan pratinjau minimum. Pratinjau yang lebih kecil lebih cepat.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Batas berlaku untuk pratinjau seluruh gambar. Detail yang diperbesar tetap tajam; ekspor dan pembuatan pratinjau 1:1 menggunakan ukurannya sendiri.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Masukkan batas piksel positif, atau -1 untuk tanpa batas.",
+  "No pixel limit": "Tanpa batas piksel"
 }

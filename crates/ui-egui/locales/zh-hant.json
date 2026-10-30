@@ -2157,5 +2157,10 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Pixel limit": "像素上限",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "相片長邊的百分比。以較小的上限為準；-1 表示無像素上限。0% 仍保留最小預覽。較小的預覽速度更快。",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "上限適用於整幅影像預覽。放大後的細節保持清晰；匯出與 1:1 預覽建立各自保留原有尺寸。",
+  "Enter a positive pixel limit, or -1 for no limit.": "請輸入正數像素上限，或輸入 -1 表示不限制。",
+  "No pixel limit": "無像素上限"
 }

@@ -148,8 +148,8 @@ fn a_label_longer_than_its_column_leaves_the_controls_in_line() {
     let mut h = demo([1600.0, 1000.0]);
     show(&mut h, "performance");
     // Then its choices start where the choices of a short label do
-    let (short, long) = (rect(&h, "button:settingsPreview-0"), rect(&h, "button:settingsForgetLocal-0"));
-    assert!((short.left() - long.left()).abs() < 0.5, "Preview size starts at {} and Forget unchanged photos at {}", short.left(), long.left());
+    let (short, long) = (rect(&h, "button:settingsMemory-0"), rect(&h, "button:settingsForgetLocal-0"));
+    assert!((short.left() - long.left()).abs() < 0.5, "Memory for caches starts at {} and Forget unchanged photos at {}", short.left(), long.left());
 }
 
 #[test]

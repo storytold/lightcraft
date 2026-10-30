@@ -2327,5 +2327,10 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Pixel limit": "Pikseliraja",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Prosenttiosuus kuvan pitkästä sivusta. Pienempi raja on voimassa; -1 tarkoittaa, ettei pikselirajaa ole. 0 % säilyttää vähimmäiskokoisen esikatselun. Pienemmät esikatselut ovat nopeampia.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Rajat koskevat koko kuvan esikatseluja. Suurennetut yksityiskohdat pysyvät terävinä; viennit ja 1:1-esikatselut säilyttävät omat kokonsa.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Anna positiivinen pikseliraja tai -1, jos et halua rajaa.",
+  "No pixel limit": "Ei pikselirajaa"
 }

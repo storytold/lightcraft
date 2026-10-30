@@ -102,6 +102,11 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
     for (id, label, sc, menu) in crate::menus::ui_commands() {
         let sc = crate::shortcuts::binding(keymap, id, *sc);
         v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
+        if *id == "app.previewSize"
+            && let Some(command) = v.last_mut().and_then(Value::as_object_mut)
+        {
+            command.insert("params".into(), json!("{percent?: integer 0..100, pixelLimit?: -1 | integer 1..=4294967295} — query or set whole-frame preview caps; -1 removes the user pixel cap; native zoom detail and exports are independent"));
+        }
     }
     Value::Array(v)
 }
@@ -127,6 +132,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
+            "previewPixels": app.renderer.textures.get(&crate::render::Slot::Main).filter(|t| t.photo == p).map(|t| t.size),
             "pending": app.renderer.is_pending(crate::render::Slot::Main),
             // why its render failed (the loupe then shows a stand-in, or nothing, for good)
             "failed": app.renderer.failure_of(crate::render::Slot::Main, p),

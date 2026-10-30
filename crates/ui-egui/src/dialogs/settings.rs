@@ -16,7 +16,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
+use crate::state::{GridBadges, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
