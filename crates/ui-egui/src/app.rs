@@ -5,8 +5,9 @@ use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
     MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
     SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
-    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    TOAST_SECONDS, UNDO_TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import,
+    lightroom_import, menus, merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui,
+    widgets,
 };
 
 mod control;
@@ -437,6 +438,33 @@ impl LightcraftApp {
     pub fn toast_for(&mut self, _ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = self.tick_now();
         self.ui.toast = Some((text.into(), t + secs, None));
+        self.ui.toast_undo = None;
+    }
+
+    /// A toast for an action that has just committed one undo step (a drop or a menu move that moved, added or tagged
+    /// photos): it carries an Undo button for [`UNDO_TOAST_SECONDS`], until the next step is committed or
+    /// the toast is replaced, whichever comes first.
+    pub fn toast_undoable(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        let text = text.into();
+        self.toast_for(ctx, text.clone(), UNDO_TOAST_SECONDS);
+        self.ui.toast_undo = Some((text, self.session.commits(), self.session.undo.len()));
+    }
+
+    /// Whether the toast on screen offers Undo: it is the one [`Self::toast_undoable`] showed, nothing has been
+    /// committed since (a later step would make Undo reach that instead), the undo stack is as the drop left it
+    /// (Edit > Undo from the menu or a new library would change it, and a click would then undo something else),
+    /// and no dialog is open over the toast.
+    pub fn toast_offers_undo(&self) -> bool {
+        match (&self.ui.toast, &self.ui.toast_undo) {
+            (Some((shown, _, _)), Some((text, commits, steps))) => {
+                shown == text
+                    && *commits == self.session.commits()
+                    && *steps == self.session.undo.len()
+                    && self.session.redo.is_empty()
+                    && self.ui.dialog.is_none()
+            }
+            _ => false,
+        }
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
@@ -524,6 +552,7 @@ impl LightcraftApp {
     pub fn toast_error(&mut self, _ctx: &egui::Context, text: impl Into<String>) {
         let t = self.tick_now();
         self.ui.toast = Some((text.into(), t + 6.0, None));
+        self.ui.toast_undo = None;
     }
 
     /// The process is about to end (settings and library are saved by then): make sure nothing is

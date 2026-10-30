@@ -21,6 +21,7 @@ mod dialog_tab;
 mod dialogs;
 mod docking_acceptance;
 mod drop_import;
+mod drop_undo;
 mod edit_layout;
 mod empty_library;
 mod error_kinds;

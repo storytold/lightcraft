@@ -331,6 +331,11 @@ pub struct UiState {
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
     pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    /// The toast that offers Undo: its text, how many undo steps the session had committed, and how many the undo
+    /// stack held, when the action it tells of finished. The toast shows the button only while its text is still on
+    /// screen and the stacks are as that action left them, so Undo can only reach that action ([`crate::LightcraftApp::toast_undoable`]).
+    #[serde(skip)]
+    pub toast_undo: Option<(String, u64, usize)>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -485,6 +490,7 @@ impl Default for UiState {
             compare: None,
             reference: None,
             toast: None,
+            toast_undo: None,
             last_find_missing: None,
             last_find_missing_result: None,
             #[cfg(test)]

@@ -405,7 +405,15 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 /// Adds the dragged photos to the album and toasts how many went in (and how many Local ones were skipped).
 fn drop_photos_on_album(app: &mut LightcraftApp, ui: &egui::Ui, a: &Album, ids: Vec<u64>) {
     match app.run("album.addPhotos", json!({"id": a.id.0, "ids": ids})) {
-        Ok(r) => app.toast(ui.ctx(), added_message(a, &r)),
+        Ok(r) => {
+            let msg = added_message(a, &r);
+            // an Undo button only when something was added (the drop is then one undo step)
+            if r.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0) > 0 {
+                app.toast_undoable(ui.ctx(), msg);
+            } else {
+                app.toast(ui.ctx(), msg);
+            }
+        }
         Err(e) => app.toast(ui.ctx(), e),
     }
 }
