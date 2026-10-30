@@ -456,6 +456,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (yl > 1e-9) {
         d = c * o / yl;
     }
+    // Lifted toe adds neutral light: fade towards grey (see `fade_lifted_toe` in `finish.rs`).
+    let toe = pf(F_TOE);
+    if (toe > 0.0 && o > 0.0) {
+        let fade = clamp((o - toe) / o, 0.0, 1.0);
+        if (fade < 1.0) {
+            d = vec3<f32>(o) + (d - vec3<f32>(o)) * fade;
+        }
+    }
     let k = chroma_scale(o);
     if (k != 1.0) {
         d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;

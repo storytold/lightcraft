@@ -20,6 +20,12 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Fade a tone-mapped pixel towards neutral grey by the lifted-toe amount.
+fn fade_lifted_toe(display: [f32; 3], output_luma: f32, toe: f32) -> [f32; 3] {
+    let fade = ((output_luma - toe) / output_luma).clamp(0.0, 1.0);
+    if fade < 1.0 { display.map(|v| output_luma + (v - output_luma) * fade) } else { display }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -397,6 +403,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let yl = luminance_2020(c);
             let o = fp.tone.apply(yl);
             let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+
+            // Lifted toe adds neutral light: fade towards grey so shadows stay neutral.
+            let toe = fp.tone.toe();
+            if toe > 0.0 && o > 0.0 {
+                d = fade_lifted_toe(d, o, toe);
+            }
+
             let k = fp.tone.chroma_scale(o);
             if k != 1.0 {
                 d = d.map(|v| o + (v - o) * k);
