@@ -2354,5 +2354,14 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Reduce Motion": "Зменшити рух",
+  "Reduce motion": "Зменшити рух",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються. Доки ви не зміните це тут, діє системне налаштування «Зменшити рух».",
+  "Increase Contrast": "Збільшити контрастність",
+  "Increase contrast": "Збільшити контрастність",
+  "Makes borders, separators and text stand out more in every theme.": "Робить межі, роздільники та текст помітнішими в усіх темах.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Робить межі, роздільники та текст помітнішими в усіх темах. Доки ви не зміните це тут, діє системне налаштування «Збільшити контрастність».",
+  "Use the system setting": "Використовувати налаштування системи",
+  "Turns off zoom and spinner animations. Fades stay.": "Вимикає анімацію масштабування та індикаторів роботи. Плавні згасання залишаються."
 }

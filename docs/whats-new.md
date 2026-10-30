@@ -1,5 +1,21 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### Increase contrast
+- **Settings ▸ Interface ▸ Increase contrast** (`view.increaseContrast` for scripts and agents) makes borders,
+  separators and text stand out more in every theme: text reads at least 7:1 on the surfaces it is written on (panels,
+  fields, buttons, and rows and buttons that are hovered or pressed, and selected grid cells), icons 4.5:1, and the borders of fields
+  and buttons, the separators between panels and the Develop sliders' plain tracks and thumbs 3:1 against what they part. The
+  outlines of the interface's standard controls and windows are drawn a half point thicker, also while hovered or
+  pressed. The open drop-down's outline and the standard disabled controls are strengthened too. Text on a photo, on a
+  cell tinted by a color label and on a filled primary button keeps its own colors, and so does text written in the
+  accent, caution or error color ("In Use" on a theme card, warnings). A selected row in a list or a drop-down keeps its fill and its text. The panel frames and LightCraft's own buttons keep their line weight and disabled look (their colors follow
+  the stronger tokens), and the color-gradient slider tracks (Temp, Tint, Hue) keep theirs. The surfaces keep their colors. On macOS it
+  follows System Settings ▸ Accessibility ▸ Display ▸ Increase contrast until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -156,6 +172,16 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

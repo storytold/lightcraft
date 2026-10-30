@@ -2327,5 +2327,14 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Reduce Motion": "Vähennä liikettä",
+  "Reduce motion": "Vähennä liikettä",
+  "Turns off zoom and spinner animations. Fades stay.": "Poistaa zoomaus- ja pyörivät animaatiot käytöstä. Häivytykset säilyvät.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Poistaa zoomaus- ja pyörivät animaatiot käytöstä. Häivytykset säilyvät. Seuraa järjestelmän Vähennä liikettä -asetusta, kunnes muutat sitä täällä.",
+  "Increase Contrast": "Lisää kontrastia",
+  "Increase contrast": "Lisää kontrastia",
+  "Makes borders, separators and text stand out more in every theme.": "Korostaa reunoja, erottimia ja tekstiä kaikissa teemoissa.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Korostaa reunoja, erottimia ja tekstiä kaikissa teemoissa. Seuraa järjestelmän Lisää kontrastia -asetusta, kunnes muutat sitä täällä.",
+  "Use the system setting": "Käytä järjestelmän asetusta"
 }

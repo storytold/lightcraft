@@ -35,6 +35,12 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
 
+/// Whether the system asks for reduced motion (`None`: not known).
+pub type SystemReduceMotionFn = Box<dyn FnMut() -> Option<bool>>;
+
+/// Whether the system asks for increased contrast (`None`: not known).
+pub type SystemIncreaseContrastFn = Box<dyn FnMut() -> Option<bool>>;
+
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
@@ -72,6 +78,13 @@ pub struct Services {
     /// The profile of the screen showing the window, used while none is chosen in Settings ▸
     /// Display (macOS, whose windows aren't colour-managed: issue #787).
     pub screen_profile: Option<ScreenProfileFn>,
+    /// The system's Reduce Motion setting (macOS), followed while Settings ▸ Interface ▸ Reduce motion
+    /// has not been changed by the user; read at most once a second, on frames the app draws (an idle
+    /// window notices on its next input), as people switch it while the app runs.
+    pub system_reduce_motion: Option<SystemReduceMotionFn>,
+    /// The system's Increase Contrast setting (macOS), followed while Settings ▸ Interface ▸ Increase
+    /// contrast has not been changed by the user; read at most once a second, like Reduce Motion.
+    pub system_increase_contrast: Option<SystemIncreaseContrastFn>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,
     /// Open dialog for a keyword list file (`.txt`, Photo Supreme's `.utf8`; File ▸ Import Keywords…).
