@@ -95,8 +95,10 @@ removed), the report still names the archive and a separate warning names what w
 it is written after the photos are imported, so the importer checks its folder first: when
 `Interop` is a link or a file rather than a folder, or a folder in which a file can't be created
 (read-only, no permission), the import is refused before anything changes, with an error naming
-the folder. Nothing lands outside the library, and a retry can't duplicate virtual copies (the index
-write checks the folder again). Source catalogs and originals are never overwritten.
+the folder. Nothing lands outside the library. The check can't catch everything: when the index
+write itself fails after the photos are imported (the disk fills up, or the index would exceed 16 MiB),
+the import reports the error, the photos stay, and a retry may import their virtual copies again,
+because the index doesn't list them. Source catalogs and originals are never overwritten.
 
 Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
 loading the whole `.lrcat`. Database files are capped at 16 GiB and 16,777,216 pages; the WAL
