@@ -34,16 +34,18 @@ fn click(h: &mut Headless, id: &str) {
     h.settled(T, "after ui.clickWidget");
 }
 
+#[track_caller]
 fn drag(h: &mut Headless, id: &str, dx: f32, dy: f32) {
     let r = h.request("ui.dragWidget", json!({"id": id, "dx": dx, "dy": dy, "steps": 8}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settled(T, "after ui.dragWidget");
+    h.settled(T, &format!("after dragging {id}"));
 }
 
+#[track_caller]
 fn cmd(h: &mut Headless, id: &str, params: Value) -> Value {
     let r = h.request("engine.execute", json!({"command": id, "params": params}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settled(T, "after engine.execute");
+    h.settled(T, &format!("after {id}"));
     r["result"].clone()
 }
 
