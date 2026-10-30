@@ -597,6 +597,24 @@ fn face_scan_row_follows_pending_photos() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+#[test]
+fn face_scan_row_starts_over_in_another_library() {
+    // issue #2995: the scan's whole was kept from the library opened before, so a smaller one showed most of it done
+    let d = temp("peak-library");
+    let (mut s, _) = setup(&d, 64);
+    s.faces.peak = 442_717;
+    s.open_library(d.join("other"), true).unwrap();
+    let id = s.catalog.photos().map(|p| p.id).max().unwrap();
+    set_regions(&mut s, id, vec![region(0.1, None)]);
+    let last = s.execute("faces.pump", &json!({})).unwrap();
+    let pending = last["pendingPhotos"].as_u64().unwrap();
+    assert!(pending > 0, "{last}");
+    assert_eq!(last["peak"].as_u64().unwrap(), pending, "{last}");
+    let rows = s.activity.list().into_iter().filter(|t| t.kind == "faces").collect::<Vec<_>>();
+    assert_eq!(rows.iter().map(|t| (t.total, t.done)).collect::<Vec<_>>(), vec![(pending, 0)]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 fn face_names(s: &Session, id: PhotoId) -> Vec<Option<String>> {
     s.catalog.photo(id).unwrap().meta.regions.iter().map(|r| r.name.clone()).collect()
 }

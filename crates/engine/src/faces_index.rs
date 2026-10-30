@@ -600,6 +600,8 @@ impl FacesState {
         self.in_flight.clear();
         self.retry_at = None;
         self.saved_at = None;
+        self.task = None;
+        self.peak = 0;
         self.epoch = self.epoch.wrapping_add(1);
     }
 

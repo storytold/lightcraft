@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### The face scan's progress starts over in another library
+- Opening another library while the face scan was running kept the old library's photo count as the progress bar's
+  whole, so a smaller library's scan looked almost done from the start (#2995). The scan's row and bar now start over
+  with each library.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
