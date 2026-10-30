@@ -92,6 +92,13 @@ macro_rules! skip {
     };
 }
 
+/// Print a configuration note (`LIGHTCRAFT_TIME_SCALE`, the watchdog's settings) straight to the
+/// process's stderr. `eprintln!` would go to libtest's capture of the test that happened to read
+/// the setting first, shown only if that test fails.
+pub(crate) fn note(line: &str) {
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
 /// What [`skip!`] calls: print the note and append it to the skip log, if one is set. Never fails
 /// the test: a log that can't be written loses the entry, not the run.
 pub fn record(need: Need, reason: &str, file: &str, line: u32) {
