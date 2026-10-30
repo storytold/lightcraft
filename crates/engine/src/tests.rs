@@ -19,6 +19,8 @@ mod face_tiles;
 mod filesystem_history;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod focus_scan;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod folder_metadata;
 mod folders;
 mod forget_local;
 mod history_cursor;

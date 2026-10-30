@@ -273,6 +273,8 @@ pub struct Session {
     /// Set by a command whose change must not rewrite the photo's XMP sidecar even with auto-write on
     /// (a catalog-only edit of data the sidecar writer does not emit); consumed when the command ends.
     pub(crate) skip_auto_write: bool,
+    /// The folder metadata save or read waiting for `folder.metadataPump` ([`cmd::folder_metadata`]); dropped when another library opens.
+    pub(crate) folder_metadata: Option<cmd::folder_metadata::FolderMetadataJob>,
     /// The order of Reload from Disk runs, so an older one finishing late is dropped ([`cmd::reload`]).
     pub(crate) reload_tickets: cmd::reload::Tickets,
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
@@ -471,6 +473,7 @@ impl Session {
             pending_sidecar_repairs: Vec::new(),
             interaction: None,
             skip_auto_write: false,
+            folder_metadata: None,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
