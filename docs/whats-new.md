@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Closing a library no longer removes another library's lock note
+- If a library's folder was moved while it was open and another library took its place (a network share mounted
+  over its mount point), closing it removed the other library's `catalog.lock.owner`. Now a library only removes the
+  owner note it wrote itself.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

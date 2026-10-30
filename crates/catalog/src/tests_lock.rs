@@ -199,3 +199,24 @@ fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
         &refused[..refused.len().min(3)]
     );
 }
+
+/// A library folder that was moved away while open, with another library put at its path (a share
+/// mounted over the mount point), keeps that library's owner note when the lock is dropped: the note
+/// names another holder, so it isn't ours to remove (issue #3240).
+#[test]
+fn dropping_the_lock_keeps_an_owner_note_that_names_someone_else() {
+    let _serial = serial();
+    let dir = temp_dir("swapped");
+    let moved = dir.with_extension("moved");
+    let _ = std::fs::remove_dir_all(&moved);
+    let l = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(l.held());
+    std::fs::rename(&dir, &moved).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = br#"{"pid":999999,"host":"elsewhere","program":"LightCraft","version":"0.2.0","since":1}"#;
+    std::fs::write(dir.join(OWNER), other).unwrap();
+    drop(l);
+    assert_eq!(std::fs::read(dir.join(OWNER)).unwrap(), other, "another holder's note stays");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&moved);
+}

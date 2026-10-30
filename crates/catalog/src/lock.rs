@@ -95,6 +95,8 @@ pub struct LibraryLock {
     /// `None` when the file system can't lock (the library is open unlocked).
     file: Option<File>,
     held: bool,
+    /// The owner note this lock wrote, so dropping it removes only that one.
+    owner: LockOwner,
 }
 
 impl LibraryLock {
@@ -102,7 +104,7 @@ impl LibraryLock {
     pub fn acquire(dir: &Path, program: &str) -> Result<LibraryLock, LockError> {
         let unlocked = |why: io::Error| {
             log::warn!("library {}: can't lock {LOCK} ({why}); opening it without protection against a second program", dir.display());
-            LibraryLock { dir: dir.to_path_buf(), file: None, held: false }
+            LibraryLock { dir: dir.to_path_buf(), file: None, held: false, owner: LockOwner::default() }
         };
         let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join(LOCK)) {
             Ok(f) => f,
@@ -124,7 +126,7 @@ impl LibraryLock {
         {
             log::warn!("library {}: can't write {OWNER}: {e}", dir.display());
         }
-        Ok(LibraryLock { dir: dir.to_path_buf(), file: Some(file), held: true })
+        Ok(LibraryLock { dir: dir.to_path_buf(), file: Some(file), held: true, owner })
     }
 
     /// The OS lock is held (`false`: the file system can't lock; opened unprotected).
@@ -147,13 +149,19 @@ impl LibraryLock {
 
 impl Drop for LibraryLock {
     /// Remove the owner note while still holding the lock (so it can't delete the next holder's),
-    /// then release the lock explicitly. Closing the handle isn't enough on Unix: `flock` lasts
+    /// but only if it is still the one this lock wrote: if the folder was moved and another library
+    /// now sits at its path (a share mounted over the mount point), that note is someone else's
+    /// (issue #3240). Then release the lock explicitly. Closing the handle isn't enough on Unix: `flock` lasts
     /// while any copy of the descriptor is open, and a process another thread is spawning holds a
     /// copy of every descriptor until it execs (issue #680). If the unlock fails the handle still
     /// closes right after, which releases the lock once every copy is gone, as before.
     fn drop(&mut self) {
         if self.held {
-            let _ = std::fs::remove_file(self.dir.join(OWNER));
+            let path = self.dir.join(OWNER);
+            let ours = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<LockOwner>(&b).ok()).is_some_and(|o| o == self.owner);
+            if ours {
+                let _ = std::fs::remove_file(&path);
+            }
             if let Some(f) = &self.file
                 && let Err(e) = f.unlock()
             {
