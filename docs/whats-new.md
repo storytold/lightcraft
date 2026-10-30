@@ -1,5 +1,26 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### The filter never holds what the source shown already supplies
+- The filter bar has no chip for an album, and a library folder or Picks already decide what they show, so a copy of
+  one of them left in the filter narrowed the next source with nothing on screen to explain why. Now every way of
+  changing the filter (the bar, a saved preset, View ▸ Enable Filters, showing a source) leaves them out. A preset that
+  holds an album, the library folder shown or Picks' flag applies the rest and leaves them out (a script is told
+  which); setting one of them in the filter by hand is refused, and the flag buttons are off while Picks is shown.
+- Renaming or moving a Local folder you browsed earlier no longer narrows All Photos to it, and no longer replaces the
+  filter View ▸ Enable Filters put aside: the browsed folder follows the rename, and the filter is left as it was.
+
+### Undo puts the filter back with the keyword, person or folder
+- Deleting or renaming a keyword, renaming a person and removing a library folder change the filter that names them, and
+  undo brought the keyword, name or folder back but left the filter as it was changed, so the grid showed everything or
+  nothing. Now undo gives the filter its old keyword, name or folder, also in the filter View ▸ Enable Filters put aside,
+  and redo changes it again. Only what the step changed moves, and only while you have not changed that part of the
+  filter since; a filter you built after emptying or replacing the old one is left alone. Redo leaves alone a keyword,
+  name or folder you had picked yourself when you undid the step, as undo did, for as long as you keep it. When View ▸
+  Enable Filters had the filter put aside, a folder that undo restores while another folder is shown stays in it and
+  comes back with Enable Filters once that other folder is no longer shown.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

@@ -39,6 +39,7 @@ mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
 pub mod files;
+pub mod filter_state;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
@@ -80,6 +81,7 @@ pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
 pub mod text;
+mod undo_filters;
 mod view;
 pub mod walk;
 
@@ -139,6 +141,9 @@ pub struct UndoEntry {
     /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists. An
     /// empty `to` removes the (empty) folder `from`, an empty `from` creates `to` (Create Folder).
     pub folder: Option<FolderMove>,
+    /// What the step did to the person's filter (a keyword deleted or renamed, a folder removed…): undo carries it
+    /// back and redo forward (see [`undo_filters`]).
+    pub(crate) filters: Option<undo_filters::FilterChange>,
     /// Inverses of logged path corrections from a partially failed history step.
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
@@ -231,9 +236,9 @@ pub struct Session {
     pub auto_sync: bool,
     pub catalog: Catalog,
     pub source: LibrarySource,
-    pub filter: Filter,
-    /// The filter `library.toggleFilters` put aside (Library > Enable Filters off); not persisted.
-    pub(crate) shelved_filter: Option<Filter>,
+    /// The filter bar's filter and the one `library.toggleFilters` put aside (Library > Enable Filters off); not
+    /// persisted. Written only through its methods, which keep it clear of what the source shown owns.
+    pub(crate) filters: filter_state::FilterState,
     pub sort: Sort,
     pub selection: Selection,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
@@ -450,8 +455,7 @@ impl Session {
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,
-            filter: Filter::default(),
-            shelved_filter: None,
+            filters: Default::default(),
             sort: Sort::default(),
             selection: Selection::default(),
             visible: Vec::new().into(),
@@ -580,10 +584,20 @@ impl Session {
     fn run_command(&mut self, id: &str, journal: Option<&Value>, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
         let log_start = self.pending_log.len();
         let was_active = self.active();
+        // what the step does to the person's filter is kept with it for undo (see `undo_filters`)
+        let commits = self.commits;
+        if self.depth == 0 {
+            self.filters.begin_recording();
+        }
         self.depth += 1;
         // last-resort guard: a panic in a command is that command's error, not a crash
         let r = guard::catch(&format!("`{id}`"), || f(self)).unwrap_or_else(|e| Err(EngineError::Other(e)));
         self.depth -= 1;
+        if self.depth == 0
+            && let Some(before) = self.filters.end_recording()
+        {
+            self.note_filter_change(before, commits);
+        }
         if self.depth == 0 && was_active.is_some() && self.active() != was_active {
             self.previous_active = was_active;
             if let Some(left) = was_active {
@@ -633,7 +647,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            filters: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -745,8 +766,8 @@ impl Session {
             return;
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
-        // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        // Folder moves, steps that carry a filter change and partially applied file steps stay on their own.
+        if entries.iter().any(|e| e.folder.is_some() || e.filters.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -755,6 +776,7 @@ impl Session {
             label: label.to_string(),
             op: Op::Batch { ops },
             folder: None,
+            filters: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
@@ -779,12 +801,15 @@ impl Session {
                 return Err(err);
             }
         };
+        // (the filter first: the photo is shown if it is in view under the filter the step's undo leaves)
+        let carried = self.carry_filters(e.filters.as_ref());
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
             label: e.label.clone(),
             op: redo,
             folder: e.folder.as_ref().map(FolderMove::reversed),
+            filters: carried,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
@@ -804,12 +829,15 @@ impl Session {
                 return Err(err);
             }
         };
+        // (the filter first: the photo is shown if it is in view under the filter the step leaves)
+        let carried = self.carry_filters(e.filters.as_ref());
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
             label: e.label.clone(),
             op: undo,
             folder: e.folder.as_ref().map(FolderMove::reversed),
+            filters: carried,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
@@ -1058,15 +1086,29 @@ impl Session {
 
     // ---------------------------------------------------------------- library view
 
+    /// The filter bar's filter. It changes through the commands (`library.filter`, `filter.applyPreset`,
+    /// `library.clearFilter`, `library.toggleFilters`, `library.source`…), never beside them.
+    pub fn filter(&self) -> &Filter {
+        self.filters.current()
+    }
+
+    /// Show `f` as the filter bar's filter, over the source shown: what that source owns is left out
+    /// ([`LibrarySource::reconcile`]) and returned. Setting a filter forgets the one Enable Filters put aside.
+    pub fn set_filter(&mut self, f: Filter) -> Vec<filter_state::SourceOwned> {
+        self.filters.replace(self.source, f)
+    }
+
     /// Library > Enable Filters is off: a filter is put aside (`library.toggleFilters`).
     pub fn filters_off(&self) -> bool {
-        self.shelved_filter.is_some()
+        self.filters.is_off()
     }
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
-        let mut key =
-            (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+        let mut key = (
+            self.catalog.revision,
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filters.current(), self.sort, self.browse, self.library_folder),
+        );
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -1092,14 +1134,14 @@ impl Session {
             // Use this same value to evaluate relative rules and stamp the result.
             let now = current_now.unwrap_or_else(|| (self.clock)());
             lightcraft_catalog::rules::set_now(Some(now.clone()));
-            let f = self.view_filter(self.source, &self.filter);
+            let f = self.view_filter(self.source, self.filters.current());
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
             // a view that is only a question, else in the album or folder shown. Taking a photo out of an album
             // or the library takes it out of the view at once, held or not.
             // (only a view that asks something can lose a photo to an edit: the others are queried as ever, at no
             // cost for the hold)
-            let holds = self.hold_view && (asks || self.filter != Filter::default());
+            let holds = self.hold_view && (asks || *self.filters.current() != Filter::default());
             let within = holds.then(|| {
                 if asks {
                     self.view_filter(LibrarySource::All, &Filter::default())
@@ -1113,7 +1155,7 @@ impl Session {
             // Views whose order or photos are not the query's alone are worked out whole each time: an album in
             // its own order, Recently Added (how far back it reaches moves with every import), Missing Photos.
             let own_order = matches!(self.source, LibrarySource::Album(a) if self.sort.key == lightcraft_catalog::SortKey::CaptureDate
-                && self.filter == Filter::default()
+                && *self.filters.current() == Filter::default()
                 && self.catalog.album(a).is_some_and(|al| !al.is_smart()));
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
@@ -1155,7 +1197,7 @@ impl Session {
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
                 && !al.is_smart()
-                && self.filter == Filter::default()
+                && *self.filters.current() == Filter::default()
             {
                 // each photo's place looked up, not searched for (a big album sorted in O(n log n))
                 let mut place: std::collections::HashMap<PhotoId, usize> = std::collections::HashMap::with_capacity(al.photos.len());
@@ -1255,7 +1297,7 @@ impl Session {
         if self.source == LibrarySource::Missing {
             return None;
         }
-        if self.filter == Filter::default() && !self.hold_view {
+        if *self.filters.current() == Filter::default() && !self.hold_view {
             // nothing narrows the source: what the view lists is all of it, and is counted already (not a view
             // that holds photos that stopped matching: those are not of the source any more)
             let _ = self.visible();

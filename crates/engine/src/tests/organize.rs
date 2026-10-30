@@ -253,7 +253,7 @@ fn filters_are_not_restored_when_a_library_reopens() {
     s.close_library().unwrap();
     drop(s);
     let mut s2 = open(&dir);
-    assert_eq!(s2.filter, lightcraft_catalog::Filter::default());
+    assert_eq!(*s2.filter(), lightcraft_catalog::Filter::default());
     assert_eq!(s2.visible_cloned().len(), all);
     assert_eq!(serde_json::to_value(s2.sort).unwrap()["key"], "fileName", "the rest of the view is restored");
     let _ = std::fs::remove_dir_all(&dir);
@@ -269,17 +269,17 @@ fn filter_chips_clear_one_filter_and_total_ignores_the_filter() {
     s.execute("library.filter", &json!({"rating": 4, "date": "2026-01-16", "text": "x"})).unwrap();
     // the total is the source's, whatever the filter hides
     assert_eq!(s.source_total(), Some(all));
-    let chips = crate::filter_chips(&s.filter, &s.catalog);
+    let chips = crate::filter_chips(s.filter(), &s.catalog);
     let labels: Vec<&str> = chips.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(labels, ["Search: “x”", "Rating ≥ 4★", "Date: January 16, 2026"]);
     // clearing the date chip leaves the other two filters alone
     s.execute("library.filter", &chips[2].clear).unwrap();
-    assert_eq!(s.filter.date, None);
-    assert_eq!((s.filter.rating, s.filter.text.as_str()), (4, "x"));
-    for c in crate::filter_chips(&s.filter, &s.catalog) {
+    assert_eq!(s.filter().date, None);
+    assert_eq!((s.filter().rating, s.filter().text.as_str()), (4, "x"));
+    for c in crate::filter_chips(s.filter(), &s.catalog) {
         s.execute("library.filter", &c.clear).unwrap();
     }
-    assert_eq!(s.filter, Default::default());
+    assert_eq!(*s.filter(), Default::default());
 }
 
 /// A shuffle is part of the saved view: the same seed (and so the same grid) is back on the next launch.

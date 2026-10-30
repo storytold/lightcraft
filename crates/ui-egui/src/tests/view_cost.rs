@@ -67,7 +67,7 @@ fn what_one_keyword_costs_in_a_library_of_67_000_photos() {
     // its parts
     let ids = s.visible_cloned();
     let t = Instant::now();
-    let f = s.source.to_filter(&s.filter, &s.catalog);
+    let f = s.source.to_filter(s.filter(), &s.catalog);
     let q = s.catalog.query(&f, &s.sort);
     let query = t.elapsed();
     let t = Instant::now();

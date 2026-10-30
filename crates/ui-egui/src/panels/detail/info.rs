@@ -167,21 +167,21 @@ pub(super) const FILTER_PILL_HEIGHT: f32 = 20.0;
 
 /// Whether [`filter_pill`] has something to show (a filter is active).
 pub(super) fn filter_pill_shown(app: &LightcraftApp) -> bool {
-    !lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).is_empty()
+    !lightcraft_engine::filter_chips(app.session.filter(), &app.session.catalog).is_empty()
 }
 
 /// A small pill at the loupe's top left naming the active filters: the filmstrip and Next / Previous
 /// follow them, so a filter must never be invisible here. A click clears them all. It sits in the
 /// canvas margin, so the photo does not move.
 pub(super) fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
-    let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
+    let chips = lightcraft_engine::filter_chips(app.session.filter(), &app.session.catalog);
     if chips.is_empty() {
         return;
     }
     let t = Tokens::get(ui.ctx());
     let p = ui.painter_at(canvas);
     let label =
-        chips.iter().map(|c| crate::panels::chips::display_label(c, &app.session.filter, &app.session.catalog)).collect::<Vec<_>>().join("  ·  ");
+        chips.iter().map(|c| crate::panels::chips::display_label(c, app.session.filter(), &app.session.catalog)).collect::<Vec<_>>().join("  ·  ");
     let g = p.layout_no_wrap(crate::i18n::tr_format!("Filtered: {label}", label = label), t.font(12.0), Color32::from_gray(225));
     let inset = FILTER_PILL_INSET;
     let w = (g.size().x + 40.0).min((canvas.width() - 2.0 * inset).max(60.0));
@@ -344,7 +344,7 @@ mod filter_pill_tests {
     #[test]
     fn the_filter_pill_is_inset_equally_from_both_edges() {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
-        app.session.filter.text = "717".into();
+        app.session.set_filter(lightcraft_catalog::Filter { text: "717".into(), ..Default::default() });
         let ctx = egui::Context::default();
         let canvas = Rect::from_min_size(pos2(52.0, 82.0), vec2(800.0, 500.0));
         let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);

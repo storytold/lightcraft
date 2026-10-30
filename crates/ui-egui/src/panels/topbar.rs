@@ -128,7 +128,7 @@ fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rec
     let fresp = ui.interact(fr, egui::Id::unique("filter-btn"), Sense::click());
     crate::widgets::announce(&fresp, crate::i18n::tr("Filters"));
     register(ui, "icon:filter", fr);
-    let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
+    let filtering = *app.session.filter() != Default::default() || app.ui.filter_bar;
     paint(
         ui.painter(),
         fr.shrink(6.0),
@@ -142,7 +142,7 @@ fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rec
         },
     );
     // badge: how many filters are on, even with the filter bar closed
-    let active = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).len();
+    let active = lightcraft_engine::filter_chips(app.session.filter(), &app.session.catalog).len();
     if active > 0 {
         let c = fr.right_top() + vec2(-3.0, 8.0);
         ui.painter().circle_filled(c, 7.0, t.accent);

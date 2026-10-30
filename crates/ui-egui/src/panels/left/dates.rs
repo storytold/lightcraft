@@ -23,7 +23,7 @@ pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, count: usize, indent: f32) -> bool {
     let open_id = egui::Id::unique(("date-open", key.to_string()));
     let mut open = tree_open(ui, open_id, false);
-    let sel = app.session.filter.date.as_deref() == Some(key);
+    let sel = app.session.filter().date.as_deref() == Some(key);
     let resp = Row::new(&format!("date:{key}"), Icon::Clock, label).count(Some(count)).selected(sel).indent(indent).show(app, ui);
     if key.len() < 10 {
         tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));

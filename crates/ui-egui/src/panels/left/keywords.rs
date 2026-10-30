@@ -22,7 +22,7 @@ pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[
 
 /// One drawn row of [`keyword_rows`]; `open_id` and `open` are its triangle's when it has rows inside it.
 fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: &str, indent: f32, open_id: Option<egui::Id>, open: &mut bool) {
-    let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
+    let sel = app.session.filter().keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
     let resp = Row::new(id, Icon::Tag, &n.name).count(Some(n.count)).selected(sel).indent(indent).show(app, ui);
     if let Some(k) = open_id {
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path));

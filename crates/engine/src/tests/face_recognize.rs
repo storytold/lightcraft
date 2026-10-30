@@ -619,7 +619,7 @@ fn rename_person_rewrites_every_spelling_and_undoes() {
     assert_eq!(face_names(&s, b)[0], Some("Ada".into()));
     assert_eq!(face_names(&s, b)[1], Some("Ann".into()), "a pet is not a person");
     assert_eq!(s.catalog.people().iter().find(|p| p.name.eq_ignore_ascii_case("ada")).map(|p| p.name.as_str()), Some("Ada"));
-    assert_eq!(s.filter.person.as_deref(), Some("Ada"));
+    assert_eq!(s.filter().person.as_deref(), Some("Ada"));
     assert_eq!(s.undo.len(), undo + 1);
     assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Rename Person"));
     s.execute("edit.undo", &json!({})).unwrap();

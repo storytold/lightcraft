@@ -15,9 +15,9 @@ fn the_filter_follows_a_rename_whatever_the_case() {
     s.execute("photo.setMeta", &json!({"ids": [id], "keywords": ["ßßa|é"]})).unwrap();
     s.execute("library.filter", &json!({"keyword": "ßßa|é"})).unwrap();
     s.execute("keyword.rename", &json!({"from": "ẞẞA", "to": "Road"})).unwrap();
-    assert_eq!(s.filter.keyword.as_deref(), Some("Road|é"));
+    assert_eq!(s.filter().keyword.as_deref(), Some("Road|é"));
     s.execute("keyword.merge", &json!({"from": ["ROAD"], "into": "Weg"})).unwrap();
-    assert_eq!(s.filter.keyword.as_deref(), Some("Weg|é"));
+    assert_eq!(s.filter().keyword.as_deref(), Some("Weg|é"));
 }
 
 fn temp_dir(tag: &str) -> std::path::PathBuf {
@@ -140,7 +140,7 @@ fn the_filter_follows_a_keyword_moved_into_a_new_parent() {
     s.execute("library.filter", &json!({"keyword": "Rome"})).unwrap();
     s.execute("keyword.move", &json!({"keyword": "rome", "parent": "Italy"})).unwrap();
     assert_eq!(keywords_of(&s, id), ["Italy|Rome"]);
-    assert_eq!(s.filter.keyword.as_deref(), Some("Italy|Rome"));
+    assert_eq!(s.filter().keyword.as_deref(), Some("Italy|Rome"));
 }
 
 /// Keywords given to photos are stored cleaned (" beach " is "beach", "Travel | Italy" is

@@ -315,7 +315,7 @@ fn a_grid_followed_through_edits_shows_what_a_grid_made_afresh_shows() {
             let vis = h.app.session.visible().to_vec();
             if vis.is_empty() {
                 // (no picks shown: back to every photo)
-                h.app.session.filter.flag = None;
+                h.app.session.set_filter(lightcraft_catalog::Filter::default());
                 continue;
             }
             let id = vis[roll(vis.len() as u64) as usize].0;
@@ -371,7 +371,10 @@ fn a_grid_followed_through_edits_shows_what_a_grid_made_afresh_shows() {
                     }
                 }
                 10 => h.app.ui.view = if h.app.ui.view == ViewMode::PhotoGrid { ViewMode::SquareGrid } else { ViewMode::PhotoGrid },
-                _ => h.app.session.filter.flag = n.is_multiple_of(2).then_some(lightcraft_catalog::Flag::Pick),
+                _ => {
+                    let flag = n.is_multiple_of(2).then_some(lightcraft_catalog::Flag::Pick);
+                    h.app.session.set_filter(lightcraft_catalog::Filter { flag, ..Default::default() });
+                }
             }
             h.step();
             assert_as_made_afresh(&mut h, &format!("seed {seed}, after step {step}"));

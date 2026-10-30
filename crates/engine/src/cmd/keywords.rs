@@ -29,15 +29,12 @@ fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, fol
     if photos + listed > 0 {
         s.commit(label, op)?;
     }
-    if let Some(k) = s.filter.keyword.clone() {
-        s.filter.keyword = follow(&k);
-    }
     // a filter put aside by Enable Filters follows the keyword too
-    if let Some(f) = s.shelved_filter.as_mut()
-        && let Some(k) = f.keyword.clone()
-    {
-        f.keyword = follow(&k);
-    }
+    s.filters.follow(|f| {
+        if let Some(k) = f.keyword.clone() {
+            f.keyword = follow(&k);
+        }
+    });
     Ok(json!({"changed": photos, "listed": listed}))
 }
 

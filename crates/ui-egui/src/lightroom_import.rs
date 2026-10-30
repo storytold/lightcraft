@@ -642,12 +642,15 @@ mod tests {
         let mut h = demo();
         let id = h.app.session.catalog.photos().next().unwrap().id.0;
         h.app.session.source = lightcraft_engine::LibrarySource::Picks;
-        h.app.session.filter.text = "no-photo-has-this-name".into();
-        h.app.session.filter.only = vec![lightcraft_catalog::PhotoId(u64::MAX)];
-        h.app.session.filter.labels = vec![lightcraft_catalog::ColorLabel::Red];
-        h.app.session.filter.rule_set = Some(lightcraft_catalog::RuleSet {
-            mode: lightcraft_catalog::rules::Match::All,
-            rules: vec![lightcraft_catalog::rules::Rule::Field { field: "rating".into(), op: "is".into(), value: json!(5) }],
+        h.app.session.set_filter(lightcraft_catalog::Filter {
+            text: "no-photo-has-this-name".into(),
+            only: vec![lightcraft_catalog::PhotoId(u64::MAX)],
+            labels: vec![lightcraft_catalog::ColorLabel::Red],
+            rule_set: Some(lightcraft_catalog::RuleSet {
+                mode: lightcraft_catalog::rules::Match::All,
+                rules: vec![lightcraft_catalog::rules::Rule::Field { field: "rating".into(), op: "is".into(), value: json!(5) }],
+            }),
+            ..Default::default()
         });
         let (task, _tx, _, _) = fake_import(&h);
         let value = json!({"photos": 1, "imported": 1, "collections": 0, "missing": ["D:/Photos/a.NEF"], "mapping": {"1": id}, "library": "C:/Pictures/LightCraft Library"});
@@ -667,7 +670,7 @@ mod tests {
         let dialog = h.app.ui.dialog.clone().unwrap();
         crate::panels::dialogs::confirm_dialog(&mut h.app, &dialog).unwrap();
         assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
-        assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default());
+        assert_eq!(*h.app.session.filter(), lightcraft_catalog::Filter::default());
         assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(id));
         assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
         assert!(!h.app.session.visible().is_empty());

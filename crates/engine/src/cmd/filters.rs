@@ -21,10 +21,10 @@ fn list(s: &Session) -> Value {
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "filter.savePreset";
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?.to_string();
-    if s.filter == Filter::default() {
+    if *s.filter() == Filter::default() {
         return Err(bad(C, "the filter is empty: set some filters first"));
     }
-    let preset = FilterPreset { name: name.clone(), filter: s.filter.clone() };
+    let preset = FilterPreset { name: name.clone(), filter: s.filter().clone() };
     match s.filter_presets.iter_mut().find(|f| f.name.eq_ignore_ascii_case(&name)) {
         Some(f) => *f = preset,
         None => s.filter_presets.push(preset),
@@ -37,9 +37,15 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "filter.applyPreset";
     let name = str_param(p, "name").ok_or_else(|| bad(C, "missing `name`"))?;
     let f = s.filter_presets.iter().find(|f| f.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(C, format!("no filter preset `{name}`")))?;
-    s.filter = f.filter.clone();
-    s.shelved_filter = None;
-    Ok(json!({"photos": s.visible().len()}))
+    let f = f.filter.clone();
+    let skipped = s.set_filter(f);
+    let photos = s.visible().len();
+    // what the source shown owns is left out, and said (a preset made before it was shown holds it)
+    if skipped.is_empty() {
+        Ok(json!({"photos": photos}))
+    } else {
+        Ok(json!({"photos": photos, "skipped": skipped.iter().map(|f| f.name()).collect::<Vec<_>>()}))
+    }
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -66,7 +72,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             save
         ),
-        cmd!("filter.applyPreset", "Apply Filter Preset", [], None, "{name} — replaces the current filter → {photos}", always, apply),
+        cmd!(
+            "filter.applyPreset",
+            "Apply Filter Preset",
+            [],
+            None,
+            "{name} — replaces the current filter; what the source shown owns (an album, the library folder shown, Picks' flag) is left out and named → {photos, skipped?: [album|libraryFolder|flag]}",
+            always,
+            apply
+        ),
         cmd!("filter.deletePreset", "Delete Filter Preset", [], None, "{name}", always, delete),
     ]
 }

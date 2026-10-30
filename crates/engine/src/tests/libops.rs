@@ -67,7 +67,7 @@ fn keyword_rename_merge_delete_undo_and_replay() {
     assert_eq!(r["changed"], 2);
     assert_eq!(s.undo.len(), undo_before + 1, "one undo step");
     assert_eq!(keywords_of(&s, ids[0]), ["Europe|Italy|rome", "sea"]);
-    assert_eq!(s.filter.keyword.as_deref(), Some("Europe|Italy"), "the filter follows the rename");
+    assert_eq!(s.filter().keyword.as_deref(), Some("Europe|Italy"), "the filter follows the rename");
     assert_eq!(s.visible().len(), 2);
     s.execute("keyword.merge", &json!({"from": ["Italia"], "into": "Europe|Italy"})).unwrap();
     assert_eq!(keywords_of(&s, ids[2]), ["Europe|Italy"]);

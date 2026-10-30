@@ -103,7 +103,7 @@ fn rename_person_from_the_card_and_the_page() {
     assert_eq!(h.app.ui.person_page.as_deref(), Some("Ada Lovelace"));
     assert_eq!(h.app.ui.last_person.as_deref(), Some("Ada Lovelace"));
     assert_eq!(h.app.ui.person_from.as_ref().and_then(|(n, _)| n.as_deref()), Some("Ada Lovelace"));
-    assert_eq!(h.app.session.filter.person.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(h.app.session.filter().person.as_deref(), Some("Ada Lovelace"));
     h.app.session.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(stored(&h, ids[0]), vec![Some("Jane Doe".into()), Some("jane doe".into())]);
 }
