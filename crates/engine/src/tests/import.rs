@@ -13,6 +13,9 @@ use crate::Session;
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-import-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
+    // Tests that take a folder "offline" rename it to this sibling; a left-over one (from a run
+    // whose process id is reused) is non-empty and would make that rename fail.
+    let _ = std::fs::remove_dir_all(d.with_extension("offline"));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -1229,6 +1232,9 @@ fn smart_previews_folder_is_chosen_per_library() {
     let r = again.execute("library.smartPreviewsLocation", &json!({"reset": true})).unwrap();
     assert_eq!(r["custom"], false, "{r}");
     assert_eq!(r["path"], lib.join("Smart Previews").to_string_lossy().as_ref());
+    for d in [&lib, &away, &src.with_extension("offline")] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
 
 /// Missing Photos covers library photos only: a small library next to many Local browse

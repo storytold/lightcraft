@@ -121,7 +121,7 @@
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Nhập Lightroom xong: đã thêm {imported} ảnh; cảnh báo chỉ mục: {warning}",
   "Lightroom import failed: {e}{warning}": "Nhập Lightroom thất bại: {e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Kiểm tra Lightroom thất bại: {e}{warning}",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  "Listing folders — folders: {folders}, files: {files}": "Đang liệt kê thư mục — thư mục: {folders}, tệp: {files}",
   "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.": "MIT OR Apache-2.0. Phông: {} (OFL). Biểu tượng: tác phẩm gốc.",
   "Making the denoised picture… {}%": "Đang tạo ảnh đã khử nhiễu… {}%",
   "Matches: {}": "Khớp: {}",
@@ -298,12 +298,12 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more",
   "Added {n} photo{}": "Đã thêm {n} ảnh{:.0}",
   "Could not read {name}: {e}": "Không thể đọc {name}: {e}",
   "Drop to import {n} item{}": "Thả để nhập {n} mục{:.0}",
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "…and {more} more": "…and {more} more"
 }

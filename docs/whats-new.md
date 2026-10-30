@@ -13,6 +13,11 @@
 
 ## 2026-10-24
 
+### The Slideshow settings page stays put while the preview renders
+- In Settings ▸ Slideshow, the line under the slide preview ("The selected photo as a slide…") now shows from the first
+  frame instead of only once the preview has finished rendering. Before, it appeared with the render, pushing the page
+  below it down by a line, so a click made in that moment could land beside the control you aimed at.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
@@ -29,6 +34,14 @@
 - In the Tone Curve's parametric mode the graph is now drawn from the renderer's own curve, so it always matches the
   photo, and the line can be dragged: pressing it picks the region under the pointer (Highlights, Lights, Darks or
   Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
+
+### Big libraries take less memory
+- Photos whose develop settings are equal now hold them once in memory: every unedited JPEG, PNG or other rendered
+  file, every raw on the same import look, and the equal history steps, versions and import looks of one photo. (A
+  raw's unedited Kelvin settings carry its own as-shot white balance, so those share only with raws of the very same
+  white balance.) On a test library of 100,000 photos, 90 % unedited JPEGs, 8 % raws with one as-shot white balance
+  and 2 % edited, a photo takes about 2.8 kB where it took 4.4 kB (285 MB instead of 441 MB). Nothing changes on
+  screen, and the library's files are byte for byte what they were, so earlier versions open them as before.
 
 ## 2026-10-23
 
@@ -167,6 +180,25 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Smart albums open and count faster on large libraries
+- A smart album that tests another smart album and also a file path or other text (for example "in Rejects, and the
+  path contains …") now checks the quick rules first and the slow ones last, so most photos are ruled out before the
+  other album is asked about them. The photos in the album and their order are the same, and the rules still show in
+  the order you wrote them. (A library whose smart albums test each other in a circle, which LightCraft doesn't let
+  you make, or test each other 32 deep, keeps testing the rules as written.) On a 312,000-photo test library, opening
+  one such album went from about 224 ms to about 100 ms, and opening 51 of them in turn from about 19 s to about
+  5.8 s (a busy machine, so rough numbers).
+
+### Listing a folder tree on a network share reads folders side by side
+- Folder walks (the import and Add Photos review, Synchronize Folder, Local's Include Subfolders, Find Missing Photos,
+  preset and LUT folders, and the MCP tools) now read up to eight folders ahead of the walk at the same time, instead
+  of one after another, so a tree with many folders on a network share waits for the share's answers together instead
+  of in a chain. The photos found, their order, the limits on depth and number of entries, how links to folders are
+  followed, and the folders left out are as before. Once the entry limit is reached, the readers take no more folders:
+  the up to eight folders already being read are finished, each listing no more entries than the limit allows. A tree
+  whose folders hold fewer than two subfolders or links is read without starting anything extra. A share that answers
+  one listing at a time gains less than the number of folders read together suggests.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

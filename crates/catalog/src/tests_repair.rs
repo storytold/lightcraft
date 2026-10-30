@@ -218,3 +218,27 @@ fn an_album_filed_under_another_id_gets_its_own() {
     assert_eq!((a.id, a.parent), (inner, Some(folder)));
     assert_eq!(c.album_children(Some(folder)).iter().map(|a| a.id).collect::<Vec<_>>(), vec![inner]);
 }
+
+/// What was worked out from the albums (whether rules may be tested cheapest first) is worked out
+/// again when a repair changes the albums.
+#[test]
+fn a_repair_forgets_what_was_worked_out_from_the_albums() {
+    let (mut c, _) = sound();
+    let smart = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album { smart: Some(Box::default()), ..album(smart.0, None, false, vec![]) } }).unwrap();
+    assert!(!c.keeps_written_order(), "worked out, and remembered");
+    // damaged outside `apply`: the smart album tests itself, and an album is filed under another id
+    let rules: Filter =
+        serde_json::from_value(serde_json::json!({"ruleSet": {"match": "all", "rules": [{"field": "album", "op": "is", "value": smart.0}]}}))
+            .unwrap();
+    if let Some(a) = c.albums.get_mut(&smart) {
+        a.smart = Some(Box::new(rules));
+    }
+    let inner = c.albums().find(|a| !a.folder && a.smart.is_none()).unwrap().id;
+    if let Some(mut a) = c.albums.remove(&inner) {
+        a.id = AlbumId(900);
+        c.albums.insert(inner, a);
+    }
+    assert!(!c.repair().is_empty());
+    assert!(c.keeps_written_order(), "the loop the repair left is seen");
+}
