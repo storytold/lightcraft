@@ -162,6 +162,12 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   (no params: a command that takes photo ids then acts on the selection). Any other text that
   isn't an object rejects the promise and runs nothing, as the control channel and MCP do, so a
   typo can't run a command on the selection. This is how the headless-Chrome checks drive the page.
+  `await lightcraft.request("ui.inspect", {})` calls any method of the control channel
+  (`docs/control-protocol.md`: `engine.execute`, `ui.inspect`, `ui.menu.invoke`, …) and resolves to
+  its result as a JSON value (an object, an array, `null`, …), as VectorCraft's `window.vectorcraft` and PhotoCraft's
+  `window.photocraft` do, so an agent or a host app drives the page with the commands it sends the
+  desktop app. Errors reject with an `Error`, and params that are neither an object nor JSON text
+  (a number, `NaN`, a function) reject without running anything.
 - **The page title names the open photo**: `<file name> — LightCraft`, with ` •` after the name while
   changes are not yet written to browser storage (`LightcraftApp::page_title`). eframe's web runner
   ignores the window title the desktop app sets, and a host that embeds the page reads this title to
@@ -181,7 +187,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   storage until the site's data is cleared; backups larger than 4 GB need zip64, which isn't
   written yet.
 - **Preset files** (import/export `.json`) aren't wired to browser pickers yet.
-- **Control channel / MCP.** These are desktop-only, because they need a TCP socket.
+- **Control channel over TCP / MCP.** These are desktop-only, because they need a TCP socket. In the browser, `lightcraft.request` (above) reaches the same control methods without one.
 - **AVIF export** is untested in the browser; it's the one encoder that may not be wasm-safe.
 - **JPEG XL export** is native only: the encoder (`jixel`) starts threads of its own, which wasm32 has not got; the
   web build reports "not available in this build". JPEG XL import works.
