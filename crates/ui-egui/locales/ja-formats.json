@@ -252,7 +252,6 @@
   "{what} merge cancelled": "{what}合成をキャンセルしました",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "ローカル写真{n}枚をスキップしました{0:.0}：アルバムに入れられるのはライブラリの写真です（先にマイフォトに追加してください）",
   "New Folder in “{name}”": "「{name}」に新規フォルダ",
-  "Moved {} photo(s)": "{} 枚の写真を移動しました",
   "not added to Apple Photos: {e}": "Appleの写真に追加されませんでした：{e}",
   "{n} added to Apple Photos album “{album}”": "{n}件をAppleの写真のアルバム「{album}」に追加しました",
   "{n} added to Apple Photos": "{n}件をAppleの写真に追加しました",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "停止しました: {1}枚中{0}枚を「{2}」に移動しました。編集 → 取り消す で元に戻せます。"
 }

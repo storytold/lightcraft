@@ -123,8 +123,22 @@ pub(crate) struct BatchMoveError {
 /// Move the files `moves` names, all or nothing: after a failure the earlier moves are undone.
 /// Moves that can't be undone (e.g. the network share went away) are reported, not ignored.
 pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::result::Result<(), BatchMoveError> {
+    move_all_with(fs, moves, &mut |_, _| true).map(|_| ())
+}
+
+/// [`move_all`], asking `go_on(k, move)` before each move (`k` moved so far): `false` stops there,
+/// keeping the `k` files already moved where they are now. How many moved: all of `moves` unless
+/// stopped. A failure still undoes every earlier move, as in [`move_all`].
+pub(crate) fn move_all_with(
+    fs: &dyn MoveFs,
+    moves: &[(String, String)],
+    go_on: &mut dyn FnMut(usize, &(String, String)) -> bool,
+) -> std::result::Result<usize, BatchMoveError> {
     let mut done: Vec<&(String, String)> = Vec::new();
     for m in moves {
+        if !go_on(done.len(), m) {
+            return Ok(done.len());
+        }
         let Err(e) = move_file_with(fs, &m.0, &m.1) else {
             done.push(m);
             continue;
@@ -146,7 +160,7 @@ pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::resu
         }
         return Err(BatchMoveError { message, stuck, pending_sidecars });
     }
-    Ok(())
+    Ok(done.len())
 }
 
 /// Final `SetFile` per photo (nested batches included), filtered by destination only afterward.

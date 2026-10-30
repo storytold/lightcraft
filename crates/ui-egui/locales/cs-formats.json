@@ -104,7 +104,6 @@
   "Matches: {}": "Shody: {}",
   "Merging… {stage} {:.0}%": "Slučování… {stage} {:.0}%",
   "Move {what} to Recently Deleted?": "Přesunout {what} do nedávno odstraněných?",
-  "Moved {} photo(s)": "Přesunuto fotografií: {}",
   "Moved; {} photo(s) relinked": "Přesunuto; znovu propojeno fotografií: {}",
   "Named ({named_n})": "Pojmenované ({named_n})",
   "New Folder in “{name}”": "Nová složka v „{name}“",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "Zastaveno: do „{2}“ přesunuto {0} z {1} fotografií. Úpravy → Zpět je vrátí."
 }

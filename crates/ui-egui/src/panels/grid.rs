@@ -1390,17 +1390,16 @@ fn context_menu_file_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let can_pick = app.services.pick_folder.is_some() || app.services.picker.is_some();
     if can_pick && ui.button(crate::i18n::tr("Move to Folder…")).clicked() {
         // the folder dialog goes through the shared picker (off the UI thread where the host has
-        // one: then photo.moveToFolder runs when it closes)
+        // one: then photo.moveToFolder runs when it closes); the move itself runs in the background
         let req = crate::pick::PickRequest::folder(crate::i18n::tr("Move to Folder…"));
-        let picked =
-            crate::pick::ask(app, "photo.moveToFolder", &json!({}), "folder", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x]));
+        let picked = crate::pick::ask(app, "photo.moveToFolder", &json!({"background": true}), "folder", req, |s| {
+            s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
+        });
         if let crate::pick::Picked::Now(v) = picked
             && let Some(into) = v.into_iter().next()
         {
-            match app.run("photo.moveToFolder", json!({"folder": into})) {
-                Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
-                Err(e) => app.toast(ui.ctx(), e),
-            }
+            // (a refusal is told in a toast by `start`)
+            let _ = crate::move_task::start(app, ui.ctx(), &json!({"folder": into}));
         }
     }
     if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {

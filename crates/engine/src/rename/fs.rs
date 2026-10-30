@@ -220,7 +220,7 @@ pub(super) fn is_respelling(fs: &dyn MoveFs, from: &Path, to: &Path) -> bool {
 }
 
 /// Windows accepts both separators; spelling differences must not hide file identity.
-pub(super) fn folded_path(path: &str) -> String {
+pub(crate) fn folded_path(path: &str) -> String {
     if cfg!(windows) { path.replace('\\', "/").to_lowercase() } else { path.to_lowercase() }
 }
 

@@ -248,7 +248,6 @@
   "{what} merge cancelled": "Об’єднання {what} скасовано",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальних фото: {n}{0:.0} — в альбомах лише фото з бібліотеки (спершу додайте їх до моїх фото)",
   "New Folder in “{name}”": "Нова тека в «{name}»",
-  "Moved {} photo(s)": "Переміщено фото: {}",
   "not added to Apple Photos: {e}": "не додано до Apple Фото: {e}",
   "{n} added to Apple Photos album “{album}”": "Додано до альбому Apple Фото «{album}»: {n}",
   "{n} added to Apple Photos": "Додано до Apple Фото: {n}",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "Зупинено: до «{2}» переміщено {0} з {1} фото. Редагування → Скасувати поверне їх."
 }

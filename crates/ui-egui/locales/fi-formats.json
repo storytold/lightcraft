@@ -130,7 +130,6 @@
   "Move {n} photo{} to “{}”?": "Siirretäänkö kuvat kohteeseen ”{1}” ({n}){0:.0}?",
   "Move {what} to Recently Deleted?": "Siirretäänkö {what} Äskettäin poistettuihin?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Siirretty kuvia kohteeseen ”{1}”: {n}{0:.0}. Muokkaa → Kumoa siirtää ne takaisin.",
-  "Moved {} photo(s)": "Siirretty kuvia: {}",
   "Moved; {} photo(s) relinked": "Siirretty; yhdistetty uudelleen kuvia: {}",
   "Named ({named_n})": "Nimetyt ({named_n})",
   "New Folder in “{name}”": "Uusi kansio kohteessa ”{name}”",
@@ -305,5 +304,6 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "Pysäytetty: siirretty {0} / {1} kuvaa kohteeseen ”{2}”. Muokkaa → Kumoa siirtää ne takaisin."
 }

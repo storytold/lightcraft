@@ -240,7 +240,6 @@
   "{what} merge cancelled": "Unione {what} annullata",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Foto locali saltate: {n}{0:.0}; gli album contengono foto della libreria (prima aggiungile a Le mie foto)",
   "New Folder in “{name}”": "Nuova cartella in “{name}”",
-  "Moved {} photo(s)": "Foto spostate: {}",
   "not added to Apple Photos: {e}": "non aggiunte a Foto di Apple: {e}",
   "{n} added to Apple Photos album “{album}”": "Aggiunte all'album “{album}” di Foto di Apple: {n}",
   "{n} added to Apple Photos": "Aggiunte a Foto di Apple: {n}",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "Interrotto: {0} di {1} foto spostate in “{2}”. Modifica → Annulla le riporta indietro."
 }

@@ -32,7 +32,7 @@ guard.detail(&file_name);
   `SyncRun`…), or move it into the worker thread. Dropping it removes the row, also when the worker panics, so a
   dead job never leaves a stuck bar. A worker that only reports progress takes a `TaskHandle` (`guard.handle()`,
   `Clone + Send`).
-- **`kind`** is a stable camelCase id that agents filter by (`export`, `import`, `scan`, `sync`, `previews`,
+- **`kind`** is a stable camelCase id that agents filter by (`export`, `import`, `scan`, `sync`, `move`, `previews`,
   `download`, `faces`, `cache`, `focus`…). **`label`** is a short English name in sentence case ("Building previews"). The stack shows it
   translated, so add it to every catalog in `crates/ui-egui/locales/`.
 - **Progress:** `progress(done, total)`. A `total` of 0 means the amount of work isn't known yet, and the bar sweeps.
@@ -46,6 +46,9 @@ guard.detail(&file_name);
   - `Cancel::Yes`: the job polls `guard.is_cancelled()` itself.
   - `Cancel::No`: the job can't stop; it gets no ✕ and doesn't make Quit ask.
   - `set_cancellable(false)` for a phase that has to finish once started (a Lightroom import adding its photos).
+- **Quit** doesn't ask about a task that ✕ has already stopped ("Stopping…"). The one exception is the move to another
+  folder: it is still finishing the file in hand and quitting cuts it short, so Quit asks until it ends
+  (`crates/ui-egui/src/panels/notices.rs`, `may_close`).
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
@@ -62,6 +65,7 @@ guard.detail(&file_name);
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
+| Moving photos to another folder | `crates/engine/src/move_job.rs`, `crates/ui-egui/src/move_task.rs` | split a job into a session half (plan, row, finish) and a `Send` worker half; `Cancel::Yes` checked between files, keeping what is done; the library follows the files once the worker is done; hold back conflicting commands while it runs |
 
 ## Testing
 

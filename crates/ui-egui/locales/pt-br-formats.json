@@ -252,7 +252,6 @@
   "{what} merge cancelled": "{what} mesclagem cancelada",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Fotos locais ignoradas: {n}{0:.0} — álbuns contêm fotos da biblioteca (adicione-as às Minhas fotos primeiro)",
   "New Folder in “{name}”": "Nova pasta em “{name}”",
-  "Moved {} photo(s)": "{} foto(s) movida(s)",
   "not added to Apple Photos: {e}": "não adicionadas ao Fotos da Apple: {e}",
   "{n} added to Apple Photos album “{album}”": "{n} adicionadas ao álbum “{album}” do Fotos da Apple",
   "{n} added to Apple Photos": "{n} adicionadas ao Fotos da Apple",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "Interrompido: {0} de {1} fotos movidas para “{2}”. Editar → Desfazer as traz de volta."
 }

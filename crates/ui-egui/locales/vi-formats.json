@@ -130,7 +130,6 @@
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
   "Move {what} to Recently Deleted?": "Chuyển {what} vào Đã xóa gần đây?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
-  "Moved {} photo(s)": "Đã di chuyển {} ảnh",
   "Moved; {} photo(s) relinked": "Đã di chuyển; liên kết lại {} ảnh",
   "Named ({named_n})": "Có tên ({named_n})",
   "New Folder in “{name}”": "Thư mục mới trong «{name}»",
@@ -305,5 +304,6 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Stopped: moved {} of {} photos to “{}”. Edit → Undo moves them back.": "Đã dừng: đã di chuyển {0} trên {1} ảnh đến «{2}». Chỉnh sửa → Hoàn tác sẽ đưa chúng trở lại."
 }
