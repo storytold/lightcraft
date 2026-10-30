@@ -4,7 +4,7 @@ use super::{LightcraftApp, RichText, Tokens, json, register};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
-    heading(ui, t, crate::i18n::tr("Raw defaults"));
+    heading(ui, t, "Raw defaults");
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsRawPreset", crate::i18n::tr("Raw default"), d.raw_preset.as_deref(), "LightCraft Default") {
@@ -65,13 +65,13 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
-    heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
+    heading(ui, t, "Other images (JPEG, PNG, TIFF, HEIC…)");
     row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {
             let _ = app.run("library.preferences", json!({"import": {"otherPreset": v}}));
         }
     });
-    heading(ui, t, crate::i18n::tr("Metadata"));
+    heading(ui, t, "Metadata");
     hint(ui, t, crate::i18n::tr("Added to photos you import that don't already have it."));
     for (key, label, hint_text, value) in
         [("copyright", "Copyright", "© 2026 Your Name", d.copyright.clone()), ("creator", "Creator", "Your Name", d.creator.clone())]
@@ -115,11 +115,16 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
-    heading(ui, t, crate::i18n::tr("XMP sidecars"));
+    heading(ui, t, "XMP sidecars");
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
     }
+    hint(
+        ui,
+        t,
+        "On, supported changes to a photo's edits or metadata are written to an XMP file beside the photo automatically when possible, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.",
+    );
     row(ui, t, crate::i18n::tr("Sidecar names"), |ui| {
         use lightcraft_engine::sidecar::SidecarNaming as N;
         let mut n = xmp.naming;
@@ -129,14 +134,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         }
     });
     if !cfg!(target_arch = "wasm32") {
-        heading(ui, t, crate::i18n::tr("Dropped Files"));
+        heading(ui, t, "Dropped Files");
         check(ui, "settings.importDropped", &mut app.ui.settings.import_dropped_directly, "Import dropped files without review");
-        heading(ui, t, crate::i18n::tr("Cameras and Cards"));
+        heading(ui, t, "Cameras and Cards");
         let mut on_card = d.show_on_card;
         if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected") {
             let _ = app.run("library.preferences", json!({"import": {"showOnCard": on_card}}));
         }
-        heading(ui, t, crate::i18n::tr("Auto Import"));
+        heading(ui, t, "Auto Import");
         hint(ui, t, crate::i18n::tr("Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete."));
         row(ui, t, crate::i18n::tr("Watched folder"), |ui| {
             match &d.auto_folder {

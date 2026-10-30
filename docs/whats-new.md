@@ -2,6 +2,39 @@
 
 ## 2026-10-24
 
+### Settings has a filter that finds a section on whatever tab it is
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first, or ↓
+  to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The choices of a
+  closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, `settingsFound:<tab>:<section>`
+  for each section found, and `heading:<its English name>` for where a section starts, whatever the interface
+  language.
+- The filter of Settings finds more of what is typed and puts the best first. It is ready to type in when Settings
+  opens. Either spelling of a word finds the other (color, colour), also while it is being typed, and some words a
+  section does not say itself find it ("trash" for Culling, "scheme" for Appearance; in English). A section or tab
+  named for the word comes first, then one with it in a label, choice or button, then one that mentions it in an
+  explanation, so Return opens the best match and not the first tab that has the word. The line under a result
+  starts shortly before the word it was found by, and the letters found stand on a fill with a line under them
+  (the line of text is one piece, so a word keeps its kerning when the letters found are in its middle). The
+  folders shown in Settings (the library's, a cache's) and its text boxes (what is typed into one, or what an empty
+  one says) are not looked through. The heading of the section opened is marked for a moment. Scripts:
+  `settingsLanded:<section>` while it is.
+
+### Settings tabs look like tabs, and the keyboard focus shows
+- The tabs of Settings look like tabs: names on the window with a line under the open one, no longer the same
+  buttons as the choices under them (on General the languages read as a second row of tabs). In Settings a chosen
+  option is outlined as well as filled, so it stands out in every theme. Screen readers are told a choice in
+  Settings is a radio button, and the tab bar is a list of tabs, each a tab that says whether it is the open one
+  and that opens the page under it.
+- Settings by keyboard is a short way. Tab stops once at the tab bar (at the open tab) and once at each row of
+  choices (at the one that holds), and the arrow keys move inside: → ↓ to the next, ← ↑ to the one before, Home and
+  End to the ends, Space or Return to open or choose. An arrow held with ⌘, ⇧, ⌥ or ⌃ is left alone.
+- Whatever has the keyboard focus is ringed 2 pt in the text colour: tabs, choices, checkboxes, buttons, closed
+  lists, radio buttons and text boxes. A click leaves no ring. Every text button in LightCraft shows the same ring
+  when Tab reaches it, the Edit panel's Auto, B&W, HDR and Reset among them. The star
+  that makes a theme a favourite is a Tab stop for every theme, not only for one that is a favourite already.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
@@ -20,6 +53,35 @@
   Shadows) and moving up or down changes that slider, as one undo step. Hovering the line names the region first.
 
 ## 2026-10-23
+
+### Settings text can be read in more themes
+
+- What Settings says can be read in more themes. Its explanations, the text a box shows while it is empty, "In Use"
+  on a theme's card and the warnings and refusals on the AI Denoise and Faces tabs now stand at least 4.5:1 against
+  what they are on (the explanations were 4.2:1 in Charcoal and 4.3:1 in Silver, "In Use" 2.9:1 in Charcoal); the
+  borders of text boxes, checkboxes, radio buttons, buttons, the tabs, the rows of choices and the line under the
+  tabs stand 3:1, where they were 1.2 to 1.7:1; so do the buttons of a question a button asks. The AI Denoise and
+  Faces tabs' own lines, the GPU line under Rendering and the star that marks a favorite theme are read the same way.
+  The warnings and group labels on the Slideshow tab, the dialogs that add a face model and the colors of the rest of
+  LightCraft are as they were, but for the Info row's choices in View Options, which are outlined the same way.
+- The hint under External Editing drew two empty boxes where its menu path had arrows; it reads "Photo > Edit In >
+  Edit in PhotoCraft" now.
+- Photo ▸ Edit In, Edit in PhotoCraft and Edit in Other Editor have names in all seventeen languages, the ones the
+  hint under External Editing gives.
+- Sentences and names in Settings that some languages had no word for (External Editing and its hints, the
+  Monitor tab, the model installation messages) are in every language now. "(library default)" and "starting…" are
+  translated too.
+
+### Settings asks before it does what can't be taken back
+- Settings asks before it does what is slow or impossible to take back. Clear Cache says that thumbnails and
+  previews are made again as you browse. The prompt for removing a model says that the model's file is deleted.
+  Each prompt opens under its button with the action and a Keep button. Keep has the focus, so Return alone changes
+  nothing; Esc or a click elsewhere answers no.
+- Changing the smart previews folder with "Delete them" chosen no longer deletes at the press of Choose Folder: with
+  the new folder chosen, it says how many smart previews would go and what they are for, and waits for Delete and
+  Change Folder or Cancel. The choice goes back to "Move them" afterwards, and neither it nor the question is
+  left standing when Settings is closed or another library is opened.
+- Automatically write changes into XMP sidecars says what is written where.
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the

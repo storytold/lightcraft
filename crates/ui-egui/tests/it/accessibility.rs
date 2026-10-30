@@ -3,7 +3,10 @@
 //! node with no name, a slider without its value and range, or a canvas tool no key can reach.
 use egui::accesskit::Role;
 use egui::vec2;
-use egui_kittest::{Harness, kittest::NodeT};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use lightcraft_ui_egui::{
     LightcraftApp, Services,
     state::{RightPanel, ViewMode},
@@ -248,4 +251,96 @@ fn tab_walks_the_right_panels_top_to_bottom() {
             assert!(w[1].1 >= w[0].1 - 30.0, "{right:?}: Tab jumps up from {:?} to {:?}\n{seen:?}", w[0], w[1]);
         }
     }
+}
+
+/// Settings' filter reads every tab by drawing it in a context of its own. That reading leaves the
+/// window's tree as it was: one Settings window, no interactive node left unnamed by it, and what was found
+/// listed as the window's own widgets.
+#[test]
+fn the_settings_filter_reads_the_tabs_without_touching_the_tree() {
+    let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
+    // (the External Editor tab's text has a "▸" the fonts lack: drawn as a box here, as in the app,
+    // not a panic as the kittest harness has it by default)
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    h.state_mut().run("app.settings", serde_json::json!({"tab": "general"})).unwrap();
+    h.run_steps(8);
+    let windows =
+        |h: &Harness<'_, LightcraftApp>| h.root().children_recursive().map(|n| n.accesskit_node()).filter(|n| n.role() == Role::Window).count();
+    let before = windows(&h);
+    // (what Settings leaves unnamed of its own is not this test's: the filter adds none to it)
+    let unnamed = |h: &Harness<'_, LightcraftApp>| audit(h, "settings").len();
+    let unnamed_before = unnamed(&h);
+    let filter = h.get_by_label("Filter settings");
+    filter.click();
+    h.run_steps(2);
+    h.get_by_label("Filter settings").type_text("cache");
+    h.run_steps(8);
+    assert!(h.state().widgets.iter().any(|(id, _)| id.starts_with("settingsFound:")), "the filter lists what it found");
+    assert_eq!(windows(&h), before, "reading the tabs adds no window to the tree");
+    assert!(unnamed(&h) <= unnamed_before, "the filter and what it found are named: {} unnamed, {unnamed_before} before", unnamed(&h));
+}
+
+/// What a screen reader is told about the Settings tab strip: a tab list holding one tab per
+/// section, the open one selected, and the open tab controlling the page under it. VoiceOver
+/// read the tabs as check boxes (a button with a toggled state) before.
+#[test]
+fn the_settings_tab_strip_is_a_tab_list_of_tabs_that_control_their_page() {
+    let tabs = lightcraft_ui_egui::panels::settings::TABS;
+    let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
+    h.state_mut().run("app.settings", serde_json::json!({"tab": "slideshow"})).expect("Settings opens");
+    h.run_steps(8);
+    let nodes: Vec<_> = h.root().children_recursive().map(|n| n.accesskit_node()).collect();
+    // each node with its ancestors (id, role), nearest first
+    let with_ancestors: Vec<_> = nodes
+        .iter()
+        .map(|n| {
+            let mut up = n.parent();
+            let mut chain = Vec::new();
+            while let Some(p) = up {
+                chain.push((p.id(), p.role()));
+                up = p.parent();
+            }
+            (n, chain)
+        })
+        .collect();
+    let lists: Vec<_> = nodes.iter().filter(|n| n.role() == Role::TabList).collect();
+    assert_eq!(lists.len(), 1, "one tab list: {:?}", lists.iter().map(|n| n.label()).collect::<Vec<_>>());
+    let list = lists[0];
+    assert!(list.label().is_some_and(|l| !l.trim().is_empty()), "the tab list has a name");
+    // one tab per section, in order, each under the list through nothing but plain containers
+    // (macOS lists the tabs from the list's children, looking through those alone)
+    let found: Vec<_> = with_ancestors
+        .iter()
+        .filter(|(n, chain)| {
+            n.role() == Role::Tab
+                && chain.iter().position(|(id, _)| *id == list.id()).is_some_and(|at| chain[..at].iter().all(|(_, r)| *r == Role::GenericContainer))
+        })
+        .map(|(n, _)| n)
+        .collect();
+    let names: Vec<String> = found.iter().map(|n| n.label().unwrap_or_default()).collect();
+    let want: Vec<String> = tabs.iter().map(|(_, l)| lightcraft_ui_egui::i18n::tr(l).to_string()).collect();
+    assert_eq!(names, want, "one tab per section");
+    // the open one, and only it, is selected, and it is no toggle (a check box to VoiceOver)
+    for (tab, (id, _)) in found.iter().zip(tabs) {
+        assert_eq!(tab.is_selected(), Some(*id == "slideshow"), "{:?} selected", tab.label());
+        assert!(tab.toggled().is_none(), "{:?} is no toggle", tab.label());
+    }
+    // the open tab, and no other, controls a tab panel named for it
+    let open = found[tabs.iter().position(|(id, _)| *id == "slideshow").expect("a Slideshow tab")];
+    let panel: Vec<_> = open.controls().collect();
+    assert_eq!(panel.len(), 1, "the open tab controls its page");
+    assert_eq!(panel[0].role(), Role::TabPanel);
+    assert_eq!(panel[0].label(), open.label());
+    assert!(found.iter().filter(|t| t.controls().next().is_some()).count() == 1, "only the open tab controls a page");
+    // the page is in the panel: its controls, and Slideshow's slide preview pinned above them
+    let in_panel = |name: &str| {
+        with_ancestors
+            .iter()
+            .any(|(n, chain)| n.label().as_deref() == Some(name) && n.role() != Role::TabPanel && chain.iter().any(|(id, _)| *id == panel[0].id()))
+    };
+    assert!(in_panel("Intro"), "the preview's Photo / Intro / Ending choice is in the page's panel");
+    assert!(
+        with_ancestors.iter().filter(|(n, chain)| n.role() == Role::CheckBox && chain.iter().any(|(id, _)| *id == panel[0].id())).count() > 0,
+        "the page's own controls are in the panel"
+    );
 }
