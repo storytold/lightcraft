@@ -153,10 +153,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     let job = move || {
         let _ = tx.send(ScanEnd::Done(scan_with(input, &paths, &p)));
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("lc-import-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
-    #[cfg(target_arch = "wasm32")]
-    job();
+    crate::tasks::worker("lc-import-scan", job)?;
     let guard = scan_guard(app, &progress, false);
     app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard, resolved: None });
     Ok(json!({"scanning": true}))
@@ -186,12 +183,6 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         app.session.keep_active_in_view();
         return Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}));
     }
-    stop_scan(app);
-    app.import = None;
-    app.session.browse = Some(lightcraft_engine::Browse { path: dir_s.clone(), subfolders });
-    app.session.source = lightcraft_engine::LibrarySource::Folder;
-    // the photos the library already knows from this folder show at once: keep or pick the active one
-    app.session.keep_active_in_view();
     let (mut input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
@@ -241,14 +232,14 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         // the probes of earlier scans go back to the session with the result, for the import that follows
         let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput { candidates, probes: input.take_probes() }));
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("lc-browse-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
-    // the job takes the probes back out of `input`, so it is an FnMut where it runs in place
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut job = job;
-        job();
-    }
+    // started before anything changes: a worker that can't start leaves the view as it was
+    crate::tasks::worker("lc-browse-scan", job)?;
+    stop_scan(app);
+    app.import = None;
+    app.session.browse = Some(lightcraft_engine::Browse { path: dir_s.clone(), subfolders });
+    app.session.source = lightcraft_engine::LibrarySource::Folder;
+    // the photos the library already knows from this folder show at once: keep or pick the active one
+    app.session.keep_active_in_view();
     let guard = scan_guard(app, &progress, true);
     app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard, resolved: Some(resolved) });
     app.renderer.forget_imports();

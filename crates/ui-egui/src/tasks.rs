@@ -96,6 +96,27 @@ fn start<T: Send + 'static>(
     Ok(())
 }
 
+/// Start `job` on a worker thread called `name` (`lc-…`: a thread dump tells it from the others);
+/// in the browser build, which has no threads, run it at once. `Err` when the thread can't start
+/// (the system is out of threads or memory): `job` is dropped unrun, so a caller starts its
+/// worker before it changes any state the worker's result would go with.
+pub(crate) fn worker(name: &str, job: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    #[cfg(test)]
+    if refused::take() {
+        return Err("could not start: refused by the test".into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::Builder::new().name(name.into()).spawn(job).map(drop).map_err(|e| format!("could not start: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = name;
+        job();
+        Ok(())
+    }
+}
+
 /// Apply finished tasks (called every frame).
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
@@ -166,5 +187,28 @@ pub fn wait_for(app: &mut LightcraftApp, ctx: &egui::Context, label: &str, timeo
         let _ = timeout;
         poll(app, ctx);
         !app.tasks.is_running(label)
+    }
+}
+
+/// Tests make [`worker`] fail as when the system can't start a thread.
+#[cfg(test)]
+pub(crate) mod refused {
+    use std::cell::Cell;
+
+    thread_local! {
+        static NEXT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// The next `n` workers started from this thread fail to start.
+    pub(crate) fn next(n: usize) {
+        NEXT.with(|c| c.set(n));
+    }
+
+    pub(super) fn take() -> bool {
+        NEXT.with(|c| {
+            let n = c.get();
+            c.set(n.saturating_sub(1));
+            n > 0
+        })
     }
 }

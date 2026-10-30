@@ -54,10 +54,7 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
     let job = move || {
         let _ = tx.send(scan_with(input, &p));
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("lc-sync-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
-    #[cfg(target_arch = "wasm32")]
-    job();
+    crate::tasks::worker("lc-sync-scan", job)?;
     let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
     app.sync = Some(SyncTask { path: path.to_string(), name: name.to_string(), progress, rx, guard });
@@ -222,8 +219,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
 /// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
-    let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg
-    else {
+    let Dialog::SynchronizeFolder { path, name, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg else {
         return Err("the folder is still being scanned".into());
     };
     // (before the busy checks: nothing is imported or written, so a running import or
@@ -247,16 +243,7 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     };
     let (work, commit) = match started {
         Ok(halves) => halves,
-        Err(e) => {
-            // look again, in the background, keeping what was ticked
-            if open(app, path, name, *disk).is_ok()
-                && let Some(Dialog::SynchronizeFolder { import_new: i, relink_moved: l, remove_missing: m, read_metadata: x, .. }) =
-                    &mut app.ui.dialog
-            {
-                (*i, *l, *m, *x) = (*import_new, *relink_moved, *remove_missing, *read_metadata);
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(scan_again(app, dlg, e)),
     };
     let progress = Arc::new(SyncProgress::default());
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -269,14 +256,26 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
             c.store(true, Ordering::Relaxed);
         }
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("lc-sync".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
-    #[cfg(target_arch = "wasm32")]
-    job();
+    if let Err(e) = crate::tasks::worker("lc-sync", job) {
+        // the scan went with the job that didn't start
+        return Err(scan_again(app, dlg, e));
+    }
     let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
     app.sync_run = Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new(), guard });
     Ok(json!({"started": true}))
+}
+
+/// The dialog's scan can't be used (gone stale, or handed to a worker that didn't start): look
+/// again, in the background, keeping what was ticked. Returns `why`, for the caller to report.
+fn scan_again(app: &mut LightcraftApp, dlg: &Dialog, why: String) -> String {
+    let Dialog::SynchronizeFolder { path, name, disk, import_new, relink_moved, remove_missing, read_metadata, .. } = dlg else { return why };
+    if open(app, path, name, *disk).is_ok()
+        && let Some(Dialog::SynchronizeFolder { import_new: i, relink_moved: l, remove_missing: m, read_metadata: x, .. }) = &mut app.ui.dialog
+    {
+        (*i, *l, *m, *x) = (*import_new, *relink_moved, *remove_missing, *read_metadata);
+    }
+    why
 }
 
 /// A synchronize at work: the file-system half on a worker thread, its steps committed here

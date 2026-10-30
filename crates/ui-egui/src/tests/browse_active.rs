@@ -93,3 +93,26 @@ fn choosing_an_album_keeps_or_picks_the_active_photo() {
     exec(&mut h, "library.source", json!({"kind": "album", "id": album.0}));
     assert_eq!(active(&h), Some(vis[1]));
 }
+
+/// A Local folder whose reading thread can't start (the system is out of threads) is an error that
+/// leaves the view as it was: the source, the folder and the photos shown (#3071). The next try
+/// works.
+#[test]
+fn a_browse_whose_worker_cannot_start_leaves_the_view_as_it_was() {
+    let mut h = demo();
+    h.settle(SETTLE);
+    let dir = folder("browse-refused", 2);
+    let before = (h.app.session.source, h.app.session.browse.clone(), h.app.session.visible_cloned());
+    assert_ne!(before.0, lightcraft_engine::LibrarySource::Folder);
+    crate::tasks::refused::next(1);
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r.to_string().contains("could not start"), "{r}");
+    h.settle(SETTLE);
+    assert_eq!((h.app.session.source, h.app.session.browse.clone(), h.app.session.visible_cloned()), before);
+    assert!(h.app.scan.is_none());
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Folder);
+    assert_eq!(h.app.session.visible_cloned().len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
