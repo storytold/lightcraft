@@ -4,7 +4,8 @@
 
 use std::path::Path;
 
-use lightcraft_develop::Preset;
+use lightcraft_catalog::PhotoId;
+use lightcraft_develop::{DevelopSettings, Preset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -171,6 +172,29 @@ pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
 }
 
 impl Session {
+    /// The settings after applying `preset` to photo `id` at `amount`. The settings the preset
+    /// names are computed on the photo's import state ([`lightcraft_catalog::Photo::import_defaults`])
+    /// when a default preset recorded one (`import_look`); a photo without one (its settings came
+    /// from an XMP sidecar or a catalog import, which record none) composes them on its current
+    /// settings instead, since the camera defaults are not its import state. Either way, the
+    /// settings the preset does not name keep the photo's values (issue #2159). The `preset.apply`
+    /// command and the UI's hover previews share this, so hovering shows exactly what a click commits.
+    pub fn preset_applied(&self, id: PhotoId, preset: &Preset, amount: f64) -> Option<DevelopSettings> {
+        let current = self.develop_of(id)?;
+        let photo = self.catalog.photo(id)?;
+        // The original is read only below 100 %: the panel asks for every visible row at 100 % on
+        // every frame, and then neither the import state nor a copy of the photo's settings is built.
+        let look;
+        let original: &DevelopSettings = match &photo.import_look {
+            Some(_) if (amount - 1.0).abs() >= 1e-9 => {
+                look = photo.import_defaults();
+                &look
+            }
+            _ => &current,
+        };
+        Some(preset.apply_on(&current, original, amount))
+    }
+
     /// Add imported presets. Identical presets (same name, group and settings) already present are
     /// skipped; id clashes get a fresh id. Returns the ids added.
     pub fn add_presets(&mut self, presets: Vec<Preset>) -> Vec<String> {
@@ -218,49 +242,49 @@ pub fn builtin() -> Vec<Preset> {
             "Color",
             "warm-glow",
             "Warm Glow",
-            json!({"wb": {"mode": "custom", "temp": 7200.0, "tint": 8.0}, "light": {"contrast": 8.0, "shadows": 12.0}, "color": {"vibrance": 18.0}}),
+            json!({"treatment": "color", "wb": {"mode": "custom", "temp": 7200.0, "tint": 8.0}, "light": {"contrast": 8.0, "shadows": 12.0}, "color": {"vibrance": 18.0}}),
         ),
         p(
             "Color",
             "cool-morning",
             "Cool Morning",
-            json!({"wb": {"mode": "custom", "temp": 5600.0, "tint": -4.0}, "light": {"highlights": -20.0}, "color": {"vibrance": 10.0}, "grading": {"shadows": {"hue": 215.0, "sat": 12.0, "lum": 0.0}}}),
+            json!({"treatment": "color", "wb": {"mode": "custom", "temp": 5600.0, "tint": -4.0}, "light": {"highlights": -20.0}, "color": {"vibrance": 10.0}, "grading": {"shadows": {"hue": 215.0, "sat": 12.0, "lum": 0.0}}}),
         ),
         p(
             "Color",
             "teal-orange",
             "Teal & Orange",
-            json!({"grading": {"shadows": {"hue": 195.0, "sat": 28.0, "lum": 0.0}, "highlights": {"hue": 35.0, "sat": 22.0, "lum": 0.0}, "balance": 10.0}, "color": {"vibrance": 12.0}, "light": {"contrast": 14.0}}),
+            json!({"treatment": "color", "grading": {"shadows": {"hue": 195.0, "sat": 28.0, "lum": 0.0}, "highlights": {"hue": 35.0, "sat": 22.0, "lum": 0.0}, "balance": 10.0}, "color": {"vibrance": 12.0}, "light": {"contrast": 14.0}}),
         ),
         p(
             "Color",
             "vivid-pop",
             "Vivid Pop",
-            json!({"color": {"vibrance": 40.0, "saturation": 8.0}, "light": {"contrast": 18.0, "whites": 10.0, "blacks": -10.0}, "effects": {"clarity": 12.0}}),
+            json!({"treatment": "color", "color": {"vibrance": 40.0, "saturation": 8.0}, "light": {"contrast": 18.0, "whites": 10.0, "blacks": -10.0}, "effects": {"clarity": 12.0}}),
         ),
         p(
             "Color",
             "soft-pastel",
             "Soft Pastel",
-            json!({"light": {"contrast": -25.0, "highlights": -30.0, "shadows": 35.0, "blacks": 20.0}, "color": {"saturation": -18.0, "vibrance": 10.0}, "curve": {"shadows": 25.0}}),
+            json!({"treatment": "color", "light": {"contrast": -25.0, "highlights": -30.0, "shadows": 35.0, "blacks": 20.0}, "color": {"saturation": -18.0, "vibrance": 10.0}, "curve": {"shadows": 25.0}}),
         ),
         p(
             "Film",
             "faded-matte",
             "Faded Matte",
-            json!({"curve": {"shadows": 40.0, "highlights": -15.0}, "light": {"contrast": -10.0}, "color": {"saturation": -12.0}, "grain": {"amount": 18.0, "size": 25.0, "roughness": 50.0}}),
+            json!({"treatment": "color", "curve": {"shadows": 40.0, "highlights": -15.0}, "light": {"contrast": -10.0}, "color": {"saturation": -12.0}, "grain": {"amount": 18.0, "size": 25.0, "roughness": 50.0}}),
         ),
         p(
             "Film",
             "warm-film",
             "Warm Film",
-            json!({"wb": {"mode": "custom", "temp": 6900.0, "tint": 5.0}, "curve": {"shadows": 22.0}, "grading": {"highlights": {"hue": 45.0, "sat": 15.0, "lum": 0.0}}, "grain": {"amount": 22.0, "size": 30.0, "roughness": 55.0}, "vignette": {"amount": -12.0}}),
+            json!({"treatment": "color", "wb": {"mode": "custom", "temp": 6900.0, "tint": 5.0}, "curve": {"shadows": 22.0}, "grading": {"highlights": {"hue": 45.0, "sat": 15.0, "lum": 0.0}}, "grain": {"amount": 22.0, "size": 30.0, "roughness": 55.0}, "vignette": {"amount": -12.0}}),
         ),
         p(
             "Film",
             "muted-film",
             "Muted Film",
-            json!({"color": {"saturation": -25.0, "vibrance": 5.0}, "light": {"contrast": 10.0}, "curve": {"shadows": 18.0}, "grain": {"amount": 15.0}}),
+            json!({"treatment": "color", "color": {"saturation": -25.0, "vibrance": 5.0}, "light": {"contrast": 10.0}, "curve": {"shadows": 18.0}, "grain": {"amount": 15.0}}),
         ),
         p(
             "B&W",
@@ -279,181 +303,181 @@ pub fn builtin() -> Vec<Preset> {
             "Landscape",
             "crisp-landscape",
             "Crisp Landscape",
-            json!({"light": {"highlights": -45.0, "shadows": 30.0, "contrast": 12.0}, "effects": {"clarity": 22.0, "dehaze": 12.0, "texture": 15.0}, "color": {"vibrance": 25.0}}),
+            json!({"treatment": "color", "light": {"highlights": -45.0, "shadows": 30.0, "contrast": 12.0}, "effects": {"clarity": 22.0, "dehaze": 12.0, "texture": 15.0}, "color": {"vibrance": 25.0}}),
         ),
         p(
             "Landscape",
             "golden-hour",
             "Golden Hour",
-            json!({"wb": {"mode": "custom", "temp": 7600.0, "tint": 12.0}, "light": {"highlights": -35.0, "shadows": 20.0}, "grading": {"highlights": {"hue": 38.0, "sat": 25.0, "lum": 5.0}}, "vignette": {"amount": -15.0}}),
+            json!({"treatment": "color", "wb": {"mode": "custom", "temp": 7600.0, "tint": 12.0}, "light": {"highlights": -35.0, "shadows": 20.0}, "grading": {"highlights": {"hue": 38.0, "sat": 25.0, "lum": 5.0}}, "vignette": {"amount": -15.0}}),
         ),
         p(
             "Landscape",
             "blue-hour",
             "Blue Hour Boost",
-            json!({"wb": {"mode": "custom", "temp": 5200.0, "tint": 6.0}, "light": {"shadows": 25.0, "exposure": 0.2}, "mixer": {"blue": {"hue": 0.0, "sat": 25.0, "lum": 0.0}, "purple": {"hue": 0.0, "sat": 15.0, "lum": 0.0}}}),
+            json!({"treatment": "color", "wb": {"mode": "custom", "temp": 5200.0, "tint": 6.0}, "light": {"shadows": 25.0, "exposure": 0.2}, "mixer": {"blue": {"hue": 0.0, "sat": 25.0, "lum": 0.0}, "purple": {"hue": 0.0, "sat": 15.0, "lum": 0.0}}}),
         ),
         p(
             "Portrait",
             "soft-skin",
             "Soft Skin",
-            json!({"effects": {"texture": -25.0, "clarity": -10.0}, "light": {"contrast": -5.0, "shadows": 15.0}, "mixer": {"orange": {"hue": 0.0, "sat": -8.0, "lum": 10.0}}}),
+            json!({"treatment": "color", "effects": {"texture": -25.0, "clarity": -10.0}, "light": {"contrast": -5.0, "shadows": 15.0}, "mixer": {"orange": {"hue": 0.0, "sat": -8.0, "lum": 10.0}}}),
         ),
         p(
             "Portrait",
             "bright-airy",
             "Bright & Airy",
-            json!({"light": {"exposure": 0.45, "contrast": -15.0, "highlights": -40.0, "shadows": 40.0, "whites": 15.0}, "color": {"vibrance": 8.0, "saturation": -8.0}}),
+            json!({"treatment": "color", "light": {"exposure": 0.45, "contrast": -15.0, "highlights": -40.0, "shadows": 40.0, "whites": 15.0}, "color": {"vibrance": 8.0, "saturation": -8.0}}),
         ),
         p(
             "Style",
             "moody",
             "Moody",
-            json!({"light": {"exposure": -0.3, "contrast": 20.0, "highlights": -30.0, "blacks": -15.0}, "color": {"saturation": -20.0}, "grading": {"shadows": {"hue": 200.0, "sat": 15.0, "lum": -5.0}}, "vignette": {"amount": -30.0}}),
+            json!({"treatment": "color", "light": {"exposure": -0.3, "contrast": 20.0, "highlights": -30.0, "blacks": -15.0}, "color": {"saturation": -20.0}, "grading": {"shadows": {"hue": 200.0, "sat": 15.0, "lum": -5.0}}, "vignette": {"amount": -30.0}}),
         ),
         p(
             "Style",
             "cinematic",
             "Cinematic",
-            json!({"curve": {"shadows": 20.0, "highlights": -10.0}, "grading": {"shadows": {"hue": 190.0, "sat": 25.0, "lum": 0.0}, "highlights": {"hue": 30.0, "sat": 18.0, "lum": 0.0}}, "light": {"contrast": 15.0}, "vignette": {"amount": -20.0}}),
+            json!({"treatment": "color", "curve": {"shadows": 20.0, "highlights": -10.0}, "grading": {"shadows": {"hue": 190.0, "sat": 25.0, "lum": 0.0}, "highlights": {"hue": 30.0, "sat": 18.0, "lum": 0.0}}, "light": {"contrast": 15.0}, "vignette": {"amount": -20.0}}),
         ),
         // ---- Portrait
         p(
             "Portrait",
             "moody-portrait",
             "Moody Portrait",
-            json!({"light": {"exposure": -0.25, "contrast": 20.0, "highlights": -30.0, "blacks": -12.0}, "color": {"saturation": -15.0}, "vignette": {"amount": -25.0, "midpoint": 40.0}, "mixer": {"orange": {"sat": 6.0}}}),
+            json!({"treatment": "color", "light": {"exposure": -0.25, "contrast": 20.0, "highlights": -30.0, "blacks": -12.0}, "color": {"saturation": -15.0}, "vignette": {"amount": -25.0, "midpoint": 40.0}, "mixer": {"orange": {"sat": 6.0}}}),
         ),
         p(
             "Portrait",
             "golden-glow",
             "Golden Glow",
-            json!({"grading": {"highlights": {"hue": 40.0, "sat": 18.0, "lum": 0.0}, "midtones": {"hue": 35.0, "sat": 8.0, "lum": 0.0}}, "light": {"shadows": 15.0}, "effects": {"clarity": -8.0}}),
+            json!({"treatment": "color", "grading": {"highlights": {"hue": 40.0, "sat": 18.0, "lum": 0.0}, "midtones": {"hue": 35.0, "sat": 8.0, "lum": 0.0}}, "light": {"shadows": 15.0}, "effects": {"clarity": -8.0}}),
         ),
         p(
             "Portrait",
             "clean-studio",
             "Clean Studio",
-            json!({"light": {"contrast": 10.0, "whites": 15.0, "blacks": -8.0}, "effects": {"texture": -10.0}, "color": {"vibrance": 5.0}}),
+            json!({"treatment": "color", "light": {"contrast": 10.0, "whites": 15.0, "blacks": -8.0}, "effects": {"texture": -10.0}, "color": {"vibrance": 5.0}}),
         ),
         // ---- Landscape
         p(
             "Landscape",
             "crisp-vista",
             "Crisp Vista",
-            json!({"effects": {"dehaze": 15.0, "clarity": 18.0, "texture": 12.0}, "light": {"contrast": 12.0, "highlights": -25.0, "shadows": 18.0}, "color": {"vibrance": 20.0}}),
+            json!({"treatment": "color", "effects": {"dehaze": 15.0, "clarity": 18.0, "texture": 12.0}, "light": {"contrast": 12.0, "highlights": -25.0, "shadows": 18.0}, "color": {"vibrance": 20.0}}),
         ),
         p(
             "Landscape",
             "deep-sky",
             "Deep Sky",
-            json!({"mixer": {"blue": {"lum": -25.0, "sat": 15.0}, "aqua": {"lum": -10.0}}, "light": {"highlights": -30.0}, "effects": {"dehaze": 10.0}}),
+            json!({"treatment": "color", "mixer": {"blue": {"lum": -25.0, "sat": 15.0}, "aqua": {"lum": -10.0}}, "light": {"highlights": -30.0}, "effects": {"dehaze": 10.0}}),
         ),
         p(
             "Landscape",
             "lush-greens",
             "Lush Greens",
-            json!({"mixer": {"green": {"hue": 12.0, "sat": 18.0, "lum": 8.0}, "yellow": {"hue": 10.0, "sat": 10.0}}, "color": {"vibrance": 12.0}, "effects": {"clarity": 8.0}}),
+            json!({"treatment": "color", "mixer": {"green": {"hue": 12.0, "sat": 18.0, "lum": 8.0}, "yellow": {"hue": 10.0, "sat": 10.0}}, "color": {"vibrance": 12.0}, "effects": {"clarity": 8.0}}),
         ),
         p(
             "Landscape",
             "desert-warmth",
             "Desert Warmth",
-            json!({"mixer": {"orange": {"sat": 15.0, "lum": 5.0}, "yellow": {"hue": -8.0, "sat": 10.0}, "blue": {"sat": -10.0}}, "grading": {"highlights": {"hue": 38.0, "sat": 12.0, "lum": 0.0}}, "light": {"contrast": 10.0}}),
+            json!({"treatment": "color", "mixer": {"orange": {"sat": 15.0, "lum": 5.0}, "yellow": {"hue": -8.0, "sat": 10.0}, "blue": {"sat": -10.0}}, "grading": {"highlights": {"hue": 38.0, "sat": 12.0, "lum": 0.0}}, "light": {"contrast": 10.0}}),
         ),
         p(
             "Landscape",
             "misty-morning",
             "Misty Morning",
-            json!({"effects": {"dehaze": -18.0, "clarity": -12.0}, "light": {"contrast": -18.0, "highlights": -10.0}, "grading": {"shadows": {"hue": 210.0, "sat": 10.0, "lum": 0.0}}, "color": {"saturation": -10.0}}),
+            json!({"treatment": "color", "effects": {"dehaze": -18.0, "clarity": -12.0}, "light": {"contrast": -18.0, "highlights": -10.0}, "grading": {"shadows": {"hue": 210.0, "sat": 10.0, "lum": 0.0}}, "color": {"saturation": -10.0}}),
         ),
         // ---- Urban
         p(
             "Urban",
             "gritty-street",
             "Gritty Street",
-            json!({"effects": {"clarity": 35.0, "texture": 20.0}, "light": {"contrast": 25.0, "blacks": -15.0}, "color": {"saturation": -30.0}, "vignette": {"amount": -18.0}}),
+            json!({"treatment": "color", "effects": {"clarity": 35.0, "texture": 20.0}, "light": {"contrast": 25.0, "blacks": -15.0}, "color": {"saturation": -30.0}, "vignette": {"amount": -18.0}}),
         ),
         p(
             "Urban",
             "neon-night",
             "Neon Night",
-            json!({"mixer": {"magenta": {"sat": 20.0}, "purple": {"sat": 18.0}, "blue": {"sat": 12.0}, "aqua": {"sat": 15.0}}, "light": {"contrast": 18.0, "blacks": -12.0}, "color": {"vibrance": 15.0}, "grading": {"shadows": {"hue": 250.0, "sat": 15.0, "lum": 0.0}}}),
+            json!({"treatment": "color", "mixer": {"magenta": {"sat": 20.0}, "purple": {"sat": 18.0}, "blue": {"sat": 12.0}, "aqua": {"sat": 15.0}}, "light": {"contrast": 18.0, "blacks": -12.0}, "color": {"vibrance": 15.0}, "grading": {"shadows": {"hue": 250.0, "sat": 15.0, "lum": 0.0}}}),
         ),
         p(
             "Urban",
             "concrete-cool",
             "Concrete Cool",
-            json!({"grading": {"shadows": {"hue": 205.0, "sat": 14.0, "lum": 0.0}, "highlights": {"hue": 200.0, "sat": 6.0, "lum": 0.0}}, "color": {"saturation": -20.0}, "light": {"contrast": 12.0}, "effects": {"clarity": 15.0}}),
+            json!({"treatment": "color", "grading": {"shadows": {"hue": 205.0, "sat": 14.0, "lum": 0.0}, "highlights": {"hue": 200.0, "sat": 6.0, "lum": 0.0}}, "color": {"saturation": -20.0}, "light": {"contrast": 12.0}, "effects": {"clarity": 15.0}}),
         ),
         p(
             "Urban",
             "faded-urban",
             "Faded Urban",
-            json!({"curve": {"shadows": 30.0}, "color": {"saturation": -22.0}, "light": {"contrast": -8.0}, "grain": {"amount": 12.0, "size": 25.0, "roughness": 45.0}}),
+            json!({"treatment": "color", "curve": {"shadows": 30.0}, "color": {"saturation": -22.0}, "light": {"contrast": -8.0}, "grain": {"amount": 12.0, "size": 25.0, "roughness": 45.0}}),
         ),
         // ---- Food
         p(
             "Food",
             "fresh-bright",
             "Fresh & Bright",
-            json!({"light": {"exposure": 0.25, "shadows": 20.0, "whites": 10.0}, "color": {"vibrance": 22.0}, "effects": {"texture": 15.0}}),
+            json!({"treatment": "color", "light": {"exposure": 0.25, "shadows": 20.0, "whites": 10.0}, "color": {"vibrance": 22.0}, "effects": {"texture": 15.0}}),
         ),
         p(
             "Food",
             "warm-table",
             "Warm Table",
-            json!({"grading": {"midtones": {"hue": 32.0, "sat": 10.0, "lum": 0.0}}, "mixer": {"orange": {"sat": 10.0}, "red": {"sat": 8.0}}, "light": {"contrast": 8.0}}),
+            json!({"treatment": "color", "grading": {"midtones": {"hue": 32.0, "sat": 10.0, "lum": 0.0}}, "mixer": {"orange": {"sat": 10.0}, "red": {"sat": 8.0}}, "light": {"contrast": 8.0}}),
         ),
         p(
             "Food",
             "dark-moody-food",
             "Dark & Moody",
-            json!({"light": {"exposure": -0.3, "contrast": 22.0, "highlights": -20.0, "blacks": -15.0}, "effects": {"texture": 18.0}, "vignette": {"amount": -22.0}}),
+            json!({"treatment": "color", "light": {"exposure": -0.3, "contrast": 22.0, "highlights": -20.0, "blacks": -15.0}, "effects": {"texture": 18.0}, "vignette": {"amount": -22.0}}),
         ),
         // ---- Seasons
         p(
             "Seasons",
             "autumn-gold",
             "Autumn Gold",
-            json!({"mixer": {"green": {"hue": -30.0, "sat": -10.0}, "yellow": {"hue": -15.0, "sat": 15.0}, "orange": {"sat": 18.0}}, "grading": {"highlights": {"hue": 40.0, "sat": 10.0, "lum": 0.0}}}),
+            json!({"treatment": "color", "mixer": {"green": {"hue": -30.0, "sat": -10.0}, "yellow": {"hue": -15.0, "sat": 15.0}, "orange": {"sat": 18.0}}, "grading": {"highlights": {"hue": 40.0, "sat": 10.0, "lum": 0.0}}}),
         ),
         p(
             "Seasons",
             "winter-blue",
             "Winter Blue",
-            json!({"grading": {"shadows": {"hue": 215.0, "sat": 18.0, "lum": 0.0}, "highlights": {"hue": 205.0, "sat": 8.0, "lum": 0.0}}, "color": {"saturation": -12.0}, "light": {"whites": 12.0}}),
+            json!({"treatment": "color", "grading": {"shadows": {"hue": 215.0, "sat": 18.0, "lum": 0.0}, "highlights": {"hue": 205.0, "sat": 8.0, "lum": 0.0}}, "color": {"saturation": -12.0}, "light": {"whites": 12.0}}),
         ),
         p(
             "Seasons",
             "spring-fresh",
             "Spring Fresh",
-            json!({"mixer": {"green": {"hue": 10.0, "sat": 12.0, "lum": 10.0}, "magenta": {"sat": 10.0}}, "light": {"shadows": 15.0}, "color": {"vibrance": 15.0}}),
+            json!({"treatment": "color", "mixer": {"green": {"hue": 10.0, "sat": 12.0, "lum": 10.0}, "magenta": {"sat": 10.0}}, "light": {"shadows": 15.0}, "color": {"vibrance": 15.0}}),
         ),
         p(
             "Seasons",
             "summer-haze",
             "Summer Haze",
-            json!({"effects": {"dehaze": -12.0}, "curve": {"shadows": 18.0}, "grading": {"highlights": {"hue": 45.0, "sat": 14.0, "lum": 0.0}}, "light": {"contrast": -10.0}}),
+            json!({"treatment": "color", "effects": {"dehaze": -12.0}, "curve": {"shadows": 18.0}, "grading": {"highlights": {"hue": 45.0, "sat": 14.0, "lum": 0.0}}, "light": {"contrast": -10.0}}),
         ),
         // ---- Vintage
         p(
             "Vintage",
             "instant-70s",
             "Instant ’70s",
-            json!({"curve": {"shadows": 28.0, "highlights": -18.0}, "grading": {"shadows": {"hue": 170.0, "sat": 14.0, "lum": 0.0}, "highlights": {"hue": 45.0, "sat": 18.0, "lum": 0.0}}, "color": {"saturation": -10.0}, "vignette": {"amount": -15.0}, "grain": {"amount": 20.0, "size": 30.0, "roughness": 55.0}}),
+            json!({"treatment": "color", "curve": {"shadows": 28.0, "highlights": -18.0}, "grading": {"shadows": {"hue": 170.0, "sat": 14.0, "lum": 0.0}, "highlights": {"hue": 45.0, "sat": 18.0, "lum": 0.0}}, "color": {"saturation": -10.0}, "vignette": {"amount": -15.0}, "grain": {"amount": 20.0, "size": 30.0, "roughness": 55.0}}),
         ),
         p(
             "Vintage",
             "cross-process",
             "Cross Process",
-            json!({"grading": {"shadows": {"hue": 230.0, "sat": 25.0, "lum": 0.0}, "highlights": {"hue": 60.0, "sat": 25.0, "lum": 0.0}}, "light": {"contrast": 22.0}, "color": {"saturation": 10.0}}),
+            json!({"treatment": "color", "grading": {"shadows": {"hue": 230.0, "sat": 25.0, "lum": 0.0}, "highlights": {"hue": 60.0, "sat": 25.0, "lum": 0.0}}, "light": {"contrast": 22.0}, "color": {"saturation": 10.0}}),
         ),
         p(
             "Vintage",
             "bleach-bypass",
             "Bleach Bypass",
-            json!({"color": {"saturation": -40.0}, "light": {"contrast": 35.0, "highlights": -15.0}, "effects": {"clarity": 15.0}}),
+            json!({"treatment": "color", "color": {"saturation": -40.0}, "light": {"contrast": 35.0, "highlights": -15.0}, "effects": {"clarity": 15.0}}),
         ),
         // ---- B&W toners
         p(
@@ -701,5 +725,141 @@ mod tests {
         let dv = s.develop_of(s.active().unwrap()).unwrap();
         assert_eq!((dv.light.exposure, dv.light.shadows, dv.grain.amount), (0.3, 20.0, 12.0));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Issue #2159: a color preset after a B&W one brings the colors back. The treatment and the
+    /// settings the color preset names take its values; a setting it does not name keeps the
+    /// value the B&W preset gave it.
+    #[test]
+    fn a_color_preset_after_a_bw_one_returns_the_colors() {
+        let mut s = Session::with_demo();
+        s.execute("preset.apply", &json!({"id": "lc.bw-high-contrast"})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(dv.treatment, lightcraft_develop::Treatment::Bw);
+        s.execute("preset.apply", &json!({"id": "lc.warm-glow"})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(dv.treatment, lightcraft_develop::Treatment::Color, "the color preset restores the treatment");
+        assert_eq!(dv.light.contrast, 8.0, "the color preset's values, not the B&W preset's");
+        assert_eq!(dv.light.whites, 20.0, "a setting the color preset doesn't name keeps the B&W preset's value");
+    }
+
+    /// A manual edit to a setting a preset does not name survives it, though the preset styles
+    /// the same group (Bright & Airy names exposure, contrast, highlights, shadows and whites).
+    #[test]
+    fn a_preset_keeps_a_setting_it_does_not_name_in_the_group_it_styles() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "light.blacks", "value": -30.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy"})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(dv.light.blacks, -30.0, "blacks is not named by the preset");
+        assert_eq!(dv.light.exposure, 0.45, "exposure is named by the preset and takes its value");
+    }
+
+    /// Colours a partial preset does not name keep the photo's values. Deep Sky names only the
+    /// blue and aqua mixer colours, and only their luminance and saturation.
+    #[test]
+    fn a_preset_keeps_the_mixer_colours_it_does_not_name() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "mixer.red.sat", "value": 20.0})).unwrap();
+        s.execute("develop.set", &json!({"control": "mixer.blue.hue", "value": 15.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.deep-sky"})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(dv.mixer.red.sat, 20.0, "a colour the preset doesn't name");
+        assert_eq!(dv.mixer.blue.hue, 15.0, "a setting of a named colour that the preset doesn't name");
+        assert_eq!(dv.mixer.blue.lum, -25.0, "a setting the preset names takes its value");
+    }
+
+    /// Settings that came from an XMP sidecar or a catalog import record no import look, so the
+    /// camera defaults are not their original: a preset that names only some of their group keeps
+    /// the rest.
+    #[test]
+    fn xmp_imported_exposure_whites_and_blacks_survive_crisp_landscape() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.whites", "value": 10.0})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.blacks", "value": -20.0})).unwrap();
+        let id = s.active().unwrap();
+        assert!(s.catalog.photo(id).unwrap().import_look.is_none());
+        s.execute("preset.apply", &json!({"id": "lc.crisp-landscape"})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert_eq!((dv.light.exposure, dv.light.whites, dv.light.blacks), (0.7, 10.0, -20.0));
+        assert_eq!(dv.light.contrast, 12.0, "a setting the preset names takes its value");
+    }
+
+    /// Amount 0 applies nothing to a photo with no import look: the photo keeps every value, also
+    /// the exposure that Bright & Airy names (a camera-default original would reset it to 0).
+    #[test]
+    fn amount_zero_applies_nothing_to_a_photo_without_an_import_look() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
+        let id = s.active().unwrap();
+        let before = s.develop_of(id).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 0})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap(), before);
+    }
+
+    /// With no import look, a preset's amount moves the named settings from the photo's current
+    /// values: 50 % of Bright & Airy's exposure (0.45) from 2.0 is 1.225.
+    #[test]
+    fn a_preset_amount_without_an_import_look_is_measured_from_the_current_settings() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 50})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert!((dv.light.exposure - 1.225).abs() < 1e-9, "{}", dv.light.exposure);
+    }
+
+    /// A photo whose default preset recorded an import look measures a preset's amount from that
+    /// look: 50 % is halfway from the look to the preset whatever the photo was edited to, and
+    /// 0 % gives the look's value for the settings the preset names.
+    #[test]
+    fn a_preset_amount_is_measured_from_the_import_look_when_there_is_one() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let mut p = (**s.catalog.photo(id).unwrap()).clone();
+        let mut look = p.camera_defaults();
+        look.light.exposure = 0.5;
+        look.light.blacks = -10.0;
+        p.import_look = Some(std::sync::Arc::new(look.clone()));
+        p.develop = std::sync::Arc::new(look);
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: p.id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.blacks", "value": -30.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 50})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert!((dv.light.exposure - 0.475).abs() < 1e-9, "{}", dv.light.exposure);
+        assert_eq!(dv.light.blacks, -30.0, "a setting the preset doesn't name keeps the photo's edit");
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 0})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert_eq!(dv.light.exposure, 0.5, "amount 0 gives the import look's value for a setting the preset names");
+    }
+
+    /// A photo whose import look records a free crop aspect (null) but whose edits locked one
+    /// gets the import value back at 0 % from a preset that names the aspect: the lock is not
+    /// kept (the baseline of the amount contract), the cleared option is restored.
+    #[test]
+    fn amount_zero_restores_a_null_import_aspect() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let mut p = (**s.catalog.photo(id).unwrap()).clone();
+        let look = p.camera_defaults();
+        p.import_look = Some(std::sync::Arc::new(look.clone()));
+        p.develop = std::sync::Arc::new(look);
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: p.id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.execute("crop.aspect", &json!({"aspect": [3, 2]})).unwrap();
+        assert!(s.develop_of(id).unwrap().crop.aspect.is_some(), "the aspect is locked for this test");
+        let added = s.add_presets(vec![lightcraft_develop::Preset {
+            id: "user.free-aspect".into(),
+            name: "Free aspect".into(),
+            group: "Test".into(),
+            settings: json!({"crop": {"aspect": null}}),
+            favorite: false,
+            builtin: false,
+        }]);
+        s.execute("preset.apply", &json!({"id": added[0], "amount": 0})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert_eq!(dv.crop.aspect, None, "amount 0 gives the import look's free aspect back");
     }
 }
