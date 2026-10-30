@@ -110,6 +110,10 @@ fn count_text_by_unit() {
         cancellable: true,
         cancelling: false,
         age_ms: 600,
+        parent: None,
+        batch: false,
+        failed: 0,
+        eta_ms: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
@@ -118,6 +122,55 @@ fn count_text_by_unit() {
     assert_eq!(count_text(&t), "40 %");
     t.total = 0;
     assert_eq!(count_text(&t), "");
+}
+
+/// a batch is one row with the time left and the failures; its photos fold under it; when it ends,
+/// what it did shows once as a message.
+#[test]
+fn a_batch_row_folds_its_photos_and_says_how_it_went() {
+    use crate::panels::activity::{eta_text, summary_text};
+    assert_eq!(eta_text(20_000), "less than a minute left");
+    assert_eq!(eta_text(6 * 60_000), "about 6 min left");
+    assert_eq!(eta_text(150 * 60_000), "about 2 h 30 min left");
+    let mut h = demo();
+    let b = h.app.session.activity.start_batch("denoise", "AI Denoise", Cancel::Yes);
+    b.progress(0, 200);
+    std::thread::sleep(Duration::from_millis(30));
+    b.item_done();
+    b.item_failed("IMG_0002.CR3: the file is damaged");
+    let photo = b.child("denoise", "AI Denoise");
+    photo.detail("IMG_0003.CR3");
+    wait_visible(&mut h);
+    let parent = format!("activity:row:{}", b.id());
+    let child = format!("activity:row:{}", photo.id());
+    assert!(has(&h, &parent));
+    assert!(!has(&h, &child), "the photo's row is folded under its batch");
+    let line = crate::panels::activity::detail_line_for_tests(&h.app.session.activity.list()[0]);
+    assert!(line.starts_with("2 of 200 · about ") && line.contains("1 failed"), "{line}");
+    let fold = format!("activity:children:{}", b.id());
+    click(&mut h, &fold);
+    assert!(has(&h, &child), "opened");
+    assert!(rect(&h, &child).left() > rect(&h, &parent).left(), "set in under its batch");
+    click(&mut h, &fold);
+    assert!(!has(&h, &child), "folded again");
+    // the batch ends: its summary shows once
+    drop(photo);
+    drop(b);
+    h.step();
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert_eq!(toast, "AI Denoise: 1 done, 1 failed: IMG_0002.CR3: the file is damaged");
+    h.app.ui.toast = None;
+    h.step();
+    assert!(h.app.ui.toast.is_none(), "said once");
+    // a job that reports itself (an export) isn't repeated
+    let e = h.app.session.activity.start_batch("export", "Exporting", Cancel::Yes);
+    e.reports_itself();
+    e.item_done();
+    drop(e);
+    h.step();
+    assert!(h.app.ui.toast.is_none());
+    let s = h.app.session.activity.finished();
+    assert_eq!(summary_text(s.last().unwrap()), "Exporting: 1 done");
 }
 
 #[test]

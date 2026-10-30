@@ -129,6 +129,11 @@ impl Progress {
     pub(crate) fn cancel_now(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
+
+    /// Has the job been asked to stop?
+    pub(super) fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 /// The loaded model, loading it first when it is not (kept for the next photo).

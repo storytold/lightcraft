@@ -305,5 +305,11 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "about {n} min left": "დარჩა დაახლ. {n} წთ",
+  "about {h} h {m} min left": "დარჩა დაახლ. {h} სთ {m} წთ",
+  "{n} done": "{n} მზადაა",
+  ", {n} failed": ", {n} ვერ შესრულდა",
+  "{n} failed": "{n} ვერ შესრულდა",
+  "Show each photo ({n})": "თითოეული ფოტოს ჩვენება ({n})"
 }

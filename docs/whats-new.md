@@ -11,6 +11,23 @@
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
   the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
+### AI Denoise for a whole shoot
+- **AI Denoise follows Auto Sync**, like the sliders: with Auto Sync on, the switch turns it on (or off) for every
+  selected raw photo in one undo step, and their denoised pictures are made in the background.
+- **AI Denoise at import:** Settings ▸ Import ▸ **AI Denoise from** (ISO 800 … 12800) switches it on for new raw photos
+  shot at that ISO or above.
+- **One progress row for a job over many photos.** AI Denoise and exports show one row in the activity stack:
+  "37 of 200 · about 6 min left · 2 failed". "Show each photo" opens the rows of the photos in progress. When the job
+  ends, a note says how it went ("AI Denoise: 198 done, 2 failed: …").
+
+### AI Denoise with LightCraft's own model
+- Settings ▸ AI Denoise offers **LightCraft Denoise (Bayer) 0.1.0**, a model trained by LightCraft contributors on
+  CC0 raw photos and licensed MIT OR Apache-2.0 like LightCraft, so commercial work is fine. It downloads once
+  (31 MB) after its terms are shown, from the project's release, or from the trainer's site when that fails; the
+  file is checked against its SHA-256 whichever site served it.
+- Without a model the panel says so plainly and points to Luminance and Color under Detail; a model you were
+  given installs with **Install from file…**.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

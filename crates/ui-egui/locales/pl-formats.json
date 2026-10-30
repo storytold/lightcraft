@@ -305,5 +305,11 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "about {n} min left": "zostało ok. {n} min",
+  "about {h} h {m} min left": "zostało ok. {h} godz. {m} min",
+  "{n} done": "gotowe: {n}",
+  ", {n} failed": ", nieudane: {n}",
+  "{n} failed": "nieudane: {n}",
+  "Show each photo ({n})": "Pokaż poszczególne zdjęcia ({n})"
 }

@@ -305,5 +305,11 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "about {n} min left": "faltam cerca de {n} min",
+  "about {h} h {m} min left": "faltam cerca de {h} h {m} min",
+  "{n} done": "{n} prontas",
+  ", {n} failed": ", {n} com falha",
+  "{n} failed": "{n} com falha",
+  "Show each photo ({n})": "Mostrar cada foto ({n})"
 }

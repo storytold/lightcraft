@@ -49,7 +49,9 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
-    let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
+    // one batch row: the photos done, the time left; the export says how it went itself
+    let guard = app.session.activity.start_batch("export", "Exporting", Cancel::Flag(cancel.clone()));
+    guard.reports_itself();
     guard.progress(0, total as u64);
     let row = guard.handle();
     // translated here: the language is the UI thread's, and the worker would show English
@@ -261,6 +263,19 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     m
 }
 
+/// How many of the batch's `total` photos a finished batch placed: one per file, except a contact sheet or a print to
+/// PDF, one file that holds every photo it placed.
+fn photos_done(files: &[Value], total: usize) -> usize {
+    let n: usize = files
+        .iter()
+        .map(|f| match f["photos"].as_u64() {
+            Some(n) if f["contactSheet"] == true || f["print"] == true => usize::try_from(n).unwrap_or(usize::MAX),
+            _ => 1,
+        })
+        .fold(0, usize::saturating_add);
+    n.min(total)
+}
+
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
@@ -268,6 +283,14 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            // the batch's summary (`activity.list` → finished): photos placed, the failures and why
+            if let Ok((files, _, _)) = &r {
+                task.guard.progress(photos_done(files, total) as u64, total as u64);
+                for f in files.iter().filter(|f| f.get("error").is_some()) {
+                    let name = f.get("file").and_then(Value::as_str).unwrap_or("");
+                    task.guard.count_failed(&format!("{name}: {}", f["error"].as_str().unwrap_or("error")));
+                }
+            }
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
@@ -287,6 +310,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
+            // `done` here counts photos placed, so the batch's time left follows finished photos
             task.guard.progress(done as u64, task.total as u64);
             task.guard.detail(&current);
         }
@@ -406,6 +430,16 @@ mod contact_sheet_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A finished contact sheet or print to PDF is one file for every photo: its batch ends at all of them, not
+    /// `1 of N` (CodeRabbit, #2932).
+    #[test]
+    fn a_contact_sheet_counts_every_photo_it_placed() {
+        assert_eq!(photos_done(&[json!({"path": "a.pdf", "photos": 40, "contactSheet": true})], 40), 40);
+        assert_eq!(photos_done(&[json!({"path": "a.pdf", "photos": 12, "print": true})], 12), 12);
+        assert_eq!(photos_done(&[json!({"path": "a.jpg"}), json!({"file": "b.jpg", "error": "x"})], 5), 2);
+        assert_eq!(photos_done(&[json!({"photos": u64::MAX, "print": true})], 3), 3, "never past the batch");
+    }
 
     /// The toast's Apple Photos part (issue #236): the count and album, a partial import's
     /// warning, an error with what to do, a cancelled export.

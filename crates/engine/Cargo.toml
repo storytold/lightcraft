@@ -54,6 +54,8 @@ chrono = { workspace = true }
 sam = ["dep:lightcraft-segment"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+# LightCraft's own denoise model offered as a download (MIT OR Apache-2.0 weights, CC0 training data); needs its hosted file.
+lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraft-denoise-core/lightcraft-model"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)

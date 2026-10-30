@@ -682,6 +682,12 @@ fn settings_are_checked_saved_and_a_paused_pump_starts_nothing() {
     // …and cancelling forgets it
     assert_eq!(x.s.execute("denoise.cancel", &json!({})).unwrap()["cancelled"], 1);
     assert_eq!(x.s.denoise_photo_state(id), PhotoState::Idle);
+    // …until asked for again: Auto looking at it doesn't queue it again (CodeRabbit on #2932)
+    assert!(x.s.denoise_held(id));
+    for _ in 0..3 {
+        x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    }
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Idle);
     // when the pace allows, it is made
     x.s.execute("denoise.queue", &json!({"scope": "withAmount"})).unwrap();
     pump_until_ready(&mut x.s, 1);
@@ -841,10 +847,18 @@ fn denoise_row_while_queue_is_busy() {
         let rows = rows(&x.s);
         // (what the pump left running or queued is what the row reflects until the next pump)
         if x.s.denoise_busy() {
-            assert_eq!(rows.len(), 1, "{r}");
-            assert_eq!((rows[0].label.as_str(), rows[0].cancellable, rows[0].unit), ("AI Denoise", false, crate::activity::Unit::Percent), "{r}");
+            // one batch row counting photos, and under it the running photo's tiles
+            let batch = rows.iter().find(|t| t.batch).unwrap_or_else(|| panic!("a batch row: {rows:?} {r}"));
+            assert_eq!(
+                (batch.label.as_str(), batch.cancellable, batch.unit, batch.total),
+                ("AI Denoise", true, crate::activity::Unit::Count, 1),
+                "{r}"
+            );
             if !r["running"].is_null() {
-                assert_eq!(rows[0].detail, "ramp.dng", "{r}");
+                assert_eq!(rows.len(), 2, "{rows:?}");
+                let photo = rows.iter().find(|t| !t.batch).unwrap_or_else(|| panic!("{rows:?}"));
+                assert_eq!((photo.parent, photo.unit, photo.detail.as_str()), (Some(batch.id), crate::activity::Unit::Percent, "ramp.dng"), "{r}");
+                assert_eq!(batch.detail, "ramp.dng", "{r}");
             }
             shown = true;
         } else {
@@ -857,5 +871,265 @@ fn denoise_row_while_queue_is_busy() {
     }
     assert!(shown, "the photo never showed a row");
     assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
+    let done = x.s.activity.finished();
+    let last = done.last().expect("the batch leaves its summary");
+    assert_eq!((last.kind, last.done, last.failed), ("denoise", 1, 0));
     let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+/// the AI Denoise switch follows the Develop sliders. With Auto Sync on, every selected raw photo switches
+/// with the active one, in one undo step, and their pictures are made under one batch row; with it off, only the active
+/// photo. Explicit `ids` switch exactly those.
+#[test]
+fn the_denoise_switch_follows_auto_sync_in_one_undo_step() {
+    let mut x = setup("autosync", true);
+    let originals = x.dir.join("originals");
+    let mut paths = Vec::new();
+    for i in 0..3 {
+        let path = originals.join(format!("more{i}.dng"));
+        std::fs::write(&path, ramp_dng(192 + 2 * (i + 1), 160, "RGGB")).unwrap();
+        paths.push(path.to_string_lossy().to_string());
+    }
+    x.s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<u64> = x.s.catalog.photos().map(|p| p.id.0).collect();
+    assert_eq!(ids.len(), 4);
+    x.s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    x.s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let on = |s: &Session, id: u64| s.develop_of(lightcraft_catalog::PhotoId(id)).unwrap().enhance.denoise_enabled();
+    let undo = x.s.undo.len();
+    let r = x.s.execute("denoise.toggle", &json!({"enabled": true})).unwrap();
+    assert_eq!(r["ids"].as_array().map(Vec::len), Some(4), "{r}");
+    assert_eq!(x.s.undo.len(), undo + 1, "one undo step");
+    assert!(ids.iter().all(|id| on(&x.s, *id)));
+    assert_eq!(x.s.develop_of(lightcraft_catalog::PhotoId(ids[3])).unwrap().enhance.denoise, 50.0);
+    // the pictures are made under one batch row, and it says how it went
+    pump_until_ready(&mut x.s, 4);
+    for _ in 0..20 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    }
+    let done = x.s.activity.finished();
+    let last = done.last().expect("a summary");
+    assert_eq!((last.kind, last.done, last.failed), ("denoise", 4, 0), "{done:?}");
+    // undo: all four go back off at once
+    x.s.execute("edit.undo", &json!({})).unwrap();
+    assert!(ids.iter().all(|id| !on(&x.s, *id)));
+    x.s.execute("edit.redo", &json!({})).unwrap();
+    // Auto Sync off: only the active photo
+    x.s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    let r = x.s.execute("denoise.toggle", &json!({"enabled": false})).unwrap();
+    assert_eq!(r["ids"], json!([ids[0]]));
+    assert!(!on(&x.s, ids[0]) && on(&x.s, ids[1]));
+    // explicit ids: exactly those
+    x.s.execute("denoise.toggle", &json!({"ids": [ids[1], ids[2]], "enabled": false})).unwrap();
+    assert!(!on(&x.s, ids[1]) && !on(&x.s, ids[2]) && on(&x.s, ids[3]));
+    assert!(x.s.execute("denoise.toggle", &json!({"ids": "all"})).is_err());
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// cancelling AI Denoise's batch row stops it, and the photos it held are not queued again just because
+/// they are looked at (Auto); asking for them again does queue them.
+#[test]
+fn a_cancelled_denoise_batch_stays_cancelled_until_asked_again() {
+    let mut x = setup("cancelbatch", true);
+    x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
+    set_amount(&mut x.s, 100.0);
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    let batch = x.s.activity.list().into_iter().find(|t| t.kind == "denoise" && t.batch).expect("a batch row");
+    x.s.activity.cancel(batch.id).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    assert!(!x.s.denoise_busy(), "stopped");
+    for _ in 0..3 {
+        x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    }
+    assert!(!x.s.denoise_busy(), "not queued again by being looked at");
+    x.s.execute("denoise.queue", &json!({})).unwrap();
+    assert!(x.s.denoise_busy(), "asked for again");
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// A job told to stop by the batch row's ✕ winds down on its own thread: until it has, no new batch row
+/// appears for it. The photo it was making waits until asked for again.
+#[test]
+fn a_cancelled_batch_does_not_come_back_while_its_job_winds_down() {
+    let mut x = setup("cancelrunning", true);
+    // a model that does not load until let go: the job is running all that while
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let (g, runs) = (gate.clone(), x.runs.clone());
+    x.s.denoise.loader = Arc::new(move |_, _| {
+        let (open, wake) = &*g;
+        let mut open = open.lock().unwrap();
+        while !*open {
+            open = wake.wait(open).unwrap();
+        }
+        Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>)
+    });
+    x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
+    set_amount(&mut x.s, 100.0);
+    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    let batches = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "denoise" && t.batch).count();
+    let batch = x.s.activity.list().into_iter().find(|t| t.kind == "denoise" && t.batch).expect("a batch row");
+    x.s.activity.cancel(batch.id).unwrap();
+    for _ in 0..3 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        assert!(x.s.denoise_busy(), "the job is still winding down");
+        assert_eq!(batches(&x.s), 0, "no new batch row for a job that is stopping");
+    }
+    assert!(x.s.denoise_held(photo(&x.s)), "the photo waits until asked for again");
+    let (open, wake) = &*gate;
+    *open.lock().unwrap() = true;
+    wake.notify_all();
+    for _ in 0..200 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        if !x.s.denoise_busy() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!x.s.denoise_busy(), "stopped");
+    assert_eq!(batches(&x.s), 0);
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// Browsing a folder imports nothing: "AI Denoise from ISO N" makes no pictures for the photos browsed.
+#[test]
+fn browsing_a_folder_makes_no_ai_denoise_pictures() {
+    let mut x = setup("browsedenoise", true);
+    // (not made because it is looked at either: it is the open photo, and pictures are made on their own)
+    x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
+    x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
+    let folder = x.dir.join("browsed");
+    std::fs::create_dir_all(&folder).unwrap();
+    let data: Vec<u16> = (0..192 * 160).map(|i| 600 + (i % 192) as u16 * 30).collect();
+    let meta = lightcraft_meta::Metadata { iso: Some(6400), ..Default::default() };
+    std::fs::write(folder.join("high.dng"), synthetic_dng_of(192, 160, "RGGB", data, None, meta)).unwrap();
+    x.s.execute("library.browse", &json!({"path": folder.to_string_lossy()})).unwrap();
+    let browsed = x.s.catalog.photos().find(|p| p.local).map(|p| p.id).expect("the browsed photo");
+    x.s.execute("library.select", &json!({"ids": [browsed.0]})).unwrap();
+    for _ in 0..3 {
+        x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    }
+    assert!(!x.s.denoise_busy(), "{}", x.s.execute("denoise.status", &json!({})).unwrap());
+    // imported, the same file is queued
+    x.s.execute("library.import", &json!({"paths": [folder.join("high.dng").to_string_lossy()]})).unwrap();
+    assert!(x.s.denoise_busy(), "imported at ISO 6400: queued");
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// An import that switches AI Denoise on for more photos than the queue holds loses none: the rest
+/// wait and are queued as it drains.
+#[test]
+fn an_import_larger_than_the_queue_makes_every_picture() {
+    let mut x = setup("importbacklog", true);
+    // (Auto on: the cancelled photo, selected, still isn't made until asked for)
+    x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
+    x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
+    x.s.denoise.queue_cap = 1;
+    let folder = x.dir.join("high-iso");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut paths = Vec::new();
+    for i in 0..3u16 {
+        let data: Vec<u16> = (0..192 * 160).map(|j| 600 + (j % 192) as u16 * 30 + i * 7).collect();
+        let meta = lightcraft_meta::Metadata { iso: Some(6400), ..Default::default() };
+        let path = folder.join(format!("high-{i}.dng"));
+        std::fs::write(&path, synthetic_dng_of(192, 160, "RGGB", data, None, meta)).unwrap();
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    x.s.execute("library.import", &json!({"paths": paths.clone()})).unwrap();
+    assert!(x.s.denoise_busy());
+    // cancelling one waiting photo takes it out of the backlog too
+    let last = x.s.catalog.photos().find(|p| p.file_name == "high-2.dng").map(|p| p.id).expect("imported");
+    assert_eq!(x.s.execute("denoise.cancel", &json!({"id": last.0})).unwrap()["cancelled"], 1);
+    x.s.execute("library.select", &json!({"ids": [last.0]})).unwrap();
+    pump_until_ready(&mut x.s, 2);
+    for _ in 0..20 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    }
+    assert!(!x.s.denoise_busy());
+    assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["ready"], 2, "the cancelled photo isn't made");
+    x.s.execute("denoise.queue", &json!({"ids": [last.0]})).unwrap();
+    pump_until_ready(&mut x.s, 3);
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// Three raws of a test library (besides the setup's ramp).
+fn three_raws(x: &mut Setup, tag: &str) -> Vec<u64> {
+    let folder = x.dir.join(tag);
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut paths = Vec::new();
+    for i in 0..3u16 {
+        let data: Vec<u16> = (0..192 * 160).map(|j| 600 + (j % 192) as u16 * 30 + i * 7).collect();
+        let path = folder.join(format!("{tag}-{i}.dng"));
+        std::fs::write(&path, synthetic_dng_of(192, 160, "RGGB", data, None, lightcraft_meta::Metadata::default())).unwrap();
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    x.s.execute("library.import", &json!({"paths": paths})).unwrap();
+    x.s.catalog.photos().filter(|p| p.file_name.starts_with(tag)).map(|p| p.id.0).collect()
+}
+
+/// The switch on for more photos than the queue holds loses none: the rest wait in the backlog (CodeRabbit, #2932).
+#[test]
+fn the_switch_on_more_photos_than_the_queue_holds_makes_every_picture() {
+    let mut x = setup("togglebacklog", true);
+    let ids = three_raws(&mut x, "many");
+    x.s.denoise.queue_cap = 1;
+    x.s.execute("denoise.toggle", &json!({"ids": ids, "enabled": true})).unwrap();
+    assert_eq!(x.s.denoise_in_flight(true).len(), 3, "one queued, two waiting");
+    // switched on again while they wait, the queued one now behind the others: none is taken in twice (CodeRabbit,
+    // #2932)
+    let reversed: Vec<u64> = ids.iter().rev().copied().collect();
+    x.s.execute("denoise.toggle", &json!({"ids": reversed, "enabled": true})).unwrap();
+    assert_eq!(x.s.denoise_in_flight(true).len(), 3, "the photos in flight are not queued again");
+    pump_until_ready(&mut x.s, 3);
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// With nowhere to keep the pictures (a library that isn't on disk), nothing waits in the backlog either: the
+/// activity row would stay up for good (CodeRabbit, #2932).
+#[test]
+fn nothing_waits_when_there_is_nowhere_to_keep_the_pictures() {
+    let mut x = setup("backlognodir", true);
+    let ids: Vec<lightcraft_catalog::PhotoId> = three_raws(&mut x, "nodir").into_iter().map(lightcraft_catalog::PhotoId).collect();
+    x.s.denoise.queue_cap = 1;
+    if let Some(l) = x.s.library.as_mut() {
+        l.on_disk = false;
+    }
+    x.s.denoise_enqueue_all(&ids);
+    assert!(x.s.denoise_in_flight(true).is_empty());
+    assert!(!x.s.denoise_busy());
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// "AI Denoise from ISO N" at import switches it on for new raw photos shot at that ISO or above (part of
+/// the look they start from), and leaves the others alone.
+#[test]
+fn ai_denoise_above_an_iso_is_switched_on_at_import() {
+    let mut x = setup("importiso", true);
+    let r = x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 3200}})).unwrap();
+    assert_eq!(r["import"]["denoiseAboveIso"], 3200);
+    assert!(x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 7}})).is_err());
+    let mut p = (**x.s.catalog.photo(photo(&x.s)).unwrap()).clone();
+    p.develop = std::sync::Arc::new(lightcraft_develop::DevelopSettings::default());
+    p.meta.iso = Some(6400);
+    crate::import::apply_import_defaults(&x.s, &mut p);
+    assert!(p.develop.enhance.denoise_enabled() && p.develop.enhance.denoise == 50.0);
+    assert!(p.import_look.as_ref().is_some_and(|l| l.enhance.denoise_enabled()), "where editing starts");
+    p.meta.iso = Some(800);
+    p.develop = std::sync::Arc::new(lightcraft_develop::DevelopSettings::default());
+    crate::import::apply_import_defaults(&x.s, &mut p);
+    assert!(!p.develop.enhance.denoise_enabled(), "below the ISO");
+    // off again
+    let r = x.s.execute("library.preferences", &json!({"import": {"denoiseAboveIso": 0}})).unwrap();
+    assert!(r["import"].get("denoiseAboveIso").is_none(), "{r}");
+    p.meta.iso = Some(25_600);
+    crate::import::apply_import_defaults(&x.s, &mut p);
+    assert!(!p.develop.enhance.denoise_enabled());
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
 }

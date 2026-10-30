@@ -223,3 +223,52 @@ fn dismissing_the_setup_without_a_model_leaves_ai_denoise_off() {
     drop(app);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// With no AI Denoise model available, Settings ▸ AI Denoise explains why and what to use meanwhile,
+/// instead of offering only a file prompt (a dead end for most people).
+#[test]
+fn ai_denoise_without_a_model_explains_instead_of_asking_for_a_file() {
+    use crate::headless::Headless;
+    use std::time::Duration;
+    const T: Duration = Duration::from_secs(10);
+    let dir = std::env::temp_dir().join(format!("lc-ui-denoise-none-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.view = crate::state::ViewMode::PhotoGrid;
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    h.app.session.set_denoise_models_dir(Some(dir.join("denoise-models")));
+    // The list a build with no model to offer gives, whatever models this test build has compiled in (a workspace
+    // build enables the desktop app's default model, which would list it).
+    let mut list = h.app.session.execute("denoise.models.list", &json!({})).unwrap();
+    assert!(!list["dir"].is_null(), "{list}");
+    list["models"] = json!([]);
+    let now = h.app.tick_now();
+    h.app.caches.denoise.seed_list(now, list);
+    h.app.ui.dialog = Some(Dialog::Settings { tab: "denoise".into() });
+    h.step();
+    h.step();
+    assert!(h.request("ui.widgets", json!({"filter": "denoise:"}), T).to_string().contains("denoise:noModelYet"), "the explanation is shown");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// While a denoise request waits, Settings ▸ AI Denoise shows the note with a working
+/// "Cancel pending action" button: clicking it drops the request.
+#[test]
+fn the_pending_notice_in_settings_cancels_the_request() {
+    use crate::headless::Headless;
+    use std::time::Duration;
+    const T: Duration = Duration::from_secs(10);
+    let (mut app, dir, raw) = setup("notice-cancel");
+    let r = app.run("denoise.toggle", json!({"id": raw.0, "enabled": true})).unwrap();
+    assert_eq!(r["setupRequired"], true);
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    h.step();
+    h.step();
+    let widgets = h.request("ui.widgets", json!({"filter": "modelSetup:"}), T).to_string();
+    assert!(widgets.contains("modelSetup:cancel:denoise"), "{widgets}");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "modelSetup:cancel:denoise"}), T)["ok"], true);
+    h.step();
+    assert!(!model_setup::denoise_requested(&h.app, raw), "Cancel drops the pending request");
+    drop(h);
+    let _ = std::fs::remove_dir_all(dir);
+}

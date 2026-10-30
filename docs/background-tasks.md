@@ -49,16 +49,40 @@ guard.detail(&file_name);
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
+## Batches: one row for a job over many photos
+
+A job that works through many photos (AI Denoise, export) shows **one** row for the whole batch: "AI Denoise · 37 of 200 · about 6 min left · 2 failed".
+
+```rust
+let batch = session.activity.start_batch("denoise", "AI Denoise", Cancel::Yes);
+batch.progress(0, photos as u64);        // the total; `item_done` keeps counting past a short one
+batch.item_done();                       // a photo finished
+batch.item_failed("IMG_2.CR3: why");     // a photo failed (counted in done too; the reason is kept)
+let photo = batch.child("denoise", "AI Denoise"); // the photo in progress, under the batch
+```
+
+- **Counts:** `item_done` / `item_failed` count one photo each. A job that sets `progress(done, total)` itself counts
+  a failure with `count_failed(why)` (it doesn't add to `done`).
+- **Time left:** `etaMs` comes from the time per photo measured since the first one was done (a slow start, such as
+  loading a model, doesn't stretch it). The stack words it ("about 6 min left").
+- **Per-photo rows:** `child` (or `Activity::start_child(parent_id, ..)` from a worker that only has the id) puts a
+  row under the batch. The stack folds them away ("Show each photo (3)"). A child of `child` shares the batch's cancel
+  flag: ✕ on the batch stops them too.
+- **The end:** dropping the batch's guard leaves a `BatchSummary` (`activity.list` → `finished`): done, failed, the
+  first reasons, cancelled. The desktop app says it once ("AI Denoise: 198 done, 2 failed: IMG_2.CR3: why"), unless
+  the job reports itself (`reports_itself()`: an export's own message).
+
 ## Examples in the code
 
 | Job | Where | Shows how to |
 |---|---|---|
-| Export, contact sheet | `crates/ui-egui/src/export_task.rs` | adopt the job's flag; update the row each frame |
+| Export, contact sheet | `crates/ui-egui/src/export_task.rs` | adopt the job's flag; update the row each frame; an export is a batch that reports itself, its failures counted when it ends |
 | Build Previews | `crates/engine/src/cmd/previews.rs` | move the guard into the worker thread |
 | Slideshow export | `crates/engine/src/cmd/slideshow.rs`, `crates/engine/src/slideshow_export.rs` | an engine command that owns its worker and row; progress from the worker through a `TaskHandle`; results read back by command |
 | Model downloads | `crates/engine/src/face_download.rs` | report progress through a `TaskHandle` in shared state |
 | Lightroom catalog import | `crates/ui-egui/src/lightroom_import.rs` | stop being cancellable for a phase that must finish |
-| Face scan, AI Denoise | `crates/engine/src/cmd/face_recognize.rs`, `crates/engine/src/denoise.rs` | a continuous job with no ✕, kept in session state |
+| Face scan | `crates/engine/src/cmd/face_recognize.rs` | a continuous job with no ✕, kept in session state |
+| AI Denoise | `crates/engine/src/denoise.rs` (`denoise_track`) | a continuous queue shown as a batch while busy (photos counted since it was last idle), the running photo's tiles as its child; ✕ empties the queue and holds those photos until asked for again |
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |

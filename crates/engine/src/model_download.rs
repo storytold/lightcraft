@@ -97,7 +97,7 @@ impl Downloads {
             .spawn(move || {
                 // the row goes when the thread ends, however it ends
                 let _task = task;
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&spec, &spec.url, &staging, &worker)));
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&spec, &sources(&spec), &staging, &worker)));
                 if outcome.is_err() {
                     worker.set(State::Failed("the download stopped unexpectedly".into()));
                 }
@@ -177,14 +177,21 @@ impl Drop for Downloads {
 }
 
 /// What went wrong, in words the user can act on.
+/// A source's site, as the message names it: its host, without any user name or password the
+/// address carries (the message is shown and returned to scripts).
 #[cfg(not(target_arch = "wasm32"))]
-fn explain(e: &lightcraft_fetch::DownloadError) -> String {
+fn source_name(url: &str) -> &str {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
+    let site = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    site.rsplit('@').next().unwrap_or(site)
+}
+
+/// One source's failure, in a few words.
+#[cfg(not(target_arch = "wasm32"))]
+fn explain_one(e: &lightcraft_fetch::DownloadError) -> String {
     use lightcraft_fetch::DownloadError;
     match e {
-        DownloadError::AllMirrorsFailed { errors, .. } => {
-            let detail: String = errors.join("; ").chars().take(300).collect();
-            format!("could not download the model ({detail}): check the internet connection, or get the file from its page and add it yourself")
-        }
+        DownloadError::AllMirrorsFailed { errors, .. } => errors.join("; ").chars().take(200).collect(),
         other => other.to_string(),
     }
 }
@@ -203,26 +210,63 @@ fn fetch(_: &Download, _: &str, _: &Path, _: &Shared) -> Result<(), String> {
     Err("the web build downloads no models".into())
 }
 
-/// The whole job: reuse a verified earlier copy, else fetch, check and stage. Always ends in a final [`State`].
-fn run(spec: &Download, mirror: &str, staging: &Path, shared: &Shared) {
+/// Where `spec` is fetched from, in order: its address, then its fallbacks.
+fn sources(spec: &Download) -> Vec<String> {
+    std::iter::once(spec.url.clone()).chain(spec.fallbacks.iter().cloned()).collect()
+}
+
+/// The whole job: reuse a verified earlier copy, else fetch from each of `sources` in turn until one gives the file
+/// with the right size and SHA-256, and stage it. Cancelling stops at once; any other failure (unreachable, refused,
+/// the wrong file) moves on to the next source. Always ends in a final [`State`].
+fn run(spec: &Download, sources: &[String], staging: &Path, shared: &Shared) {
     let target = staging.join(&spec.file_name);
     let part = staging.join(format!("{}.part", spec.file_name));
-    match fetch(spec, mirror, staging, shared) {
-        Ok(()) => shared.set(State::Done { path: target, sha256: spec.sha256.to_string() }),
-        #[cfg(not(target_arch = "wasm32"))]
-        Err(lightcraft_fetch::DownloadError::Cancelled) => {
-            let _ = std::fs::remove_file(&part);
-            shared.set(State::Cancelled);
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut errors: Vec<String> = Vec::new();
+    for source in sources {
+        match fetch(spec, source, staging, shared) {
+            Ok(()) => {
+                shared.set(State::Done { path: target, sha256: spec.sha256.to_string() });
+                return;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Err(lightcraft_fetch::DownloadError::Cancelled) => {
+                let _ = std::fs::remove_file(&part);
+                shared.set(State::Cancelled);
+                return;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Err(e) => {
+                // (what this source sent is not kept: the next one starts afresh, or none does
+                // when it can't be removed, as the next would resume from its bytes)
+                errors.push(format!("{}: {}", source_name(source), explain_one(&e)));
+                if let Err(gone) = std::fs::remove_file(&part)
+                    && gone.kind() != std::io::ErrorKind::NotFound
+                {
+                    errors.push(format!("the partial download could not be removed ({gone})"));
+                    break;
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                shared.set(State::Failed(e));
+                return;
+            }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        Err(e) => {
-            shared.set(State::Failed(explain(&e)));
-        }
-        #[cfg(target_arch = "wasm32")]
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            shared.set(State::Failed(e));
-        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let detail: String = errors.join("; ").chars().take(400).collect();
+        shared.set(State::Failed(if detail.is_empty() {
+            "the model has no download address".into()
+        } else {
+            format!("could not download the model ({detail}): check the internet connection, or get the file from its page and add it yourself")
+        }));
+    }
+    #[cfg(target_arch = "wasm32")]
+    if sources.is_empty() {
+        shared.set(State::Failed("the model has no download address".into()));
     }
 }
 
@@ -232,6 +276,13 @@ mod tests {
     use lightcraft_denoise::hash::sha256_hex;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn a_source_is_named_by_its_host_without_its_credentials() {
+        assert_eq!(source_name("https://user:secret@mirror.example/models/a.onnx"), "mirror.example");
+        assert_eq!(source_name("https://token@mirror.example?x=1"), "mirror.example");
+        assert_eq!(source_name("https://github.com/storytold/lightcraft/releases"), "github.com");
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-denoise-dl-{name}-{}", std::process::id()));
@@ -244,6 +295,7 @@ mod tests {
         Download {
             id: "test-model".into(),
             url: "https://example.invalid/m/test-model.onnx".into(),
+            fallbacks: Vec::new(),
             file_name: "test-model.onnx".into(),
             size_bytes: bytes.len() as u64,
             sha256: sha256_hex(bytes),
@@ -334,13 +386,13 @@ mod tests {
         std::fs::create_dir_all(&staging).unwrap();
         let mirror = serve("200 OK", bytes.clone());
         let shared = Shared::new(spec.size_bytes);
-        run(&spec, &mirror, &staging, &shared);
+        run(&spec, std::slice::from_ref(&mirror), &staging, &shared);
         let State::Done { path, sha256 } = shared.get() else { panic!("{:?}", shared.get()) };
         assert_eq!((std::fs::read(&path).unwrap(), sha256), (bytes, spec.sha256.to_string()));
         assert!(!staging.join("test-model.onnx.part").exists());
         // asked again with the copy still staged: no fetch needed (nothing listens there)
         let again = Shared::new(spec.size_bytes);
-        run(&spec, "http://127.0.0.1:1/m", &staging, &again);
+        run(&spec, &["http://127.0.0.1:1/m".to_string()], &staging, &again);
         assert!(matches!(again.get(), State::Done { .. }), "{:?}", again.get());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -353,10 +405,58 @@ mod tests {
         // the right size and the wrong content
         let spec = spec_for(&[7u8; 5000]);
         let shared = Shared::new(spec.size_bytes);
-        run(&spec, &serve("200 OK", vec![8u8; 5000]), &staging, &shared);
+        run(&spec, &[serve("200 OK", vec![8u8; 5000])], &staging, &shared);
         assert!(matches!(shared.get(), State::Failed(_)), "{:?}", shared.get());
         // nothing is left behind: not the file, not a partial one
         assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The model comes from its first source, else the next: an unreachable or refusing source, or one serving a
+    /// file that isn't this one (wrong SHA-256), moves on; the wrong file is never kept, whichever source sent it.
+    #[test]
+    fn a_failing_source_falls_back_to_the_next_and_a_wrong_file_is_refused_from_either() {
+        let dir = scratch("fallback");
+        let staging = dir.join(STAGING);
+        std::fs::create_dir_all(&staging).unwrap();
+        let bytes: Vec<u8> = (0..50_000u32).map(|i| (i % 251) as u8).collect();
+        let spec = spec_for(&bytes);
+        let good = format!("{}/{}", serve("200 OK", bytes.clone()), spec.file_name);
+        let wrong = format!("{}/{}", serve("200 OK", vec![9u8; bytes.len()]), spec.file_name);
+        let down = format!("http://127.0.0.1:1/m/{}", spec.file_name);
+        for first in [down.clone(), wrong.clone()] {
+            let shared = Shared::new(spec.size_bytes);
+            run(&spec, &[first.clone(), good.clone()], &staging, &shared);
+            let State::Done { path, .. } = shared.get() else { panic!("{first}: {:?}", shared.get()) };
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{first}: the right file, from the second source");
+            std::fs::remove_file(&path).unwrap();
+        }
+        // a wrong file from either source, or from both: refused, nothing kept
+        for pair in [[wrong.clone(), wrong.clone()], [down.clone(), wrong.clone()]] {
+            let shared = Shared::new(spec.size_bytes);
+            run(&spec, &pair, &staging, &shared);
+            let State::Failed(why) = shared.get() else { panic!("{pair:?}: {:?}", shared.get()) };
+            assert!(why.contains("127.0.0.1"), "each source is named: {why}");
+            assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "{pair:?}: nothing kept");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A partial download that can't be removed stops the fallback: the next source would resume
+    /// from its bytes.
+    #[test]
+    fn a_partial_download_that_cannot_be_removed_stops_the_fallback() {
+        let dir = scratch("stuck-part");
+        let staging = dir.join(STAGING);
+        let bytes: Vec<u8> = (0..5_000u32).map(|i| (i % 251) as u8).collect();
+        let spec = spec_for(&bytes);
+        // a folder where the partial file goes: it can't be removed as a file
+        std::fs::create_dir_all(staging.join(format!("{}.part", spec.file_name))).unwrap();
+        let good = format!("{}/{}", serve("200 OK", bytes), spec.file_name);
+        let shared = Shared::new(spec.size_bytes);
+        run(&spec, &[format!("http://127.0.0.1:1/m/{}", spec.file_name), good], &staging, &shared);
+        let State::Failed(why) = shared.get() else { panic!("{:?}", shared.get()) };
+        assert!(why.contains("partial download could not be removed"), "{why}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -368,7 +468,7 @@ mod tests {
         let spec = spec_for(b"abc");
         for mirror in ["http://127.0.0.1:1/m".to_string(), serve("404 Not Found", b"not found".to_vec())] {
             let shared = Shared::new(3);
-            run(&spec, &mirror, &staging, &shared);
+            run(&spec, std::slice::from_ref(&mirror), &staging, &shared);
             let State::Failed(why) = shared.get() else { panic!("{:?}", shared.get()) };
             assert!(why.contains("internet connection"), "{why}");
         }
@@ -384,7 +484,7 @@ mod tests {
         let spec = spec_for(b"abc");
         let shared = Shared::new(3);
         shared.cancel.store(true, Ordering::Relaxed);
-        run(&spec, &serve("200 OK", b"abc".to_vec()), &staging, &shared);
+        run(&spec, &[serve("200 OK", b"abc".to_vec())], &staging, &shared);
         assert_eq!(shared.get(), State::Cancelled);
         assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
