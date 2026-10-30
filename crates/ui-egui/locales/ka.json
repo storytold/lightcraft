@@ -2734,5 +2734,21 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Choose one album to rename it": "სახელის შესაცვლელად აირჩიეთ ერთი ალბომი",
+  "Choose one folder to rename it": "სახელის შესაცვლელად აირჩიეთ ერთი საქაღალდე",
+  "Choose one folder to synchronize it": "სინქრონიზაციისთვის აირჩიეთ ერთი საქაღალდე",
+  "Choose one keyword to create a keyword inside it": "აირჩიეთ ერთი საკვანძო სიტყვა, რომ მასში ახალი შექმნათ",
+  "Choose one keyword to edit it": "რედაქტირებისთვის აირჩიეთ ერთი საკვანძო სიტყვა",
+  "Choose one keyword to rename it": "სახელის შესაცვლელად აირჩიეთ ერთი საკვანძო სიტყვა",
+  "Create Keyword Tag Inside…": "შიგნით საკვანძო სიტყვის შექმნა…",
+  "Delete Albums": "ალბომების წაშლა",
+  "Delete Folder": "საქაღალდის წაშლა",
+  "Delete Keywords": "საკვანძო სიტყვების წაშლა",
+  "Moves the photos imported from these folders to Recently Deleted; no file is touched": "ამ საქაღალდეებიდან იმპორტირებულ ფოტოებს „ახლახან წაშლილში“ გადაიტანს; ფაილებს არ ეხება",
+  "No photo has them; the keywords below them go too.": "არცერთ ფოტოს არ აქვს; მათ ქვემოთ არსებული საკვანძო სიტყვებიც წაიშლება.",
+  "One of them is a whole disk: remove a disk by itself": "ერთ-ერთი მათგანი მთელი დისკია: დისკი ცალკე მოაშორეთ",
+  "Remove Folders from Library": "საქაღალდეების ბიბლიოთეკიდან ამოღება",
+  "That includes the photos in the folders inside them.": "ეს მოიცავს მათში არსებული საქაღალდეების ფოტოებსაც.",
+  "The photos stay in All Photos. Undo brings the albums back.": "ფოტოები „ყველა ფოტოში“ რჩება. „დაბრუნება“ ალბომებს აღადგენს."
 }

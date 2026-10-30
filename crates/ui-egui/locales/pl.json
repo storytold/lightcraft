@@ -2283,5 +2283,22 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Choose one album to rename it": "Wybierz jeden album, aby zmienić jego nazwę",
+  "Choose one folder to rename it": "Wybierz jeden folder, aby zmienić jego nazwę",
+  "Choose one folder to synchronize it": "Wybierz jeden folder, aby go zsynchronizować",
+  "Choose one keyword to create a keyword inside it": "Wybierz jedno słowo kluczowe, aby utworzyć w nim kolejne",
+  "Choose one keyword to edit it": "Wybierz jedno słowo kluczowe, aby je edytować",
+  "Choose one keyword to rename it": "Wybierz jedno słowo kluczowe, aby zmienić jego nazwę",
+  "Create Keyword Tag Inside…": "Utwórz słowo kluczowe wewnątrz…",
+  "Delete Albums": "Usuń albumy",
+  "Delete Folder": "Usuń folder",
+  "Delete Keywords": "Usuń słowa kluczowe",
+  "Moves the photos imported from these folders to Recently Deleted; no file is touched": "Przenosi zdjęcia zaimportowane z tych folderów do „Ostatnio usunięte”; żaden plik nie jest zmieniany",
+  "No photo has them; the keywords below them go too.": "Żadne zdjęcie ich nie ma; słowa kluczowe pod nimi też zostaną usunięte.",
+  "One of them is a whole disk: remove a disk by itself": "Jeden z nich to cały dysk: usuń dysk osobno",
+  "Remove Folders from Library": "Usuń foldery z biblioteki",
+  "That includes the photos in the folders inside them.": "Obejmuje to też zdjęcia w folderach wewnątrz nich.",
+  "The photos stay in All Photos. Undo brings the albums back.": "Zdjęcia zostają we „Wszystkich zdjęciach”. Cofnij przywróci albumy.",
+  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "Zdjęcia zostają we „Wszystkich zdjęciach”. Usunięcie folderu usuwa też jego albumy. Możesz to cofnąć."
 }

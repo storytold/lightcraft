@@ -242,18 +242,31 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("lens", "lens", "Lens", f.lens.clone(), lenses),
         ("keyword", "keyword", "Keyword", f.keyword.clone(), keywords),
     ] {
-        let mut items = vec![(format!("Any {}", all_label.to_lowercase()), json!({key: Value::Null}), current.is_none())];
-        items.extend(values.into_iter().map(|v| (v.clone(), json!({key: v.clone()}), current.as_deref() == Some(v.as_str()))));
+        // (the keyword picker puts the keywords chosen with Cmd+click in the sidebar aside, as a keyword set here)
+        let set = |v: Value| if key == "keyword" { json!({"keyword": v, "keywords": []}) } else { json!({key: v}) };
+        let mut items =
+            vec![(format!("Any {}", all_label.to_lowercase()), set(Value::Null), current.is_none() && !(key == "keyword" && !f.keywords.is_empty()))];
+        items.extend(values.into_iter().map(|v| (v.clone(), set(json!(v)), current.as_deref() == Some(v.as_str()))));
         let shown = current.clone().unwrap_or_else(|| all_label.to_string());
         let shown = if shown.chars().count() > 22 { format!("{}…", shown.chars().take(21).collect::<String>()) } else { shown };
-        picker(app, ui, id, &shown, current.is_some(), items);
+        // (several keywords chosen in the sidebar filter the grid too: the picker is on, though it names none)
+        let on = current.is_some() || (key == "keyword" && !f.keywords.is_empty());
+        picker(app, ui, id, &shown, on, items);
     }
 
     // save / clear
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
-    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
+    let why_not = app.session.view_save_refusal();
+    let save = ui.add_enabled(
+        filtering && why_not.is_none(),
+        egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))),
+    );
     register(ui, "button:filterSave", save.rect);
+    let save = match why_not {
+        Some(why) => save.on_disabled_hover_text(why),
+        None => save,
+    };
     if save.clicked() {
         let _ = app.run("dialog.newSmartAlbum", json!({}));
     }

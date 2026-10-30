@@ -305,5 +305,22 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "{n} albums": "ალბომები: {n}",
+  "{n} folders": "საქაღალდეები: {n}",
+  "Export {n} Albums…": "{n} ალბომის ექსპორტი…",
+  "Move {n} Albums to": "{n} ალბომის გადატანა",
+  "Delete {n} Albums…": "{n} ალბომის წაშლა…",
+  "Remove {n} Folders from Library…": "{n} საქაღალდის ამოღება ბიბლიოთეკიდან…",
+  "Add {n} Keywords to Selected Photos": "{n} საკვანძო სიტყვის დამატება არჩეულ ფოტოებზე",
+  "Remove {n} Keywords from Selected Photos": "{n} საკვანძო სიტყვის მოხსნა არჩეული ფოტოებიდან",
+  "Show Photos with Any of {n} Keywords": "ფოტოების ჩვენება {n} საკვანძო სიტყვიდან რომელიმეთი",
+  "Merge {n} Keywords into…": "{n} საკვანძო სიტყვის გაერთიანება…",
+  "Delete {n} Keywords…": "{n} საკვანძო სიტყვის წაშლა…",
+  "Delete {n} albums?": "წავშალოთ {n} ალბომი?",
+  "Delete {n} keywords?": "წავშალოთ {n} საკვანძო სიტყვა?",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "ფოტოები, რომლებსაც ერთ-ერთი აქვს: {count}. მათ ქვემოთ არსებული საკვანძო სიტყვებიც წაიშლება. გაუქმება მათ დააბრუნებს.",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "ამოვიღოთ {n} საქაღალდე ბიბლიოთეკიდან? მათგან იმპორტირებული ფოტოები: {count}.",
+  "…and {n} more": "…და კიდევ {n}",
+  "{n} keywords": "საკვანძო სიტყვები: {n}"
 }

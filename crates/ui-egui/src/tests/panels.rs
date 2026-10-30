@@ -2591,3 +2591,83 @@ fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
     // and the shadow one keeps the same inset from its edge
     assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
 }
+
+/// A date chip that names several dates (`date` with `dates`) names all of them in another
+/// language too, not only the first.
+#[test]
+fn a_date_chip_names_every_date_in_another_language() {
+    use crate::i18n::{Locale, date_group_label, set_language};
+    let s = lightcraft_engine::Session::new();
+    let filter = lightcraft_catalog::Filter { date: Some("2026-01-05".into()), dates: vec!["2026-01-02".into()], ..Default::default() };
+    let chips = lightcraft_engine::filter_chips(&filter, &s.catalog);
+    assert_eq!(chips.len(), 1);
+    set_language(Locale::De);
+    let label = crate::panels::chips::display_label(&chips[0], &filter, &s.catalog);
+    let dates = ["2026-01-05", "2026-01-02"].map(|d| date_group_label(d, false));
+    set_language(Locale::En);
+    assert!(dates.iter().all(|d| label.contains(d.as_str())), "{label} names {dates:?}");
+}
+
+/// Keyword, album and folder chips that list several values join them with the language's own
+/// "or", as the date and label chips do, not with the engine's English one.
+#[test]
+fn keyword_album_and_folder_chips_join_their_values_in_the_language_s_own_or() {
+    use crate::i18n::{Locale, set_language};
+    let s = lightcraft_engine::Session::new();
+    let filter = lightcraft_catalog::Filter {
+        keywords: vec!["alps".into(), "beach".into()],
+        albums: vec![lightcraft_catalog::AlbumId(901), lightcraft_catalog::AlbumId(902)],
+        library_folders: vec!["/lib/Trips".into(), "/lib/Work".into()],
+        ..Default::default()
+    };
+    let chips = lightcraft_engine::filter_chips(&filter, &s.catalog);
+    assert_eq!(chips.len(), 3);
+    set_language(Locale::De);
+    let labels: Vec<String> = chips.iter().map(|c| crate::panels::chips::display_label(c, &filter, &s.catalog)).collect();
+    let or = Locale::De.tr("or");
+    set_language(Locale::En);
+    for label in &labels {
+        assert!(label.contains(&format!(" {or} ")) && !label.contains(" or "), "{label} joins with {or:?}");
+    }
+}
+
+/// Several albums shown with a smart one among them can't be saved as smart-album rules: the
+/// File menu's "New Smart Album from Filter…" is greyed out, and running it says why (naming the
+/// smart album) in the engine's own words; a single smart album alone still can be saved.
+#[test]
+fn new_smart_album_from_filter_is_greyed_out_for_several_albums_with_a_smart_one() {
+    let mut h = folders_app(&["/pics/trip/a.jpg"]);
+    let plain = h.app.run("album.create", json!({"name": "Alps"})).unwrap()["id"].as_u64().unwrap();
+    let other = h.app.run("album.create", json!({"name": "Beach"})).unwrap()["id"].as_u64().unwrap();
+    let smart = h.app.run("album.createSmart", json!({"name": "Rated", "rules": {"rating": 1}})).unwrap()["id"].as_u64().unwrap();
+    let entry = |h: &Headless| crate::menus::menu_entries(&h.app).into_iter().find(|e| e.id == "dialog.newSmartAlbum").unwrap();
+    h.app.run("library.source", json!({"kind": "album", "ids": [plain, other]})).unwrap();
+    assert!(entry(&h).enabled, "plain albums can be saved");
+    h.app.run("library.source", json!({"kind": "album", "ids": [plain, smart]})).unwrap();
+    assert!(!entry(&h).enabled && !crate::menus::ui_enabled(&h.app, "dialog.newSmartAlbum"));
+    let from_menu = h.app.run("dialog.newSmartAlbum", json!({})).unwrap_err();
+    assert!(from_menu.contains("\"Rated\" is a smart album"), "{from_menu}");
+    assert!(h.app.ui.dialog.is_none(), "no dialog opened");
+    let from_engine = h.app.run("album.createSmart", json!({"name": "X"})).unwrap_err();
+    assert!(from_engine.contains(&from_menu), "one message for both: {from_engine} / {from_menu}");
+    h.app.run("library.source", json!({"kind": "album", "id": smart})).unwrap();
+    assert!(entry(&h).enabled, "a smart album alone is saved as its own rules");
+}
+
+/// The shortcut of "New Smart Album from Filter…" says why when the view can't be saved, instead of
+/// doing nothing (where the window's menu doesn't own the shortcut).
+#[test]
+fn the_new_smart_album_shortcut_says_why_a_view_of_several_albums_cannot_be_saved() {
+    let mut h = folders_app(&["/pics/trip/a.jpg"]);
+    let plain = h.app.run("album.create", json!({"name": "Alps"})).unwrap()["id"].as_u64().unwrap();
+    let smart = h.app.run("album.createSmart", json!({"name": "Rated", "rules": {"rating": 1}})).unwrap()["id"].as_u64().unwrap();
+    h.app.run("library.source", json!({"kind": "album", "ids": [plain, smart]})).unwrap();
+    h.app.native_shortcuts.clear();
+    let r = h.request("ui.key", json!({"key": "N", "cmd": true, "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("\"Rated\" is a smart album"), "{toast:?}");
+    assert!(h.app.ui.dialog.is_none());
+}

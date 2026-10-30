@@ -2327,5 +2327,21 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Choose one album to rename it": "Valitse yksi albumi nimetäksesi sen uudelleen",
+  "Choose one folder to rename it": "Valitse yksi kansio nimetäksesi sen uudelleen",
+  "Choose one folder to synchronize it": "Valitse yksi kansio synkronoidaksesi sen",
+  "Choose one keyword to create a keyword inside it": "Valitse yksi avainsana luodaksesi sen sisään avainsanan",
+  "Choose one keyword to edit it": "Valitse yksi avainsana muokataksesi sitä",
+  "Choose one keyword to rename it": "Valitse yksi avainsana nimetäksesi sen uudelleen",
+  "Create Keyword Tag Inside…": "Luo avainsanatunniste sisään…",
+  "Delete Albums": "Poista albumit",
+  "Delete Folder": "Poista kansio",
+  "Delete Keywords": "Poista avainsanat",
+  "Moves the photos imported from these folders to Recently Deleted; no file is touched": "Siirtää näistä kansioista tuodut kuvat kohtaan Äskettäin poistetut; mitään tiedostoa ei kosketa",
+  "No photo has them; the keywords below them go too.": "Yhdelläkään kuvalla ei ole niitä; niiden alla olevat avainsanat poistetaan myös.",
+  "One of them is a whole disk: remove a disk by itself": "Yksi niistä on kokonainen levy: poista levy erikseen",
+  "Remove Folders from Library": "Poista kansiot kirjastosta",
+  "That includes the photos in the folders inside them.": "Tämä sisältää niiden sisällä olevissa kansioissa olevat kuvat.",
+  "The photos stay in All Photos. Undo brings the albums back.": "Kuvat pysyvät kohdassa Kaikki kuvat. Kumoa palauttaa albumit."
 }

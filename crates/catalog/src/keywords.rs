@@ -10,7 +10,7 @@
 //! photo has them, or given attributes ([`KeywordInfo`]: synonyms, export options, person). The
 //! tree is the keyword list together with the keywords photos carry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,12 @@ pub fn same(a: &str, b: &str) -> bool {
 pub fn is_under(k: &str, parent: &str) -> bool {
     let (k, p) = (k.to_lowercase(), parent.to_lowercase());
     k == p || k.strip_prefix(&p).is_some_and(|rest| rest.starts_with(SEP))
+}
+
+/// The upper levels of a case folded keyword path, each as a prefix of it ending before a `|`
+/// (`a|b|c` gives `a`, `a|b`), the way [`is_under`] sees them.
+fn upper_levels(folded: &str) -> impl Iterator<Item = &str> {
+    folded.match_indices(SEP).map(|(i, _)| &folded[..i])
 }
 
 /// Replace the `from` prefix of `k` (which [`is_under`] `from`) with `to`. By levels, not bytes:
@@ -407,6 +413,97 @@ impl Catalog {
         let mut ops = self.keyword_ops(|kws| kws.iter().filter(|x| !is_under(x, &k)).cloned().collect());
         ops.extend(self.list_ops(|list| list.retain(|_, l| !is_under(&l.path, &k))));
         Ok(Op::Batch { ops })
+    }
+
+    /// [`Self::delete_keyword_ops`] for several keywords at once: one batch, so one undo step.
+    /// Unlike one keyword (which may be absent and then changes nothing), every keyword named must
+    /// exist, or the whole batch is refused.
+    pub fn delete_keywords_ops(&self, keywords: &[String]) -> Result<Op> {
+        let gone: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+        if gone.is_empty() || gone.iter().any(String::is_empty) {
+            return Err(CatalogError::Invalid("empty keyword".into()));
+        }
+        // case folded once here, and each candidate once below, not once per pair
+        let folded: Vec<String> = gone.iter().map(|g| g.to_lowercase()).collect();
+        let under = |k: &str, p: &str| k == p || k.strip_prefix(p).is_some_and(|rest| rest.starts_with(SEP));
+        let mut found = vec![false; folded.len()];
+        let listed = self.keyword_list.values().map(|l| &l.path);
+        for k in listed.chain(self.photos().filter(|p| p.in_library()).flat_map(|p| p.meta.keywords.iter())) {
+            let k = k.to_lowercase();
+            for (hit, p) in found.iter_mut().zip(&folded) {
+                *hit |= under(&k, p);
+            }
+        }
+        if let Some(i) = found.iter().position(|hit| !hit) {
+            return Err(CatalogError::Invalid(format!("no keyword “{}”", gone[i])));
+        }
+        let goes = |k: &str| {
+            let k = k.to_lowercase();
+            folded.iter().any(|p| under(&k, p))
+        };
+        let mut ops = self.keyword_ops(|kws| kws.iter().filter(|x| !goes(x)).cloned().collect());
+        ops.extend(self.list_ops(|list| list.retain(|_, l| !goes(&l.path))));
+        Ok(Op::Batch { ops })
+    }
+
+    /// Move several keywords (each with the keywords below it) inside `parent`, or to the top
+    /// level (`None`), as one batch. Each keeps its name. Of a keyword and one below it only the
+    /// upper one moves (the lower goes with it). Nothing merges here: a name that is taken where
+    /// they go ([`CatalogError::KeywordExists`]), or two of them with one name, refuses the whole
+    /// move. Returns the batch and each move as `(from, to)`.
+    pub fn move_keywords_ops(&self, keywords: &[String], parent: Option<&str>) -> Result<(Op, Vec<(String, String)>)> {
+        // paths are case folded once and kept in sets: a batch of thousands stays linear
+        let mut from: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for k in keywords {
+            let path = self.keyword_path(k).ok_or_else(|| CatalogError::Invalid(format!("no keyword “{}”", clean(k))))?;
+            if seen.insert(path.to_lowercase()) {
+                from.push(path);
+            }
+        }
+        if from.is_empty() {
+            return Err(CatalogError::Invalid("no keyword to move".into()));
+        }
+        // the upper ones only: a keyword goes when one of its upper levels is named too
+        from.retain(|f| !upper_levels(&f.to_lowercase()).any(|up| seen.contains(up)));
+        let upper: HashSet<String> = from.iter().map(|f| f.to_lowercase()).collect();
+        let parent = parent.map(clean).filter(|p| !p.is_empty()).map(|p| self.keyword_path(&p).unwrap_or(p));
+        if let Some(p) = &parent {
+            let p = p.to_lowercase();
+            if upper.contains(&p) || upper_levels(&p).any(|up| upper.contains(up)) {
+                return Err(CatalogError::Invalid("can't move a keyword inside itself".into()));
+            }
+        }
+        let mut moves: Vec<(String, String)> = Vec::new();
+        let mut names: HashSet<String> = HashSet::new();
+        for f in &from {
+            let leaf = f.rsplit(SEP).next().unwrap_or(f);
+            let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}{SEP}{leaf}"));
+            if !names.insert(to.to_lowercase()) {
+                return Err(CatalogError::Invalid(format!("two of them are named “{leaf}”: move them one at a time")));
+            }
+            moves.push((f.clone(), to));
+        }
+        // one that is there already stays; the others must find their name free
+        moves.retain(|(f, t)| !same(f, t));
+        if let Some((_, taken)) = moves.iter().find(|(_, t)| self.has_keyword(t)) {
+            return Err(CatalogError::KeywordExists(taken.clone()));
+        }
+        // case folded once here and once per photo keyword, not once per pair
+        let folded_from: Vec<String> = moves.iter().map(|(f, _)| f.to_lowercase()).collect();
+        let moved = |k: &str| {
+            let k_folded = k.to_lowercase();
+            moves.iter().zip(&folded_from).find_map(|((f, t), f_folded)| {
+                let under = k_folded == *f_folded || k_folded.strip_prefix(f_folded.as_str()).is_some_and(|rest| rest.starts_with(SEP));
+                under.then(|| reparent(k, f, t))
+            })
+        };
+        let mut ops = self.keyword_ops(|kws| kws.iter().map(|k| moved(k).unwrap_or_else(|| k.clone())).collect());
+        // (the moves touch apart parts of the list: each one's listings are its own)
+        for (f, t) in &moves {
+            ops.extend(self.list_move_ops(std::slice::from_ref(f), t));
+        }
+        Ok((Op::Batch { ops }, moves))
     }
 
     /// Merge several keywords (with their children) into `into`.

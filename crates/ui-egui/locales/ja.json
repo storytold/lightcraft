@@ -2356,5 +2356,22 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Choose one album to rename it": "名前を変更するには、アルバムを1つだけ選択してください",
+  "Choose one folder to rename it": "名前を変更するには、フォルダを1つだけ選択してください",
+  "Choose one folder to synchronize it": "同期するには、フォルダを1つだけ選択してください",
+  "Choose one keyword to create a keyword inside it": "中にキーワードを作成するには、キーワードを1つだけ選択してください",
+  "Choose one keyword to edit it": "編集するには、キーワードを1つだけ選択してください",
+  "Choose one keyword to rename it": "名前を変更するには、キーワードを1つだけ選択してください",
+  "Create Keyword Tag Inside…": "この中にキーワードタグを作成…",
+  "Delete Albums": "アルバムを削除",
+  "Delete Folder": "フォルダを削除",
+  "Delete Keywords": "キーワードを削除",
+  "Moves the photos imported from these folders to Recently Deleted; no file is touched": "これらのフォルダから読み込んだ写真を「最近削除した写真」に移動します。ファイルには手を加えません",
+  "No photo has them; the keywords below them go too.": "これらのキーワードを持つ写真はありません。下位のキーワードも削除されます。",
+  "One of them is a whole disk: remove a disk by itself": "その中にディスク全体が含まれています。ディスクは単独で除去してください",
+  "Remove Folders from Library": "フォルダをライブラリから除去",
+  "That includes the photos in the folders inside them.": "その中にあるフォルダの写真も含まれます。",
+  "The photos stay in All Photos. Undo brings the albums back.": "写真は「すべての写真」に残ります。「取り消す」でアルバムが戻ります。",
+  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "写真は「すべての写真」に残ります。フォルダを削除すると、その中のアルバムも削除されます。「取り消す」で元に戻せます。"
 }

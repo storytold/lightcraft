@@ -43,13 +43,20 @@ fn label_names(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog
 }
 
 /// The value of a `prefix: value` chip, localised.
-fn prefixed_value(prefix: &str, value: &str, filter: &lightcraft_catalog::Filter) -> String {
+fn prefixed_value(prefix: &str, value: &str, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
     use crate::i18n::{date_group_label, tr};
     let date = match prefix {
         "Flag" | "Type" => return tr(value).to_string(),
-        "Date" => &filter.date,
+        "Date" => {
+            // every date of the chip, as the engine's label lists them
+            let dates = filter.dates_wanted();
+            if dates.is_empty() {
+                return value.to_string();
+            }
+            return dates.iter().map(|date| date_group_label(date, false)).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
+        }
         "Imported" => &filter.imported,
-        _ => return value.to_string(),
+        _ => return several_names(prefix, filter, catalog).map_or_else(|| value.to_string(), |names| names.join(&format!(" {} ", tr("or")))),
     };
     date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
 }
@@ -80,12 +87,24 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = if filter.only_none { 0 } else { filter.only.len() }));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
-        return format!("{}: {}", tr(prefix), prefixed_value(prefix, value, filter));
+        return format!("{}: {}", tr(prefix), prefixed_value(prefix, value, filter, catalog));
     }
     if let Some(value) = chip.label.strip_prefix("Rating ") {
         return format!("{} {value}", tr("Rating"));
     }
     tr(&chip.label).to_string()
+}
+
+/// The names a Keyword, Album or Folder chip lists, as the engine's `filter_chips` builds them, so
+/// the caller can join them with the language's own "or". `None` for any other chip.
+fn several_names(prefix: &str, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> Option<Vec<String>> {
+    let names: Vec<String> = match prefix {
+        "Keyword" => filter.keywords_wanted(),
+        "Folder" => filter.library_folders_wanted().iter().map(|d| lightcraft_catalog::folders::folder_label(d)).collect(),
+        "Album" => filter.albums_wanted().iter().map(|a| catalog.album(*a).map_or_else(|| format!("album {}", a.0), |a| a.name.clone())).collect(),
+        _ => return None,
+    };
+    (!names.is_empty()).then_some(names)
 }
 
 /// Draws the strip; does nothing without chips.
