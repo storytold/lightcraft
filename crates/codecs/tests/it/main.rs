@@ -3,6 +3,7 @@
 
 mod bench;
 mod corpus;
+mod damaged_jpeg;
 mod float_tiff;
 mod fuzz;
 mod header;

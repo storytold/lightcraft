@@ -242,6 +242,13 @@ from its raw data without a manual Reload. Headless sessions don't do this on th
 build) → `{checked, updated, cleared}`. Like the app's recheck, it isn't an undo step and keeps
 develop settings and history.
 
+### JPEGs cut short
+
+A JPEG that stops before its end-of-image marker (an interrupted download or copy) imports from the data that is
+there; `catalog.query` lists it with `truncated: true`. Reload sets it back to `false` once the file is whole. A cut
+file with no picture data yet, and a cut JPEG of a kind only the slower decoder reads (CMYK, 12-bit, lossless,
+separate scans per colour), is still reported in `library.import`'s `failed` list.
+
 ## Resources
 
 `resources/list` / `resources/read` serve JSON snapshots:

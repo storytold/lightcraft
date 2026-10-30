@@ -452,7 +452,15 @@ fn image_probe_reads_headers_like_the_decode_did() {
             assert_eq!(p.format, if name == "a.jpg" { "JPEG" } else { "PNG" });
             assert_eq!(p.file_size, bytes.len() as u64);
             assert!(p.content_hash.is_some());
-            assert!(probe_bytes(name, &bytes[..bytes.len() / 2]).is_err(), "{name}: truncated file accepted");
+            assert!(!p.truncated);
+            let cut = probe_bytes(name, &bytes[..bytes.len() / 2]);
+            if name == "a.jpg" {
+                // a JPEG cut short is read from the data present, and says so
+                let cut = cut.unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert!(cut.truncated && (cut.width, cut.height) == (p.width, p.height), "{name} {o:?}");
+            } else {
+                assert!(cut.is_err(), "{name}: truncated file accepted");
+            }
         }
     }
     assert!(probe_bytes("x.jpg", b"not an image").is_err());
@@ -1454,6 +1462,127 @@ fn unsupported_raw_imports_as_preview_only_and_survives_reopen() {
     s.execute("photo.relink", &json!({"id": id.0, "path": dng.to_string_lossy()})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().preview_only, None);
     drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A JPEG cut short (an interrupted download) imports, marked as truncated, from the data
+/// present; the original is never touched; the mark survives a reopen and Reload clears it when
+/// the file is whole (undoably). One with nothing to show is still reported as failed.
+#[test]
+fn a_jpeg_cut_short_imports_marked_truncated_and_reload_clears_it() {
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("lc-cut-jpeg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (lib, files) = (dir.join("lib"), dir.join("files"));
+    std::fs::create_dir_all(&files).unwrap();
+    let (w, h) = (160u32, 96u32);
+    let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let whole = encode_jpeg(&EncodeImage::new(w, h, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let cut = &whole[..whole.len() * 2 / 3];
+    let (cut_path, whole_path, empty_path) = (files.join("cut.jpg"), files.join("whole.jpg"), files.join("nothing.jpg"));
+    std::fs::write(&cut_path, cut).unwrap();
+    std::fs::write(&whole_path, &whole).unwrap();
+    std::fs::write(&empty_path, &whole[..30]).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let path = |p: &std::path::Path| json!(p.to_string_lossy());
+    let r = s.execute("library.import", &json!({"paths": [path(&cut_path), path(&whole_path), path(&empty_path)]})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(2), "{r}");
+    assert_eq!(r["failed"].as_array().map(Vec::len), Some(1), "{r}");
+    assert!(r["failed"][0][0].as_str().is_some_and(|p| p.ends_with("nothing.jpg")), "{r}");
+    let by_name = |s: &crate::Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).map(|p| p.id).unwrap();
+    let (id, whole_id) = (by_name(&s, "cut.jpg"), by_name(&s, "whole.jpg"));
+    let p = s.catalog.photo(id).unwrap();
+    assert!(p.truncated && (p.width, p.height) == (w, h), "{p:?}");
+    assert!(!s.catalog.photo(whole_id).unwrap().truncated);
+    assert_eq!(std::fs::read(&cut_path).unwrap(), cut, "the original is never modified");
+    // it renders (thumbnail size and full size) from the data present
+    for edge in [48, 160] {
+        assert!(s.render_job(id, edge, edge, false, true).unwrap().run().rendered.is_ok(), "edge {edge}");
+    }
+    // agents see it
+    let q = s.execute("catalog.query", &json!({"filter": {}})).unwrap();
+    let flags: Vec<(String, bool)> = q["photos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["fileName"].as_str().unwrap_or_default().to_string(), p["truncated"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(flags.iter().filter(|f| f.1).count(), 1, "{flags:?}");
+    // a reopen keeps it
+    s.persist().unwrap();
+    drop(s);
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.catalog.photo(id).unwrap().truncated);
+    assert!(!s.catalog.photo(whole_id).unwrap().truncated);
+    // the download finishes: Reload clears the mark, undo brings it back
+    std::fs::write(&cut_path, &whole).unwrap();
+    let r = s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!([id.0]), "{r}");
+    assert!(!s.catalog.photo(id).unwrap().truncated);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().truncated);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A raw's preview window that stops before the JPEG's end (a pointer that lies about the
+/// length) is not shown from the data present: the caller falls back to the whole file.
+#[test]
+fn a_quick_preview_window_cut_short_is_left_to_the_whole_file_fallback() {
+    let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let jpeg = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    assert!(quick_image_srgb(&[], &jpeg, false, 64).is_some());
+    assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], false, 64).is_none());
+    assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], true, 64).is_none());
+}
+
+/// A JPEG cut short is charged to the work gate for its file and its whole frame together,
+/// from before the file is read until the load is done (so the buffer is never uncounted); a
+/// whole file or a non-JPEG is charged its length alone.
+#[test]
+fn a_cut_jpeg_is_charged_for_its_file_and_its_whole_frame() {
+    let dir = std::env::temp_dir().join(format!("lc-cut-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let jpeg = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let cut = &jpeg[..jpeg.len() / 2];
+    let thumb = crate::media::SourceLevel::Thumb.max_edge();
+    let charged = |name: &str, bytes: &[u8], max_edge: usize| {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let gate = crate::memory::WorkGate::new(usize::MAX / 2);
+        let held = load_gated(&gate, false, &path.to_string_lossy(), max_edge, |b| {
+            assert_eq!(b.len(), bytes.len());
+            Ok(gate.usage().0)
+        })
+        .unwrap();
+        assert_eq!(gate.usage().0, 0, "{name}: given back");
+        held
+    };
+    assert_eq!(charged("cut.jpg", cut, thumb), cut.len() + 160 * 96 * 3);
+    assert_eq!(charged("cut-full.jpg", cut, thumb + 1), cut.len() + 160 * 96 * 15);
+    assert_eq!(charged("whole.jpg", &jpeg, thumb), jpeg.len() * 3);
+    assert_eq!(charged("other.bin", b"not a jpeg at all", thumb), 17 * 3);
+    // a frame header after more than the first probe's worth of APP segments (extended XMP,
+    // a big ICC profile) is still found
+    let mut padded = jpeg[..2].to_vec();
+    for _ in 0..20 {
+        padded.extend([0xFF, 0xED, 0xEA, 0x62]);
+        padded.extend(std::iter::repeat_n(0u8, 0xEA60));
+    }
+    padded.extend_from_slice(&jpeg[2..jpeg.len() / 2]);
+    assert!(padded.len() - jpeg.len() / 2 > FRAME_PROBE, "the frame header is past the first probe");
+    let padded_path = dir.join("padded-cut.jpg");
+    std::fs::write(&padded_path, &padded).unwrap();
+    assert_eq!(cut_jpeg_frame_weight(&padded_path.to_string_lossy(), padded.len(), thumb), 160 * 96 * 3);
+    // a damaged frame header that claims 65535 x 65535 pixels is not charged for them
+    let mut wild = cut.to_vec();
+    let sof = wild.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    wild[sof + 5..sof + 9].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    assert_eq!(charged("wild.jpg", &wild, thumb), wild.len() * 3);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
