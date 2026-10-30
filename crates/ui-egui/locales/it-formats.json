@@ -178,6 +178,7 @@
   "{} files and {f} folder{}": "{} file, cartelle: {f}{:.0}",
   "{} item{}": "Elementi: {}{:.0}",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} di 4 guide: trascina lungo le linee che dovrebbero essere verticali o orizzontali.",
+  "{} only": "solo {}",
   "{} photos": "{} foto",
   "{} photos · exposures {} EV": "{} foto · esposizioni {} EV",
   "{} photos · {} · {:.0}° × {:.0}°": "{} foto · {} · {:.0}° × {:.0}°",

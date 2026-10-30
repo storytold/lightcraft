@@ -281,6 +281,7 @@
   "{} label (click more labels to show any of them)": "Nhãn «{}» (nhấp thêm nhãn để hiện ảnh có bất kỳ nhãn nào)",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} / 4 đường dẫn — kéo dọc các đường cần thẳng đứng hoặc nằm ngang.",
   "{} of {} from {host}": "{} / {} từ {host}",
+  "{} only": "chỉ {}",
   "{} photos": "{} ảnh",
   "{} photos · exposures {} EV": "{} ảnh · phơi sáng {} EV",
   "{} photos · {} · {:.0}° × {:.0}°": "{} ảnh · {} · {:.0}° × {:.0}°",

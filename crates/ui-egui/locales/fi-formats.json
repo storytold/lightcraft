@@ -281,6 +281,7 @@
   "{} label (click more labels to show any of them)": "Merkintä: {} (napsauta lisää merkintöjä näyttääksesi minkä tahansa niistä)",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} / 4 apuviivaa — vedä pysty- tai vaakasuoraksi tarkoitettujen viivojen suuntaisesti.",
   "{} of {} from {host}": "{} / {} kohteesta {host}",
+  "{} only": "vain {}",
   "{} photos": "Kuvia: {}",
   "{} photos · exposures {} EV": "Kuvia: {} · valotukset {} EV",
   "{} photos · {} · {:.0}° × {:.0}°": "Kuvia: {} · {} · {:.0}° × {:.0}°",

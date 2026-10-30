@@ -170,6 +170,7 @@
   "{} files and {f} folder{}": "Pliki: {}, foldery: {f}{:.0}",
   "{} item{}": "Elementy: {}{:.0}",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} z 4 prowadnic — przeciągnij wzdłuż linii, które powinny być pionowe lub poziome.",
+  "{} only": "tylko {}",
   "{} photos": "Zdjęcia: {}",
   "{} photos · exposures {} EV": "Zdjęcia: {} · ekspozycje {} EV",
   "{} photos · {} · {:.0}° × {:.0}°": "Zdjęcia: {} · {} · {:.0}° × {:.0}°",

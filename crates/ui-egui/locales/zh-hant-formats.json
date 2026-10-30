@@ -132,6 +132,7 @@
   "{} files": "{} 個檔案",
   "{} files and {f} folder{}": "{} 個檔案與 {f} 個資料夾{:.0}",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "已繪製 {}／4 條參考線 — 沿應為垂直或水平的線條拖曳。",
+  "{} only": "僅 {}",
   "{} photos": "{} 張照片",
   "{} photo{} not readable": "{} 張照片無法讀取{:.0}",
   "{} spot(s) on this photo": "此照片有 {} 個斑點",

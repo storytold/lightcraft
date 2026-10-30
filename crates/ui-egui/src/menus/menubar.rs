@@ -754,6 +754,18 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             v.extend((1..=5u8).map(|r| {
                 item("library.selectBy", json!({"rating": r}), crate::i18n::tr_format!("{} and higher", "★".repeat(r as usize)), None, true, None)
             }));
+            // each rating on its own (#3311), with Unrated as the zero row
+            v.push(MenuNode::Separator);
+            v.extend((1..=5u8).map(|r| {
+                item(
+                    "library.selectBy",
+                    json!({"rating": r, "ratingOp": "eq"}),
+                    crate::i18n::tr_format!("{} only", "★".repeat(r as usize)),
+                    None,
+                    true,
+                    None,
+                )
+            }));
             v.push(item("library.selectBy", json!({"rating": 0, "ratingOp": "eq"}), "Unrated", None, true, None));
             v.push(MenuNode::Separator);
             v.extend(lightcraft_catalog::ColorLabel::ALL.iter().map(|l| {

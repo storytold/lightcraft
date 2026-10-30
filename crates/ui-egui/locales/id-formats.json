@@ -108,6 +108,7 @@
   "{} files": "{} file",
   "{} files and {f} folder{}": "{} file dan {f} folder{:.0}",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} dari 4 garis panduan — seret di sepanjang garis yang seharusnya vertikal atau horizontal.",
+  "{} only": "hanya {}",
   "{} photos": "{} foto",
   "{} photo{} not readable": "{} foto tidak dapat dibaca{:.0}",
   "{} spot(s) on this photo": "{} bintik di foto ini",

@@ -108,6 +108,7 @@
   "{} files": "{}個のファイル",
   "{} files and {f} folder{}": "{}個のファイルと{f}個のフォルダ{:.0}",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "ガイド4本中{}本：垂直または水平にする線に沿ってドラッグ",
+  "{} only": "{}のみ",
   "{} photos": "{}枚",
   "{} photo{} not readable": "{}枚を読み込めません{:.0}",
   "{} spot(s) on this photo": "この写真に{}か所のスポット",

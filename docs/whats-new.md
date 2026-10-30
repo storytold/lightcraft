@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Select by a single star rating
+- Edit ▸ Select by now lists each rating on its own (★ only through ★★★★★ only) below the “and higher” rows,
+  next to Unrated. Choosing ★★★ only selects the photos in view rated exactly three stars, where before the menu
+  could only select three stars and up (#3311).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

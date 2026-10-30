@@ -233,6 +233,7 @@
   "{} label (click more labels to show any of them)": "Štítek {} (kliknutím na další štítky zobrazíte fotografie s kterýmkoli z nich)",
   "{} of 4 guides — drag along lines that should be vertical or horizontal.": "{} ze 4 vodítek — táhněte podél čar, které mají být svislé nebo vodorovné.",
   "{} of {} from {host}": "{} z {} z {host}",
+  "{} only": "pouze {}",
   "{} photos": "Fotografií: {}",
   "{} photos · exposures {} EV": "Fotografií: {} · expozice {} EV",
   "{} photos · {} · {:.0}° × {:.0}°": "Fotografií: {} · {} · {:.0}° × {:.0}°",
