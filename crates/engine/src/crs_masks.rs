@@ -208,13 +208,18 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
             if pts.is_empty() {
                 return Err("empty brush".into());
             }
-            let erase = num(m, "crs:MaskValue").is_some_and(|v| v <= 0.0);
+            let value = num(m, "crs:MaskValue").unwrap_or(1.0);
+            let erase = value <= 0.0;
+            // Zero means paint toward zero (erase), not an eraser with zero strength.
+            let density = if value == 0.0 { 1.0 } else { value.abs() };
             json!({"kind": "brush", "strokes": [{
                 "points": pts,
                 "size": num(m, "crs:Radius").unwrap_or(0.03).clamp(0.001, 1.0),
-                "feather": (num(m, "crs:CenterWeight").unwrap_or(0.5) * 100.0).clamp(0.0, 100.0),
+                // CenterWeight is hardness: zero is a fully soft dab, one a hard disk.
+                // Copying it as feather turns soft imported brushes into oversized solid disks.
+                "feather": ((1.0 - num(m, "crs:CenterWeight").unwrap_or(0.5)) * 100.0).clamp(0.0, 100.0),
                 "flow": (num(m, "crs:Flow").unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
-                "density": (num(m, "crs:MaskValue").unwrap_or(1.0).abs() * 100.0).clamp(0.0, 100.0),
+                "density": (density * 100.0).clamp(0.0, 100.0),
                 "erase": erase,
             }]})
         }

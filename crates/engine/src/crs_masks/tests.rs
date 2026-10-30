@@ -38,6 +38,7 @@ fn settings() -> (DevelopSettings, Vec<String>) {
     (DevelopSettings::default().merged(&partial).expect("valid settings"), unmapped)
 }
 
+/// Verify correction containers preserve adjustments, component geometry and brush properties.
 #[test]
 fn corrections_become_masks() {
     let (s, unmapped) = settings();
@@ -63,7 +64,7 @@ fn corrections_become_masks() {
     assert_eq!(brush.adjust.clarity, 40.0);
     assert_eq!(brush.components.len(), 1, "the brush's dab runs are one component");
     let MaskShape::Brush { strokes } = &brush.components[0].shape else { panic!() };
-    assert_eq!((strokes.len(), strokes[0].points.len(), strokes[0].flow, strokes[0].feather), (2, 2, 80.0, 30.0));
+    assert_eq!((strokes.len(), strokes[0].points.len(), strokes[0].flow, strokes[0].feather), (2, 2, 80.0, 70.0));
     assert_eq!(unmapped, vec!["Mask: AI mask (9)".to_string()]);
 }
 
@@ -74,6 +75,116 @@ fn masks_render() {
     let render =
         |d: &DevelopSettings| lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data;
     assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the masks change the picture");
+}
+
+/// Synthetic single-dab correction, including the soft-brush attributes seen in the supplied
+/// Lightroom 6 sidecar. Keep personal metadata and the original photograph out of fixtures.
+fn brush_packet(container: &str, center_weight: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+ <crs:{container}><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:LocalExposure2012="0.25">
+  <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Paint" crs:Radius="0.065549" crs:Flow="1" crs:MaskValue="1" {center_weight}>
+   <crs:Dabs><rdf:Seq><rdf:li>M 0.5 0.5</rdf:li></rdf:Seq></crs:Dabs>
+  </rdf:li></rdf:Seq></crs:CorrectionMasks>
+ </rdf:Description></rdf:li></rdf:Seq></crs:{container}>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// Convert Lightroom hardness to feather in both brush containers, bounding invalid inputs.
+#[test]
+fn imported_brush_center_weight_is_hardness() {
+    for container in ["PaintBasedCorrections", "MaskGroupBasedCorrections"] {
+        for (attr, feather) in [
+            ("", 50.0),
+            (r#"crs:CenterWeight="0""#, 100.0),
+            (r#"crs:CenterWeight="0.3""#, 70.0),
+            (r#"crs:CenterWeight="1""#, 0.0),
+            (r#"crs:CenterWeight="-2""#, 100.0),
+            (r#"crs:CenterWeight="2""#, 0.0),
+            (r#"crs:CenterWeight="NaN""#, 50.0),
+        ] {
+            let d = lightcraft_meta::parse_xmp(&brush_packet(container, attr)).unwrap();
+            let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+            assert!(unmapped.is_empty(), "{unmapped:?}");
+            let s = DevelopSettings::default().merged(&partial).unwrap();
+            let MaskShape::Brush { strokes } = &s.masks[0].components[0].shape else { panic!() };
+            assert_eq!(strokes[0].feather, feather, "{container} {attr}");
+            assert_eq!(strokes[0].size, 0.065549, "feather conversion must preserve the outer radius");
+        }
+    }
+}
+
+/// Preserve a soft brush's falloff and outer radius through a portrait crop at two resolutions.
+#[test]
+fn lr6_soft_brush_renders_a_falloff_after_crop_at_each_resolution() {
+    let d = lightcraft_meta::parse_xmp(&brush_packet("PaintBasedCorrections", r#"crs:CenterWeight="0""#)).unwrap();
+    let (mut partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 4928.0 / 3264.0);
+    // The supplied photo is cropped from a landscape sensor to a portrait frame.
+    partial["crop"] = json!({"geometry": {"rect": {"x0": 0.297266, "y0": 0.0, "x1": 0.738825, "y1": 1.0}}});
+    let s = DevelopSettings::default().merged(&partial).unwrap();
+    let frame = lightcraft_pipeline::geometry::Frame::new(4928, 3264, &s, true);
+    let shape = &s.masks[0].components[0].shape;
+    for width in [220, 440] {
+        let (w, h) = frame.fit(width, 1000);
+        let img = lightcraft_raster::Image { width: w, height: h, data: vec![[0.18f32; 3]; w * h] };
+        let log_l = lightcraft_raster::Plane::new(w, h);
+        let alpha = lightcraft_pipeline::masks::shape_alpha(shape, &frame, w, h, &img, &log_l, 0.0, None);
+        let center = frame.norm_to_out(w, h).apply(lightcraft_geom::Point::new(0.5, 0.5));
+        let radius = 0.065549 * frame.px_per_long(w);
+        let sample = |fraction: f64| {
+            let x = (center.x + radius * fraction).floor() as usize;
+            alpha.data[center.y.floor() as usize * w + x]
+        };
+        assert!(sample(0.0) > 0.99);
+        assert!((sample(0.5) - 0.5).abs() < 0.08, "half-radius falloff at {w} px: {}", sample(0.5));
+        assert!(sample(0.9) < 0.06, "the outer ring must not be a solid disk: {}", sample(0.9));
+        assert_eq!(sample(1.1), 0.0);
+    }
+}
+
+/// Preserve soft brush edges when importing catalog-style Lua develop settings.
+#[test]
+fn catalog_style_lua_brush_keeps_soft_edges() {
+    // Catalog develop settings use the same Lua-table parser as lrtemplate presets.
+    let t = r#"s = { title = "Soft", value = { settings = { PaintBasedCorrections = {
+        { What = "Correction", LocalExposure2012 = 0.25, CorrectionMasks = {
+            { What = "Mask/Paint", Radius = 0.065549, CenterWeight = 0, Flow = 1, MaskValue = 1,
+              Dabs = { "d 0.5 0.5" } } } } } } } }"#;
+    let imported = crate::preset_import::read_presets("Soft.lrtemplate", t.as_bytes(), None).unwrap();
+    let s = DevelopSettings::default().merged(&imported[0].preset.settings).unwrap();
+    let MaskShape::Brush { strokes } = &s.masks[0].components[0].shape else { panic!() };
+    assert_eq!((strokes[0].size, strokes[0].feather), (0.065549, 100.0));
+}
+
+/// Apply zero-valued erase strokes to earlier paint without changing paint outside the eraser.
+#[test]
+fn lightroom_zero_mask_value_erases_previous_paint() {
+    // Lightroom 6 writes both M and d dab runs, and MaskValue=0 on erasers. The supplied
+    // sidecar uses these to trim the animal's outline; zero-density erasers did nothing.
+    let eraser = r#"<rdf:li crs:What="Mask/Paint" crs:Radius="0.02" crs:Flow="1" crs:CenterWeight="1" crs:MaskValue="0">
+        <crs:Dabs><rdf:Seq><rdf:li>d 0.5 0.5</rdf:li></rdf:Seq></crs:Dabs></rdf:li>"#;
+    for container in ["PaintBasedCorrections", "MaskGroupBasedCorrections"] {
+        let packet = brush_packet(container, r#"crs:CenterWeight="1""#)
+            .replace("</rdf:Seq></crs:CorrectionMasks>", &format!("{eraser}</rdf:Seq></crs:CorrectionMasks>"));
+        let d = lightcraft_meta::parse_xmp(&packet).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        let s = DevelopSettings::default().merged(&partial).unwrap();
+        let shape = &s.masks[0].components[0].shape;
+        let MaskShape::Brush { strokes } = shape else { panic!() };
+        assert_eq!(strokes.len(), 2);
+        assert!(!strokes[0].erase && strokes[1].erase);
+        assert_eq!(strokes[1].density, 100.0, "MaskValue=0 is a full-strength eraser");
+        let frame = lightcraft_pipeline::geometry::Frame::new(300, 200, &s, true);
+        let img = lightcraft_raster::Image { width: 300, height: 200, data: vec![[0.18f32; 3]; 300 * 200] };
+        let log_l = lightcraft_raster::Plane::new(300, 200);
+        let alpha = lightcraft_pipeline::masks::shape_alpha(shape, &frame, 300, 200, &img, &log_l, 0.0, None);
+        assert_eq!(alpha.data[100 * 300 + 150], 0.0, "erase removes the painted centre");
+        assert_eq!(alpha.data[100 * 300 + 162], 1.0, "paint beyond the eraser stays");
+        assert_eq!(alpha.data[100 * 300 + 175], 0.0, "the outer brush radius stays fixed");
+    }
 }
 
 #[test]
