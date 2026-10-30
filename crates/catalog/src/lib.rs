@@ -393,6 +393,13 @@ impl Catalog {
     pub fn photos(&self) -> impl Iterator<Item = &Arc<Photo>> {
         self.photos.values()
     }
+    /// The photos after `after` (all of them for `None`), in id order: what a walk over the library in steps
+    /// picks up where it stopped, without a pass over the ones it has been through.
+    pub fn photos_after(&self, after: Option<PhotoId>) -> impl Iterator<Item = &Arc<Photo>> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let start = after.map_or(Unbounded, Excluded);
+        self.photos.range((start, Unbounded)).map(|(_, p)| p)
+    }
     pub fn len(&self) -> usize {
         self.photos.len()
     }
@@ -594,20 +601,44 @@ impl Catalog {
 
     /// Whether every change since the catalog was at `revision` is remembered photo by photo.
     fn remembers(&self, revision: u64) -> bool {
-        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor && self.changes.broad <= revision
+        self.remembers_photos(revision) && self.changes.broad <= revision
+    }
+
+    /// Whether every change to a photo since the catalog was at `revision` is remembered.
+    fn remembers_photos(&self, revision: u64) -> bool {
+        self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor
     }
 
     /// The photos changed, added or removed since the catalog was at `revision`, each once. `None` when that is not
     /// known: an op since then changed more than photos of its own, or it was too long ago. Then anything may
     /// have changed.
     pub fn touched_since(&self, revision: u64) -> Option<Vec<PhotoId>> {
-        if !self.remembers(revision) {
-            return None;
-        }
-        let mut ids: Vec<PhotoId> = self.changes.touched.iter().filter(|(r, _, _)| *r > revision).map(|(_, id, _)| *id).collect();
+        self.remembers(revision).then(|| self.touched_after(revision, Aspects::ALL))
+    }
+
+    /// The photos whose `reads` (what a tally reads of them) changed since the catalog was at
+    /// `revision`, added and removed photos included, each once; ops that change no photo of their
+    /// own (an album, a stack, the keyword list, a folder's label) and other things of a photo (a
+    /// rating, a slider) aside: for what is counted from the photos alone (the folders, days and
+    /// keywords they carry). `None` when that is not known: too long ago, or the catalog was set
+    /// from outside (a library loaded).
+    pub fn photos_changed_since(&self, revision: u64, reads: Aspects) -> Option<Vec<PhotoId>> {
+        // (every op that changes a photo says which, in `photo_mut` or as it adds or removes it:
+        // the ops `apply_inner` marks broad change no photo)
+        self.remembers_photos(revision).then(|| self.touched_after(revision, reads))
+    }
+
+    fn touched_after(&self, revision: u64, reads: Aspects) -> Vec<PhotoId> {
+        let mut ids: Vec<PhotoId> = self
+            .changes
+            .touched
+            .iter()
+            .filter(|(r, _, a)| *r > revision && (reads == Aspects::ALL || a.any_of(reads)))
+            .map(|(_, id, _)| *id)
+            .collect();
         ids.sort_unstable();
         ids.dedup();
-        Some(ids)
+        ids
     }
     fn album_mut(&mut self, id: AlbumId) -> Result<&mut Album> {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))

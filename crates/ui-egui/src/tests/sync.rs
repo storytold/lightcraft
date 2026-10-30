@@ -82,6 +82,16 @@ fn imported_folder(dir: &Scratch, then: impl FnOnce()) -> Headless {
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
+    // The sidebar looks for the photos' files on a worker thread that `Headless::busy` does not count, and the
+    // Missing Photos row it adds above Folders moves every row below it down when the answer lands. Wait for that
+    // row, so a row's place read after this is still right when it is right-clicked (a loaded machine took longer
+    // than the quiet frames `settle` waits for).
+    h.step_until(T, |h| h.file_checks_done());
+    let gone = h.app.session.catalog.photos().any(|p| p.library_file().is_some_and(|f| !std::path::Path::new(f).exists()));
+    if gone {
+        assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| w == "source:missing")), "the Missing Photos row is drawn");
+        assert!(h.settle(SETTLE), "the sidebar did not settle after the Missing Photos row was drawn");
+    }
     h
 }
 
@@ -153,6 +163,16 @@ fn tick_remove_missing(h: &mut Headless) {
         }
     }
     panic!("the box never ticked: {:?}", h.app.ui.dialog);
+}
+
+/// A folder with a photo gone from disk: the fixture returns once the Missing Photos row is drawn. The
+/// row comes from the background checks of the files and moves every row below it down when it lands, so a
+/// test that read a folder row's place before it, and right-clicked there after, hit the row above or below.
+#[test]
+fn a_folder_with_a_photo_gone_is_handed_over_with_the_missing_photos_row_drawn() {
+    let dir = Scratch::new("missing-row");
+    let h = changed_folder(&dir);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "source:missing"), "the Missing Photos row is not drawn yet");
 }
 
 fn counts(h: &Headless) -> crate::state::SyncCounts {

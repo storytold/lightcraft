@@ -27,6 +27,16 @@ pub fn monotonic_ms() -> f64 {
     START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
+/// What the availability sweep gives way to: an import, a scan or a Synchronize Folder in flight, or a Local-view
+/// listing running. The sweep's worker asks this every few hundred milliseconds, so it must never take the egui
+/// `Context` lock: the frame, every `request_repaint` and the control server's repaint requests hold that lock
+/// (some across the window system's wake-up call), and a worker queued for it turns each of those into a wait for
+/// the others. The listing count is therefore fetched here, on the UI thread, and the worker only reads the atomic.
+pub(crate) fn sweep_gives_way(activity: lightcraft_engine::activity::Activity, ctx: &egui::Context) -> lightcraft_engine::availability::Busy {
+    let listings = crate::panels::left::fs_running_counter(ctx);
+    std::sync::Arc::new(move || activity.any_of(&["scan", "import", "sync"]) || listings.load(std::sync::atomic::Ordering::Acquire) > 0)
+}
+
 /// Wall-clock milliseconds since the Unix epoch, only for names that must be unique in the world
 /// (`library-restored-<ms>`), never for timing or deadlines.
 pub fn now_ms() -> f64 {

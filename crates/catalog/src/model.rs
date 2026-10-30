@@ -497,6 +497,18 @@ impl Photo {
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
     }
+    /// The file Missing Photos checks for this photo, if it is in scope: a library photo (not in
+    /// Recently Deleted, not a Local-only record seen while browsing a folder) whose original is a
+    /// file. Browse records are out of scope on purpose: browsing can leave tens of thousands of
+    /// them in the catalog, they never show in library views (Missing Photos included), and a
+    /// folder that is gone is simply not browsed again. The sidebar count, the Missing Photos view,
+    /// `library.missing` and Find Missing Photos all use this one rule.
+    pub fn library_file(&self) -> Option<&str> {
+        match &self.source {
+            Source::File { path } if self.in_library() => Some(path),
+            _ => None,
+        }
+    }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();

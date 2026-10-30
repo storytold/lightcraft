@@ -59,6 +59,27 @@ struct State {
     busy: Option<Busy>,
     /// Bumped whenever a file is found gone, or found back.
     gone_generation: u64,
+    /// The latest files found gone or back, each with the generation that change made, oldest first
+    /// ([`Availability::gone_changes_since`]).
+    gone_log: VecDeque<(u64, String)>,
+    /// Changes up to this generation are no longer all in `gone_log`.
+    gone_log_floor: u64,
+}
+
+/// The most changes of the files found gone remembered; older ones are answered with "anything may have changed".
+const MAX_GONE_LOG: usize = 8192;
+
+impl State {
+    /// `path` was found gone or back.
+    fn note_gone_change(&mut self, path: String) {
+        self.gone_generation += 1;
+        self.gone_log.push_back((self.gone_generation, path));
+        if self.gone_log.len() > MAX_GONE_LOG
+            && let Some((g, _)) = self.gone_log.pop_front()
+        {
+            self.gone_log_floor = self.gone_log_floor.max(g);
+        }
+    }
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -93,6 +114,9 @@ impl Availability {
         st.known.clear();
         st.gone.clear();
         st.gone_generation += 1;
+        // (every file may have changed)
+        st.gone_log.clear();
+        st.gone_log_floor = st.gone_generation;
     }
 
     /// Answer from the cache and check on a worker thread from now on; `wake` runs when an
@@ -149,6 +173,19 @@ impl Availability {
         lock(&self.state).gone_generation
     }
 
+    /// The files found gone or back after generation `since` (a [`Availability::gone_generation`] read
+    /// earlier), with the generation they bring things to: a file may be named more than once. `None`
+    /// when too much changed since to say which (or the checks were replaced): any file may have.
+    /// What the Missing Photos count follows file by file, instead of looking at every photo again.
+    pub fn gone_changes_since(&self, since: u64) -> Option<(u64, Vec<String>)> {
+        let st = lock(&self.state);
+        if since < st.gone_log_floor {
+            return None;
+        }
+        let paths = st.gone_log.iter().filter(|(g, _)| *g > since).map(|(_, p)| p.clone()).collect();
+        Some((st.gone_generation, paths))
+    }
+
     /// Paths waiting for the worker.
     pub fn pending(&self) -> usize {
         lock(&self.state).queue.len()
@@ -198,6 +235,14 @@ impl Availability {
     /// How many files are found gone.
     pub fn gone_len(&self) -> usize {
         lock(&self.state).gone.len()
+    }
+
+    /// Ask the UI for a frame (what the worker does when an answer changed), for work made for it
+    /// on another thread.
+    pub fn wake(&self) {
+        if let Some(w) = &self.background {
+            w();
+        }
     }
 
     /// What the sweep under way has left to check (0: none under way, though its last file may still
@@ -254,11 +299,11 @@ impl Availability {
                         st.queued.remove(&path);
                     }
                     let gone_changed = if ok { st.gone.remove(&path) } else { st.gone.insert(path.clone()) };
+                    if gone_changed {
+                        st.note_gone_change(path.clone());
+                    }
                     let prev = st.known.insert(path, (ok, std::time::Instant::now()));
                     let changed = prev.map(|p| p.0) != Some(ok);
-                    if gone_changed {
-                        st.gone_generation += 1;
-                    }
                     (asked && changed) || gone_changed
                 };
                 if wakes {
@@ -365,6 +410,33 @@ mod tests {
         wait_until("the sweep", || a.sweeping() == 0 && a.pending() == 0);
         wait_until("the answers", || a.gone_len() == 2);
         assert!(a.is_gone("gone 1") && a.is_gone("gone 2") && !a.is_gone("here") && !a.is_gone("also here"));
+    }
+
+    #[test]
+    fn the_files_found_gone_or_back_are_told_since_a_generation_until_too_many_changed() {
+        let (mut a, _, _) = logged();
+        let g0 = a.gone_generation();
+        assert!(a.sweep(vec!["gone 1".into(), "here".into(), "gone 2".into()]));
+        wait_until("the answers", || a.gone_len() == 2);
+        let (g1, mut paths) = a.gone_changes_since(g0).expect("remembered");
+        paths.sort();
+        assert_eq!((g1, paths), (a.gone_generation(), vec!["gone 1".to_string(), "gone 2".to_string()]));
+        assert_eq!(a.gone_changes_since(g1), Some((g1, vec![])), "nothing since");
+        // a file found back is a change too
+        a.set_probe(Arc::new(|_: &str| true));
+        assert!(a.gone_changes_since(g0).is_none(), "replacing the checks changes any file");
+        let g2 = a.gone_generation();
+        assert_eq!(a.gone_changes_since(g2), Some((g2, vec![])));
+        // more changes than are remembered: the oldest are answered with "anything"
+        {
+            let mut st = lock(&a.state);
+            for i in 0..=MAX_GONE_LOG {
+                st.note_gone_change(format!("p{i}"));
+            }
+        }
+        assert!(a.gone_changes_since(g2).is_none());
+        let g3 = a.gone_generation();
+        assert_eq!(a.gone_changes_since(g3).map(|(_, p)| p.len()), Some(0));
     }
 
     #[test]
@@ -512,6 +584,23 @@ mod tests {
         all.sort();
         all.dedup();
         assert_eq!(all.len(), 100, "every file checked once, none again from the start");
+    }
+
+    #[test]
+    fn a_sweep_gives_way_while_a_task_is_in_the_activity_stack_and_goes_on_when_its_guard_drops() {
+        let (a, log, _) = logged();
+        let activity = crate::activity::Activity::default();
+        let act = activity.clone();
+        a.sweep_yields_to(Arc::new(move || act.any_of(&["scan", "import", "sync"])));
+        // (a task that never ends cleanly: its guard drops as its thread unwinds)
+        let guard = activity.start("scan", "Reading photos", crate::activity::Cancel::No);
+        assert!(a.sweep((0..5).map(|i| format!("sweep {i}")).collect()));
+        std::thread::sleep(YIELD_POLL * 3);
+        assert!(held(&log).is_empty());
+        let other = activity.start("export", "Exporting", crate::activity::Cancel::No);
+        drop(other);
+        drop(guard);
+        wait_until("the sweep", || held(&log).len() == 5);
     }
 
     #[test]

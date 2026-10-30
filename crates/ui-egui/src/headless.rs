@@ -89,6 +89,8 @@ pub struct HeadlessView {
     pub clipboard: String,
     /// Events the host owes the next frame (a paste request's paste, as a desktop host sends it).
     owed: Vec<egui::Event>,
+    /// When the last frame asked to be run again (`Duration::MAX`: only on input or an explicit repaint).
+    pub repaint_after: Duration,
 }
 
 impl Default for HeadlessView {
@@ -111,6 +113,7 @@ impl HeadlessView {
             frames: 0,
             clipboard: String::new(),
             owed: vec![],
+            repaint_after: Duration::MAX,
         }
     }
 
@@ -162,7 +165,9 @@ impl HeadlessView {
                 self.clipboard.clone_from(text);
             }
         }
-        let mut commands = out.viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        let viewport = out.viewport_output.remove(&ViewportId::ROOT);
+        self.repaint_after = viewport.as_ref().map_or(Duration::MAX, |v| v.repaint_delay);
+        let mut commands = viewport.map(|v| v.commands).unwrap_or_default();
         // 0.37: `ViewportCommand::Screenshot` carries a one-shot callback. A headless host answers
         // it here, after the pass it was issued in, exactly once.
         let mut shots = Vec::new();
@@ -386,6 +391,18 @@ impl Headless {
                 _ => {}
             }
         }
+    }
+
+    /// Whether the background checks of the library's files (Missing Photos) are done: the list
+    /// of the files, the sweep, what was asked meanwhile and the count of what was found gone. Not part of [`Headless::busy`]: on a
+    /// large library on a share they take minutes, and a snapshot doesn't wait for them. A test
+    /// that needs the Missing Photos row where it will be waits for them.
+    pub fn file_checks_done(&self) -> bool {
+        let files = &self.app.session.media.availability;
+        files.sweeping() == 0
+            && files.pending() == 0
+            && !self.app.caches.files_listing.load(std::sync::atomic::Ordering::Acquire)
+            && !self.app.caches.missing.walking()
     }
 
     /// Is anything still in progress (renders, file-system checks the sidebar waits for, queued

@@ -379,41 +379,23 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// How many library photos have no file (Local browse records are not checked; see
-/// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
-/// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
-/// at most every 5 s, and at once (after the running check) when the catalog changed.
+/// `Photo::library_file`): what the background checks of the files found ([`crate::Caches::missing_count`]).
+/// Every file is checked when the library opens and every few minutes, one at a time on the
+/// availability worker; the files of photos that come in are checked as they do. On a network
+/// share that is one stream of checks, never a pass over the library per edit.
 pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-    #[derive(Clone, Default)]
-    struct Job {
-        n: std::sync::Arc<AtomicUsize>,
-        running: std::sync::Arc<AtomicBool>,
-        at: f64,
-        rev: u64,
+    let (library, now) = (app.session.library_generation(), app.tick_now());
+    let s = &app.session;
+    let checking = app.caches.check_files(&s.catalog, library, &s.media.availability, now);
+    let n = app.caches.missing_count(&s.catalog, library, &s.media.availability);
+    if app.caches.missing_walking() {
+        ui.ctx().request_repaint();
+    } else if checking {
+        // (a check that ends wakes nobody when every file is there: a frame now and then notes when it ended)
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+    } else {
+        // idle: the next sweep is due after this long, and nothing else need ask for the frame that starts it
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::caches::SWEEP_SECONDS));
     }
-    let id = egui::Id::unique("missing-count");
-    let now = ui.input(|i| i.time);
-    let rev = app.session.catalog.revision;
-    let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
-    let fresh = now - job.at < 5.0 && job.rev == rev;
-    if !fresh && !job.running.load(Relaxed) {
-        // the same scope as the Missing Photos view: library photos only, never Local browse records
-        let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
-        job.running.store(true, Relaxed);
-        job.at = now;
-        job.rev = rev;
-        let (n, running, ctx) = (job.n.clone(), job.running.clone(), ui.ctx().clone());
-        let work = move || {
-            let missing = if cfg!(target_arch = "wasm32") { 0 } else { paths.iter().filter(|p| !std::path::Path::new(p).exists()).count() };
-            n.store(missing, Relaxed);
-            running.store(false, Relaxed);
-            ctx.request_repaint();
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        std::thread::spawn(work);
-        #[cfg(target_arch = "wasm32")]
-        work();
-        ui.data_mut(|d| d.insert_temp(id, job.clone()));
-    }
-    job.n.load(Relaxed)
+    n
 }

@@ -26,7 +26,7 @@ use dates::date_rows;
 pub(crate) use folders::{folder_row_of, move_photos, moved_text};
 use folders::{folder_rows, reveal_chosen};
 use keywords::keyword_rows;
-pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
+pub(crate) use local::{fs_cached, fs_cached_running, fs_running_counter, same_folder};
 use local::{local_now, local_rows};
 #[cfg(test)]
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
@@ -94,7 +94,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let _ = app.run("library.source", json!({"kind": id}));
                 }
             }
-            // photos whose files can't be found (checked every few seconds, not every frame)
+            // photos whose files can't be found (the background checks of each file)
             let missing = missing_count(app, ui);
             if (missing > 0 || src == LibrarySource::Missing)
                 && Row::new("missing", Icon::Folder, "Missing Photos")

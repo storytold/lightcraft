@@ -31,6 +31,7 @@ pub mod icons;
 pub mod lightroom_import;
 pub mod links;
 pub mod menus;
+pub mod missing_count;
 mod model_setup;
 pub mod panels;
 pub mod pick;
@@ -578,6 +579,15 @@ pub struct Caches {
     completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
     counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
+    /// When every library photo's file was last handed to the background checks for the Missing
+    /// Photos count: (library, catalog revision, egui time); and whether files came in that no
+    /// check was asked for ([`Caches::missing_count`]).
+    files_swept: Option<(u64, u64, f64)>,
+    files_unchecked: bool,
+    /// Whether the list of every file is being made for the checks.
+    files_listing: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The Missing Photos count.
+    pub missing: missing_count::MissingCount,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
     /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally
     /// that follows edits, and the counts as the panels take them.
