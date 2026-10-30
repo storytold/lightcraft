@@ -2,6 +2,22 @@
 
 ## 2026-10-24
 
+### Locate a folder that moved
+- A folder of the library that is somewhere else now can be pointed at its new place (issue #1112): it was moved or
+  renamed outside LightCraft, its disk is mounted under another name, or its catalog came from another computer (a
+  Lightroom catalog from Windows names `D:\Photos\…`, which is nowhere on Linux or macOS). **Synchronize Folder…**
+  on a folder that isn't there now offers **Locate Missing Folder…**, and every Folders row has **Update Folder
+  Location…**. Choose the folder: its photos, those in the folders inside it too, point at the same places below it,
+  colour labels follow, and when you started from Synchronize Folder, it then scans the folder there. Only the
+  library changes, no file is touched, and it is one undo step.
+- The photos' files are looked for in the chosen folder first, in the background (a row in the activity stack; ✕
+  stops it). A folder with none of them is not taken; one with only some asks before going on. A file counts when
+  it is the size the library recorded; files of another size are said in the question. A file that is another
+  photo's of the same folder (the chosen folder is inside the old one, or the reverse) is never taken for it, unless
+  its content is the photo's.
+- Agents and the CLI: `folder.updateLocation {folder, path}`. In the running app it looks for the files in the
+  background too and answers at once; `ui.inspect` → `relocate` says how it went.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

@@ -2429,5 +2429,20 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Locate Missing Folder…": "Leta upp saknad mapp…",
+  "Locate Missing Folder": "Leta upp saknad mapp",
+  "Update Folder Location…": "Uppdatera mappens plats…",
+  "Choose where this folder is now, after it was moved or renamed outside LightCraft or its disk changed; its photos follow, no file is touched": "Välj var mappen finns nu, efter att den flyttats eller bytt namn utanför LightCraft eller att dess disk ändrats; dess foton följer med, ingen fil påverkas",
+  "If it is somewhere else now, locate it: its photos then point at the folder you choose. No file is touched.": "Om den finns någon annanstans nu, leta upp den: dess foton pekar då på mappen du väljer. Ingen fil påverkas.",
+  "Locating folder": "Letar upp mappen",
+  "A folder is already being located": "En mapp letas redan upp",
+  "A question about locating a folder is waiting for its answer": "En fråga om att leta upp en mapp väntar på svar",
+  "Locating the folder failed": "Det gick inte att leta upp mappen",
+  "Update Folder Location": "Uppdatera mappens plats",
+  "Choose the folder in the dialog that is already open": "Välj mappen i dialogrutan som redan är öppen",
+  "Locate Anyway": "Leta upp ändå",
+  "Locate the folder there anyway?": "Leta upp mappen där ändå?",
+  "Photos with no file there stay missing, and photos whose file there is another size are linked to that file. Synchronize Folder can find them again or remove them from the library. No file is touched.": "Foton utan fil där förblir saknade, och foton vars fil där har en annan storlek länkas till den filen. Synkronisera mapp kan hitta dem igen eller ta bort dem från biblioteket. Ingen fil påverkas.",
+  "The other photos stay missing there; Synchronize Folder can find them again or remove them from the library. No file is touched.": "De andra fotona förblir saknade där; Synkronisera mapp kan hitta dem igen eller ta bort dem från biblioteket. Ingen fil påverkas."
 }

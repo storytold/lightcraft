@@ -2361,5 +2361,20 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Locate Missing Folder…": "Trova cartella mancante…",
+  "Locate Missing Folder": "Trova cartella mancante",
+  "Update Folder Location…": "Aggiorna posizione cartella…",
+  "Choose where this folder is now, after it was moved or renamed outside LightCraft or its disk changed; its photos follow, no file is touched": "Scegli dove si trova ora questa cartella, dopo che è stata spostata o rinominata fuori da LightCraft o è cambiato il suo disco; le sue foto la seguono, nessun file viene toccato",
+  "If it is somewhere else now, locate it: its photos then point at the folder you choose. No file is touched.": "Se ora si trova altrove, localizzala: le sue foto punteranno alla cartella che scegli. Nessun file viene toccato.",
+  "Locating folder": "Localizzazione della cartella",
+  "A folder is already being located": "È già in corso la localizzazione di una cartella",
+  "A question about locating a folder is waiting for its answer": "Una domanda sulla localizzazione di una cartella attende risposta",
+  "Locating the folder failed": "La localizzazione della cartella non è riuscita",
+  "Update Folder Location": "Aggiorna posizione cartella",
+  "Choose the folder in the dialog that is already open": "Scegli la cartella nella finestra di dialogo già aperta",
+  "Locate Anyway": "Localizza comunque",
+  "Locate the folder there anyway?": "Localizzare comunque la cartella lì?",
+  "Photos with no file there stay missing, and photos whose file there is another size are linked to that file. Synchronize Folder can find them again or remove them from the library. No file is touched.": "Le foto senza file lì restano mancanti, e le foto il cui file lì ha un'altra dimensione vengono collegate a quel file. Sincronizza cartella può ritrovarle o rimuoverle dalla libreria. Nessun file viene toccato.",
+  "The other photos stay missing there; Synchronize Folder can find them again or remove them from the library. No file is touched.": "Le altre foto restano mancanti lì; Sincronizza cartella può ritrovarle o rimuoverle dalla libreria. Nessun file viene toccato."
 }

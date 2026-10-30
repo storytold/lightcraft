@@ -2235,5 +2235,20 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Locate Missing Folder…": "Định vị thư mục bị thiếu…",
+  "Locate Missing Folder": "Định vị thư mục bị thiếu",
+  "Update Folder Location…": "Cập nhật vị trí thư mục…",
+  "Choose where this folder is now, after it was moved or renamed outside LightCraft or its disk changed; its photos follow, no file is touched": "Chọn vị trí hiện tại của thư mục này, sau khi nó bị di chuyển hoặc đổi tên bên ngoài LightCraft hoặc đĩa của nó đã thay đổi; ảnh của nó đi theo, không đụng tệp nào",
+  "If it is somewhere else now, locate it: its photos then point at the folder you choose. No file is touched.": "Nếu giờ nó ở nơi khác, hãy định vị nó: ảnh của nó sẽ trỏ tới thư mục bạn chọn. Không đụng tệp nào.",
+  "Locating folder": "Đang định vị thư mục",
+  "A folder is already being located": "Một thư mục đang được định vị",
+  "A question about locating a folder is waiting for its answer": "Một câu hỏi về việc định vị thư mục đang chờ trả lời",
+  "Locating the folder failed": "Định vị thư mục thất bại",
+  "Update Folder Location": "Cập nhật vị trí thư mục",
+  "Choose the folder in the dialog that is already open": "Chọn thư mục trong hộp thoại đang mở",
+  "Locate Anyway": "Vẫn định vị",
+  "Locate the folder there anyway?": "Vẫn định vị thư mục ở đó?",
+  "Photos with no file there stay missing, and photos whose file there is another size are linked to that file. Synchronize Folder can find them again or remove them from the library. No file is touched.": "Ảnh không có tệp ở đó vẫn bị thiếu, còn ảnh có tệp ở đó khác kích thước sẽ được liên kết với tệp ấy. Đồng bộ thư mục có thể tìm lại chúng hoặc gỡ chúng khỏi thư viện. Không đụng tệp nào.",
+  "The other photos stay missing there; Synchronize Folder can find them again or remove them from the library. No file is touched.": "Các ảnh khác vẫn bị thiếu ở đó; Đồng bộ thư mục có thể tìm lại chúng hoặc gỡ chúng khỏi thư viện. Không đụng tệp nào."
 }

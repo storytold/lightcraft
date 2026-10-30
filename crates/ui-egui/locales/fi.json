@@ -2327,5 +2327,20 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Locate Missing Folder…": "Paikanna puuttuva kansio…",
+  "Locate Missing Folder": "Paikanna puuttuva kansio",
+  "Update Folder Location…": "Päivitä kansion sijainti…",
+  "Choose where this folder is now, after it was moved or renamed outside LightCraft or its disk changed; its photos follow, no file is touched": "Valitse, missä kansio nyt on, kun se siirrettiin tai nimettiin uudelleen LightCraftin ulkopuolella tai sen levy vaihtui; sen kuvat seuraavat mukana, tiedostoihin ei kosketa",
+  "If it is somewhere else now, locate it: its photos then point at the folder you choose. No file is touched.": "Jos kansio on nyt jossain muualla, paikanna se: sen kuvat osoittavat silloin valitsemaasi kansioon. Tiedostoihin ei kosketa.",
+  "Locating folder": "Paikannetaan kansiota",
+  "A folder is already being located": "Kansiota paikannetaan jo",
+  "A question about locating a folder is waiting for its answer": "Kysymys kansion paikantamisesta odottaa vastausta",
+  "Locating the folder failed": "Kansion paikantaminen epäonnistui",
+  "Update Folder Location": "Päivitä kansion sijainti",
+  "Choose the folder in the dialog that is already open": "Valitse kansio jo avoinna olevassa ikkunassa",
+  "Locate Anyway": "Paikanna silti",
+  "Locate the folder there anyway?": "Paikannetaanko kansio silti sieltä?",
+  "Photos with no file there stay missing, and photos whose file there is another size are linked to that file. Synchronize Folder can find them again or remove them from the library. No file is touched.": "Kuvat, joilla ei ole tiedostoa siellä, jäävät puuttuviksi, ja kuvat, joiden tiedosto siellä on erikokoinen, linkitetään siihen tiedostoon. Synkronoi kansio voi löytää ne uudelleen tai poistaa ne kirjastosta. Tiedostoihin ei kosketa.",
+  "The other photos stay missing there; Synchronize Folder can find them again or remove them from the library. No file is touched.": "Muut kuvat jäävät sinne puuttuviksi; Synkronoi kansio voi löytää ne uudelleen tai poistaa ne kirjastosta. Tiedostoihin ei kosketa."
 }

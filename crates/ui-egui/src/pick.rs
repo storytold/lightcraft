@@ -67,13 +67,23 @@ pub const CURVE_PRESET_EXTENSIONS: &[&str] = &["lccurve", "json"];
 pub type Picker = Box<dyn FnMut(PickRequest) -> Result<Receiver<Vec<String>>, String>>;
 
 /// A dialog that is up for a command. When it closes, the command runs again with the answer
-/// under `key`.
+/// under `key`, if the library is still the one it was asked in.
 pub struct Pending {
     pub command: String,
     params: Value,
     key: &'static str,
     kind: PickKind,
     rx: Receiver<Vec<String>>,
+    /// The library (`Session::library_generation`) the command was run in: its answer is about
+    /// that library's folders, photos and presets, not the one opened meanwhile.
+    library: u64,
+}
+
+/// Whether a dialog for `command` is up in the library that is open now. An entry asked in a
+/// library since left does not count: the next [`poll`] drops it, whatever its dialog does.
+pub fn waiting(app: &LightcraftApp, command: &str) -> bool {
+    let library = app.session.library_generation();
+    app.pending_picks.iter().any(|p| p.command == command && p.library == library)
 }
 
 /// How a command's request for a path was answered.
@@ -98,14 +108,15 @@ pub fn ask(
     request: PickRequest,
     now: impl FnOnce(&mut Services) -> Option<Vec<String>>,
 ) -> Picked {
-    if app.pending_picks.iter().any(|p| p.command == command) {
+    if waiting(app, command) {
         return Picked::Later;
     }
     if let Some(start) = app.services.picker.as_mut() {
         let kind = request.kind;
         match start(request) {
             Ok(rx) => {
-                app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
+                let library = app.session.library_generation();
+                app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx, library });
                 return Picked::Later;
             }
             Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
@@ -135,9 +146,16 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.pending_picks.is_empty() {
         return;
     }
+    let library = app.session.library_generation();
     let mut answered = Vec::new();
     let mut waiting = Vec::new();
     for p in std::mem::take(&mut app.pending_picks) {
+        if p.library != library {
+            // the library was switched while the dialog was up: its answer, replayed, would act
+            // on the new library (relink its folders, import into it). Dropped, whatever it says.
+            log::info!("{}: the library changed while the file dialog was up; its answer is dropped", p.command);
+            continue;
+        }
         match p.rx.try_recv() {
             Ok(paths) if paths.is_empty() => {}
             Ok(paths) => answered.push((p, paths)),
@@ -151,6 +169,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.pending_picks = waiting;
     for (p, paths) in answered {
+        // (an earlier answer of this frame may have switched the library)
+        if p.library != app.session.library_generation() {
+            log::info!("{}: the library changed before its answer ran; dropped", p.command);
+            continue;
+        }
         let params = with_answer(&p.params, p.key, p.kind, &paths);
         if let Err(e) = app.run(&p.command, params) {
             app.toast_error(ctx, e);

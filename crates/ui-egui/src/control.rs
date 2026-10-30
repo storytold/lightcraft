@@ -147,6 +147,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "scan": app.scan.as_ref().map(crate::import::ScanTask::status),
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
+        "relocate": crate::relocate::status(app),
         "tasks": app.tasks.labels(),
         // every long-running task in flight, as the activity stack shows them (`activity.list`)
         "activity": app.session.activity.list(),
@@ -411,11 +412,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Err(e) => err(e),
             }
         }
-        "ui.dialog.confirm" => match app.ui.dialog.take() {
+        "ui.dialog.confirm" => match app.ui.dialog.clone() {
             Some(d) => {
+                // the dialog is open while its action runs, as when its button is pressed: an
+                // action may ask whether it is (`folder.locate` scans the folder afterwards only
+                // for the Synchronize dialog that is waiting for it)
                 let r = crate::panels::dialogs::confirm_dialog(app, &d);
-                // the import review and the rule editor stay open on an error, as with their buttons
-                if (r.is_err()
+                // the import review, the rule editor and Synchronize Folder stay open on an
+                // error, as with their buttons (other dialogs the button keeps open close here)
+                let stays = (r.is_err()
                     && matches!(
                         d,
                         crate::state::Dialog::Import { .. }
@@ -423,11 +428,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                             | crate::state::Dialog::SmartRules { .. }
                             | crate::state::Dialog::SaveEffect { .. }
                             | crate::state::Dialog::CaptureTime { .. }
+                            | crate::state::Dialog::SynchronizeFolder { .. }
                     ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
-                    || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))
-                {
-                    app.ui.dialog = Some(d);
+                    || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d));
+                // (a dialog the action opened or changed takes its place)
+                if !stays && app.ui.dialog.as_ref() == Some(&d) {
+                    app.ui.dialog = None;
                 }
                 wrap(r)
             }

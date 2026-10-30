@@ -305,5 +305,10 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "None of this folder's photos are in “{name}”: choose the folder it is now": "Tidak ada foto folder ini di “{name}”: pilih folder tempatnya sekarang",
+  "Only {found} of this folder's {total} photos are in:": "Hanya {found} dari {total} foto folder ini ada di:",
+  "Only {found} of this folder's {total} photos are in “{name}”: the folder was not located": "Hanya {found} dari {total} foto folder ini ada di “{name}”: folder tidak ditemukan",
+  "Files there that are not the size the library recorded: {n}": "File di sana yang ukurannya tidak sama dengan yang dicatat pustaka: {n}",
+  "Folder located. Photos relinked: {n}": "Folder ditemukan. Foto yang ditautkan ulang: {n}"
 }

@@ -305,5 +305,10 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "None of this folder's photos are in “{name}”: choose the folder it is now": "Inga av mappens foton finns i ”{name}”: välj mappen där den finns nu",
+  "Only {found} of this folder's {total} photos are in:": "Bara {found} av mappens {total} foton finns i:",
+  "Only {found} of this folder's {total} photos are in “{name}”: the folder was not located": "Bara {found} av mappens {total} foton finns i ”{name}”: mappen hittades inte",
+  "Files there that are not the size the library recorded: {n}": "Filer där som inte har den storlek biblioteket registrerade: {n}",
+  "Folder located. Photos relinked: {n}": "Mappen har hittats. Omlänkade foton: {n}"
 }

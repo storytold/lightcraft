@@ -85,6 +85,13 @@ existing paths. The library path does not relocate settings, logs or optional mo
 the README's settings/log locations). Make sure an external drive is mounted before
 starting either process.
 
+Work that waits on a disk does not hold up the window in connect mode. `folder.updateLocation`
+looks for the photos' files on a worker thread there: it returns `{background: true}` at once, and
+`ui.inspect` → `relocate.last` gives the result, `{error}` or `{cancelled: true}` once
+`relocate.running` is `null` (see [control-protocol.md](control-protocol.md)). Headless, the same
+command returns its result directly. In a `command_batch` in connect mode the steps after it run
+before the photos are relinked: wait for the result, then send what depends on it.
+
 `codex mcp list` confirms registration, not a successful tool call. After adding the server,
 restart the client's MCP connections and verify `doc_inspect` or `query_photos` against the
 expected library before editing. Configuration options are in the

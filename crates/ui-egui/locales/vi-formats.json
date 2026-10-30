@@ -305,5 +305,10 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "None of this folder's photos are in “{name}”: choose the folder it is now": "Không có ảnh nào của thư mục này nằm trong “{name}”: hãy chọn thư mục hiện tại của nó",
+  "Only {found} of this folder's {total} photos are in:": "Chỉ {found} trong {total} ảnh của thư mục này nằm trong:",
+  "Only {found} of this folder's {total} photos are in “{name}”: the folder was not located": "Chỉ {found} trong {total} ảnh của thư mục này nằm trong “{name}”: thư mục chưa được định vị",
+  "Files there that are not the size the library recorded: {n}": "Tệp ở đó có kích thước khác với thư viện đã ghi: {n}",
+  "Folder located. Photos relinked: {n}": "Đã định vị thư mục. Ảnh đã liên kết lại: {n}"
 }

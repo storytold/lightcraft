@@ -339,6 +339,25 @@ pub enum Dialog {
         remove_missing: bool,
         read_metadata: bool,
     },
+    /// Only some of a folder's files are where the person said the folder is now: locate it
+    /// there anyway (`folder.locate` with `incomplete`; see [`crate::relocate`])?
+    LocateFolder {
+        /// The folder as the library knows it.
+        path: String,
+        /// Where it is said to be now.
+        to: String,
+        #[serde(default)]
+        disk: bool,
+        /// The question took the place of a waiting Synchronize Folder dialog, which opens again once the folder
+        /// is located (set from the request; a dialog an agent opens with it set does nothing more).
+        #[serde(default)]
+        synchronize: bool,
+        found: usize,
+        total: usize,
+        /// Files there of another size than the library recorded (not among `found`).
+        #[serde(default)]
+        different: usize,
+    },
     About,
     Shortcuts,
     /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply

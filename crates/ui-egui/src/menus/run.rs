@@ -1324,6 +1324,8 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         }
         "file.findMissing" => file_find_missing_command(app, id, p),
         "photo.tagFromTracklog" => photo_tag_from_tracklog_command(app, ctx, id, p),
+        "folder.locate" => folder_locate_command(app, id, p),
+        "folder.updateLocation" => folder_update_location_command(app, p),
         "photo.locate" => photo_locate_command(app, p),
         "file.addFromDevice" => {
             // a camera / card: review its DCIM folder, copying into the library by default
@@ -1729,6 +1731,69 @@ fn photo_locate_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, Str
         Some(path) => app.run("photo.relink", json!({"id": id.0, "path": path})),
         None => Ok(Value::Null),
     }
+}
+
+/// Where `folder.locate` is to look: the command's `path`, or the folder the person chooses (`None`: not chosen, or the
+/// answer comes later).
+fn folder_locate_target(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Option<String>, String> {
+    if let Some(x) = p.get("path").and_then(Value::as_str) {
+        return Ok(Some(x.to_string()));
+    }
+    // (one folder dialog per command: a second folder asked about meanwhile would get the first one's answer)
+    if crate::pick::waiting(app, id) {
+        return Err(crate::i18n::tr("Choose the folder in the dialog that is already open").to_string());
+    }
+    match crate::pick::ask(app, id, p, "path", PickRequest::folder(crate::i18n::tr("Locate Missing Folder…")), |s| {
+        s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
+    }) {
+        Picked::Now(v) => Ok(v.into_iter().next()),
+        Picked::Later => Ok(None),
+        // (a cancelled synchronous dialog answers `None` too: only a host without the service has "no dialog")
+        Picked::Unavailable if app.services.pick_folder.is_none() => Err("no folder dialog on this platform".into()),
+        Picked::Unavailable => Ok(None),
+    }
+}
+
+/// The `folder.locate` command: where a folder of the library is now (issues #1112, #1116): {folder, path?, disk?,
+/// incomplete?, synchronize?}. Without `path` a folder dialog asks; the files are then looked for there in the
+/// background and the photos relinked (`folder.updateLocation`).
+fn folder_locate_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    let Some(folder) = p.get("folder").and_then(Value::as_str).filter(|x| !x.trim().is_empty()) else {
+        return Err("folder.locate: missing `folder`".into());
+    };
+    let to = folder_locate_target(app, id, p)?;
+    let flag = |key: &str| p.get(key).and_then(Value::as_bool).unwrap_or(false);
+    // Synchronize Folder afterwards only while its dialog still waits for the answer (closed meanwhile: it is not
+    // opened again unasked)
+    let synchronize = flag("synchronize") && crate::relocate::synchronizing(app, folder);
+    match to {
+        Some(to) => crate::relocate::start(
+            app,
+            crate::relocate::Request { path: folder.to_string(), to, disk: flag("disk"), incomplete: flag("incomplete"), synchronize, asks: true },
+        ),
+        None => Ok(Value::Null),
+    }
+}
+
+/// The `folder.updateLocation` command. The engine's command looks for the files on the calling thread, which here is
+/// the app's: an agent's call (control channel, `mcp --connect`) goes the way of the person's instead (a worker thread
+/// under a row in the activity stack) and is answered at once; `ui.inspect` → `relocate` says how it went.
+fn folder_update_location_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let text = |key: &str| p.get(key).and_then(Value::as_str).filter(|x| !x.trim().is_empty());
+    let (Some(folder), Some(to)) = (text("folder"), text("path")) else {
+        let key = if text("folder").is_none() { "folder" } else { "path" };
+        return Err(format!("folder.updateLocation: missing `{key}`"));
+    };
+    let flag = |key: &str| p.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let request = crate::relocate::Request {
+        path: folder.to_string(),
+        to: to.to_string(),
+        disk: flag("disk"),
+        incomplete: flag("incomplete"),
+        synchronize: false,
+        asks: false,
+    };
+    crate::relocate::start(app, request).map(|_| json!({"background": true}))
 }
 
 /// The `file.findMissing` command.

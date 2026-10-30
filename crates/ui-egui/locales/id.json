@@ -2339,5 +2339,20 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Locate Missing Folder…": "Temukan folder yang hilang…",
+  "Locate Missing Folder": "Temukan folder yang hilang",
+  "Update Folder Location…": "Perbarui lokasi folder…",
+  "Choose where this folder is now, after it was moved or renamed outside LightCraft or its disk changed; its photos follow, no file is touched": "Pilih lokasi folder ini sekarang, setelah dipindahkan atau diganti namanya di luar LightCraft atau disknya berubah; fotonya mengikuti, tidak ada file yang diubah",
+  "If it is somewhere else now, locate it: its photos then point at the folder you choose. No file is touched.": "Jika folder ini sekarang ada di tempat lain, temukan: foto-fotonya lalu mengarah ke folder yang Anda pilih. Tidak ada file yang diubah.",
+  "Locating folder": "Menemukan folder",
+  "A folder is already being located": "Sebuah folder sedang ditemukan",
+  "A question about locating a folder is waiting for its answer": "Pertanyaan tentang menemukan folder menunggu jawaban",
+  "Locating the folder failed": "Gagal menemukan folder",
+  "Update Folder Location": "Perbarui lokasi folder",
+  "Choose the folder in the dialog that is already open": "Pilih folder di dialog yang sudah terbuka",
+  "Locate Anyway": "Tetap temukan",
+  "Locate the folder there anyway?": "Tetap temukan folder di sana?",
+  "Photos with no file there stay missing, and photos whose file there is another size are linked to that file. Synchronize Folder can find them again or remove them from the library. No file is touched.": "Foto tanpa file di sana tetap hilang, dan foto yang filenya di sana berukuran lain ditautkan ke file itu. Sinkronkan folder dapat menemukannya lagi atau menghapusnya dari pustaka. Tidak ada file yang diubah.",
+  "The other photos stay missing there; Synchronize Folder can find them again or remove them from the library. No file is touched.": "Foto lainnya tetap hilang di sana; Sinkronkan folder dapat menemukannya lagi atau menghapusnya dari pustaka. Tidak ada file yang diubah."
 }

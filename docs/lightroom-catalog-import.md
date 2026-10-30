@@ -140,7 +140,11 @@ path isn't a folder on this computer (a catalog copied from another machine), th
 the path relative to the catalog that Lightroom records for root folders on the catalog's volume
 (`relativePathFromCatalog`), when that is a folder, and reports the remapping as a warning. Copying
 a project folder with its catalog inside it therefore keeps its originals linked. Other moved
-originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
+originals stay missing; use LightCraft's missing-photo relinking tools to update their paths. For a
+whole folder or disk that is somewhere else on this computer (a catalog from Windows opened on Linux
+or macOS, say), right-click it in the sidebar's Folders ▸ **Update Folder Location…** (or Synchronize
+Folder… ▸ **Locate Missing Folder…**) and choose where it is now: every photo below it follows, and
+no file is touched (`folder.updateLocation`).
 
 Original and root folder paths are resolved with the catalog as the document and are looked at
 only when they are on this computer or on the network share the catalog itself is on

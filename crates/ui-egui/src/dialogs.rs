@@ -279,6 +279,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
         Dialog::SynchronizeFolder { .. } => "Synchronize Folder",
+        Dialog::LocateFolder { .. } => "Locate Missing Folder",
         // (nothing to download from in this build: the dialog explains the manual install)
         Dialog::SamModel { .. } if sam_by_hand(&app.session.segmenter) => "Install the SAM 3 Model",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
@@ -356,7 +357,10 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::SynchronizeFolder { .. } if informational => "Close",
+        // a folder that isn't there can't be synchronized, only located (#1112)
+        Dialog::SynchronizeFolder { counts: Some(c), .. } if c.offline => "Locate Missing Folder…",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
+        Dialog::LocateFolder { .. } => "Locate Anyway",
         Dialog::SamModel { .. } => return sam_ok_label(dlg, sam).to_string(),
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
         _ if informational => "Close",
@@ -516,6 +520,9 @@ const BACKDROP_SHOWN: &str = "dialog-backdrop-shown";
 /// downloads).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
     matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+        // Locate Missing Folder… of a folder that isn't there: the dialog waits for the answer
+        // (a folder that turns out not to be it leaves the person here, to choose again)
+        || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.offline)
 }
 
 /// The body of the AutoStack dialog.
@@ -1835,6 +1842,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
+        d @ Dialog::LocateFolder { .. } => crate::relocate::body(ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
         Dialog::RemoveFolder { .. } => remove_folder_body(ui, t, dlg),

@@ -305,5 +305,10 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "None of this folder's photos are in “{name}”: choose the folder it is now": "Mikään tämän kansion kuvista ei ole kansiossa ”{name}”: valitse kansio, jossa se nyt on",
+  "Only {found} of this folder's {total} photos are in:": "Vain {found} tämän kansion {total} kuvasta on kansiossa:",
+  "Only {found} of this folder's {total} photos are in “{name}”: the folder was not located": "Vain {found} tämän kansion {total} kuvasta on kansiossa ”{name}”: kansiota ei paikannettu",
+  "Files there that are not the size the library recorded: {n}": "Siellä olevat tiedostot, joiden koko ei vastaa kirjaston tallentamaa: {n}",
+  "Folder located. Photos relinked: {n}": "Kansio paikannettu. Uudelleen yhdistettyjä kuvia: {n}"
 }
