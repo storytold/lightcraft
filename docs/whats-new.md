@@ -1,5 +1,34 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### A person's page comes back at once, and goes straight to its suggestions
+- Coming back to a person's page from a photo, or after rating or editing, no longer works out its More faces again
+  (seconds in a large library): only a change to a face does. While the scan learns new faces, the page is refreshed
+  no more than a tenth of the time it takes to make. Go to Suggestions, next to their name, scrolls past their own
+  faces, often hundreds, to the ones that look like them. The People index keeps its own place: coming back from a person's page
+  scrolled down to their suggestions no longer leaves everyone scrolled to the end of the unnamed faces.
+
+### Open a face's photo from a right click
+- In People, a right click on an unnamed face, or on a face offered in More on a person's page, has Open Photo: the
+  whole photo, to tell who it is before naming, confirming or setting it aside. Escape comes back. (Unnamed faces
+  already opened on a double click; a click on a More face confirms it, so it had no way to open.)
+
+### A face set aside on a person's page stays set aside
+- On a person's page, × on one of the faces offered in More used to hide it until LightCraft was quit: next time it was
+  offered again. It is now kept: that face is no longer offered in that person's More (it can still be offered for
+  someone else, and name suggestions elsewhere are unchanged). Bring Back Set-Aside Faces, at the top of their page, gives them all back. Kept in the library's
+  `people.json` beside the chosen picture, so the catalog format does not change; it follows Rename Person. Agents:
+  `faces.dismiss {name, photo, index}`, `{name, restore: true}`; `faces.person` counts them (`dismissed`). (#3249)
+
+### Choose the face that shows a person in People
+- On a person's page, right-click one of their faces and choose Use as Person's Picture: People shows them by that
+  face instead of their largest one (often a blurred close-up, or the moment they blinked). A star marks it on their
+  page, and Use Their Largest Face goes back. The choice follows the person through Rename Person, and a face that
+  loses their name no longer stands for them. It is kept in the library's `people.json`, beside the catalog, so the
+  catalog format does not change. Agents: `faces.setCover {name, photo, index}` (`photo: null` for the largest face);
+  `faces.person` says which face is chosen (`cover`). (#3246)
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

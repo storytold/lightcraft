@@ -571,7 +571,8 @@ pub struct Caches {
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
-    people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
+    /// The People view's list: catalog revision, chosen pictures' generation, filter, people.
+    people: Option<(u64, u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
@@ -619,6 +620,15 @@ pub struct Caches {
     pub face_hints: Option<(u64, u64, u64, std::sync::Arc<panels::faces::Hints>)>,
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
+    /// The [`lightcraft_engine::Session::people_gen`] the open person page shows (a chosen picture is not in the
+    /// catalog revision).
+    pub person_page_gen: u64,
+    /// The faces the open person page was made from ([`panels::person::faces_signature`]: named, all), and how long
+    /// making it took (seconds).
+    pub person_page_made: ((u64, u64), f64),
+    /// The open person page was kept although unnamed faces changed (the scan found some): made again once the wait is
+    /// over, even when nothing changes after.
+    pub person_page_stale: bool,
     /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
     pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The most photos the face scan has had left at once since it last finished (the progress bar's whole).

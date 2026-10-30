@@ -2390,5 +2390,14 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Use as Person's Picture": "Utiliser comme image de la personne",
+  "Use Their Largest Face": "Revenir au visage le plus grand",
+  "This face is now their picture in People": "Ce visage est maintenant son image dans Personnes",
+  "Their largest face is their picture again": "Son visage le plus grand redevient son image",
+  "Bring Back Set-Aside Faces": "Remettre les visages écartés",
+  "The faces you set aside with × are offered again": "Les visages écartés avec × sont de nouveau proposés",
+  "Open Photo": "Ouvrir la photo",
+  "Go to Suggestions": "Aller aux suggestions",
+  "The faces that look like them, below theirs": "Les visages qui lui ressemblent, sous les siens"
 }
