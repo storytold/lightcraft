@@ -305,5 +305,8 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Changes found: {n}": "Ändringar hittade: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "”{name}” genomsöks fortfarande: vänta, eller stoppa den med × på dess rad",
+  "Look at the changes found in “{name}” first, or dismiss them": "Titta först på ändringarna som hittades i ”{name}”, eller avfärda dem"
 }

@@ -2339,5 +2339,11 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Continue in Background": "Lanjutkan di Latar Belakang",
+  "Folder not found": "Folder tidak ditemukan",
+  "Dismiss": "Tutup",
+  "Review…": "Tinjau…",
+  "Open Synchronize Folder with what the scan found": "Buka Sinkronkan Folder dengan hasil pemindaian",
+  "You can go on working: a notice at the top left says when the scan is done.": "Anda dapat terus bekerja: pemberitahuan di kiri atas memberi tahu saat pemindaian selesai."
 }

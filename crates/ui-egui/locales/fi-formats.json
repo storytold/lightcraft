@@ -305,5 +305,8 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Changes found: {n}": "Löydettyjä muutoksia: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "Kohdetta ”{name}” skannataan vielä: odota tai pysäytä se rivin ×-painikkeella",
+  "Look at the changes found in “{name}” first, or dismiss them": "Katso ensin kohteesta ”{name}” löydetyt muutokset tai hylkää ne"
 }

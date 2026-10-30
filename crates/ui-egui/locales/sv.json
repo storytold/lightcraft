@@ -2429,5 +2429,11 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Continue in Background": "Fortsätt i bakgrunden",
+  "Folder not found": "Mappen hittades inte",
+  "Dismiss": "Avfärda",
+  "Review…": "Granska…",
+  "Open Synchronize Folder with what the scan found": "Öppna Synkronisera mapp med det genomsökningen hittade",
+  "You can go on working: a notice at the top left says when the scan is done.": "Du kan fortsätta arbeta: en avisering uppe till vänster berättar när genomsökningen är klar."
 }

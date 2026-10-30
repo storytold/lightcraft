@@ -356,6 +356,8 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::SynchronizeFolder { .. } if informational => "Close",
+        // the scan need not be waited for
+        Dialog::SynchronizeFolder { counts: None, .. } => "Continue in Background",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
         Dialog::SamModel { .. } => return sam_ok_label(dlg, sam).to_string(),
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
@@ -375,9 +377,9 @@ fn sam_ok_label(dlg: &Dialog, sam: &SamState) -> &'static str {
     }
 }
 
-/// Whether the confirm button works: installing waits for the licence to be accepted (and Synchronize waits for the
-/// scan), a rename waits for its conflicts to be settled, smart-album rules that can't mean anything wait to be fixed.
-fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
+/// Whether the confirm button works: installing waits for the licence to be accepted (and Synchronize for the short
+/// settle after its scan), a rename waits for its conflicts to be settled, smart-album rules that can't mean anything wait to be fixed.
+fn can_confirm(app: &LightcraftApp, ctx: &egui::Context, dlg: &Dialog, informational: bool) -> bool {
     let rename_blocked = match dlg {
         Dialog::RenamePerson { from, to, merge } => {
             let plan = person_rename_plan(&app.session.catalog, from, to);
@@ -385,10 +387,9 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
         }
         _ => false,
     };
-    let waiting = matches!(
-        dlg,
-        Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
-    );
+    let waiting = matches!(dlg, Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. })
+        // (Synchronize, just after its button stopped being Continue in Background)
+        || (matches!(dlg, Dialog::SynchronizeFolder { counts: Some(_), .. }) && !crate::sync::settled(app, ctx));
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
     !rename_blocked && (informational || (!waiting && !bad_rules))
@@ -401,7 +402,7 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     let cancel = cancel_label(dlg, &sam);
     let ok = ok_label(app, dlg, informational, &sam);
     let ok = ok.as_str();
-    let can_confirm = can_confirm(app, dlg, informational);
+    let can_confirm = can_confirm(app, ui.ctx(), dlg, informational);
     let primary = !informational && can_confirm && confirm_style(dlg) == ConfirmStyle::Primary;
     use crate::button::{Button, Kind};
     // (each kind of dialog its own buttons: the keyboard's place doesn't carry from a

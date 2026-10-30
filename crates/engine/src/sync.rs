@@ -141,6 +141,12 @@ pub struct FolderMoved {
     pub id: u64,
     pub from: String,
     pub to: String,
+    /// The content hash the scan read at `to`. Synchronizing relinks only while the file there
+    /// still has it: a scan of a big folder is confirmed minutes later, and a file put in its
+    /// place by then is not the photo. `None` when the scan had no file probe, and then there is
+    /// nothing to compare. Not part of the command's reply.
+    #[serde(skip)]
+    pub hash: Option<String>,
 }
 
 /// What [`synchronize`] does with the changes found.
@@ -293,7 +299,10 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     let missing = std::mem::take(&mut changes.missing);
     for m in missing {
         match moved_from.get(&m.path) {
-            Some(to) => changes.moved.push(FolderMoved { id: m.id, from: m.path, to: to.clone() }),
+            Some(to) => {
+                let hash = out.probes.get(to).and_then(|p| p.content_hash.clone());
+                changes.moved.push(FolderMoved { id: m.id, from: m.path, to: to.clone(), hash });
+            }
             None => changes.missing.push(m),
         }
     }
@@ -301,9 +310,18 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     changes
 }
 
-/// Whether a photo is the same as far as synchronizing goes: its file, its place in the library
-/// and what a sidecar is compared with. Face and pet regions found in the background meanwhile
-/// don't make a scan stale.
+/// Whether a photo is the same file in the same place in the library: what decides whether it
+/// is missing or moved, and which files beside it are new. Its rating, keywords and edits are
+/// the person's work, not the folder's state.
+fn same_file(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size)
+            == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size)
+}
+
+/// Whether a photo is the same as far as reading its sidecar goes: its file, its place in the
+/// library and what a sidecar is compared with. Face and pet regions found in the background
+/// meanwhile don't make a scan stale.
 fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
     if Arc::ptr_eq(a, b) {
         return true;
@@ -577,19 +595,35 @@ fn not_there(path: &str) -> EngineError {
 
 impl Session {
     /// The last scan ([`Session::folder_changes`]) if it is of folder `path` and still current:
-    /// the folder holds the same photos, none of them changed. What the person was shown is what
-    /// gets done. Used once. (Changes elsewhere in the library don't matter.)
+    /// the folder holds the same photos (virtual copies aside), each the same file in the same
+    /// place ([`same_file`]).
+    /// What the person was shown is what gets done. Used once.
+    ///
+    /// Work on the folder's photos since (ratings, labels, keywords, edits) leaves the scan
+    /// current: none of it changes which files are new, missing or moved, and a scan of a big
+    /// folder on a slow disk takes minutes in which the person is told to go on working. The one
+    /// thing such work does matter to is a sidecar the scan found news in: reading it would go
+    /// over that work, so for those photos nothing may have changed ([`same_for_sync`]).
+    /// (Changes elsewhere in the library don't matter.)
     pub fn take_folder_changes(&mut self, path: &str) -> Option<FolderChanges> {
         let c = self.folder_changes.take()?;
         if lightcraft_catalog::query::folder_key(&c.path) != lightcraft_catalog::query::folder_key(path) {
             return None;
         }
         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
-        let mut now: Vec<PhotoId> = self.catalog.query(&f, &Sort::default());
-        let mut then: Vec<PhotoId> = c.seen.iter().map(|p| p.id).collect();
+        // (virtual copies made or deleted meanwhile are not files: the folder holds what it held,
+        // except for copies of photos the scan relinks or removes, which are acted on by id and
+        // would be left behind)
+        let acted: std::collections::HashSet<u64> = c.moved.iter().map(|m| m.id).chain(c.missing.iter().map(|m| m.id)).collect();
+        let counts = |p: &Photo| p.copy_of.is_none_or(|o| acted.contains(&o.0));
+        let mut now: Vec<PhotoId> =
+            self.catalog.query(&f, &Sort::default()).into_iter().filter(|id| self.catalog.photo(*id).is_some_and(|p| counts(p))).collect();
+        let mut then: Vec<PhotoId> = c.seen.iter().filter(|p| counts(p)).map(|p| p.id).collect();
         now.sort();
         then.sort();
-        let unchanged = now == then && c.seen.iter().all(|p| self.catalog.photo(p.id).is_some_and(|q| same_for_sync(p, q)));
+        let read: std::collections::HashSet<u64> = c.metadata.iter().map(|m| m.id).collect();
+        let same = |p: &Arc<Photo>, q: &Arc<Photo>| if read.contains(&p.id.0) { same_for_sync(p, q) } else { same_file(p, q) };
+        let unchanged = now == then && c.seen.iter().filter(|p| p.copy_of.is_none()).all(|p| self.catalog.photo(p.id).is_some_and(|q| same(p, q)));
         unchanged.then_some(c)
     }
 }
@@ -763,11 +797,22 @@ impl SyncWork {
         if cancel.load(Relaxed) {
             return;
         }
-        // still where the scan found it, and still gone from where the photo says
-        let checked = moved.len();
-        let relink: Vec<(PhotoId, String)> =
-            moved.into_iter().filter(|m| Path::new(&m.to).is_file() && !Path::new(&m.from).exists()).map(|m| (PhotoId(m.id), m.to)).collect();
-        step(checked);
+        // still where the scan found it (the same content, when the scan read it), and still gone
+        // from where the photo says
+        let mut relink: Vec<(PhotoId, String)> = Vec::with_capacity(moved.len());
+        for m in moved {
+            // each file is read again when the scan hashed it: this can take a while on a share
+            if cancel.load(Relaxed) {
+                return;
+            }
+            let still_the_file = Path::new(&m.to).is_file()
+                && !Path::new(&m.from).exists()
+                && m.hash.as_deref().is_none_or(|h| crate::cmd::missing::file_hash(&m.to).is_some_and(|now| base_hash(&now) == base_hash(h)));
+            if still_the_file {
+                relink.push((PhotoId(m.id), m.to));
+            }
+            step(1);
+        }
         if !relink.is_empty() && !send(SyncStep::Relink(relink)) {
             return;
         }

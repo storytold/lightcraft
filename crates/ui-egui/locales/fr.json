@@ -2390,5 +2390,11 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Continue in Background": "Continuer en arrière-plan",
+  "Folder not found": "Dossier introuvable",
+  "Dismiss": "Retirer",
+  "Review…": "Examiner…",
+  "Open Synchronize Folder with what the scan found": "Ouvrir Synchroniser le dossier avec ce que l'analyse a trouvé",
+  "You can go on working: a notice at the top left says when the scan is done.": "Vous pouvez continuer à travailler : un avis en haut à gauche signale la fin de l'analyse."
 }

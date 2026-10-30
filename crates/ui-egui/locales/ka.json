@@ -2734,5 +2734,11 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Continue in Background": "ფონურ რეჟიმში გაგრძელება",
+  "Folder not found": "საქაღალდე ვერ მოიძებნა",
+  "Dismiss": "დახურვა",
+  "Review…": "ნახვა…",
+  "Open Synchronize Folder with what the scan found": "საქაღალდის სინქრონიზაციის გახსნა შემოწმების შედეგით",
+  "You can go on working: a notice at the top left says when the scan is done.": "შეგიძლიათ მუშაობა გააგრძელოთ: შემოწმების დასრულებისას ზედა მარცხენა კუთხეში შეტყობინება გამოჩნდება."
 }

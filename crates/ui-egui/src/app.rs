@@ -104,6 +104,8 @@ impl LightcraftApp {
             scan: None,
             sync: None,
             sync_owns_changes: false,
+            sync_scanned_at: f64::NEG_INFINITY,
+            sync_ready: None,
             sync_run: None,
             lightroom: None,
             lightroom_last: None,

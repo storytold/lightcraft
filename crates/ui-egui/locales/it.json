@@ -2361,5 +2361,11 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Continue in Background": "Continua in background",
+  "Folder not found": "Cartella non trovata",
+  "Dismiss": "Rimuovi",
+  "Review…": "Esamina…",
+  "Open Synchronize Folder with what the scan found": "Apri Sincronizza cartella con ciò che ha trovato l'analisi",
+  "You can go on working: a notice at the top left says when the scan is done.": "Puoi continuare a lavorare: un avviso in alto a sinistra dice quando l'analisi è finita."
 }

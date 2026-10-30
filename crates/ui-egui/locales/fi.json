@@ -2327,5 +2327,11 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Continue in Background": "Jatka taustalla",
+  "Folder not found": "Kansiota ei löytynyt",
+  "Dismiss": "Hylkää",
+  "Review…": "Tarkista…",
+  "Open Synchronize Folder with what the scan found": "Avaa Synkronoi kansio skannauksen löytämillä muutoksilla",
+  "You can go on working: a notice at the top left says when the scan is done.": "Voit jatkaa työskentelyä: vasemmassa yläkulmassa oleva ilmoitus kertoo, kun skannaus on valmis."
 }

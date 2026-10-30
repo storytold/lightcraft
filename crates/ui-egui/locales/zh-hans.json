@@ -2200,5 +2200,11 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Continue in Background": "在后台继续",
+  "Folder not found": "未找到文件夹",
+  "Dismiss": "移除",
+  "Review…": "查看…",
+  "Open Synchronize Folder with what the scan found": "用扫描结果打开“同步文件夹”",
+  "You can go on working: a notice at the top left says when the scan is done.": "你可以继续工作：扫描完成时左上角会出现通知。"
 }

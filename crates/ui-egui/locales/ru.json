@@ -2349,5 +2349,11 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Continue in Background": "Продолжить в фоне",
+  "Folder not found": "Папка не найдена",
+  "Dismiss": "Скрыть",
+  "Review…": "Просмотреть…",
+  "Open Synchronize Folder with what the scan found": "Открыть «Синхронизировать папку» с результатами поиска",
+  "You can go on working: a notice at the top left says when the scan is done.": "Можно продолжать работу: уведомление слева вверху сообщит, когда поиск завершится."
 }

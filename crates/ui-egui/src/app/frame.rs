@@ -269,7 +269,12 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
-        self.shown_library = Some(generation);
+        // (another library than the one shown before: at launch there was none, and nothing of
+        // an earlier library to let go of)
+        let switched = self.shown_library.replace(generation).is_some();
+        if switched {
+            sync::library_changed(self);
+        }
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
