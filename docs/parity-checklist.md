@@ -51,11 +51,11 @@ cited here still exists. Formerly docs/parity.md.
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
+| Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 421 | 65 | 57 | 35 | 196/203 (97%) | 146/161 (91%) |
+| **Total** | 420 | 66 | 57 | 35 | 196/203 (97%) | 146/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 543 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 543 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 56.4% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -683,7 +683,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-ESC | Leave tool / view — Esc | P0 | ✅ | `cmd:view.back`, `crates/ui-egui/src/icons.rs` (`navigation_arrowheads_have_both_halves`), `crates/ui-egui/src/tests/crop_tool.rs` | top-bar navigation arrowheads render both halves at 1× and 2× scale; in the crop tool Esc closes the tool first (the crop stays), the next Esc goes back to the grid; Esc that ends an edit in a text field does nothing else |
 | KEY-COMMIT | Commit tool — Return | P1 | ✅ | `cmd:tool.done` | Return closes Crop / Remove / Red Eye / Masking back to Edit (edits apply live, as in Lightroom) |
 | KEY-DELETE-PIN | Delete selected pin — ⌫ | P0 | ✅ | `cmd:mask.delete`, `cmd:spot.delete` | ⌫ deletes the active mask (Masking) or the selected spot (Remove), never the photo while retouching |
-| KEY-HIDEPINS | Hide pins — H | P2 | ✅ | `cmd:view.toolOverlay`, `crates/ui-egui/src/tests/tool_overlay.rs` | ⇧H cycles the Tool Overlay (Auto → Always → Selected → Never) for spot and mask pins, since H opens Remove; also View ▸ Tool Overlay and the Remove / Masking panels (#224) |
+| KEY-HIDEPINS | Hide pins — H | P2 | 🟡 | `cmd:view.toolOverlay`, `cmd:view.maskPins`, `cmd:panel.remove`, `crates/ui-egui/src/shortcuts.rs`, `crates/ui-egui/src/tests/tool_overlay.rs`, `crates/ui-egui/src/tests/keymap.rs` (`h_toggles_the_mask_pins_while_masking`, `h_while_masking_does_not_open_remove`, `h_opens_remove_when_another_panel_is_active`, `a_remapped_remove_key_still_opens_remove_while_masking`, `h_still_toggles_the_pins_when_remove_moves_to_another_key`, `h_keeps_its_binding_in_the_full_screen_preview`, `h_keeps_its_binding_when_the_masking_panel_is_not_exposed`) | ⇧H cycles the Tool Overlay (Auto → Always → Selected → Never) for spot and mask pins; also View ▸ Tool Overlay and the Remove / Masking panels (#224). In the visible Masking panel an unmodified H itself toggles the mask pins (the same switch as View ▸ Show Mask Pins) and does not open Remove; the toggle yields only to an explicit assignment of H itself, and a Remove key reassigned to anything else still opens Remove there. Outside Masking — and wherever no panel shows (the full-screen preview, a minimized or hidden panel) — H keeps its own binding (Remove, by default). Remove's spot pins have no H hide toggle (⇧H only), so the row is partial |
 
 ## Lightroom Classic extras
 
@@ -799,6 +799,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | KEY-HIDEPINS ✅ → 🟡: in the Masking panel an unmodified H toggles the mask pins (`view.maskPins`, the View ▸ Show Mask Pins switch) instead of opening Remove; the toggle yields only to an explicit assignment of H itself, a Remove key reassigned to anything else still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default). Remove's spot pins keep ⇧H as their only hide toggle (`tests/keymap` `h_toggles_the_mask_pins_while_masking`, `a_remapped_remove_key_still_opens_remove_while_masking`, `h_still_toggles_the_pins_when_remove_moves_to_another_key`) |
 | 2026-10-25 | patch | LR-BEHAV-TITLEBAR: the top bar's title-bar gestures come from craft-window's `title_bar`: a double-click follows the system setting, and a press on a button, the search field or a panel floating over the bar never moves the window; status counts unchanged |
 | 2026-10-24 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌥0 / ⌥⇧0 (`keyword.nextSet`, `keyword.previousSet`) go to the next / previous keyword set; status counts unchanged (KEYC-METADATA stays 🟡) |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘K / Ctrl+K (`panel.addKeywords`, Add Keywords) shows the Keywords panel, opens Keywording and puts the cursor in the Add keyword box; status counts unchanged (KEYC-METADATA stays 🟡) |

@@ -386,9 +386,21 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
-    let (fire, aliased) = pressed_commands(app, ctx);
+    let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
+    }
+    // while the Masking panel is open, an unmodified H that no assignment has claimed toggles the
+    // mask pins (the View ▸ Show Mask Pins switch) instead of opening Remove; the full-screen
+    // preview shows no panels and a minimized window hides the panel, so there H keeps its own
+    // binding
+    if h_press
+        && app.ui.right == crate::state::RightPanel::Masking
+        && !app.ui.fullscreen
+        && crate::docking::exposed(app, crate::docking::Panel::Tools)
+    {
+        let _ = app.run("view.maskPins", json!({}));
+        fire.retain(|f| f != "panel.remove");
     }
     let rotate_fires = fire.iter().any(|f| f == "crop.rotateAspect");
     for f in fire {
@@ -396,12 +408,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The keys pressed this frame: the commands to fire, and the aliases (command and params) to run.
-fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>) {
+/// The keys pressed this frame: the commands to fire, the aliases (command and params) to run, and
+/// whether an unmodified H that no keymap assignment has claimed was pressed (the Masking panel's
+/// pin toggle, see `handle`).
+fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>, bool) {
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&'static str, serde_json::Value)> = Vec::new();
+    let mut h_press = false;
     let keymap = &app.ui.settings.keymap;
     let grid = library_grid(app);
     // The grid navigation keys act on the photos in view, so they wait while the full-screen preview
@@ -446,8 +461,9 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
             }
         }
         fixed_photo_keys(i, &native, &taken, grid_navigation, &mut fire);
+        h_press = matches(i, Modifiers::NONE, Key::H) && !native("H") && !taken.contains(&(Modifiers::NONE, Key::H));
     });
-    (fire, aliased)
+    (fire, aliased, h_press)
 }
 
 /// The fixed photo keys pressed: ratings 0-5, colour labels 6-9 (with Shift: and advance), and in a grid the
