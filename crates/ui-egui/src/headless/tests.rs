@@ -67,6 +67,7 @@ fn a_rejected_model_file_says_why_in_settings() {
     h.app.session.set_denoise_models_dir(Some(dir.join("denoise-models")));
     // without the runtime the button is disabled (the workspace build turns it on through the desktop app)
     if h.app.session.execute("denoise.models.list", &json!({})).unwrap()["runtime"] != true {
+        lightcraft_testkit::skip!(Feature, "denoise runtime unavailable: the workspace build turns it on");
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
