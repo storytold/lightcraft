@@ -1396,6 +1396,11 @@
   "Size (% of short edge)": "Розмір (% короткого краю)",
   "Size limit": "Обмеження розміру",
   "Skip": "Пропустити",
+  "Skip Stalled File": "Пропустити завислий файл",
+  "✕ ends an import or scan at once when a file stops answering": "× одразу завершує імпорт або сканування, коли файл перестає відповідати",
+  "✕ now ends an import within about a second while files are being read or copied, however long a read has been waiting; a copy that was under way is taken back. While folders are being listed, ✕ still waits for the listing.": "Тепер × завершує імпорт приблизно за секунду, поки файли читаються або копіюються, як би довго не чекало читання; копіювання, що тривало, скасовується. Поки теки перелічуються, × і далі чекає закінчення переліку.",
+  "After four skipped files the import or scan stops with an error that the drive is not answering. Agents use `activity.skip {id}`; `activity.list` shows `stalled` for the task.": "Після чотирьох пропущених файлів імпорт або сканування зупиняється з помилкою про те, що диск не відповідає. Агенти використовують `activity.skip {id}`; `activity.list` показує для завдання `stalled`.",
+  "While 32 or more given-up reads are still blocked on a drive that stopped answering, a new import or scan ends at once with an error saying so, even from another drive: try again later, or restart LightCraft.": "Поки 32 або більше відкинутих читань досі заблоковані на диску, який перестав відповідати, новий імпорт або сканування одразу завершується з помилкою про це, навіть з іншого диска: повторіть пізніше або перезапустіть LightCraft.",
   "Slideshow": "Показ слайдів",
   "Slideshow paused": "Показ слайдів призупинено",
   "Slideshow resumed": "Показ слайдів відновлено",
@@ -2354,5 +2359,7 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Synchronize Folder reads the same way: ✕ ends its scan and the import of its run at once, and when the drive stops answering the scan says so, lists only what it reached and offers only Import new photos.": "Синхронізувати теку читає так само: × одразу завершує її сканування та імпорт під час її виконання, а коли диск перестає відповідати, сканування повідомляє про це, перелічує лише те, до чого дійшло, і пропонує лише Імпортувати нові фото.",
+  "The scan stopped when the drive stopped answering: only new photos can be imported from it.": "Сканування зупинено, бо диск перестав відповідати: з нього можна імпортувати лише нові фото."
 }

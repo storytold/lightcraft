@@ -1,6 +1,6 @@
-use super::files::{expand, probe_all};
+use super::files::{ReadJob, expand, read_files};
 use super::types::ImportCandidate;
-use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, ReadWatch, Session, Source, StuckReaders};
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
@@ -71,12 +71,38 @@ pub struct ScanProgress {
     pub done: std::sync::atomic::AtomicUsize,
     /// Shared with the scan's row in the activity stack (its ✕ sets it).
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Which file the probes wait for, and Skip for it (the scan's row shows it; see [`ReadWatch`]).
+    pub reads: std::sync::Arc<ReadWatch>,
+}
+
+impl ScanProgress {
+    /// Progress of a scan whose probes count as stalled after `stall_after` ([`Session::import_stall_after`]) and
+    /// whose abandoned reads are counted in `stuck` ([`Session::stuck_readers`]).
+    pub fn new(stall_after: std::time::Duration, stuck: std::sync::Arc<StuckReaders>) -> Self {
+        ScanProgress { reads: std::sync::Arc::new(ReadWatch::with_stuck(stall_after, stuck)), ..Default::default() }
+    }
+}
+
+/// A probe a review scan kept still holds for the scan that follows while the file is as big as it was (or can't be
+/// looked at: it is then probed again, or fails there).
+fn cache_holds_for_scan(path: &str, info: &ProbeInfo) -> bool {
+    let size = std::fs::metadata(path).map(|m| m.len()).ok();
+    size.is_none() || size == Some(info.file_size)
+}
+
+/// A probe a scan kept still holds for the import while the file is still there, as it was (the web's files are not
+/// `std::fs` files: kept as probed).
+pub(super) fn cache_holds_for_import(path: &str, info: &ProbeInfo) -> bool {
+    cfg!(target_arch = "wasm32") || std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == info.file_size)
 }
 
 /// The result of [`scan_with`]: the candidates, and the probes to keep for the import that follows.
 pub struct ScanOutput {
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
+    /// Why the scan ended early for a reason of its own, if it did: the drive stopped answering (the fourth read was
+    /// skipped). The candidates not reached say so as their error.
+    pub stopped: Option<String>,
 }
 
 impl ScanInput {
@@ -104,8 +130,9 @@ impl ScanInput {
 /// against the library and earlier candidates). Nothing is added; the probes are kept for the
 /// import that follows.
 pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
+    let progress = ScanProgress::new(s.import_stall_after, s.stuck_readers.clone());
     let (input, paths) = ScanInput::new(s, paths);
-    let out = scan_with(input, &paths, &ScanProgress::default());
+    let out = scan_with(input, &paths, &progress);
     s.import_probes = out.probes;
     out.candidates
 }
@@ -123,25 +150,13 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let by_path = library_files(&input.library, &files);
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
-    // probes from a preceding `scan` are reused when the file is unchanged (same size)
-    let cached: Vec<Option<ProbeInfo>> = todo
-        .iter()
-        .map(|f| {
-            let info = input.cache.remove(f)?;
-            // (✕ set while the files' cached probes are checked: no more round trips to the disk; what is
-            // not reached counts as not probed, like the files after it)
-            if progress.cancel.load(Relaxed) {
-                return None;
-            }
-            let size = std::fs::metadata(f).map(|m| m.len()).ok();
-            (size.is_none() || size == Some(info.file_size)).then_some(info)
-        })
-        .collect();
-    let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
-    progress.done.store(todo.len() - missing.len(), Relaxed);
-    let mut fresh = probe_all(input.probe.as_ref(), &missing, &progress.done, &progress.cancel).into_iter();
+    // probes from a preceding `scan` are reused when the file is unchanged (same size): checked by the readers
+    let jobs: Vec<ReadJob> = todo.iter().map(|f| ReadJob { path: f.clone(), cached: input.cache.remove(f) }).collect();
     let probed: Vec<Result<ProbeInfo, String>> =
-        cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
+        read_files(input.probe.as_ref(), jobs, cache_holds_for_scan, None, &progress.done, &progress.cancel, &progress.reads)
+            .into_iter()
+            .map(|r| r.info)
+            .collect();
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
     // (who in the library has a content that was probed: asked once the probes are in)
@@ -184,5 +199,5 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    ScanOutput { candidates: out, probes: kept, stopped: progress.reads.ended() }
 }

@@ -364,12 +364,27 @@ pub struct SyncCounts {
     pub metadata: usize,
     #[serde(default)]
     pub moved: usize,
+    /// Photos of the folder whose check was skipped (the drive did not answer): the folder is not known to be up to date.
+    #[serde(default)]
+    pub unchecked: usize,
+    /// The scan ended early (the drive stopped answering): what it lists is only what it reached, and a run made from
+    /// it only imports the new files.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 impl SyncCounts {
-    /// The folder is there and the scan found nothing to bring in, relink, remove or read: the
-    /// dialog only says so (files it skipped are not changes).
+    /// The folder is there and the scan found nothing to bring in, relink, remove or read: there is nothing to choose,
+    /// so the dialog only says what it found (new files it couldn't read are not changes). A scan that stopped
+    /// ([`SyncCounts::stopped`]) only offers Import new photos, so with no new photo it has nothing to choose either.
+    pub fn nothing_to_choose(&self) -> bool {
+        !self.offline && self.new == 0 && (self.stopped || self.moved + self.missing + self.metadata == 0)
+    }
+
+    /// [`SyncCounts::nothing_to_choose`], the scan ran to its end and every photo of the folder was checked: a photo
+    /// whose check was skipped, or a scan that stopped, is not known to be fine, so the dialog doesn't say the library
+    /// is up to date then.
     pub fn up_to_date(&self) -> bool {
-        !self.offline && self.new + self.moved + self.missing + self.metadata == 0
+        self.nothing_to_choose() && !self.stopped && self.unchecked == 0
     }
 }

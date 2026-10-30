@@ -423,3 +423,130 @@ fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_
     p.checked.store(10, Relaxed);
     assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
 }
+
+/// Given a Synchronize Folder scan whose read of a new file never answers,
+/// When its row names the file and Skip is asked for (`activity.skip`),
+/// Then the scan finishes and the dialog counts that file as unreadable, with the other new file found.
+#[test]
+fn skip_on_the_folders_scan_row_lists_the_file_as_unreadable() {
+    use super::activity::Gate;
+    let dir = Scratch::new("scanstall");
+    let mut h = changed_folder(&dir);
+    h.app.session.import_stall_after = Duration::from_millis(500);
+    h.app.session.stuck_readers = std::sync::Arc::new(lightcraft_engine::import::StuckReaders::new(lightcraft_engine::import::MAX_STUCK_READERS));
+    let gate = Gate::default();
+    let in_probe = gate.clone();
+    let real = h.app.session.media.file_probe.clone().expect("the files' probe");
+    h.app.session.media.file_probe = Some(std::sync::Arc::new(move |p: &str| {
+        if p.ends_with("hang.png") {
+            in_probe.wait();
+        }
+        real(p)
+    }));
+    write_png(&dir.path("trip/hang.png"), 9);
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    assert!(h.step_until(T, |h| h.app.session.activity.list().first().is_some_and(|t| t.stalled.is_some())), "no stall");
+    let row = h.app.session.activity.list().remove(0);
+    assert_eq!((row.kind, row.stalled.as_ref().map(|s| s.what.as_str())), ("sync", Some("hang.png")));
+    let r = h.request("engine.execute", json!({"command": "activity.skip", "params": {"id": row.id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. }))), "the scan went on");
+    gate.open();
+    let c = counts(&h);
+    assert_eq!((c.new, c.unreadable), (1, 1), "c.png is new, hang.png could not be read");
+    h.app.ui.dialog = None;
+}
+
+/// Given a Synchronize Folder scan whose reads of new files stop answering one after another,
+/// When the fourth is skipped,
+/// Then an error toast says the scan stopped, and the dialog still lists what was reached.
+#[test]
+fn a_folders_scan_that_stops_at_the_cap_says_so() {
+    use super::activity::Gate;
+    let dir = Scratch::new("scancap");
+    let mut h = changed_folder(&dir);
+    h.app.session.import_stall_after = Duration::from_millis(500);
+    h.app.session.stuck_readers = std::sync::Arc::new(lightcraft_engine::import::StuckReaders::new(lightcraft_engine::import::MAX_STUCK_READERS));
+    let gate = Gate::default();
+    let in_probe = gate.clone();
+    let real = h.app.session.media.file_probe.clone().expect("the files' probe");
+    h.app.session.media.file_probe = Some(std::sync::Arc::new(move |p: &str| {
+        if p.contains("hang-") {
+            in_probe.wait();
+        }
+        real(p)
+    }));
+    for i in 0..4 {
+        write_png(&dir.path(&format!("trip/hang-{i}.png")), 40 + i as u8);
+    }
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let ended = h.step_until(T, |h| {
+        if let Some(row) = h.app.session.activity.list().first()
+            && row.stalled.is_some()
+        {
+            let _ = h.app.session.activity.skip(row.id);
+        }
+        matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. }))
+    });
+    gate.open();
+    assert!(ended, "the scan never ended");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.starts_with("Stopped:") && toast.contains("not answering"), "{toast}");
+    // a run made from it only imports: the other choices are off, and the dialog says why
+    let c = counts(&h);
+    assert!(c.stopped, "{c:?}");
+    match &h.app.ui.dialog {
+        Some(Dialog::SynchronizeFolder { relink_moved, remove_missing, read_metadata, .. }) => {
+            assert_eq!((*relink_moved, *remove_missing, *read_metadata), (false, false, false));
+        }
+        d => panic!("{d:?}"),
+    }
+    h.app.ui.dialog = None;
+}
+
+/// Given a scan that stopped (its choices were forced off) that then goes stale,
+/// When Synchronize is refused and the folder is scanned again,
+/// Then the new dialog has the default choices, not the forced-off ones.
+#[test]
+fn a_rescan_after_a_stopped_scan_starts_from_the_default_choices() {
+    let dir = Scratch::new("restopped");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    if let Some(Dialog::SynchronizeFolder { counts: Some(c), relink_moved, import_new, .. }) = &mut h.app.ui.dialog {
+        c.stopped = true;
+        *relink_moved = false;
+        // (the one choice the person can still make)
+        *import_new = false;
+    }
+    let a = h.app.session.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let r = h.request("engine.execute", json!({"command": "photo.rate", "params": {"ids": [a.0], "rating": 3}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    let rescanned = h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. })));
+    assert!(rescanned);
+    assert!(
+        matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { relink_moved: true, import_new: false, .. })),
+        "Relink back to its default, Import new as the person left it: {:?}",
+        h.app.ui.dialog
+    );
+}
+
+/// A scan that stopped with nothing found does not say the library is up to date: it did not look at everything.
+/// The same for a scan that gave up on a photo's check.
+#[test]
+fn a_stopped_scan_that_found_nothing_is_not_up_to_date() {
+    let mut c = crate::state::SyncCounts::default();
+    assert!(c.up_to_date());
+    c.stopped = true;
+    assert!(!c.up_to_date());
+    // nor does one that could not check a photo (its check was skipped): the dialog lists it and has nothing to choose
+    c = crate::state::SyncCounts { unchecked: 1, unreadable: 1, ..Default::default() };
+    assert!(!c.up_to_date());
+    assert!(c.nothing_to_choose(), "no Synchronize to run, only the list and Done");
+    c.stopped = true;
+    assert!(c.nothing_to_choose(), "a stopped scan with no new photo has nothing to choose: Synchronize would only say it stopped");
+    assert!(!c.up_to_date());
+    c.new = 1;
+    assert!(!c.nothing_to_choose(), "a stopped scan keeps Import new photos");
+}

@@ -2429,5 +2429,12 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Skip Stalled File": "Hoppa över fastnad fil",
+  "✕ ends an import or scan at once when a file stops answering": "× avslutar en import eller sökning direkt när en fil slutar svara",
+  "✕ now ends an import within about a second while files are being read or copied, however long a read has been waiting; a copy that was under way is taken back. While folders are being listed, ✕ still waits for the listing.": "× avslutar nu en import inom ungefär en sekund medan filer läses eller kopieras, oavsett hur länge en läsning har väntat; en kopiering som pågick ångras. Medan mappar listas väntar × fortfarande på listningen.",
+  "After four skipped files the import or scan stops with an error that the drive is not answering. Agents use `activity.skip {id}`; `activity.list` shows `stalled` for the task.": "Efter fyra överhoppade filer stoppas importen eller sökningen med ett fel om att enheten inte svarar. Agenter använder `activity.skip {id}`; `activity.list` visar `stalled` för uppgiften.",
+  "While 32 or more given-up reads are still blocked on a drive that stopped answering, a new import or scan ends at once with an error saying so, even from another drive: try again later, or restart LightCraft.": "Så länge 32 eller fler uppgivna läsningar fortfarande är blockerade på en enhet som slutat svara avslutas en ny import eller sökning direkt med ett fel som säger det, även från en annan enhet: försök igen senare eller starta om LightCraft.",
+  "Synchronize Folder reads the same way: ✕ ends its scan and the import of its run at once, and when the drive stops answering the scan says so, lists only what it reached and offers only Import new photos.": "Synkronisera mapp läser på samma sätt: × avslutar dess sökning och importen i dess körning direkt, och när enheten slutar svara säger sökningen det, listar bara det den nådde och erbjuder bara Importera nya foton.",
+  "The scan stopped when the drive stopped answering: only new photos can be imported from it.": "Sökningen stoppades när enheten slutade svara: bara nya foton kan importeras därifrån."
 }

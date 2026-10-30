@@ -59,6 +59,9 @@ pub(crate) enum Fault {
     /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
     /// an import's copies run side by side.
     Slow,
+    /// The copy blocks half-way until [`HANG_OPEN`] is set, as a read of a drive that stopped answering does
+    /// (implies `NoLink`).
+    Hang,
 }
 
 #[cfg(test)]
@@ -81,6 +84,14 @@ pub(crate) fn injected_fault() -> Fault {
 /// The threads copies made under [`Fault::Slow`] ran on (tests only).
 #[cfg(test)]
 static COPY_THREADS: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());
+
+/// Lets the copies that [`Fault::Hang`] blocks go on (tests only; one test at a time hangs copies).
+#[cfg(test)]
+pub(crate) static HANG_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Held for the whole of a test that hangs copies, so that two of them do not open and close [`HANG_OPEN`] under each other.
+#[cfg(test)]
+pub(crate) static HANG_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn copy_threads() -> Vec<std::thread::ThreadId> {
@@ -274,7 +285,7 @@ pub(crate) fn sibling_photo(sidecar: &Path) -> Option<String> {
 /// `dst` = `src` without touching `src`: a hard link, else a verified copy. Never overwrites
 /// (`AlreadyExists` when `dst` is taken).
 fn link_or_copy(src: &Path, dst: &Path) -> io::Result<()> {
-    let force_copy = injected(Fault::NoLink) || injected(Fault::FailWrite) || injected(Fault::Corrupt);
+    let force_copy = injected(Fault::NoLink) || injected(Fault::FailWrite) || injected(Fault::Corrupt) || injected(Fault::Hang);
     if !force_copy && !is_symlink(src) {
         match fs::hard_link(src, dst) {
             Ok(()) => {
@@ -294,6 +305,22 @@ fn link_or_copy(src: &Path, dst: &Path) -> io::Result<()> {
     copy_verified(src, dst, None)
 }
 
+/// [`io::copy`] between files in chunks of 1 MiB, like the probe's reads (so that it keeps the kernel's copy path,
+/// `copy_file_range` and reflinks), saying after each that the copy is going on (see [`crate::import::progressed`]: a copy that goes
+/// slowly is not a copy that stopped answering).
+fn copy_reporting(inp: &mut File, out: &mut File) -> io::Result<u64> {
+    const CHUNK: u64 = 1 << 20;
+    let mut total = 0u64;
+    loop {
+        let n = io::copy(&mut inp.take(CHUNK), out)?;
+        crate::import::progressed();
+        total = total.saturating_add(n);
+        if n < CHUNK {
+            return Ok(total);
+        }
+    }
+}
+
 /// Copy into a new file, sync it to disk and verify it: against `expect` (the probe's hash of the
 /// source) when given, else byte for byte against the source. On any failure the partial copy is
 /// removed.
@@ -305,7 +332,14 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             out.write_all(b"partial")?;
             return Err(io::Error::other("write failed (injected)"));
         }
-        io::copy(&mut inp, &mut out)?;
+        copy_reporting(&mut inp, &mut out)?;
+        #[cfg(test)]
+        if injected(Fault::Hang) {
+            // a drive that stopped answering: the copy is half-made and the thread blocks until the test lets go
+            while !HANG_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
         #[cfg(test)]
         if injected(Fault::Slow) {
             COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
@@ -341,6 +375,7 @@ fn hash_file(path: &Path) -> io::Result<lightcraft_preview::Hash128> {
     let mut buf = vec![0u8; 1 << 20];
     loop {
         let n = fill(&mut f, &mut buf)?;
+        crate::import::progressed();
         if n == 0 {
             return Ok(h.finish());
         }
@@ -357,6 +392,7 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
     let (mut ba, mut bb) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
     loop {
         let (na, nb) = (fill(&mut fa, &mut ba)?, fill(&mut fb, &mut bb)?);
+        crate::import::progressed();
         if na != nb || ba.get(..na) != bb.get(..nb) {
             return Ok(false);
         }
