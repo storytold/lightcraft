@@ -1880,6 +1880,248 @@ fn a_folder_takes_a_colour_label_from_its_menu() {
     assert!(!has(&h, "labelMark:libfolder:/pics/trip"));
 }
 
+/// Asserts the open menu's rows `ids` are drawn top to bottom in that order.
+fn in_order(h: &Headless, ids: &[&str]) {
+    let ys: Vec<f32> = ids.iter().map(|id| widget(h, id).center().y).collect();
+    for (pair, y) in ids.windows(2).zip(ys.windows(2)) {
+        assert!(y[0] < y[1], "{} should come above {}: {ys:?}", pair[0], pair[1]);
+    }
+}
+
+fn reveal_and_pick_services(reveal: Result<(), String>) -> Services {
+    Services { pick_folder: Some(Box::new(|| None)), reveal: Some(Box::new(move |_| reveal.clone())), png: None, ..Default::default() }
+}
+
+/// A folder's menu goes from what it does with the library's photos, through reorganizing the
+/// disk, to how the row looks and the way out to the file manager, with removal last; a disk's
+/// row keeps the same order with what applies to a disk.
+#[test]
+fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
+    let services = reveal_and_pick_services(Ok(()));
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"], [1400.0, 900.0], services);
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    in_order(
+        &h,
+        &[
+            "folderSynchronize",
+            "folderLocateMissing",
+            "folderNewFolder",
+            "folderRename",
+            "folderMove:/pics/trip",
+            "folderMovePhotosHere",
+            "folderLabelMenu",
+            "folderReveal",
+            "folderCopyPath",
+            "folderRemove",
+        ],
+    );
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes/nas");
+    in_order(
+        &h,
+        &["folderSynchronize", "folderLocateMissing", "folderNewFolder", "folderLabelMenu", "folderReveal", "folderCopyPath", "folderRemove"],
+    );
+}
+
+/// Show in Finder on a folder says why when the file manager can't show it, instead of nothing.
+#[test]
+fn a_folder_that_cant_be_shown_in_the_file_manager_says_why() {
+    let services = reveal_and_pick_services(Err("no file manager".into()));
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg"], [1400.0, 900.0], services);
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    h.app.ui.toast = None;
+    click(&mut h, "folderReveal");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("no file manager")), "{:?}", h.app.ui.toast);
+}
+
+/// A Local place's menu takes the Folders order: Synchronize first, then the disk, the file
+/// manager, and last what lists it in Local. A folder inside a place lists Remove from Local
+/// grayed out, since only a place can be removed, while its Add to Local makes it a place.
+#[test]
+fn a_local_folders_menu_takes_the_folders_order_and_grays_out_remove_inside_a_place() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-local-menu-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("place/inner")).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let place = dir.join("place").to_string_lossy().to_string();
+    let inner = dir.join("place").join("inner").to_string_lossy().to_string();
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg"], [1400.0, 900.0], reveal_and_pick_services(Ok(())));
+    h.app.run("local.addRoot", json!({"path": place})).unwrap();
+    assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == format!("source:local:{place}"))));
+    right_click(&mut h, &format!("source:local:{place}"));
+    in_order(
+        &h,
+        &[
+            "folderSynchronize",
+            "folderNewFolder",
+            "folderRename",
+            &format!("localFolderMove:{place}"),
+            "folderReveal",
+            "folderCopyPath",
+            "folderKeepInLocal",
+            "folderRemoveFromLocal",
+        ],
+    );
+    // Rename starts from the folder's own name on disk, not what dialogs call it ("parent/name")
+    click(&mut h, "folderRename");
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::TextPrompt { value, .. }) if value == "place"), "{:?}", h.app.ui.dialog);
+    h.app.ui.dialog = None;
+    h.step();
+    h.step();
+    click(&mut h, &format!("folderToggle:{place}"));
+    assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == format!("source:local:{inner}"))));
+    right_click(&mut h, &format!("source:local:{inner}"));
+    click(&mut h, "folderRemoveFromLocal");
+    assert!(h.app.ui.hidden_locations.is_empty(), "a folder inside a place can't be removed from Local: {:?}", h.app.ui.hidden_locations);
+    // the same row's Add to Local does act: the folder becomes a place of its own
+    right_click(&mut h, &format!("source:local:{inner}"));
+    click(&mut h, "folderKeepInLocal");
+    assert!(h.app.ui.local_roots.contains(&inner), "{:?}", h.app.ui.local_roots);
+}
+
+/// Where the host has no file manager, Show in Finder is left out of its group but Copy Path
+/// stays, so the group keeps its place: one separator between each pair of groups, as above.
+#[test]
+fn a_folders_menu_without_a_file_manager_keeps_copy_path_in_its_group() {
+    let services = Services { pick_folder: Some(Box::new(|| None)), png: None, ..Default::default() };
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg"], [1400.0, 900.0], services);
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    assert!(!has(&h, "folderReveal"), "no file manager here");
+    assert!(has(&h, "folderCopyPath"), "copying the path needs none");
+    let gap = |above: &str, below: &str| widget(&h, below).top() - widget(&h, above).bottom();
+    let one_separator = gap("folderMovePhotosHere", "folderLabelMenu");
+    for (above, below) in [("folderLabelMenu", "folderCopyPath"), ("folderCopyPath", "folderRemove")] {
+        let here = gap(above, below);
+        assert!((here - one_separator).abs() < 1.0, "one separator is {one_separator}, {above} to {below} is {here}");
+    }
+}
+
+/// Copy Path is in every folder menu and puts the path, as the OS spells it, on the clipboard
+/// and says so.
+#[test]
+fn copy_path_puts_a_folders_path_on_the_clipboard_from_each_kind_of_row() {
+    let native = |p: &str| p.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let dir = std::env::temp_dir().join(format!("lc-ui-copy-path-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("place")).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let place = dir.join("place").to_string_lossy().to_string();
+    let mut h = folders_app_with_services(
+        &["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"],
+        [1400.0, 900.0],
+        Services { png: None, ..Default::default() },
+    );
+    click(&mut h, "libraryFolderToggle:/pics");
+    let copy_from = |h: &mut Headless, row: &str, path: &str| {
+        assert!(h.step_until(T, |h| has(h, row)), "{row} is listed");
+        h.view.clipboard.clear();
+        h.app.ui.toast = None;
+        right_click(h, row);
+        click(h, "folderCopyPath");
+        assert_eq!(h.view.clipboard, native(path), "{row}");
+        assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some(crate::i18n::Locale::En.tr("Path copied")), "{row}");
+        assert!(!popup_open(h), "choosing closes the menu");
+    };
+    copy_from(&mut h, "source:libfolder:/pics/trip", "/pics/trip");
+    copy_from(&mut h, "source:libfolder:/Volumes/nas", "/Volumes/nas");
+    h.app.run("local.addRoot", json!({"path": place})).unwrap();
+    copy_from(&mut h, &format!("source:local:{place}"), &place);
+}
+
+/// A path is copied with the OS's separators, and a bare drive as its root.
+#[test]
+fn a_copied_path_has_the_separators_of_the_os_and_a_drives_root() {
+    use crate::panels::left::native_path;
+    assert_eq!(native_path("D:", '\\'), "D:\\");
+    assert_eq!(native_path("D:/photos/trip", '\\'), "D:\\photos\\trip");
+    assert_eq!(native_path("//server/share/x", '\\'), "\\\\server\\share\\x");
+    assert_eq!(native_path("/Volumes/nas", '/'), "/Volumes/nas");
+}
+
+/// A disk's menu offers Show in Finder with the disk's path and New Folder on Disk… inside the
+/// disk, which the startup disk (no menu at all) doesn't.
+#[test]
+fn a_disks_menu_shows_it_in_the_file_manager_and_makes_a_folder_in_it() {
+    let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = shown.clone();
+    let services = Services {
+        reveal: Some(Box::new(move |p| {
+            seen.lock().unwrap().push(p.to_string());
+            Ok(())
+        })),
+        png: None,
+        ..Default::default()
+    };
+    let mut h = folders_app_with_services(&["/Volumes/nas/a/1.jpg", "/Users/me/3.jpg"], [1400.0, 900.0], services);
+    right_click(&mut h, "source:libfolder:/Volumes/nas");
+    click(&mut h, "folderReveal");
+    assert_eq!(*shown.lock().unwrap(), ["/Volumes/nas"]);
+    right_click(&mut h, "source:libfolder:/Volumes/nas");
+    click(&mut h, "folderNewFolder");
+    match &h.app.ui.dialog {
+        Some(crate::state::Dialog::TextPrompt { title, command, params, key, .. }) => {
+            assert_eq!((command.as_str(), key.as_str()), ("folder.create", "name"));
+            assert!(title.contains("“nas”"), "the disk is called by its own name: {title}");
+            assert_eq!(params["parent"], "/Volumes/nas");
+        }
+        other => panic!("New Folder on Disk… asks for a name: {other:?}"),
+    }
+    // the startup disk keeps having no menu
+    h.app.ui.dialog = None;
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/");
+    assert!(!has(&h, "folderNewFolder") && !has(&h, "folderCopyPath"), "the startup disk has no menu");
+}
+
+/// New Folder on Disk… in a Local folder makes the folder inside it, and its row is listed.
+#[test]
+fn a_local_folders_new_folder_is_made_on_disk_and_listed() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-local-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("place/inner")).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let place = dir.join("place").to_string_lossy().to_string();
+    let inner = dir.join("place").join("inner").to_string_lossy().to_string();
+    let made = dir.join("place").join("picks").to_string_lossy().to_string();
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg"], [1400.0, 900.0], Services { png: None, ..Default::default() });
+    h.app.run("local.addRoot", json!({"path": place})).unwrap();
+    assert!(h.step_until(T, |h| has(h, &format!("source:local:{place}"))));
+    click(&mut h, &format!("folderToggle:{place}"));
+    assert!(h.step_until(T, |h| has(h, &format!("source:local:{inner}"))), "the folder inside is listed");
+    right_click(&mut h, &format!("source:local:{place}"));
+    click(&mut h, "folderNewFolder");
+    let Some(crate::state::Dialog::TextPrompt { value, .. }) = &mut h.app.ui.dialog else { panic!("{:?}", h.app.ui.dialog) };
+    *value = "picks".into();
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(std::path::Path::new(&made).is_dir(), "the folder is on disk");
+    assert!(h.step_until(T, |h| has(h, &format!("source:local:{made}"))), "its row is listed");
+}
+
 #[test]
 fn removing_a_disk_from_the_library_asks_first() {
     use crate::state::Dialog;

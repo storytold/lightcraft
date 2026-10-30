@@ -601,6 +601,23 @@ fn file_of(s: &Session, id: lightcraft_catalog::PhotoId) -> String {
 }
 
 #[test]
+fn a_folder_made_in_a_bare_drive_goes_at_its_root() {
+    use crate::cmd::browse::child_path;
+    assert_eq!(child_path("D:", "picks", '\\'), "D:\\picks");
+    assert_eq!(child_path("d:", "picks", '/'), "d:/picks");
+    // anything else joins as the host joins paths
+    assert_eq!(child_path("/Volumes/nas", "picks", '/'), std::path::Path::new("/Volumes/nas").join("picks").to_string_lossy());
+}
+
+#[test]
+fn a_folder_can_be_made_in_a_disks_root() {
+    use crate::cmd::browse::without_trailing_separators as trimmed;
+    assert_eq!((trimmed("/"), trimmed("//"), trimmed("\\")), ("/", "/", "\\"));
+    assert_eq!((trimmed("/Volumes/nas/"), trimmed("D:\\"), trimmed("D:")), ("/Volumes/nas", "D:", "D:"));
+    assert_eq!(trimmed(""), "");
+}
+
+#[test]
 fn a_folder_is_created_on_disk_and_undo_removes_it() {
     let dir = Scratch::new("create");
     let mut s = Session::new();

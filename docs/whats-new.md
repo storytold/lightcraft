@@ -1,5 +1,24 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### A folder's menu has one order, in Folders and in Local
+- Right-clicking a folder in Folders or in Local opens a menu in the same order, in groups: what it does with the
+  library's photos (Synchronize Folder…, Locate Missing Files…), then reorganizing the disk (New Folder on Disk…,
+  Rename Folder…, Move Folder To…, Move Selected Photos Here), Set Color Label, Show in Finder, and removal last. A
+  disk's row and a Local place keep that order with the groups that apply to them.
+- An item that can't apply right now is grayed out, and its tooltip says why, instead of disappearing: Move Selected
+  Photos Here until photos are selected, Synchronize Folder… in Local for a folder with no library photo, Keep in
+  Local on a place already kept, Remove from Local for a folder inside a place.
+- Show in Finder on a folder, and Keep in Local, now say why when they fail.
+- Rename Folder… in Local starts from the folder's own name on disk, as in Folders.
+
+### Every folder menu can copy the folder's path and make a folder on disk
+- Copy Path, right after Show in Finder, is in every folder menu (Folders, a disk's row, Local): it puts the folder's
+  path on the clipboard, as your system spells it, and a toast says so.
+- A disk's row now offers Show in Finder and New Folder on Disk…, and a folder in Local offers New Folder on Disk…,
+  whose new folder is listed in Local.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

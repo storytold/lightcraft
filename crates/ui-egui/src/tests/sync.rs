@@ -5,8 +5,9 @@
 //! * Right-click a folder in the sidebar's Folders section ▸ Synchronize Folder…: a dialog opens
 //!   at once and scans the folder without holding up the app, then says how many photos are new,
 //!   missing, or have metadata updates.
-//! * Right-click a folder in the sidebar's Local section: Synchronize Folder… is there when the
-//!   folder holds library photos (or has a folder with some inside), and not when it holds none.
+//! * Right-click a folder in the sidebar's Local section: Synchronize Folder… works when the
+//!   folder holds library photos (or has a folder with some inside), and is grayed out when it
+//!   holds none.
 //! * Synchronize with the defaults imports the new photos and leaves missing ones alone.
 //! * Ticking "Remove missing photos" also moves those to Recently Deleted.
 //! * Cancel leaves the library as it was.
@@ -369,8 +370,9 @@ fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
     assert!(h.app.ui.dialog.is_none(), "a stopped scan opens nothing later");
 }
 
-/// Right-click the Local row of `folder`; whether Synchronize Folder… is in its menu.
-fn local_menu_offers_synchronize(h: &mut Headless, folder: &str) -> bool {
+/// Right-click the Local row of `folder` and click its Synchronize Folder… row (it is always
+/// listed); whether its dialog opened.
+fn local_menu_synchronizes(h: &mut Headless, folder: &str) -> bool {
     let row = format!("source:local:{folder}");
     assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "no row {row}");
     let rect = h.app.widgets.iter().find(|(w, _)| *w == row).map(|(_, r)| *r).unwrap();
@@ -379,7 +381,10 @@ fn local_menu_offers_synchronize(h: &mut Headless, folder: &str) -> bool {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    h.app.widgets.iter().any(|(w, _)| *w == "folderSynchronize")
+    let r = h.request("ui.clickWidget", json!({"id": "folderSynchronize"}), T);
+    assert_eq!(r["ok"], true, "the row is listed: {r}");
+    h.step();
+    matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. }))
 }
 
 #[test]
@@ -394,17 +399,13 @@ fn a_local_folder_with_library_photos_offers_synchronize() {
         assert_eq!(r["ok"], true, "{r}");
     }
     h.step();
-    assert!(!local_menu_offers_synchronize(&mut h, &native("empty")), "no library photos in it: nothing to synchronize");
+    assert!(!local_menu_synchronizes(&mut h, &native("empty")), "no library photos in it: grayed out, nothing to synchronize");
     // close that menu, then open the other folder's
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(local_menu_offers_synchronize(&mut h, &native("trip")), "the folder holds library photos");
-    let r = h.request("ui.clickWidget", json!({"id": "folderSynchronize"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "the dialog opens at once");
+    assert!(local_menu_synchronizes(&mut h, &native("trip")), "the folder holds library photos: the dialog opens at once");
     assert!(h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. }))));
 }
 
