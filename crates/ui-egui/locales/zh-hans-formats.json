@@ -305,5 +305,22 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "{n} albums": "{n} 个相册",
+  "{n} folders": "{n} 个文件夹",
+  "Export {n} Albums…": "导出 {n} 个相册…",
+  "Move {n} Albums to": "将 {n} 个相册移动到",
+  "Delete {n} Albums…": "删除 {n} 个相册…",
+  "Remove {n} Folders from Library…": "从图库中移除 {n} 个文件夹…",
+  "Add {n} Keywords to Selected Photos": "将 {n} 个关键字添加到所选照片",
+  "Remove {n} Keywords from Selected Photos": "从所选照片中移除 {n} 个关键字",
+  "Show Photos with Any of {n} Keywords": "显示包含这 {n} 个关键字中任意一个的照片",
+  "Merge {n} Keywords into…": "将 {n} 个关键字合并到…",
+  "Delete {n} Keywords…": "删除 {n} 个关键字…",
+  "Delete {n} albums?": "要删除 {n} 个相册吗？",
+  "Delete {n} keywords?": "要删除 {n} 个关键字吗？",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "包含其中任意一个的照片：{count} 张。其下的关键字也会被删除。撤销可恢复。",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "要从图库中移除 {n} 个文件夹吗？从中导入的照片：{count} 张。",
+  "…and {n} more": "…以及另外 {n} 个",
+  "{n} keywords": "{n} 个关键字"
 }

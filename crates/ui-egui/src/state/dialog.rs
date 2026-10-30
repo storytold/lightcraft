@@ -148,6 +148,8 @@ pub enum Dialog {
         /// Photos that have it (or one below it).
         count: usize,
     },
+    /// Delete or remove several sidebar rows at once (albums, keywords, folders), after asking.
+    Several(crate::panels::side_select::Several),
     /// Merge keywords into another one on every photo.
     MergeKeywords {
         from: Vec<String>,

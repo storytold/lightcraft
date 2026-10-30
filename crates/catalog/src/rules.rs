@@ -1111,6 +1111,22 @@ impl RuleSet {
         out
     }
 
+    /// Give every Album rule, groups included, the album `to` makes of the one it names (a copy
+    /// of a set of albums tests the copies). A rule whose album isn't a valid id is left alone.
+    pub fn remap_albums(&mut self, to: &impl Fn(crate::AlbumId) -> crate::AlbumId) {
+        for rule in &mut self.rules {
+            match rule {
+                Rule::Group { group } => group.remap_albums(to),
+                Rule::Field { field, value, .. } if field == "album" => {
+                    if let Some(id) = album_rule_id(value) {
+                        *value = Value::from(to(id).0);
+                    }
+                }
+                Rule::Field { .. } => {}
+            }
+        }
+    }
+
     fn check_into(&self, cat: &Catalog, owner: Option<crate::AlbumId>, path: &mut Vec<usize>, out: &mut Vec<Problem>) {
         for (i, rule) in self.rules.iter().enumerate() {
             path.push(i);

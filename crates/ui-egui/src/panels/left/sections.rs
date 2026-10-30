@@ -363,12 +363,18 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             parent: None,
         });
     }
-    if ui.button(crate::i18n::tr("Create Smart Album from Filter…")).clicked() {
+    let why_not = app.session.view_save_refusal();
+    let from_filter = ui.add_enabled(why_not.is_none(), egui::Button::new(crate::i18n::tr("Create Smart Album from Filter…")));
+    if let Some(why) = why_not {
+        from_filter.on_disabled_hover_text(why);
+    } else if from_filter.clicked() {
         app.ui.dialog = Some(crate::state::Dialog::NewSmartAlbum { name: String::new(), parent: None });
     }
     if ui.button(crate::i18n::tr("Create Folder…")).clicked() {
         app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: true, parent: None, include_selected: false });
     }
+    // albums taken with Cut or Copy go to the top level from here
+    crate::panels::side_select::album_paste_item(app, ui, None);
     // only once the albums were put in an order by hand
     if app.session.catalog.album_children_are_ordered(None) {
         ui.separator();

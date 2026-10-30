@@ -32,6 +32,7 @@ pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+pub mod multi_select;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -99,6 +100,69 @@ pub use services::{
 use state::{GestureFrame, InjectedPress};
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long a toast saying why a command was refused stays: a sentence to read, as
+/// [`LightcraftApp::toast_error`]'s.
+const REFUSAL_SECONDS: f64 = 6.0;
+
+/// A command that didn't run: the whole error (for agents, the log and the status) and what it
+/// says to the person who asked (the reason, without the command's id).
+struct Refusal {
+    error: String,
+    why: String,
+    /// What kind of error it is, for code that decides on it ([`LightcraftApp::run_typed`]).
+    kind: lightcraft_engine::ErrorKind,
+}
+
+impl Refusal {
+    /// An error that is already text (the interface's own commands). Mostly words for a person
+    /// as they are; a command that wraps an engine command hands on the engine's error already
+    /// turned into text, and of that only the reason is for the person. `error` stays whole.
+    fn plain(error: String) -> Refusal {
+        let why = engine_reason(&error).map(sentence).unwrap_or_else(|| error.clone());
+        Refusal { why, error, kind: lightcraft_engine::ErrorKind::Other }
+    }
+}
+
+/// A sentence starts with a capital, whatever the command wrote. Only when it starts with a word:
+/// a file name or a path ("img_0012.jpg is a virtual copy", "photos/a.jpg: …") is someone's
+/// spelling and stays as it is, and so does a letter whose capital is not one letter (ß).
+fn sentence(why: &str) -> String {
+    let first_word = why.split_whitespace().next().unwrap_or_default().trim_end_matches([',', ':', ';']);
+    let mut letters = why.chars();
+    match letters.next() {
+        Some(first) if first_word.chars().all(char::is_alphabetic) && first.to_uppercase().count() == 1 => {
+            first.to_uppercase().chain(letters).collect()
+        }
+        _ => why.to_string(),
+    }
+}
+
+/// The reason in an [`EngineError`](lightcraft_engine::EngineError) that is already text: what
+/// follows ``command `id` is not available right now: `` or ``invalid parameters for `id`: ``
+/// (its `Disabled` and `BadParams` formats). `None` for anything else, including text that only
+/// begins like one: the id must be a command's (letters, digits, `.`, `_`, `-`) between the
+/// backticks, so the reason is cut at the first separator and may hold colons and backticks.
+fn engine_reason(error: &str) -> Option<&str> {
+    const SHAPES: [(&str, &str); 2] = [("command `", "` is not available right now: "), ("invalid parameters for `", "`: ")];
+    SHAPES.iter().find_map(|(before, after)| {
+        let (id, reason) = error.strip_prefix(before)?.split_once(after)?;
+        let is_id = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        (is_id && !reason.trim().is_empty()).then_some(reason)
+    })
+}
+
+impl From<lightcraft_engine::EngineError> for Refusal {
+    fn from(e: lightcraft_engine::EngineError) -> Refusal {
+        use lightcraft_engine::EngineError;
+        let why = match &e {
+            EngineError::Disabled(_, why) => why.clone(),
+            EngineError::BadParams { msg, .. } => msg.clone(),
+            other => other.to_string(),
+        };
+        Refusal { error: e.to_string(), why: sentence(&why), kind: e.kind() }
+    }
+}
+
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 

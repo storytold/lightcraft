@@ -1371,7 +1371,9 @@ fn context_menu_albums(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
         register(ui, "button:contextAddToAlbum", add.response.rect);
     }
     // in a (non-smart) album: take the selection out of it, or make this photo its cover
+    // (with several albums shown there is no telling which one is meant)
     if let lightcraft_engine::LibrarySource::Album(aid) = app.session.source
+        && app.session.also_albums.is_empty()
         && app.session.catalog.album(aid).is_some_and(|a| !a.folder && !a.is_smart())
     {
         if ui.button(crate::i18n::tr("Remove from Album")).clicked() {

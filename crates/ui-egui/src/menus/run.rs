@@ -1078,6 +1078,10 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
         }
         "dialog.smartAlbum" => dialog_smart_album_command(app, id, p),
         "dialog.newSmartAlbum" => {
+            // (several albums with a smart one among them can't be saved: say why, as the engine does)
+            if let Some(why) = app.session.view_save_refusal() {
+                return Some(Err(why));
+            }
             app.ui.dialog = Some(Dialog::NewSmartAlbum { name: p.get("name").and_then(Value::as_str).unwrap_or("").into(), parent: parent_param(p) });
             Ok(Value::Null)
         }

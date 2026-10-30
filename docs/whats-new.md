@@ -1,5 +1,38 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### Choose several albums, folders, keywords or dates in the sidebars
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one, except rows
+  inside a folder that is closed. The grid shows the photos of any of them, each once, and the title says how many
+  albums or folders are shown. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel, Keywords) the same clicks pick several keywords. Picking does not change the grid.
+- With several albums shown, Remove from Album is not offered and the Delete key is the photos' Delete once you click
+  elsewhere (it asks first while Settings ▸ Confirm before moving photos to Recently Deleted is on), because there is no
+  telling which album is meant.
+- Right-click one of several rows chosen to act on them all, as one step to undo: move albums into a folder, export
+  them, or delete them; give folders a color label or remove them from the library; give keywords to the selected
+  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
+  Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
+- Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
+  beside; dropped beside a row, the one you dragged is placed there and the others come into that folder).
+- Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
+  or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
+  click on an album it always was.
+- For agents: `album.delete` and `album.move` take `ids`, `keyword.delete` and `keyword.move` take `keywords`,
+  `library.removeFolder` and `folder.label` take `paths`, as one undo step each; `album.reorder` takes `with`, the
+  albums chosen beside the one it places, which come to the same folder in the same step.
+
+### Cut, Copy and Paste for albums and keywords
+- In the menus of albums and keywords in the left panel and the Keyword List, Cut and Copy take the rows (one or
+  several chosen) and Paste puts them down: cut albums move into the folder where you choose Paste (the Albums +
+  menu pastes at the top level), copied albums are duplicated there with their photos, a copied smart album keeps its
+  rules and a copied folder everything inside it; cut keywords are nested inside the keyword where you choose Paste;
+  copied keywords are text you can paste in a keyword box. Paste is grayed out where it can't work, such as a
+  folder inside itself, and one Edit ▸ Undo takes back a paste.
+- For agents: the new `album.duplicate` takes `id` or `ids` and an optional `parent` (null: the top level).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -156,6 +189,16 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Several albums, folders, keywords or dates shown at once (agents)
+- `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
+  browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
+  `libraryFolders` and `albums`. The single fields stay and count as one
+  more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click that use
+  this come in a later change. When the albums shown include a smart album, New Smart Album from Filter… is grayed out
+  and says why, as `album.createSmart` does.
+- `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
+  it), so editing a smart album saved from a view of several albums no longer loses them.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

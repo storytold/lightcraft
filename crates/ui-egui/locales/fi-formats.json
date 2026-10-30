@@ -305,5 +305,22 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "{n} albums": "{n} albumia",
+  "{n} folders": "{n} kansiota",
+  "Export {n} Albums…": "Vie {n} albumia…",
+  "Move {n} Albums to": "Siirrä {n} albumia kohteeseen",
+  "Delete {n} Albums…": "Poista {n} albumia…",
+  "Remove {n} Folders from Library…": "Poista {n} kansiota kirjastosta…",
+  "Add {n} Keywords to Selected Photos": "Lisää {n} avainsanaa valittuihin kuviin",
+  "Remove {n} Keywords from Selected Photos": "Poista {n} avainsanaa valituista kuvista",
+  "Show Photos with Any of {n} Keywords": "Näytä kuvat, joilla on jokin {n} avainsanasta",
+  "Merge {n} Keywords into…": "Yhdistä {n} avainsanaa kohteeseen…",
+  "Delete {n} Keywords…": "Poista {n} avainsanaa…",
+  "Delete {n} albums?": "Poistetaanko {n} albumia?",
+  "Delete {n} keywords?": "Poistetaanko {n} avainsanaa?",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Kuvia, joilla on jokin niistä: {count}. Niiden alla olevat avainsanat poistetaan myös. Kumoa palauttaa ne.",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "Poistetaanko {n} kansiota kirjastosta? Niistä tuotuja kuvia: {count}.",
+  "…and {n} more": "…ja {n} muuta",
+  "{n} keywords": "{n} avainsanaa"
 }
