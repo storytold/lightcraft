@@ -15,6 +15,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+mod album_counts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -85,6 +86,7 @@ pub mod walk;
 
 use std::sync::Arc;
 
+pub use album_counts::CountsAge;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
@@ -226,6 +228,8 @@ static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub struct Session {
     library_generation: u64,
+    /// The counts `albums.list` answers with.
+    album_counts: album_counts::AlbumCounts,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -444,9 +448,23 @@ impl Session {
         self.library_generation
     }
 
+    /// The next `albums.list` answers with `counts` and counts nothing itself: a window that keeps the albums' counts
+    /// (counted off its UI thread) offers them with how far they are from the catalog and the clock as they are now,
+    /// and `albums.list` marks the smart albums whose count is behind as pending.
+    /// [`Session::withdraw_album_counts`] takes the offer back once the command has run.
+    pub fn offer_album_counts(&mut self, counts: Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>, age: CountsAge) {
+        self.album_counts.offer(counts, age);
+    }
+
+    /// Take back what [`Session::offer_album_counts`] offered, if `albums.list` didn't use it.
+    pub fn withdraw_album_counts(&mut self) {
+        self.album_counts.withdraw();
+    }
+
     pub fn new() -> Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            album_counts: album_counts::AlbumCounts::default(),
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,

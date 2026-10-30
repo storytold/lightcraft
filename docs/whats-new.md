@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### `albums.list` no longer freezes the window in a large library
+- The `albums.list` command (also reached as `cmd_albums_list` through MCP when connected to the app) used to count every
+  smart album's photos on the window's thread before it answered: with many smart albums in a large library, seconds
+  in which the window did not respond. It now answers at once from the counts the Albums list in the sidebar keeps.
+  A smart album whose count is not of the library as it is now yet (new rules, an edit to many photos, a library just
+  opened, or a new minute for an album asking about “the last N days”, itself or through an album it tests) has
+  `countPending: true`, with the count made before (0 if there is none); ask again a moment later. A script or MCP
+  client with no window (`lightcraft-cli run`, the headless MCP server) gets the counts counted once and kept, followed
+  through edits to a few photos instead of counted again with every call.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

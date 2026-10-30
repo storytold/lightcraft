@@ -232,6 +232,12 @@ sequence in a folder, or an AV1 video (no audio). It runs in the background and 
 `cmd_slideshow_exportStatus` gives the result (`pages`, `files`, or `frames` / `samples` / `seconds` for video) or the
 error. With `wait: true` the call blocks and replies with the result.
 
+`cmd_albums_list` lists the albums with their photo counts. Connected to the desktop app it answers at once from the
+counts the sidebar keeps, and a smart album whose count isn't of the library as it is now yet (it is being counted
+again after new rules, an edit to many photos or a library just opened, or, for an album asking about "the last N days"
+itself or through an album it tests, a new minute) has `countPending: true` with the count made before (0 if none): ask
+again a moment later. Headless, the counts are made on the first call, kept, and never pending.
+
 ### Preview-only raws after an update
 
 A raw LightCraft couldn't decode when it was imported is shown from its embedded preview

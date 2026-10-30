@@ -318,6 +318,22 @@ pub(crate) fn widget_target_visible(ctx: &egui::Context, hit: Option<crate::widg
     top_modal == at_layer && !above_modal
 }
 
+/// [`LightcraftApp::run`], except that `albums.list` answers from the counts the sidebar keeps
+/// ([`crate::Caches::album_counts_for_list`]: counted on a worker thread, followed through small edits) instead of
+/// counting every smart album's photos here, on the UI thread, for as long as the library takes. Counts not ready
+/// are listed as pending (`countPending`).
+fn run_command(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if id != "albums.list" {
+        return app.run(id, params);
+    }
+    let now = (app.session.clock)();
+    let (counts, age) = app.caches.album_counts_for_list(&app.session.catalog, app.session.library_generation(), &now, ctx);
+    app.session.offer_album_counts(counts, age);
+    let r = app.run(id, params);
+    app.session.withdraw_album_counts();
+    r
+}
+
 /// Dispatch one control request: run engine commands, list menus/widgets, inspect state, queue
 /// file drops and synthetic input, capture screenshots, or return an error for an unknown or
 /// invalid request. Requests that need fresh widget geometry are queued as `Outcome` values.
@@ -329,7 +345,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.execute" | "ui.menu.invoke" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-            let r = app.run(id, params);
+            let r = run_command(app, ctx, id, params);
             ctx.request_repaint();
             wrap(r)
         }
