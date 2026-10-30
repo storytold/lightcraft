@@ -409,8 +409,12 @@ pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize
             running.store(false, Relaxed);
             ctx.request_repaint();
         };
+        // (a thread that can't start keeps the last count; the count is tried again once it is stale)
         #[cfg(not(target_arch = "wasm32"))]
-        std::thread::spawn(work);
+        if let Err(e) = std::thread::Builder::new().name("lc-missing".into()).spawn(work) {
+            log::warn!("counting missing photos: could not start: {e}");
+            job.running.store(false, Relaxed);
+        }
         #[cfg(target_arch = "wasm32")]
         work();
         ui.data_mut(|d| d.insert_temp(id, job.clone()));

@@ -155,6 +155,8 @@ fn main() -> ExitCode {
     // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
     // or RUST_LOG picks another level (#168).
     lightcraft_engine::logging::install("lightcraft-cli");
+    // before anything uses rayon, so its threads show as `lc-rayon-N` in a thread dump (#3071)
+    lightcraft_engine::threads::name_global_pool();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),

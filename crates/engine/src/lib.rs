@@ -80,6 +80,7 @@ pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
 pub mod text;
+pub mod threads;
 mod view;
 pub mod walk;
 
