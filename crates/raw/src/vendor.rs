@@ -29,7 +29,7 @@ mod sr2;
 pub mod srw;
 
 use crate::{BlackLevel, Cfa, Rect};
-use lightcraft_tiff::Tiff;
+use lightcraft_tiff::{Ifd, Tiff};
 use std::ops::Range;
 
 /// Exif `CFAPattern`.
@@ -48,6 +48,23 @@ pub(crate) fn cfa_from_exif(tiff: &Tiff) -> Option<Cfa> {
         _ => return None,
     };
     (two(c0, c1) && two(r0, r1)).then(|| Cfa::bayer_static(name))
+}
+
+/// Canon maker-note `AspectInfo` (CR2 and CR3; ExifTool names `AspectRatio`, `CroppedImageWidth`,
+/// `CroppedImageHeight`, `CroppedImageLeft`, `CroppedImageTop`): the in-camera aspect ratio's rectangle.
+pub(crate) const CANON_ASPECT_INFO: u16 = 0x009a;
+
+/// The shot's aspect-ratio rectangle from a Canon maker note's [`CANON_ASPECT_INFO`] (aspect code, width, height,
+/// left, top), placed inside `image` (the Canon image the rectangle is measured from). `None` when the tag is
+/// absent or malformed, or its rectangle doesn't fit inside `image`.
+pub(crate) fn canon_aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
+    let data = maker?.u64s(CANON_ASPECT_INFO)?;
+    let [width, height, left, top] = [1usize, 2, 3, 4].map(|i| data.get(i).and_then(|&v| usize::try_from(v).ok()));
+    let (width, height, left, top) = (width?, height?, left?, top?);
+    if width < 2 || height < 2 || left.checked_add(width)? > image.width || top.checked_add(height)? > image.height {
+        return None;
+    }
+    Some(Rect::new(image.x.checked_add(left)?, image.y.checked_add(top)?, width, height))
 }
 
 /// Black level per 2×2 CFA position (anchored at the active area origin) from masked sensor columns `cols` over

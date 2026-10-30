@@ -18,7 +18,7 @@
 //! store the whole image.
 //! Unknown camera metadata versions are ignored rather than assigned a guessed white balance.
 
-use super::{black_from_columns, crx, white_from_data};
+use super::{black_from_columns, canon_aspect_crop, crx, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_meta::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
 use lightcraft_tiff::{Ifd, Tiff};
@@ -26,7 +26,6 @@ use lightcraft_tiff::{Ifd, Tiff};
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_DATA: u16 = 0x4001;
 const LENS_MODEL: u16 = 0x0095;
-const ASPECT_INFO: u16 = 0x009a;
 
 /// Pick the first largest raw track. Equal-sized later tracks can be the Dual Pixel delta, which
 /// must never replace the main sensor image. An invalid full-size descriptor is reported, not
@@ -93,18 +92,6 @@ fn sensor_crop(maker: Option<&Ifd>, width: usize, height: usize) -> Option<Rect>
     )
 }
 
-/// The shot's aspect-ratio rectangle from `AspectInfo`, placed inside `image` (the recommended crop). `None`
-/// when the tag is absent or malformed, or its rectangle doesn't fit inside `image`.
-fn aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
-    let data = maker?.u64s(ASPECT_INFO)?;
-    let [width, height, left, top] = [1usize, 2, 3, 4].map(|i| data.get(i).and_then(|&v| usize::try_from(v).ok()));
-    let (width, height, left, top) = (width?, height?, left?, top?);
-    if width < 2 || height < 2 || left.checked_add(width)? > image.width || top.checked_add(height)? > image.height {
-        return None;
-    }
-    Some(Rect::new(image.x.checked_add(left)?, image.y.checked_add(top)?, width, height))
-}
-
 fn geometry(area: Option<&Cr3ImageArea>, maker: Option<&Ifd>, width: usize, height: usize) -> (Rect, Rect) {
     let area = area.filter(|a| usize::from(a.width) == width && usize::from(a.height) == height);
     let sensor = sensor_crop(maker, width, height);
@@ -122,7 +109,7 @@ fn geometry(area: Option<&Cr3ImageArea>, maker: Option<&Ifd>, width: usize, heig
         active = c;
         recommended = Some(Rect::new(0, 0, c.width, c.height));
     }
-    let crop = recommended.map(|c| aspect_crop(maker, c).unwrap_or(c)).unwrap_or(Rect::new(0, 0, active.width, active.height));
+    let crop = recommended.map(|c| canon_aspect_crop(maker, c).unwrap_or(c)).unwrap_or(Rect::new(0, 0, active.width, active.height));
     (active, crop)
 }
 
@@ -265,6 +252,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vendor::CANON_ASPECT_INFO;
     use lightcraft_tiff::{IfdBuilder, Value};
 
     fn maker(version: u16, wb_at: usize, black_at: usize, white_at: usize) -> Ifd {
@@ -317,7 +305,7 @@ mod tests {
             .with(SENSOR_INFO, Value::Short(vec![34, 64, 48, 1, 1, 6, 4, 61, 45]))
             .with(LENS_MODEL, Value::Ascii("RF-S18-45mm F4.5-6.3 IS STM".into()));
         if let Some(a) = aspect {
-            cmt3 = cmt3.with(ASPECT_INFO, Value::Long(a.to_vec()));
+            cmt3 = cmt3.with(CANON_ASPECT_INFO, Value::Long(a.to_vec()));
         }
         let cmt3 = tiff(cmt3);
         let mut canon = vec![0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
@@ -443,7 +431,7 @@ mod tests {
     /// and `AspectInfo` applies from its origin.
     #[test]
     fn aspect_info_needs_a_consistent_recommended_crop() {
-        let aspect = lightcraft_tiff::IfdBuilder::new().with(ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
+        let aspect = lightcraft_tiff::IfdBuilder::new().with(CANON_ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
         let bytes = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[aspect]).unwrap();
         let maker = Tiff::parse(&bytes).unwrap().ifds.remove(0);
         let area =
@@ -467,9 +455,9 @@ mod tests {
         tiff.extend_from_slice(&[0x07, 0, 0, 0, 0x40, 0x14, 0, 0, 0x60, 0x0b, 0, 0, 0, 0, 0, 0, 0xe8, 0x01, 0, 0]);
         let parsed = Tiff::parse(&tiff).unwrap();
         let maker = parsed.ifds.first();
-        assert_eq!(aspect_crop(maker, Rect::new(132, 40, 5184, 3888)), Some(Rect::new(132, 528, 5184, 2912)));
-        assert_eq!(aspect_crop(maker, Rect::new(0, 0, 5184, 2000)), None);
-        assert_eq!(aspect_crop(None, Rect::new(0, 0, 5184, 3888)), None);
+        assert_eq!(canon_aspect_crop(maker, Rect::new(132, 40, 5184, 3888)), Some(Rect::new(132, 528, 5184, 2912)));
+        assert_eq!(canon_aspect_crop(maker, Rect::new(0, 0, 5184, 2000)), None);
+        assert_eq!(canon_aspect_crop(None, Rect::new(0, 0, 5184, 3888)), None);
     }
 
     fn prepend_tracks(bytes: &[u8], tracks: &[u8]) -> Vec<u8> {
