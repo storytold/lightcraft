@@ -2429,5 +2429,12 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Delete and Change Folder": "Radera och byt mapp",
+  "Delete the smart previews in the folder used until now?": "Radera de smarta förhandsgranskningarna i mappen som använts hittills?",
+  "Keep": "Behåll",
+  "On, supported changes to a photo's edits or metadata are written to an XMP file beside the photo automatically when possible, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "När det är på skrivs ändringar som stöds i ett fotos redigeringar eller metadata automatiskt, när det går, till en XMP-fil bredvid fotot, så att andra program kan läsa den. När det är av sker det när du väljer Spara metadata till fil i menyn Foto.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "Foton vars original inte är anslutna visas och redigeras från sina smarta förhandsgranskningar; nya kan bara skapas från original som är anslutna.",
+  "The model's file is deleted. To use it again you download or add it again.": "Modellens fil raderas. För att använda den igen hämtar eller lägger du till den på nytt.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "Miniatyrer och förhandsgranskningar skapas på nytt medan du bläddrar, vilket tar en stund i ett stort bibliotek. Dina foton och redigeringar berörs inte."
 }

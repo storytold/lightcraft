@@ -2327,5 +2327,12 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Delete and Change Folder": "Poista ja vaihda kansio",
+  "Delete the smart previews in the folder used until now?": "Poistetaanko aiemmin käytetyn kansion älyesikatselut?",
+  "Keep": "Säilytä",
+  "On, supported changes to a photo's edits or metadata are written to an XMP file beside the photo automatically when possible, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "Kun asetus on päällä, tuetut kuvan muokkausten tai metatietojen muutokset kirjoitetaan mahdollisuuksien mukaan automaattisesti kuvan viereiseen XMP-tiedostoon, jotta muut sovellukset voivat lukea ne. Kun asetus on pois päältä, tämä tapahtuu, kun valitset Kuva-valikosta Tallenna metatiedot tiedostoon.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "Kuvat, joiden alkuperäisiä ei ole yhdistetty, näytetään ja niitä muokataan älyesikatseluista; uusia voi tehdä vain yhdistetyistä alkuperäisistä.",
+  "The model's file is deleted. To use it again you download or add it again.": "Mallin tiedosto poistetaan. Jos haluat käyttää sitä uudelleen, lataat tai lisäät sen uudelleen.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "Pikkukuvat ja esikatselut tehdään uudelleen selatessasi, mikä kestää hetken suuressa kirjastossa. Kuviasi ja muokkauksiasi ei kosketa."
 }

@@ -49,6 +49,69 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     label_width(ui, text, egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
+/// What [`ask_first`] makes of a button: [`Asked::clicked`] once the person has said yes.
+pub(crate) struct Asked {
+    yes: bool,
+}
+
+impl Asked {
+    /// The person pressed the button and then said yes to its question.
+    pub(crate) fn clicked(&self) -> bool {
+        self.yes
+    }
+}
+
+/// A button whose action cannot be taken back, or takes long to make good again, asks before it
+/// acts. Pressing `button` (registered by the caller as `id`) opens a small panel under it with
+/// `question`, which says what the action costs, and two buttons: `yes` (`{id}:confirm`) and
+/// Keep (`{id}:keep`), which has the focus when the panel opens. A click elsewhere or Esc answers no. What comes back stands in for the
+/// button: its `clicked` is true on the frame the answer was yes.
+pub(crate) fn ask_first(t: &Tokens, id: &str, button: egui::Response, question: &str, yes: &str) -> Asked {
+    let mut answer = false;
+    let opened = button.clicked();
+    let mut ids = None;
+    egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_max_width(280.0);
+        ui.add(egui::Label::new(RichText::new(crate::i18n::tr(question)).color(t.text_label)).wrap());
+        ui.horizontal(|ui| {
+            let r = ui.button(crate::i18n::tr(yes));
+            let confirm = r.id;
+            register(ui, format!("{id}:confirm"), r.rect);
+            if r.clicked() {
+                answer = true;
+                ui.close();
+            }
+            let r = ui.button(crate::i18n::tr("Keep"));
+            register(ui, format!("{id}:keep"), r.rect);
+            // (the question opens with the focus on Keep, so Return or Space alone changes nothing)
+            if opened {
+                r.request_focus();
+            }
+            if r.clicked() {
+                ui.close();
+            }
+            ids = Some((confirm, r.id));
+        });
+    });
+    // However the question closed (yes, Keep, Esc, a click elsewhere), the focus goes back to the
+    // button it was about, unless the click elsewhere put it on another widget. Only in the frame
+    // after the question was last drawn: a button that was not drawn since (a model's Remove while
+    // the model was gone) left its entry behind, and the button coming back is not that question's.
+    let ctx = button.ctx.clone();
+    let was_open = egui::Id::unique(("ask-first", id));
+    let frame = ctx.cumulative_frame_nr();
+    if let Some((confirm, keep)) = ids {
+        ctx.data_mut(|d| d.insert_temp(was_open, (confirm, keep, frame)));
+    } else if let Some((confirm, keep, shown)) = ctx.data(|d| d.get_temp::<(egui::Id, egui::Id, u64)>(was_open)) {
+        ctx.data_mut(|d| d.remove::<(egui::Id, egui::Id, u64)>(was_open));
+        let focused = ctx.memory(|m| m.focused());
+        if frame.saturating_sub(shown) <= 1 && (focused.is_none() || focused == Some(keep) || focused == Some(confirm)) {
+            button.request_focus();
+        }
+    }
+    Asked { yes: answer }
+}
+
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
     ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));

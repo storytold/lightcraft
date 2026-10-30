@@ -2235,5 +2235,12 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Delete and Change Folder": "Xóa và đổi thư mục",
+  "Delete the smart previews in the folder used until now?": "Xóa các bản xem trước thông minh trong thư mục đã dùng đến nay?",
+  "Keep": "Giữ lại",
+  "On, supported changes to a photo's edits or metadata are written to an XMP file beside the photo automatically when possible, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "Khi bật, các thay đổi được hỗ trợ đối với chỉnh sửa hoặc siêu dữ liệu của ảnh được tự động ghi vào tệp XMP bên cạnh ảnh khi có thể, để các ứng dụng khác đọc. Khi tắt, việc đó xảy ra khi bạn chọn Lưu siêu dữ liệu vào tệp trong menu Ảnh.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "Ảnh có bản gốc chưa được kết nối được hiển thị và chỉnh sửa từ bản xem trước thông minh của chúng; bản mới chỉ có thể tạo từ bản gốc đã kết nối.",
+  "The model's file is deleted. To use it again you download or add it again.": "Tệp của mô hình sẽ bị xóa. Để dùng lại, bạn tải xuống hoặc thêm lại.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "Hình thu nhỏ và bản xem trước được tạo lại khi bạn duyệt, việc này mất một lúc với thư viện lớn. Ảnh và chỉnh sửa của bạn không bị ảnh hưởng."
 }

@@ -2339,5 +2339,12 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Delete and Change Folder": "Hapus dan Ganti Folder",
+  "Delete the smart previews in the folder used until now?": "Hapus pratinjau pintar di folder yang digunakan sebelumnya?",
+  "Keep": "Pertahankan",
+  "On, supported changes to a photo's edits or metadata are written to an XMP file beside the photo automatically when possible, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "Jika aktif, perubahan yang didukung pada hasil edit atau metadata foto ditulis otomatis ke file XMP di samping foto bila memungkinkan, agar bisa dibaca aplikasi lain. Jika nonaktif, hal itu terjadi saat Anda memilih Simpan metadata ke file di menu Foto.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "Foto yang file aslinya tidak terhubung ditampilkan dan diedit dari pratinjau pintarnya; pratinjau pintar baru hanya dapat dibuat dari file asli yang terhubung.",
+  "The model's file is deleted. To use it again you download or add it again.": "File model akan dihapus. Untuk menggunakannya lagi, Anda perlu mengunduh atau menambahkannya lagi.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "Thumbnail dan pratinjau dibuat ulang saat Anda menelusuri, yang memerlukan waktu di pustaka besar. Foto dan hasil edit Anda tidak diubah."
 }

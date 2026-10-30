@@ -32,6 +32,17 @@
 
 ## 2026-10-23
 
+### Settings asks before it does what can't be taken back
+- Settings asks before it does what is slow or impossible to take back. Clear Cache says that thumbnails and
+  previews are made again as you browse. The prompt for removing a model says that the model's file is deleted.
+  Each prompt opens under its button with the action and a Keep button. Keep has the focus, so Return alone changes
+  nothing; Esc or a click elsewhere answers no.
+- Changing the smart previews folder with "Delete them" chosen no longer deletes at the press of Choose Folder: with
+  the new folder chosen, it says how many smart previews would go and what they are for, and waits for Delete and
+  Change Folder or Cancel. The choice goes back to "Move them" afterwards, and neither it nor the question is
+  left standing when Settings is closed or another library is opened.
+- Automatically write changes into XMP sidecars says what is written where.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

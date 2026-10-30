@@ -2734,5 +2734,12 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Delete and Change Folder": "წაშლა და საქაღალდის შეცვლა",
+  "Delete the smart previews in the folder used until now?": "წაიშალოს ჭკვიანი წინასწარი ხედები აქამდე გამოყენებულ საქაღალდეში?",
+  "Keep": "დატოვება",
+  "On, supported changes to a photo's edits or metadata are written to an XMP file beside the photo automatically when possible, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "ჩართულია: ფოტოს რედაქტირების ან მეტამონაცემების მხარდაჭერილი ცვლილებები, შესაძლებლობის შემთხვევაში, ავტომატურად იწერება ფოტოს გვერდით XMP ფაილში, რათა სხვა აპებმაც წაიკითხონ. გამორთულია: ეს ხდება, როცა მენიუ „ფოტოში“ აირჩევთ „მეტამონაცემების ფაილში შენახვას“.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "ფოტოები, რომელთა ორიგინალები დაკავშირებული არ არის, ნაჩვენებია და რედაქტირდება მათი ჭკვიანი წინასწარი ხედებიდან; ახლების შექმნა მხოლოდ დაკავშირებული ორიგინალებიდან შეიძლება.",
+  "The model's file is deleted. To use it again you download or add it again.": "მოდელის ფაილი წაიშლება. მის ხელახლა გამოსაყენებლად ისევ უნდა ჩამოტვირთოთ ან დაამატოთ.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "მინიატურები და წინასწარი ხედები ხელახლა იქმნება დათვალიერებისას, რაც დიდ ბიბლიოთეკაში გარკვეულ დროს მოითხოვს. თქვენი ფოტოები და ცვლილებები ხელუხლებელი რჩება."
 }
