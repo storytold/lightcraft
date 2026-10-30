@@ -300,7 +300,7 @@ fn settled_fails_with_what_is_still_busy() {
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.settled_within(Duration::from_millis(200), "the stuck task")));
     let message = failed.expect_err("a task that never ends can't settle");
     let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
-    assert!(message.starts_with("did not settle within 200ms (the stuck task); still busy: "), "{message}");
+    assert!(message.starts_with("did not settle within 200ms (the stuck task); busy at the limit: "), "{message}");
     assert!(message.contains("background tasks: [\"stuck\"]"), "{message}");
 }
 
@@ -328,6 +328,20 @@ fn busy_description_names_pending_work() {
     h.settled(SETTLE, "the released task");
     assert!(!h.busy());
     assert_eq!(h.busy_description(), "nothing");
+}
+
+/// A running Lightroom catalog task keeps the session busy, so a settle waits for it instead of
+/// reporting the app settled while the task still owns the catalog.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_lightroom_task_keeps_the_session_busy() {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default()), [640.0, 480.0], 1.0);
+    let task = crate::lightroom_import::stall_import(&mut h.app);
+    assert!(h.busy());
+    assert_eq!(h.busy_description(), "Lightroom catalog task");
+    drop(task);
+    h.settled(SETTLE, "the Lightroom task, its sender dropped");
+    assert!(h.app.lightroom.is_none() && !h.busy(), "{}", h.busy_description());
 }
 
 /// Agents cut, copy and paste in a text field as the system does for ⌘X / ⌘C / ⌘V
