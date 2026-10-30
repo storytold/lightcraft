@@ -2370,7 +2370,7 @@
   "Winter Blue": "Vinterblå",
   "with a counterpart here come along, the rest is listed.": "med en motsvarighet här följer med, resten listas.",
   "Without Saving and Quit (issue #100). It no longer quietly starts a demo session that looked like a reset library and": "utan att spara och Avsluta (ärende #100). Den startar inte längre i tysthet en demosession som såg ut som ett återställt bibliotek och",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Fungerar på raw-filer från kameror med en vanlig (Bayer-)sensor. Andra filer behåller sin vanliga brusreducering.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Fungerar med raw-filer från kameror med standardsensor (Bayer) och, med en modell gjord för dem, med JPEG, PNG, TIFF och andra färdiga bilder. Andra raw-filer behåller sin vanliga brusreducering.",
   "would make this album include itself through other smart albums": "skulle få det här albumet att inkludera sig självt via andra smarta album",
   "written by a newer LightCraft is refused with \"this library was written by a newer version of LightCraft\" and left": "skrivet av en nyare LightCraft avvisas med ”det här biblioteket skrevs av en nyare version av LightCraft” och lämnas",
   "written by a newer LightCraft), LightCraft says so and why, and offers Try Again, Choose Another Library…, Continue": "skrivet av en nyare LightCraft) talar LightCraft om det och varför, och erbjuder Försök igen, Välj ett annat bibliotek…, Fortsätt",
@@ -2429,5 +2429,7 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "For raw photos": "För raw-foton",
+  "For JPEG and other finished pictures": "För JPEG och andra färdiga bilder"
 }

@@ -2176,7 +2176,7 @@
   "Will be restored": "Palautetaan",
   "Window": "Ikkuna",
   "Winter Blue": "Talvensininen",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Toimii raw-tiedostoilla kameroista, joissa on tavallinen (Bayer) -anturi. Muut tiedostot säilyttävät tavallisen kohinanpoistonsa.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Toimii raw-tiedostoilla kameroista, joissa on tavallinen (Bayer-) kenno, sekä niille tehdyllä mallilla JPEG-, PNG-, TIFF- ja muilla valmiilla kuvilla. Muut raw-tiedostot säilyttävät tavallisen kohinanpoistonsa.",
   "Wrote the XMP sidecars that were waiting": "Odottaneet XMP-sivutiedostot kirjoitettu",
   "XMP Sidecar Preferences": "XMP-sivutiedostojen asetukset",
   "XMP sidecars": "XMP-sivutiedostot",
@@ -2327,5 +2327,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "For raw photos": "Raw-kuville",
+  "For JPEG and other finished pictures": "JPEG- ja muille valmiille kuville"
 }

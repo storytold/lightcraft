@@ -1,18 +1,22 @@
 #[cfg(doc)]
 use super::model::Model;
 use super::model::STACK;
-use super::products::{Active, JobSpec, MakeError, Progress, eligible, make_product, product_key, product_path, products_in};
+use super::products::{Active, JobSpec, MakeError, Progress, domain_of, eligible, make_product, product_key, product_path, products_in};
 use super::settings::{DIR, SETTINGS_TTL, installed_models, read_settings};
 use super::state::{AUTO_LOOK, Failure, MAX_QUEUE, Outcome, Pace, PhotoState, Running};
 use super::{
     Arc, DenoiseSpec, DevelopSettings, HashMap, HashSet, MakeProduct, Mutex, Ordering, PairLoader, Path, PathBuf, Photo, PhotoId, PoisonError,
     Selection, Session, Source, Value, json, product,
 };
+use lightcraft_denoise::manifest::Domain;
 
 impl Session {
     /// Where the active model's tiles run (see [`Model::device`]); `{kind: "none"}` while no model is loaded.
     pub(crate) fn denoise_device(&self) -> Value {
-        let loaded = self.denoise.active.as_ref().and_then(|a| a.model.lock().unwrap_or_else(PoisonError::into_inner).clone());
+        let loaded = [&self.denoise.active, &self.denoise.active_rgb]
+            .into_iter()
+            .flatten()
+            .find_map(|a| a.model.lock().unwrap_or_else(PoisonError::into_inner).clone());
         match loaded {
             Some(m) => m.device(self.denoise.settings.run_on()),
             None => json!({"kind": "none"}),
@@ -33,37 +37,70 @@ impl Session {
         }
         self.denoise.active_seen = Some(web_time::Instant::now());
         self.denoise.settings = self.denoise.models_dir.as_deref().map(read_settings).unwrap_or_default();
-        let chosen = self.denoise.models_dir.as_deref().and_then(|dir| {
-            let id = self.denoise.settings.model.clone()?;
-            installed_models(dir).into_iter().find(|i| i.manifest.id == id)
-        });
-        let found = chosen.map(|i| (i.fingerprint(), i));
-        let same = match (&self.denoise.active, &found) {
+        let installed = self.denoise.models_dir.as_deref().map(installed_models).unwrap_or_default();
+        // each slot takes the installed model its setting names, and only one made for its kind of photo
+        let pick = |id: Option<&String>, domain: Domain| {
+            let id = id?;
+            installed.iter().find(|i| &i.manifest.id == id && i.manifest.domain == domain).map(|i| (i.fingerprint(), i.clone()))
+        };
+        let raw = pick(self.denoise.settings.model.as_ref(), Domain::BayerToRgb);
+        let rgb = pick(self.denoise.settings.rgb_model.as_ref(), Domain::RgbToRgb);
+        let same = |a: &Option<Active>, f: &Option<(String, super::settings::Installed)>| match (a, f) {
             (None, None) => true,
             (Some(a), Some((fp, _))) => a.fingerprint == *fp,
             _ => false,
         };
-        if same {
+        if same(&self.denoise.active, &raw) && same(&self.denoise.active_rgb, &rgb) {
             return;
         }
-        // another model: what was made with the old one is not this one's, and what failed may work now
-        self.denoise.active = found.map(|(fingerprint, i)| Active {
-            id: i.manifest.id.clone(),
-            manifest: i.manifest,
-            onnx: i.onnx,
-            fingerprint,
-            model: Arc::new(Mutex::new(None)),
-        });
-        if let Some(r) = self.denoise.running.take() {
+        let activate = |f: Option<(String, super::settings::Installed)>| {
+            f.map(|(fingerprint, i)| Active {
+                id: i.manifest.id.clone(),
+                manifest: i.manifest,
+                onnx: i.onnx,
+                fingerprint,
+                model: Arc::new(Mutex::new(None)),
+            })
+        };
+        // another model: what was made with the old one is not this one's, and what failed may work now; the photos of
+        // the other kind keep their job and their place in the queue
+        let mut changed: Vec<Domain> = Vec::new();
+        if !same(&self.denoise.active, &raw) {
+            self.denoise.active = activate(raw);
+            changed.push(Domain::BayerToRgb);
+        }
+        if !same(&self.denoise.active_rgb, &rgb) {
+            self.denoise.active_rgb = activate(rgb);
+            changed.push(Domain::RgbToRgb);
+        }
+        let affected =
+            |catalog: &lightcraft_catalog::Catalog, id: PhotoId| catalog.photo(id).and_then(|p| domain_of(p)).is_none_or(|d| changed.contains(&d));
+        if self.denoise.running.as_ref().is_some_and(|r| affected(&self.catalog, r.photo))
+            && let Some(r) = self.denoise.running.take()
+        {
             r.progress.cancel_now();
         }
-        self.denoise.queue.clear();
-        self.denoise.failed.clear();
+        let catalog = &self.catalog;
+        self.denoise.queue.retain(|id| !affected(catalog, *id));
+        self.denoise.failed.retain(|id, _| !affected(catalog, *id));
         self.denoise.dirty = true;
     }
 
+    /// The model in use for photo `p`'s kind (raw or finished picture).
+    pub(crate) fn denoise_active_for(&self, p: &Photo) -> Option<&Active> {
+        match domain_of(p)? {
+            Domain::BayerToRgb => self.denoise.active.as_ref(),
+            Domain::RgbToRgb => self.denoise.active_rgb.as_ref(),
+        }
+    }
+
+    /// Is any model in use (for raw photos or for finished pictures)?
+    pub(crate) fn denoise_any_active(&self) -> bool {
+        self.denoise.active.is_some() || self.denoise.active_rgb.is_some()
+    }
+
     fn denoise_spec(&self, p: &Photo) -> Option<(DenoiseSpec, String)> {
-        let (dir, active) = (self.denoise_products_dir()?, self.denoise.active.as_ref()?);
+        let (dir, active) = (self.denoise_products_dir()?, self.denoise_active_for(p)?);
         let key = product_key(&active.fingerprint, p);
         Some((DenoiseSpec { product: product_path(&dir, &key), key: key.clone(), make: None }, key))
     }
@@ -76,11 +113,12 @@ impl Session {
         self.denoise.reindexed = Some((self.catalog.revision, web_time::Instant::now()));
         let running = self.denoise.running.as_ref().map(|r| r.photo);
         let mut now: HashMap<PhotoId, DenoiseSpec> = HashMap::new();
-        if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
+        if let Some(dir) = self.denoise_products_dir().filter(|_| self.denoise_any_active()) {
             let names: HashSet<String> =
                 products_in(&dir).into_iter().filter_map(|(p, _, _)| p.file_stem().and_then(|s| s.to_str()).map(str::to_string)).collect();
             if !names.is_empty() {
                 for p in self.catalog.photos().filter(|p| eligible(p) && running != Some(p.id)) {
+                    let Some(active) = self.denoise_active_for(p) else { continue };
                     let key = product_key(&active.fingerprint, p);
                     if names.contains(&key) {
                         now.insert(p.id, DenoiseSpec { product: product_path(&dir, &key), key, make: None });
@@ -141,7 +179,7 @@ impl Session {
         if !eligible(p) {
             return PhotoState::NotApplicable;
         }
-        if self.denoise.active.is_none() {
+        if self.denoise_active_for(p).is_none() {
             // the model folder has not been looked at yet (just started): not "no model" until it has been
             return if self.denoise.active_seen.is_none() { PhotoState::Idle } else { PhotoState::NoModel };
         }
@@ -171,7 +209,7 @@ impl Session {
     /// a photo that failed before is tried again. A photo that is not raw is skipped. Returns how many were queued.
     pub(crate) fn denoise_enqueue(&mut self, ids: &[PhotoId], front: bool, retry: bool) -> usize {
         self.denoise_refresh_active(false);
-        if self.denoise.active.is_none() || self.denoise_products_dir().is_none() {
+        if !self.denoise_any_active() || self.denoise_products_dir().is_none() {
             return 0;
         }
         let mut added = 0;
@@ -231,7 +269,7 @@ impl Session {
     fn denoise_job_spec(&self, p: &Photo, parallel: usize) -> Option<JobSpec> {
         let Source::File { path } = &p.source else { return None };
         let (spec, _) = self.denoise_spec(p)?;
-        let active = self.denoise.active.as_ref()?;
+        let active = self.denoise_active_for(p)?;
         Some(JobSpec {
             path: path.clone(),
             read: self.media.file_bytes.clone(),
@@ -386,7 +424,7 @@ impl Session {
             self.denoise_reindex();
         }
         self.denoise_poll();
-        if self.denoise.active.is_none() || self.denoise_products_dir().is_none() {
+        if !self.denoise_any_active() || self.denoise_products_dir().is_none() {
             return;
         }
         let (cap, auto) = (self.denoise.settings.threads, self.denoise.settings.auto());
@@ -424,7 +462,7 @@ impl Session {
 
     /// Is a picture being made, or waiting for its turn with a model to make it? (Headless runs wait for this.)
     pub fn denoise_busy(&self) -> bool {
-        self.denoise.running.is_some() || (!self.denoise.queue.is_empty() && self.denoise.active.is_some())
+        self.denoise.running.is_some() || (!self.denoise.queue.is_empty() && self.denoise_any_active())
     }
 
     /// Keep AI Denoise's row in the activity stack up to date (each `denoise.pump`): there while a photo is being made or
@@ -489,8 +527,11 @@ impl Session {
         }
         self.denoise_refresh_active(false);
         let name = &p.file_name;
-        if self.denoise.active.is_none() {
-            return Err(format!("{name}: Denoise is on for this photo but no denoise model is chosen; choose one in Settings, or set Denoise to 0"));
+        if self.denoise_active_for(&p).is_none() {
+            let kind = if domain_of(&p) == Some(Domain::RgbToRgb) { "finished pictures" } else { "raw photos" };
+            return Err(format!(
+                "{name}: Denoise is on for this photo but no denoise model is chosen for {kind}; choose one in Settings, or set Denoise to 0"
+            ));
         }
         if self.denoise_products_dir().is_none() {
             return Err(format!("{name}: Denoise needs a library on disk to keep its pictures in"));

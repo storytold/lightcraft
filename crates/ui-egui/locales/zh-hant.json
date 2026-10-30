@@ -1755,7 +1755,7 @@
   "Unknown licence": "Unknown licence",
   "Use": "Use",
   "Waiting to start…": "Waiting to start…",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "適用於標準（拜耳）感光元件相機的 RAW 檔；有專用模型時，也適用於 JPEG、PNG、TIFF 等成品圖片。其他 RAW 檔保留一般降噪。",
   "cached picture": "cached picture",
   "cached pictures": "cached pictures",
   "commercial use allowed": "commercial use allowed",
@@ -2157,5 +2157,7 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "For raw photos": "用於 RAW 照片",
+  "For JPEG and other finished pictures": "用於 JPEG 及其他成品圖片"
 }

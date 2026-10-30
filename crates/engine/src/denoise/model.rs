@@ -1,5 +1,5 @@
 #[cfg(feature = "denoise")]
-use super::gpu::{GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, GPU_SLOW, GPU_STUCK, card_is_faster, make_gpu};
+use super::gpu::{GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, GPU_SLOW, GPU_STUCK, card_is_faster, check_pool, make_gpu};
 #[cfg(feature = "denoise")]
 use super::settings::{installed_models, read_settings};
 #[cfg(feature = "denoise")]
@@ -310,7 +310,11 @@ impl Model for Network {
     }
 
     fn self_test(&self, run_on: RunOn) -> Result<Value, String> {
-        let t = self.cpu.self_test();
+        // its two tiles on the check tile's threads; without them, on this thread's pool
+        let t = match check_pool() {
+            Ok(pool) => pool.install(|| self.cpu.self_test()),
+            Err(_) => self.cpu.self_test(),
+        };
         if !t.ok {
             let failed: Vec<&str> = t.checks.iter().filter(|(_, ok)| !*ok).map(|(c, _)| c.as_str()).collect();
             return Err(format!("the model failed its self-test: it does not {}", failed.join(", and does not ")));

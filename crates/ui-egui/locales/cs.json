@@ -2050,7 +2050,7 @@
   "Window": "Okno",
   "Winter Blue": "Zimní modř",
   "Wrote the XMP sidecars that were waiting": "Čekající přidružené soubory XMP byly zapsány",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Funguje se soubory RAW z fotoaparátů se standardním snímačem (Bayer). Ostatní soubory si zachovají běžnou redukci šumu.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Funguje se soubory RAW z fotoaparátů se standardním snímačem (Bayer) a s modelem pro hotové snímky také s JPEG, PNG, TIFF a dalšími hotovými snímky. Ostatní soubory RAW si ponechají běžnou redukci šumu.",
   "XMP Sidecar Preferences": "Předvolby přidružených souborů XMP",
   "XMP sidecars": "Přidružené soubory XMP",
   "Year": "Rok",
@@ -2408,5 +2408,7 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "For raw photos": "Pro fotografie RAW",
+  "For JPEG and other finished pictures": "Pro JPEG a další hotové snímky"
 }

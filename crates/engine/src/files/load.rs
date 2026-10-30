@@ -208,9 +208,49 @@ fn load_bytes_now(
     }
     let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
+    // the denoised picture of a finished picture, brought to this decode's size and through the same conversion
+    let twin = denoise.and_then(|spec| denoised_finished(&d, spec));
     let img = d.to_working();
-    let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+    let orientation = Orientation::from_exif(d.orientation);
+    let finish = |img: Rgb32f| {
+        let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
+        img.into_oriented(orientation)
+    };
+    let img = finish(img);
+    let twin = twin.map(finish).filter(|t| t.width == img.width && t.height == img.height);
+    Ok((img, twin, SourceInfo::default(), false))
+}
+
+/// The cached denoised picture of a finished picture (gamma-encoded sRGB at the file's full size, see
+/// `crate::denoise`), at the size of `d` (a reduced decode is matched by binning and resampling) and in the working
+/// space, as [`lightcraft_codecs::Decoded::to_working`] has `d`. `None` when the product is missing, damaged, made
+/// from something else or not the shape of this picture.
+fn denoised_finished(d: &lightcraft_codecs::Decoded, spec: &DenoiseSpec) -> Option<Rgb32f> {
+    use lightcraft_denoise::product;
+    let header = product::read_header_at(&spec.product).ok()?;
+    let (w, h) = (d.image.width, d.image.height);
+    if header.key != spec.key || w == 0 || h == 0 || header.width < w || header.height < h {
+        return None;
+    }
+    // the same picture: the aspect ratios agree to within the rounding of a reduced decode
+    let (fw, fh) = (header.width as f64 / w as f64, header.height as f64 / h as f64);
+    if (fw - fh).abs() > 0.02 * fw.max(fh) + 2.0 / (w.min(h) as f64) {
+        return None;
+    }
+    let factor = (header.width / w).min(header.height / h).max(1);
+    let encoded = product::read(&spec.product, &spec.key, factor).ok()?;
+    let encoded =
+        if (encoded.width, encoded.height) == (w, h) { encoded } else { lightcraft_raster::resample::resize(&encoded, w, h, Filter::Mitchell) };
+    let linear = encoded.map(|p| p.map(lightcraft_color::transfer::srgb_to_linear));
+    let m =
+        lightcraft_codecs::SourceSpace::named(lightcraft_codecs::NamedSpace::Srgb, lightcraft_codecs::SpaceOrigin::Untagged).to_working().to_f32();
+    Some(linear.map(|p| {
+        [
+            m[0][0] * p[0] + m[0][1] * p[1] + m[0][2] * p[2],
+            m[1][0] * p[0] + m[1][1] * p[1] + m[1][2] * p[2],
+            m[2][0] * p[0] + m[2][1] * p[1] + m[2][2] * p[2],
+        ]
+    }))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from

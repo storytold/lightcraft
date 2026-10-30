@@ -2168,7 +2168,7 @@
   "Will be restored": "Akan dipulihkan",
   "Window": "Jendela",
   "Winter Blue": "Biru Musim Dingin",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Berfungsi untuk file raw dari kamera dengan sensor standar (Bayer). File lain tetap memakai pengurangan noise biasa.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Berfungsi pada file raw dari kamera dengan sensor standar (Bayer), dan pada JPEG, PNG, TIFF, serta gambar jadi lainnya dengan model yang dibuat untuknya. File raw lainnya tetap memakai pengurangan noise biasa.",
   "Write Waiting XMP Sidecars": "Tulis file sidecar XMP yang tertunda",
   "Wrote the XMP sidecars that were waiting": "File sidecar XMP yang tertunda telah ditulis",
   "XMP Sidecar Preferences": "Preferensi file sidecar XMP",
@@ -2339,5 +2339,7 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "For raw photos": "Untuk foto raw",
+  "For JPEG and other finished pictures": "Untuk JPEG dan gambar jadi lainnya"
 }

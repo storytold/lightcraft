@@ -1743,7 +1743,7 @@
   "Unknown licence": "Licence inconnue",
   "Use": "Utiliser",
   "Waiting to start…": "En attente de démarrage…",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Fonctionne sur les fichiers RAW des appareils photo dotés d'un capteur standard (Bayer). Les autres fichiers conservent leur réduction de bruit normale.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Fonctionne avec les fichiers RAW des appareils à capteur standard (Bayer) et, avec un modèle prévu pour elles, avec les JPEG, PNG, TIFF et autres images finies. Les autres fichiers RAW gardent leur réduction du bruit habituelle.",
   "cached picture": "image en cache",
   "cached pictures": "images en cache",
   "commercial use allowed": "usage commercial autorisé",
@@ -2390,5 +2390,7 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "For raw photos": "Pour les photos RAW",
+  "For JPEG and other finished pictures": "Pour les JPEG et autres images finies"
 }

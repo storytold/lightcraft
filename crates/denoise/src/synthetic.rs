@@ -87,6 +87,15 @@ impl Rng {
     }
 }
 
+/// What follows a convolution in the builder's graph.
+#[derive(Clone, Copy, PartialEq)]
+enum Act {
+    None,
+    Leaky,
+    Relu,
+    Sigmoid,
+}
+
 struct Builder {
     nodes: Vec<Vec<u8>>,
     inits: Vec<Vec<u8>>,
@@ -115,8 +124,8 @@ impl Builder {
         name.to_string()
     }
 
-    /// `Conv` (+ `LeakyRelu` when `leaky`); gives the name of the tensor that results.
-    fn conv(&mut self, src: &str, cin: u64, cout: u64, k: u64, leaky: bool) -> String {
+    /// `Conv` (+ the activation `act`); gives the name of the tensor that results.
+    fn conv(&mut self, src: &str, cin: u64, cout: u64, k: u64, act: Act) -> String {
         let (w, b, out) = (self.name("w"), self.name("b"), self.name("conv"));
         let w = self.weights(&w, &[cout, cin, k, k], (cin * k * k) as usize);
         let b = self.bias(&b, cout);
@@ -127,12 +136,15 @@ impl Builder {
             &out,
             &[("kernel_shape", A::Ints(&[k as i64, k as i64])), ("pads", A::Ints(&[pad; 4])), ("strides", A::Ints(&[1, 1])), ("group", A::Int(1))],
         ));
-        if !leaky {
-            return out;
-        }
-        let act = self.name("act");
-        self.nodes.push(node("LeakyRelu", &[&out], &act, &[("alpha", A::Float(0.2))]));
-        act
+        let (op, attrs): (&str, &[(&str, A)]) = match act {
+            Act::None => return out,
+            Act::Leaky => ("LeakyRelu", &[("alpha", A::Float(0.2))]),
+            Act::Relu => ("Relu", &[]),
+            Act::Sigmoid => ("Sigmoid", &[]),
+        };
+        let next = self.name("act");
+        self.nodes.push(node(op, &[&out], &next, attrs));
+        next
     }
 
     fn pool(&mut self, src: &str) -> String {
@@ -175,8 +187,8 @@ pub fn unet_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
     let mut skips: Vec<(String, u64)> = Vec::new();
     let (mut cur, mut c_in, mut c) = ("data".to_string(), 4u64, ch);
     for level in 0..=depth {
-        let x = b.conv(&cur, c_in, c, 3, true);
-        let x = b.conv(&x, c, c, 3, true);
+        let x = b.conv(&cur, c_in, c, 3, Act::Leaky);
+        let x = b.conv(&x, c, c, 3, Act::Leaky);
         if level < depth {
             skips.push((x.clone(), c));
             cur = b.pool(&x);
@@ -189,13 +201,18 @@ pub fn unet_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
     for (skip, sc) in skips.into_iter().rev() {
         let up = b.up(&cur, c, sc);
         let joined = b.concat(&up, &skip);
-        let x = b.conv(&joined, 2 * sc, sc, 3, true);
-        cur = b.conv(&x, sc, sc, 3, true);
+        let x = b.conv(&joined, 2 * sc, sc, 3, Act::Leaky);
+        cur = b.conv(&x, sc, sc, 3, Act::Leaky);
         c = sc;
     }
-    let rgb = b.conv(&cur, c, 12, 1, false);
+    let rgb = b.conv(&cur, c, 12, 1, Act::None);
     b.nodes.push(node("DepthToSpace", &[&rgb], "rgb", &[("blocksize", A::Int(2)), ("mode", A::Str("CRD"))]));
 
+    finish(&b, "rgb", [4, tile], [3, 2 * tile])
+}
+
+/// The model around the builder's nodes: input `data` and output `output`, each `[channels, side]` square.
+fn finish(b: &Builder, output: &str, input: [u64; 2], out: [u64; 2]) -> Vec<u8> {
     let mut graph = Vec::new();
     for n in &b.nodes {
         len_field(1, n, &mut graph);
@@ -203,8 +220,8 @@ pub fn unet_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
     for t in &b.inits {
         len_field(5, t, &mut graph);
     }
-    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(tile), Ok(tile)]), &mut graph);
-    len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(2 * tile), Ok(2 * tile)]), &mut graph);
+    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(input[0]), Ok(input[1]), Ok(input[1])]), &mut graph);
+    len_field(12, &value_info_bytes(output, 1, &[Ok(1), Ok(out[0]), Ok(out[1]), Ok(out[1])]), &mut graph);
     let mut ops = Vec::new();
     len_field(1, b"", &mut ops);
     varint_field(2, 13, &mut ops);
@@ -213,6 +230,36 @@ pub fn unet_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
     len_field(7, &graph, &mut model);
     len_field(8, &ops, &mut model);
     model
+}
+
+/// A darktable-NIND-shaped RGB U-Net as ONNX bytes: `[1, 3, tile, tile]` → `[1, 3, tile, tile]` (the same size), with
+/// `depth` poolings and `ch` channels (a multiple of 4) on the first level, doubling on each. Each level is two 3 × 3
+/// convolutions with a plain `Relu`; the last convolution is 1 × 1 to 3 channels followed by a `Sigmoid`.
+pub fn unet_rgb_onnx(tile: u64, ch: u64, depth: usize, seed: u64) -> Vec<u8> {
+    let mut b = Builder { nodes: Vec::new(), inits: Vec::new(), rng: Rng(seed | 1), n: 0 };
+    let mut skips: Vec<(String, u64)> = Vec::new();
+    let (mut cur, mut c_in, mut c) = ("data".to_string(), 3u64, ch);
+    for level in 0..=depth {
+        let x = b.conv(&cur, c_in, c, 3, Act::Relu);
+        let x = b.conv(&x, c, c, 3, Act::Relu);
+        if level < depth {
+            skips.push((x.clone(), c));
+            cur = b.pool(&x);
+            c_in = c;
+            c *= 2;
+        } else {
+            cur = x;
+        }
+    }
+    for (skip, sc) in skips.into_iter().rev() {
+        let up = b.up(&cur, c, sc);
+        let joined = b.concat(&up, &skip);
+        let x = b.conv(&joined, 2 * sc, sc, 3, Act::Relu);
+        cur = b.conv(&x, sc, sc, 3, Act::Relu);
+        c = sc;
+    }
+    let out = b.conv(&cur, c, 3, 1, Act::Sigmoid);
+    finish(&b, &out, [3, tile], [3, tile])
 }
 
 /// A tiny smoothing network for installing a real CPU model in setup-flow tests.
@@ -224,6 +271,31 @@ pub fn smoothing_onnx() -> Vec<u8> {
     len_field(5, &tensor("weights", &[12, 4, 3, 3], &[1.0 / 36.0; 12 * 4 * 3 * 3]), &mut graph);
     len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(64), Ok(64)]), &mut graph);
     len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(128), Ok(128)]), &mut graph);
+    let mut model = Vec::new();
+    varint_field(1, 8, &mut model);
+    len_field(7, &graph, &mut model);
+    let mut ops = Vec::new();
+    varint_field(2, 13, &mut ops);
+    len_field(8, &ops, &mut model);
+    model
+}
+
+/// A tiny smoothing network for RGB-to-RGB tests (`[1, 3, tile, tile]` → the same): a 3 × 3 average of each of the three
+/// planes on its own.
+pub fn rgb_smoothing_onnx(tile: u64) -> Vec<u8> {
+    let mut graph = Vec::new();
+    len_field(1, &node("Conv", &["data", "weights"], "rgb", &[("kernel_shape", A::Ints(&[3, 3])), ("pads", A::Ints(&[1, 1, 1, 1]))]), &mut graph);
+    let mut w = vec![0f32; 3 * 3 * 3 * 3];
+    for c in 0..3 {
+        for tap in 0..9 {
+            if let Some(v) = w.get_mut((c * 3 + c) * 9 + tap) {
+                *v = 1.0 / 9.0;
+            }
+        }
+    }
+    len_field(5, &tensor("weights", &[3, 3, 3, 3], &w), &mut graph);
+    len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(3), Ok(tile), Ok(tile)]), &mut graph);
+    len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(tile), Ok(tile)]), &mut graph);
     let mut model = Vec::new();
     varint_field(1, 8, &mut model);
     len_field(7, &graph, &mut model);

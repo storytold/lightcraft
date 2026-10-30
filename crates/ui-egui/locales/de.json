@@ -1909,7 +1909,7 @@
   "Unknown licence": "Unbekannte Lizenz",
   "Use": "Verwenden",
   "Waiting to start…": "Wartet auf Start…",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Funktioniert mit RAW-Dateien von Kameras mit Standardsensor (Bayer). Andere Dateien behalten ihre normale Rauschreduzierung.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Funktioniert mit RAW-Dateien von Kameras mit Standardsensor (Bayer) und, mit einem Modell dafür, mit JPEG, PNG, TIFF und anderen fertigen Bildern. Andere RAW-Dateien behalten ihre normale Rauschreduzierung.",
   "cached picture": "zwischengespeichertes Bild",
   "cached pictures": "zwischengespeicherte Bilder",
   "commercial use allowed": "kommerzielle Nutzung erlaubt",
@@ -3440,5 +3440,7 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "For raw photos": "Für RAW-Fotos",
+  "For JPEG and other finished pictures": "Für JPEG und andere fertige Bilder"
 }

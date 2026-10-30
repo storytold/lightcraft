@@ -2270,7 +2270,7 @@
   "With **HDR output** on, a photo edited in HDR can now be exported as a **16-bit PNG** with the PQ curve in Rec. 2020,": "**HDR გამოტანის** ჩართვისას HDR-ში დამუშავებული ფოტოს ექსპორტი ახლა შესაძლებელია **16-ბიტიან PNG-ად** PQ მრუდით Rec. 2020-ში,",
   "With a GPU, a slider drag's preview is drawn in the same frame as the slider moves instead of one frame later,": "GPU-ით სლაიდერის გადათრევის წინასწარი ხედი იმავე კადრში იხატება, რომელშიც სლაიდერი მოძრაობს, და არა ერთი კადრით გვიან,",
   "Without Saving and Quit (issue #100). It no longer quietly starts a demo session that looked like a reset library and": "შენახვის გარეშე გასვლა (ხარვეზი #100). ის აღარ იწყებს ჩუმად სადემონსტრაციო სესიას, რომელიც ჩამოყრილ ბიბლიოთეკას ჰგავდა და",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "მუშაობს სტანდარტული (Bayer) სენსორის მქონე კამერების RAW ფაილებზე. სხვა ფაილებს ხმაურის ჩვეულებრივი შემცირება რჩება.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "მუშაობს სტანდარტული (Bayer) სენსორის მქონე კამერების raw ფაილებზე, ხოლო მათთვის შექმნილი მოდელით — JPEG, PNG, TIFF და სხვა მზა სურათებზეც. სხვა raw ფაილები ჩვეულებრივ ხმაურის შემცირებას ინარჩუნებენ.",
   "XMP Sidecar Preferences": "XMP თანმხლები ფაილების პარამეტრები",
   "XMP presets apply their red / green / blue curves only when they also have the master curve and all three channel": "XMP პრესეტები წითელ / მწვანე / ლურჯ მრუდებს მხოლოდ მაშინ იყენებს, როცა მათ მთავარი მრუდიც და სამივე არხის",
   "XMP sidecars": "XMP თანმხლები ფაილები",
@@ -2734,5 +2734,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "For raw photos": "raw ფოტოებისთვის",
+  "For JPEG and other finished pictures": "JPEG-ისა და სხვა მზა სურათებისთვის"
 }

@@ -1755,7 +1755,7 @@
   "Unknown licence": "ライセンス不明",
   "Use": "使用",
   "Waiting to start…": "開始を待っています…",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "標準的な（ベイヤー）センサーのカメラの raw ファイルで動作します。それ以外のファイルは通常のノイズ軽減のままです。",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "標準（ベイヤー）センサーのカメラの RAW ファイルに使えます。専用のモデルがあれば、JPEG・PNG・TIFF などの仕上がった画像にも使えます。その他の RAW ファイルは通常のノイズ軽減のままです。",
   "cached picture": "キャッシュされた画像",
   "cached pictures": "キャッシュされた画像",
   "commercial use allowed": "商用利用可",
@@ -2356,5 +2356,7 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "For raw photos": "RAW写真用",
+  "For JPEG and other finished pictures": "JPEG などの仕上がった画像用"
 }
