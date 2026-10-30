@@ -168,6 +168,17 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Searching a big library keeps up with your typing
+- Typing in the library search stalls less on a library of hundreds of thousands of photos. The search used to
+  lower-case a photo's file name, title, caption, camera, lens, location, format, every keyword and the names of the
+  people on its faces again for each photo and each letter you typed. It now keeps that text, makes it the first time
+  you search, and keeps it up to date as you edit titles, captions, keywords, people and file names. Smart albums with
+  a Text rule keep their own text the same
+  way, made the first time such an album is counted or shown. Which photos match is unchanged. On a test library of
+  312 000 photos, finding the photos for a word took about 50 ms where it took 120 to 160 ms. The first search makes
+  the text, which takes a fraction of a second and about 32 MB of memory at that size; a Text rule's text is another
+  33 MB. Searches with `camera:`, `lens:` or `name:` gain less (about 70 ms became about 60 ms).
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

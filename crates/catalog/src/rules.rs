@@ -702,8 +702,37 @@ fn lower(v: &Value) -> String {
     }
 }
 
+/// What a Text rule looks through for `p`: its file name, title, caption, camera, lens, location, city,
+/// state, country, alt text, format, keywords, people and copy name, trimmed and lower-cased.
+pub(crate) fn rule_text(p: &Photo) -> String {
+    let m = &p.meta;
+    let all = [
+        p.file_name.as_str(),
+        &m.title,
+        &m.caption,
+        &m.camera,
+        &m.lens,
+        &m.location,
+        &m.city,
+        &m.state,
+        &m.country,
+        &m.alt_text,
+        &p.format,
+        &m.keywords.join(" "),
+        &p.people().join(" "),
+        p.copy_name.as_deref().unwrap_or(""),
+    ]
+    .join(" ");
+    let all = all.trim();
+    if all.is_ascii() { all.to_ascii_lowercase() } else { all.to_lowercase() }
+}
+
 fn text_op(op: &str, have: &str, want: &str) -> bool {
-    let have = have.trim().to_lowercase();
+    text_op_lowered(op, &have.trim().to_lowercase(), want)
+}
+
+/// [`text_op`] for a `have` that is trimmed and lower-cased already.
+fn text_op_lowered(op: &str, have: &str, want: &str) -> bool {
     match op {
         "contains" => want.split_whitespace().all(|w| have.contains(w)),
         "notContains" => !want.split_whitespace().any(|w| have.contains(w)),
@@ -981,26 +1010,10 @@ impl Rule {
             "keywordCount" => num_op(op, Some(p.keyword_count() as f64), value),
             "person" => names_op(op, &p.people(), &want),
             "personCount" => num_op(op, Some(p.people().len() as f64), value),
-            "text" => {
-                let all = [
-                    p.file_name.as_str(),
-                    &m.title,
-                    &m.caption,
-                    &m.camera,
-                    &m.lens,
-                    &m.location,
-                    &m.city,
-                    &m.state,
-                    &m.country,
-                    &m.alt_text,
-                    &p.format,
-                    &m.keywords.join(" "),
-                    &p.people().join(" "),
-                    p.copy_name.as_deref().unwrap_or(""),
-                ]
-                .join(" ");
-                text(&all)
-            }
+            "text" => match cat.rule_text_of(p) {
+                Some(have) => text_op_lowered(op, have, &want),
+                None => text_op_lowered(op, &rule_text(p), &want),
+            },
             "fileName" => text(&p.file_name),
             "extension" => text_op(op, p.extension(), want.trim_start_matches('.')),
             "duration" => num_op(op, p.duration.filter(|d| d.is_finite()), value),
