@@ -372,8 +372,12 @@ mod tests {
         const MIB: usize = 1 << 20;
         assert_eq!(budget_for(Some(128 * MIB)), 32 * MIB, "a 128 MiB cgroup limit");
         assert_eq!(budget_for(Some(512 * MIB)), 128 * MIB);
-        assert_eq!(budget_for(Some(4096 * MIB)), 1024 * MIB);
-        assert_eq!(budget_for(Some(64 * 1024 * MIB)), 1536 * MIB, "capped");
+        // 4 GiB and up don't fit a 32-bit usize (wasm32)
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(budget_for(Some(4096 * MIB)), 1024 * MIB);
+            assert_eq!(budget_for(Some(64 * 1024 * MIB)), 1536 * MIB, "capped");
+        }
         assert_eq!(budget_for(None), 1536 * MIB, "unknown");
         assert_eq!(budget_for(Some(0)), 1, "never the 0 that means not computed");
     }
