@@ -388,9 +388,33 @@ fn preferences_round_trip_and_old_settings_remain_readable() {
     assert_eq!(restored.language, Locale::ZhHans);
 }
 
-/// Smart-album choice values read as words in every language (English "Public Domain"), never as
-/// rule ids like `publicDomain`; an id the field doesn't know shows as written. A yes/no value
-/// reads Yes / No, or the language's contextual entry for it where it has one.
+#[test]
+fn catalogs_contain_core_workflows() {
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        for key in ["Import Photos…", "Export…", "Exposure", "White Balance", "Settings", "Language"] {
+            let value = language.tr(key);
+            assert!(!value.is_empty() && value != key, "{language:?}: {key}");
+        }
+    }
+}
+
+/// The built-in export presets' names show translated in the Export dialog (`builtin_label`), so
+/// every catalog carries them. A translation may keep the English text, so this checks that an
+/// entry exists: the catalog comparison only reports gaps, and a gap would show English silently.
+#[test]
+fn export_preset_names_are_translated_in_every_catalog() {
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        for key in ["Instagram Feed", "Instagram Story / Reel", "Web / Portfolio", "Full Resolution Master"] {
+            assert!(language.catalog().contains_key(key), "{language:?} has no translation for {key:?}");
+        }
+    }
+}
+
+/// Smart-album choice values read as words in every language (English "Public Domain", German
+/// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
+/// written. Unlike other labels these must be translated: an untranslated one would be English
+/// in the middle of a translated rule. A yes/no value reads Yes / No, or the language's
+/// contextual entry for it where it has one.
 #[test]
 fn choice_values_read_as_words_in_every_language() {
     use lightcraft_catalog::rules::{FIELDS, Kind, bool_label};

@@ -499,6 +499,9 @@ impl Session {
         self.last_export = prefs.last_export;
         self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
+        // a user preset whose name shadows a built-in one could never be selected or exported
+        // (the built-ins are looked up first); it gets a name of its own instead
+        self.rename_shadowing_export_presets();
         self.print_templates = prefs.print_templates;
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;

@@ -14,6 +14,31 @@ impl Session {
         builtin_presets().into_iter().map(|p| (p, true)).chain(self.export_presets.iter().cloned().map(|p| (p, false))).collect()
     }
 
+    /// The user's export presets, renamed where they shadow a built-in: the built-ins are looked up
+    /// first, so a preset whose name matches one of them (in any case) could never be selected or
+    /// exported, and the save path refuses a built-in's name. Such a preset gets a free name of its
+    /// own (`<name> (mine)`, then a number when that is taken too), keeping its settings.
+    pub(crate) fn rename_shadowing_export_presets(&mut self) {
+        let builtins: Vec<String> = builtin_presets().into_iter().map(|p| p.name).collect();
+        // the names that may not be taken: the built-ins', and every user preset's own
+        let mut taken: Vec<String> = builtins.clone();
+        taken.extend(self.export_presets.iter().map(|p| p.name.clone()));
+        for preset in self.export_presets.iter_mut() {
+            if !builtins.iter().any(|b| b.eq_ignore_ascii_case(&preset.name)) {
+                continue;
+            }
+            let base = format!("{} (mine)", preset.name);
+            let mut name = base.clone();
+            let mut n = 2;
+            while taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) {
+                name = format!("{base} {n}");
+                n += 1;
+            }
+            taken.push(name.clone());
+            preset.name = name;
+        }
+    }
+
     /// `app.export` params with a named `preset` expanded: the preset's params, overridden by the
     /// call's own (`preset` itself removed). Unknown preset names are an error.
     pub fn export_params(&self, p: &Value) -> std::result::Result<Value, String> {

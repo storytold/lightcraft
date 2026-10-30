@@ -181,6 +181,63 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Each of the four named delivery-target built-ins: listed as built-in, expanded to the settings the
+/// issue asks for, valid as `app.export` params, round-tripped through a user preset, and rendered at
+/// its size. A long edge is all a preset sets, so none of them crops the photo.
+#[test]
+fn named_builtin_presets_expand_round_trip_and_apply() {
+    use crate::export::output_size;
+    let mut s = Session::with_demo();
+    // the issue's four named built-ins are listed, marked builtin
+    let builtin: Vec<String> = s
+        .execute("export.presets", &json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["builtin"].as_bool().unwrap())
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    // 0 = no resize: the photo's own (cropped) full size
+    let issue = [
+        ("Instagram Feed", json!({"format": "jpeg", "quality": 85, "longEdge": 1080, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Instagram Story / Reel", json!({"format": "jpeg", "quality": 85, "longEdge": 1920, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Web / Portfolio", json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb", "metadata": "copyright"})),
+        ("Full Resolution Master", json!({"format": "jpeg", "quality": 95, "longEdge": 0, "colorSpace": "displayP3"})),
+    ];
+    for (name, settings) in &issue {
+        assert!(builtin.contains(&name.to_string()), "{name}: {builtin:?}");
+        // expanding one yields exactly the issue's settings, and they validate as app.export params
+        let params = s.export_params(&json!({"preset": name})).unwrap();
+        assert_eq!(&params, settings, "{name}");
+        ExportOptions::validate("app.export", &params).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // round trip: save as a user preset → expand again → identical ExportOptions
+        let mine = format!("My {name}");
+        s.execute("export.savePreset", &json!({"name": mine, "params": params})).unwrap();
+        let again = s.export_params(&json!({"preset": mine})).unwrap();
+        assert_eq!(ExportOptions::from_json(&params), ExportOptions::from_json(&again), "{name}");
+    }
+    // built-in names (the new ones too) are reserved
+    assert!(s.execute("export.savePreset", &json!({"name": "web / portfolio", "params": {}})).is_err());
+    // applying each one really renders at its size, and the photo keeps its own shape. The fixture
+    // is a demo scene at 2048×1365 instead of the demo library's 6000×4000: a preset only sets a
+    // long edge, so its behaviour is the same at this size, and every preset edge (1080, 1920,
+    // 2048) still lands — the largest one exactly at the fixture's own size, unresized.
+    use lightcraft_catalog::{Op, Photo, Source};
+    let id = s.catalog.alloc_photo_id();
+    let photo = Photo::new(id, Source::Demo { scene: 1 }, "LC01200.JPG", "JPEG", 2048, 1365, "2026-09-28T09:30:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo.clone()) }).unwrap();
+    for (name, settings) in &issue {
+        let o = ExportOptions::from_json(settings);
+        let e = export_photo(&mut s, id, &o, 1).unwrap();
+        assert_eq!((e.width, e.height), output_size(&photo, &o), "{name}");
+        match settings["longEdge"].as_u64().unwrap_or(0) {
+            0 => assert!(o.resize.is_none(), "{name}: full size means no resize"),
+            edge => assert_eq!(e.width.max(e.height) as u64, edge, "{name}: {}×{}", e.width, e.height),
+        }
+    }
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
@@ -1202,4 +1259,34 @@ fn same_folder_as_original_refuses_photos_without_a_folder() {
     let e = files[0]["error"].as_str().unwrap();
     assert!(e.contains("folder is missing") && e.contains(&gone), "{e}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A user export preset whose name collides with a built-in one (in any case) is shadowed by it:
+/// the built-ins are looked up first, so the user's preset can never be selected or exported, and
+/// the save path refuses to recreate it under a free name. Loading the preferences renames it to a
+/// name of its own instead, keeping its settings.
+#[test]
+fn a_user_preset_naming_a_built_in_is_renamed_when_the_library_opens() {
+    let lib = temp_dir("export-preset-rename");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.close_library().unwrap();
+    }
+    std::fs::write(lib.join("prefs.json"), r#"{"exportPresets": [{"name": "web / portfolio", "params": {"format": "png", "width": 64}}]}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let builtins: Vec<String> = crate::export::builtin_presets().into_iter().map(|p| p.name).collect();
+    assert_eq!(s.export_presets.len(), 1, "the user's preset is kept");
+    let name = s.export_presets[0].name.clone();
+    assert!(!builtins.iter().any(|b| b.eq_ignore_ascii_case(&name)), "{name} still shadows a built-in");
+    assert_eq!(s.export_presets[0].params, json!({"format": "png", "width": 64}), "its settings are kept");
+    // it is reachable under its own name: the export takes the user's settings
+    let p = s.export_params(&json!({"preset": name})).unwrap();
+    assert_eq!((p["format"].as_str(), p["width"].as_u64()), (Some("png"), Some(64)), "{p}");
+    // and the built-in of that name is still the built-in
+    let b = s.export_params(&json!({"preset": "Web / Portfolio"})).unwrap();
+    assert_eq!((b["format"].as_str(), b["longEdge"].as_u64()), (Some("jpeg"), Some(2048)), "{b}");
+    let _ = std::fs::remove_dir_all(&lib);
 }
