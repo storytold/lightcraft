@@ -66,6 +66,7 @@ impl LightcraftApp {
             library_passes: vec![],
             shadow: None,
             synthetic: vec![],
+            nav_buttons: vec![],
             pointer_cleanup: false,
             drop_hover: vec![],
             drop_pending: vec![],

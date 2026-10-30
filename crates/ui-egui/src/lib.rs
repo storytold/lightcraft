@@ -211,6 +211,10 @@ pub struct LightcraftApp {
     shadow: Option<headless::HeadlessView>,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
+    /// The mouse's Back / Forward buttons (`Extra1` / `Extra2`) pressed since the last UI pass.
+    /// [`Self::raw_input_hook`] takes their events out of egui's input, so no widget treats them
+    /// as a press (a slider would jump to the pointer, issue #3303); the shortcuts read them here.
+    pub(crate) nav_buttons: Vec<egui::PointerButton>,
     /// A gesture was canceled after its synthetic pointer press reached egui. The next
     /// [`Self::raw_input_hook`] cancels that press before egui's next input pass, without a
     /// `PointerMoved` (which can start a drag) or a `PointerButton` release (which can become a

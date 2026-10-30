@@ -236,6 +236,8 @@ impl LightcraftApp {
         if self.fonts_ready && !updates_ui::blocks_input(self) {
             shortcuts::handle(self, ctx);
         }
+        // the Back / Forward presses were for this pass's shortcuts only, as a key press is
+        self.nav_buttons.clear();
     }
 
     /// Lights Out: veil everything but the photo (the loupe's image, or the grid / Compare /
