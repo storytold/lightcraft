@@ -308,6 +308,50 @@ fn find_missing_finds_the_files_of_a_library_made_on_windows() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #2853: virtual copies share their original's file, so Find Missing relinks them to it,
+/// both when the original is found in the same search and when it was relinked before. A file an
+/// unrelated photo uses is still refused.
+#[test]
+fn find_missing_relinks_virtual_copies_to_their_originals_file() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    let dir = temp_dir("missing-copies");
+    std::fs::create_dir_all(dir.join("new")).unwrap();
+    for name in ["a.jpg", "b.jpg", "c.jpg"] {
+        std::fs::write(dir.join("new").join(name), b"x").unwrap();
+    }
+    let old = |name: &str| dir.join("old").join(name).to_string_lossy().to_string();
+    let new = |name: &str| dir.join("new").join(name).to_string_lossy().to_string();
+    let mut s = Session::new();
+    let mut add = |path: String, copy_of: Option<PhotoId>| {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+        p.file_size = 1;
+        p.copy_of = copy_of;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    // a and its two copies are all missing; b was relinked already, its copy wasn't; c's file
+    // is used by an unrelated photo
+    let a = add(old("a.jpg"), None);
+    let a_copies = [add(old("a.jpg"), Some(a)), add(old("a.jpg"), Some(a))];
+    let b = add(new("b.jpg"), None);
+    let b_copy = add(old("b.jpg"), Some(b));
+    add(new("c.jpg"), None);
+    let stranger = add(old("c.jpg"), None);
+    let path_of = |s: &Session, id: PhotoId| match &s.catalog.photo(id).unwrap().source {
+        Source::File { path } => path.clone(),
+        _ => String::new(),
+    };
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("new").to_string_lossy()})).unwrap();
+    for id in [a, a_copies[0], a_copies[1]] {
+        assert_eq!(path_of(&s, id), new("a.jpg"), "{r}");
+    }
+    assert_eq!(path_of(&s, b_copy), new("b.jpg"), "{r}");
+    assert_eq!(path_of(&s, stranger), old("c.jpg"), "another photo's file is not taken: {r}");
+    assert_eq!(r["missing"], 1, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// On macOS and Linux `\` may be part of a file name. Find Missing names the files it finds by
 /// the same rule as the missing photos, so `a\b.jpg` isn't relinked to a `b.jpg` beside it
 /// unasked: the two are reported as look-alikes.
