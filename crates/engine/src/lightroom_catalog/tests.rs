@@ -509,6 +509,24 @@ fn the_report_accounts_for_every_catalog_image_once() {
     let counts = ["added", "alreadyInLibrary", "inRecentlyDeleted"].map(|k| again[k].as_u64().unwrap());
     assert_eq!(counts, [0, 3, 1], "{again}");
 }
+/// A refused photo whose id reads as 0 (a malformed catalog) refuses only itself and its own
+/// copies: `masterImage` is 0 for every master, so every master was counted as refused (#2589).
+#[test]
+fn a_refused_photo_with_id_zero_refuses_only_itself() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    let mut far = data.photos[1].clone();
+    far.source_id = 0;
+    far.uuid = "image-0".into();
+    far.path = "//server/share/far.ARW".into();
+    far.image = row(json!({"id_local": 0, "fileFormat": "ARW"}));
+    far.original = Original::Refused("it is on another computer".into());
+    data.photos.push(far);
+    data.images = 3;
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!((r["added"].as_u64(), r["pathRefused"].as_u64()), (Some(2), Some(1)), "the master and its copy are added: {r}");
+    assert_eq!(s.catalog.len(), 2, "{r}");
+}
 
 /// Counts that don't add up to the catalog's images say so instead of passing silently.
 #[test]

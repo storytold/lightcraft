@@ -162,7 +162,8 @@ pub enum Original {
     #[default]
     NotHere,
     /// `path` is refused (why): it is on another computer or a device, or its folder or file name
-    /// is an absolute path. The photo is reported missing and not added to the library.
+    /// is an absolute path. The photo gets no library record, so it isn't reported missing either:
+    /// the import counts it in `pathRefused`.
     Refused(String),
 }
 
@@ -1077,8 +1078,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         let master = number(&src.image, "masterImage");
         // A refused path must not become a library record the app would look at later; its
         // virtual copies go with it. Having no record, it isn't missing (Find Missing Photos has
-        // nothing to relink): it is counted on its own.
-        if refused.contains(&src.source_id) || refused.contains(&master) {
+        // nothing to relink): it is counted on its own. (`masterImage` is 0 for a master, so a
+        // refused id of 0, from a malformed catalog, must not refuse every master.)
+        if refused.contains(&src.source_id) || (master != 0 && refused.contains(&master)) {
             path_refused += 1;
             continue;
         }
