@@ -2429,5 +2429,8 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Filter settings": "Filtrera inställningar",
+  "No setting matches what is typed.": "Ingen inställning matchar det som skrivits.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Prova ett ord eller en del av ett: namnen på flikar och avsnitt, etiketter och förklaringar genomsöks."
 }

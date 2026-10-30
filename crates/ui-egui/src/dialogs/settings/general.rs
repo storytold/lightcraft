@@ -1,4 +1,4 @@
-use super::widgets::{check, choices, heading, hint, path_label, row};
+use super::widgets::{check, choices, heading, hint, path_label, path_stand_in, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 // ------------------------------------------------------------------------------------- General
@@ -12,13 +12,12 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         });
         crate::i18n::set_language(app.ui.language);
     });
-    heading(ui, t, crate::i18n::tr("Library"));
-    let location = match &app.session.library {
-        Some(l) => l.dir.display().to_string(),
-        None => crate::i18n::tr("In memory — nothing is saved").to_string(),
-    };
-    row(ui, t, crate::i18n::tr("Location"), |ui| {
-        path_label(ui, "settingsLocation", &location, egui::TextStyle::Body.resolve(ui.style()), t.text, 0.0);
+    heading(ui, t, "Library");
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    row(ui, t, crate::i18n::tr("Location"), |ui| match &app.session.library {
+        Some(l) => path_label(ui, "settingsLocation", &l.dir.display().to_string(), font, t.text, 0.0),
+        // (no folder: words, which the filter looks through)
+        None => path_stand_in(ui, "settingsLocation", crate::i18n::tr("In memory — nothing is saved"), font, t.text, 0.0),
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();
@@ -60,7 +59,7 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.lightroom_import,
         );
     });
-    heading(ui, t, crate::i18n::tr("Startup"));
+    heading(ui, t, "Startup");
     row(ui, t, crate::i18n::tr("Open in"), |ui| {
         choices(
             ui,
@@ -69,13 +68,13 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.startup_view,
         );
     });
-    heading(ui, t, crate::i18n::tr("Culling"));
+    heading(ui, t, "Culling");
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
-    heading(ui, t, crate::i18n::tr("Dialogs"));
+    heading(ui, t, "Dialogs");
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
-    heading(ui, t, crate::i18n::tr("External Editing"));
+    heading(ui, t, "External Editing");
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
         crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
             .hint(crate::i18n::tr("Found automatically"))
