@@ -252,8 +252,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // save / clear
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
-    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
+    let why_not = app.session.view_save_refusal();
+    let save = ui.add_enabled(
+        filtering && why_not.is_none(),
+        egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))),
+    );
     register(ui, "button:filterSave", save.rect);
+    let save = match why_not {
+        Some(why) => save.on_disabled_hover_text(why),
+        None => save,
+    };
     if save.clicked() {
         let _ = app.run("dialog.newSmartAlbum", json!({}));
     }

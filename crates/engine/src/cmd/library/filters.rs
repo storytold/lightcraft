@@ -29,7 +29,8 @@ pub(super) fn merge_rules(
     let sets_rules = patch.get("ruleSet").is_some_and(|r| !r.is_null());
     let mut problems = f.rule_set.as_ref().filter(|_| sets_rules).map(|r| r.check_for(cat, owner)).unwrap_or_default();
     // and a loop through the album field the change sets
-    if patch.get("album").is_some_and(|a| !a.is_null()) {
+    let sets = |key: &str| patch.get(key).is_some_and(|a| !a.is_null());
+    if sets("album") || sets("albums") {
         problems.extend(cat.album_filter_problem(&f, owner));
     }
     if !problems.is_empty() {
@@ -48,12 +49,41 @@ pub(crate) fn covers_other_disks(s: &Session, path: &str, ids: &[PhotoId]) -> bo
         .any(|v| v != "/" && !lightcraft_catalog::query::folder_within(path, &v))
 }
 
+/// A view of several albums can't be saved when one of them is a smart album (smart album rules
+/// can't test another smart album): refuse up front, naming it, instead of letting the rules'
+/// check say so without the cause.
+pub(super) fn several_smart_refused(s: &Session, cmd: &str) -> Result<()> {
+    s.view_save_refusal().map_or(Ok(()), |why| Err(bad(cmd, why)))
+}
+
+impl Session {
+    /// Why the current view can't be saved as smart-album rules (Create Smart Album from Filter,
+    /// Update Rules from Current Filter), or `None` when it can. The one check behind the menu
+    /// item's grey-out and the refusal of `album.createSmart` / `album.setRules {fromView}`.
+    pub fn view_save_refusal(&self) -> Option<String> {
+        // (asked every frame by the menus: most views name no second album, so say so without a list)
+        if self.also_albums.is_empty() {
+            return None;
+        }
+        let shown = self.source_albums();
+        if shown.len() < 2 {
+            return None;
+        }
+        let smart = shown.iter().find_map(|a| self.catalog.album(*a).filter(|a| a.is_smart()))?;
+        Some(format!(
+            "the view shows several albums and \"{}\" is a smart album: smart album rules can't test another smart album. Show only albums that aren't smart, or save the smart album's own view",
+            smart.name
+        ))
+    }
+}
+
 /// The current view (source + filter) as smart-album rules. Viewing a smart album starts from
 /// its rules with the filter bar's settings on top.
 pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
     use lightcraft_catalog::Filter;
     let smart = match s.source {
-        LibrarySource::Album(a) => s.catalog.album(a).and_then(|a| a.smart.as_deref().cloned()),
+        // (one smart album alone: among several albums shown it is one more album)
+        LibrarySource::Album(a) if s.also_albums.is_empty() => s.catalog.album(a).and_then(|a| a.smart.as_deref().cloned()),
         _ => None,
     };
     match smart {
@@ -76,8 +106,14 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
         None => {
             let mut f = s.source.to_filter(&s.filter, &s.catalog);
             f.deleted = false;
-            if s.source == LibrarySource::LibraryFolder {
-                f.library_folder = s.library_folder.clone();
+            match s.source {
+                LibrarySource::LibraryFolder => {
+                    f.library_folder = s.library_folder.clone();
+                    f.library_folders = s.also_library_folders.clone();
+                }
+                // every album shown, not the filter's own
+                LibrarySource::Album(_) => f.albums = s.also_albums.clone(),
+                _ => {}
             }
             f
         }

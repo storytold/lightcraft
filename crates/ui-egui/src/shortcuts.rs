@@ -557,9 +557,10 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         up_down_key(app, ctx, f);
         return;
     }
-    // an export that can't start (e.g. no folder) says why instead of doing nothing
+    // an export that can't start (e.g. no folder), or a view that can't be saved as a smart
+    // album, says why instead of doing nothing
     if let Err(e) = app.run(f, json!({}))
-        && matches!(f, "app.export" | "app.exportPrevious")
+        && matches!(f, "app.export" | "app.exportPrevious" | "dialog.newSmartAlbum")
     {
         app.toast(ctx, e);
     }

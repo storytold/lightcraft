@@ -88,7 +88,7 @@ use std::sync::Arc;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
-use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
+use lightcraft_catalog::{AlbumId, Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
@@ -301,6 +301,13 @@ pub struct Session {
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
     /// from it and from the folders inside it.
     pub library_folder: Option<String>,
+    /// The other albums shown beside the [`LibrarySource::Album`] source (several chosen in the
+    /// sidebar), in the order chosen: the grid shows the photos of any of them. Never the source's
+    /// own album; see [`Session::source_albums`].
+    pub also_albums: Vec<AlbumId>,
+    /// The other folders shown beside [`Session::library_folder`], likewise; see
+    /// [`Session::source_library_folders`].
+    pub also_library_folders: Vec<String>,
     /// Copied metadata (`photo.copyMetadata`): photo.setMeta params.
     pub meta_clipboard: Option<Value>,
     /// The photo that was active before the current one (Paste Settings from Previous).
@@ -486,6 +493,8 @@ impl Session {
             meta_clipboard: None,
             browse: None,
             library_folder: None,
+            also_albums: Vec::new(),
+            also_library_folders: Vec::new(),
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             presets: presets::PresetList::new(presets::builtin()),
@@ -1065,8 +1074,14 @@ impl Session {
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
-        let mut key =
-            (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+        self.reconcile_sources();
+        let mut key = (
+            self.catalog.revision,
+            format!(
+                "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                self.source, self.filter, self.sort, self.browse, self.library_folder, self.also_albums, self.also_library_folders
+            ),
+        );
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -1092,6 +1107,10 @@ impl Session {
             // Use this same value to evaluate relative rules and stamp the result.
             let now = current_now.unwrap_or_else(|| (self.clock)());
             lightcraft_catalog::rules::set_now(Some(now.clone()));
+            if self.source == LibrarySource::LibraryFolder && !self.also_library_folders.is_empty() && self.drop_empty_folders() {
+                // one of several folders shown lost its last photo: the others stay
+                return self.visible();
+            }
             let f = self.view_filter(self.source, &self.filter);
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
@@ -1101,7 +1120,7 @@ impl Session {
             // cost for the hold)
             let holds = self.hold_view && (asks || self.filter != Filter::default());
             let within = holds.then(|| {
-                if asks {
+                if asks && self.also_albums.is_empty() {
                     self.view_filter(LibrarySource::All, &Filter::default())
                 } else if self.source == LibrarySource::RecentlyAdded {
                     // (how far back it reaches was worked out for `f`: not a second pass over the library)
@@ -1114,6 +1133,7 @@ impl Session {
             // its own order, Recently Added (how far back it reaches moves with every import), Missing Photos.
             let own_order = matches!(self.source, LibrarySource::Album(a) if self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && self.filter == Filter::default()
+                && self.also_albums.is_empty()
                 && self.catalog.album(a).is_some_and(|al| !al.is_smart()));
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
@@ -1148,9 +1168,15 @@ impl Session {
                 // an empty grid under the name of a folder that is gone from the sidebar
                 self.source = LibrarySource::All;
                 self.library_folder = None;
+                self.also_library_folders.clear();
+                // folders of the filter were ignored while the folder was shown: they would narrow All Photos now
+                self.filter.library_folder = None;
+                self.filter.library_folders.clear();
                 return self.visible();
             }
             if matches!(self.source, LibrarySource::Album(_))
+                // several albums have no order of their own between them
+                && self.also_albums.is_empty()
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
@@ -1197,22 +1223,6 @@ impl Session {
         &self.visible
     }
 
-    /// `source` as a filter over `base` (the filter bar's, or none), with the folder it shows.
-    fn view_filter(&self, source: LibrarySource, base: &Filter) -> Filter {
-        let mut f = source.to_filter(base, &self.catalog);
-        if source == LibrarySource::Folder {
-            // no folder chosen: nothing (an empty path matches nothing)
-            let b = self.browse.clone().unwrap_or_default();
-            f.folder = Some(b.path);
-            f.subfolders = b.subfolders;
-        }
-        if source == LibrarySource::LibraryFolder {
-            // no folder chosen: nothing (`.` names no folder)
-            f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-        }
-        f
-    }
-
     /// Let go of what a held view kept: the view shows what matches now ([`Session::hold_view`]).
     pub fn refresh_view(&mut self) {
         self.base = None;
@@ -1245,8 +1255,103 @@ impl Session {
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
     /// shows.
     fn folder_holds_photos(&self) -> bool {
-        let f = Filter { library_folder: self.library_folder.clone(), ..Default::default() };
+        let f = Filter { library_folder: self.library_folder.clone(), library_folders: self.also_library_folders.clone(), ..Default::default() };
         self.library_folder.is_some() && !self.catalog.query(&f, &Sort::default()).is_empty()
+    }
+
+    /// `source` as a filter over `base` (the filter bar's, or none): what [`LibrarySource::to_filter`] gives,
+    /// with the folder a `Folder` or `LibraryFolder` source shows and the other albums and folders shown
+    /// beside the source's own.
+    fn view_filter(&self, source: LibrarySource, base: &Filter) -> Filter {
+        let mut f = source.to_filter(base, &self.catalog);
+        match source {
+            LibrarySource::Folder => {
+                // no folder chosen: nothing (an empty path matches nothing)
+                let b = self.browse.clone().unwrap_or_default();
+                f.folder = Some(b.path);
+                f.subfolders = b.subfolders;
+            }
+            LibrarySource::LibraryFolder => {
+                // no folder chosen: nothing (`.` names no folder)
+                f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
+                f.library_folders = self.also_library_folders.clone();
+            }
+            // the source's albums, whatever albums the filter named
+            LibrarySource::Album(_) => f.albums = self.also_albums.clone(),
+            _ => {}
+        }
+        f
+    }
+
+    /// What the source is called: an album's name, a folder's last two names, "3 albums" or
+    /// "2 folders" for several, else the source's own label.
+    pub fn source_label(&self) -> String {
+        match (self.source, self.library_folder.as_deref()) {
+            (LibrarySource::Album(_), _) if !self.also_albums.is_empty() => format!("{} albums", self.source_albums().len()),
+            (LibrarySource::LibraryFolder, Some(_)) if !self.also_library_folders.is_empty() => {
+                format!("{} folders", self.source_library_folders().len())
+            }
+            (LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+            _ => self.source.label(&self.catalog),
+        }
+    }
+
+    /// The albums the grid shows the photos of: the [`LibrarySource::Album`] source's and the
+    /// others chosen with it, in the order chosen (the source's own last: it is the one a
+    /// single-album action takes). Empty for any other source.
+    pub fn source_albums(&self) -> Vec<AlbumId> {
+        match self.source {
+            LibrarySource::Album(a) => self.also_albums.iter().copied().filter(|x| *x != a).chain([a]).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The folders a [`LibrarySource::LibraryFolder`] source shows: [`Session::library_folder`]
+    /// (last) and the others chosen with it. Empty for any other source.
+    pub fn source_library_folders(&self) -> Vec<String> {
+        match (self.source, &self.library_folder) {
+            (LibrarySource::LibraryFolder, Some(f)) => self.also_library_folders.iter().cloned().chain([f.clone()]).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Keep "the other albums and folders shown" true to the source: none without an album or a
+    /// folder source, never the source's own, and no album that is gone. When the source's own
+    /// album is gone and others are shown, the last of them takes its place; when none is left,
+    /// the view goes back to All Photos (not an empty grid).
+    fn reconcile_sources(&mut self) {
+        if self.source != LibrarySource::LibraryFolder && !self.also_library_folders.is_empty() {
+            self.also_library_folders.clear();
+        }
+        let LibrarySource::Album(a) = self.source else {
+            if !self.also_albums.is_empty() {
+                self.also_albums.clear();
+            }
+            return;
+        };
+        let cat = &self.catalog;
+        if !self.also_albums.is_empty() {
+            self.also_albums.retain(|x| *x != a && cat.album(*x).is_some());
+        }
+        if cat.album(a).is_none() {
+            self.source = self.also_albums.pop().map_or(LibrarySource::All, LibrarySource::Album);
+        }
+    }
+
+    /// Of several folders shown, let go of those the library holds no photo of any more; the
+    /// last one left that does becomes [`Session::library_folder`]. Returns whether any went.
+    /// (All of them empty: left as it is, for the caller to go back to All Photos.)
+    fn drop_empty_folders(&mut self) -> bool {
+        let all = self.source_library_folders();
+        let holds = self.catalog.folders_holding(&all);
+        let mut kept: Vec<String> = all.iter().zip(&holds).filter(|(_, h)| **h).map(|(f, _)| f.clone()).collect();
+        if kept.len() == all.len() {
+            return false;
+        }
+        let Some(last) = kept.pop() else { return false };
+        self.library_folder = Some(last);
+        self.also_library_folders = kept;
+        true
     }
 
     /// Photos in the current source (folder, album, …) before the filter bar and search narrow
@@ -1255,6 +1360,7 @@ impl Session {
         if self.source == LibrarySource::Missing {
             return None;
         }
+        self.reconcile_sources();
         if self.filter == Filter::default() && !self.hold_view {
             // nothing narrows the source: what the view lists is all of it, and is counted already (not a view
             // that holds photos that stopped matching: those are not of the source any more)
@@ -1265,7 +1371,10 @@ impl Session {
                 return Some(ids.len());
             }
         }
-        let key = (self.catalog.revision, format!("{:?}|{:?}|{:?}", self.source, self.browse, self.library_folder));
+        let key = (
+            self.catalog.revision,
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.browse, self.library_folder, self.also_albums, self.also_library_folders),
+        );
         let key_changed = self.total.as_ref().map(|total| &total.0) != Some(&key);
         let cached_minute = self.total.as_ref().and_then(|total| total.2.as_deref());
         let current_now = cached_minute.map(|_| (self.clock)());
@@ -1275,15 +1384,7 @@ impl Session {
             // The source count can be requested before `visible`; bind it to the session's clock itself.
             let now = current_now.unwrap_or_else(|| (self.clock)());
             lightcraft_catalog::rules::set_now(Some(now.clone()));
-            let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
-            if self.source == LibrarySource::Folder {
-                let b = self.browse.clone().unwrap_or_default();
-                f.folder = Some(b.path);
-                f.subfolders = b.subfolders;
-            }
-            if self.source == LibrarySource::LibraryFolder {
-                f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-            }
+            let f = self.view_filter(self.source, &Filter::default());
             // (how many, not which: nothing to put in order)
             let n = self.catalog.count(&f);
             let clocked = filter_depends_on_clock(&f, &self.catalog);
