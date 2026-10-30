@@ -6,6 +6,13 @@ the amount of work isn't known), the count and what it's working on, and ✕ if 
 a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
 `ui.inspect` reports it as `activity`.
 
+On macOS a running job the person started also keeps the Mac awake: `Activity::wake_reason` names the oldest such job
+(housekeeping that starts by itself, like the thumbnail-cache tidy, the focus-point reading and the face scan, doesn't count, and neither does a job that was asked to stop), the UI tells
+the host when that changes (`Services::keep_awake`), and the app holds an `NSProcessInfo` activity (user initiated,
+idle system sleep disabled) with that reason until the last job ends, is cancelled or the app quits.
+`pmset -g assertions` lists it. A new `kind` that is background housekeeping rather than something the person asked for
+goes in `holds_awake` in `activity.rs`.
+
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
 window, panel or progress toast of your own**. A dialog may still show progress inline (the Synchronize Folder

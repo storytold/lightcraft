@@ -3538,6 +3538,7 @@ dependencies = [
 name = "lightcraft"
 version = "0.15.0"
 dependencies = [
+ "block2 0.6.2",
  "chrono",
  "craft-update",
  "eframe",

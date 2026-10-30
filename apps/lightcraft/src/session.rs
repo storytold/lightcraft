@@ -146,6 +146,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         screen_profile: Some(colord::service()),
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         screen_profile: None,
+        // macOS: a running job keeps the Mac awake and the window out of App Nap
+        #[cfg(target_os = "macos")]
+        keep_awake: Some(keep_awake::service()),
+        #[cfg(not(target_os = "macos"))]
+        keep_awake: None,
         pick_display_profile: Some(Box::new(|| {
             let mut d = file_dialog()
                 .set_title(lightcraft_ui_egui::i18n::tr("Choose Monitor Profile"))

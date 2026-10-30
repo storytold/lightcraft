@@ -255,6 +255,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         pick_folder: None,
         // the browser reports prefers-color-scheme to egui
         system_theme: None,
+        keep_awake: None,
     }
 }
 
