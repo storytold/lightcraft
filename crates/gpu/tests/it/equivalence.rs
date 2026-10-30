@@ -2,8 +2,8 @@
 //! `lightcraft_gpu::render`, compared in 8-bit sRGB.
 //!
 //! Bounds (documented in `docs/gpu-pipeline.md`): mean |Δ| < 0.5 LSB and max |Δ| ≤ 3 LSB per
-//! channel for every case. Skips (passes with a note) when no GPU adapter exists; CI runs them on
-//! software adapters with `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` (lavapipe, WARP) and on Metal.
+//! channel for every case. Skips (passes with a note) when no GPU adapter exists;
+//! `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` runs them on a software adapter (lavapipe, WARP) instead.
 
 use std::sync::Arc;
 
@@ -899,7 +899,7 @@ static BIG_SOURCE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The big photo of these tests: 10.24 MP, a 117 MiB source. That is over what a view keeps with its
 /// stages (96 MiB, so it is shared) and within a 128 MiB storage binding (the WebGPU default, and
-/// the limit of Mesa's lavapipe in CI), so the source goes to the device on every adapter. A source
+/// the limit of Mesa's lavapipe), so the source goes to the device on every adapter. A source
 /// over the device's limit is resampled on the CPU instead and never uploaded, which would leave
 /// these tests nothing to check.
 const BIG: usize = 3200;

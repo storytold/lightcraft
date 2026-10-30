@@ -758,9 +758,8 @@ fn refuse_adapter(device_type: wgpu::DeviceType, allow_software: bool) -> bool {
 }
 
 /// `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter. For tests on machines without a
-/// GPU (CI runners: Mesa lavapipe on Linux, WARP on Windows), so the CPU ↔ GPU equivalence tests
-/// run there instead of skipping; the app never sets it (software rendering is slower than the CPU
-/// pipeline).
+/// GPU (Mesa lavapipe on Linux, WARP on Windows), so the CPU ↔ GPU equivalence tests run there
+/// instead of skipping; the app never sets it (software rendering is slower than the CPU pipeline).
 fn software_allowed() -> bool {
     std::env::var("LIGHTCRAFT_GPU_ALLOW_SOFTWARE").is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
