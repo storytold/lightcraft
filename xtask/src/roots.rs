@@ -56,7 +56,7 @@ impl std::fmt::Display for Violation {
                 write!(f, "{name}: missing `#![deny(...)]` with all six clippy lints in {}", path.display())
             }
             Violation::OverriddenDeny { name, path, attribute, lint } => {
-                write!(f, "{name}: the crate-root `#![{{{attribute}}}({{{lint}}})]` overrides the required deny list in {}", path.display())
+                write!(f, "{name}: the crate-root `#![{attribute}({lint})]` overrides the required deny list in {}", path.display())
             }
         }
     }
@@ -338,6 +338,11 @@ mod tests {
         let src = format!("#![forbid(unsafe_code)]\n#![deny({DENY})]\n#![allow(clippy::panic)]\nfn f() {{}}\n");
         let v = check(&[root("lightcraft-foo", &src)]);
         assert!(matches!(&v[..], [Violation::OverriddenDeny { lint, .. }] if lint == "clippy::panic"), "{v:?}");
+        assert_eq!(
+            v.first().map(|v| v.to_string()).as_deref(),
+            Some("lightcraft-foo: the crate-root `#![allow(clippy::panic)]` overrides the required deny list in src/lightcraft-foo.rs"),
+            "the rendered message shows the attribute, not literal braces",
+        );
     }
 
     #[test]
