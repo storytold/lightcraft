@@ -618,8 +618,8 @@ pub fn many_body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 }
 
 /// Synchronize N Folders' Synchronize: each folder with something to do waits in the library lane as a Synchronize of
-/// its own, in the dialog's order, removing or relinking only the photos its scan found (the first starts at once if
-/// nothing else runs there). Folders up to date, not there or left out are passed over.
+/// its own, in the dialog's order, removing, relinking or reading sidecars of only the photos its scan found (the
+/// first starts at once if nothing else runs there). Folders up to date, not there or left out are passed over.
 pub fn confirm_many(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     let Dialog::SynchronizeFolders { folders, import_new, relink_moved, remove_missing, read_metadata, library } = dlg else {
         return Err("not a Synchronize Folders dialog".into());
