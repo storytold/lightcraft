@@ -154,6 +154,67 @@ pub(crate) fn assert_repair_packets(actual: &SidecarMove, unfinished: &SidecarMo
 }
 
 #[test]
+fn a_folder_move_refused_for_its_destination_does_not_finish_pending_repairs() {
+    let root = crate::tests_xmp::temp_dir("folder-refused-keeps-repairs");
+    let from = root.join("Trip");
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(root.join("Archive/Trip")).unwrap();
+    let photo = from.join("b.jpg");
+    std::fs::write(&photo, b"Photo bytes").unwrap();
+    let old_sidecar = crate::sidecar::sidecar_path(&from.join("a.jpg").to_string_lossy(), SidecarNaming::Stem);
+    let sidecar = crate::sidecar::sidecar_path(&photo.to_string_lossy(), SidecarNaming::Stem);
+    std::fs::write(&old_sidecar, b"Retained edits").unwrap();
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(1, &photo.to_string_lossy())) }).unwrap();
+    s.pending_sidecar_repairs.push(SidecarMove {
+        from: old_sidecar.clone(),
+        to: sidecar.clone(),
+        copied: false,
+        companions: vec![RetainedPacket { path: old_sidecar.clone(), version: Some(RealFs.packet_version(&old_sidecar).unwrap()) }],
+    });
+    // the destination is taken: the move is refused before anything is repaired or moved
+    let e = s.execute("folder.move", &serde_json::json!({"path": from, "into": root.join("Archive")})).unwrap_err().to_string();
+    assert!(e.contains("already exists"), "{e}");
+    assert_eq!(s.pending_sidecar_repairs.len(), 1, "the repair is still waiting");
+    assert!(old_sidecar.is_file() && !sidecar.exists(), "no repair was carried out");
+    assert!(from.is_dir());
+    // once the way is clear, the same repair finishes with the move
+    std::fs::remove_dir_all(root.join("Archive/Trip")).unwrap();
+    s.execute("folder.move", &serde_json::json!({"path": from, "into": root.join("Archive")})).unwrap();
+    assert!(s.pending_sidecar_repairs.is_empty());
+    assert_eq!(std::fs::read(root.join("Archive/Trip").join(sidecar.file_name().unwrap())).unwrap(), b"Retained edits");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_moved_into_itself_through_a_link_is_refused_before_pending_repairs() {
+    let root = crate::tests_xmp::temp_dir("folder-into-itself-through-link");
+    let from = root.join("Trip");
+    std::fs::create_dir_all(from.join("sub")).unwrap();
+    // "alias" is the folder itself, so alias/sub is inside it, though the written paths don't say so
+    std::os::unix::fs::symlink(&from, root.join("alias")).unwrap();
+    let photo = from.join("b.jpg");
+    std::fs::write(&photo, b"Photo bytes").unwrap();
+    let old_sidecar = crate::sidecar::sidecar_path(&from.join("a.jpg").to_string_lossy(), SidecarNaming::Stem);
+    let sidecar = crate::sidecar::sidecar_path(&photo.to_string_lossy(), SidecarNaming::Stem);
+    std::fs::write(&old_sidecar, b"Retained edits").unwrap();
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(file_photo(1, &photo.to_string_lossy())) }).unwrap();
+    s.pending_sidecar_repairs.push(SidecarMove {
+        from: old_sidecar.clone(),
+        to: sidecar.clone(),
+        copied: false,
+        companions: vec![RetainedPacket { path: old_sidecar.clone(), version: Some(RealFs.packet_version(&old_sidecar).unwrap()) }],
+    });
+    let e = s.execute("folder.move", &serde_json::json!({"path": from, "into": root.join("alias/sub")})).unwrap_err().to_string();
+    assert!(e.contains("can't be moved into itself"), "{e}");
+    assert_eq!(s.pending_sidecar_repairs.len(), 1, "the repair is still waiting");
+    assert!(old_sidecar.is_file() && !sidecar.exists(), "no repair was carried out");
+    assert!(photo.is_file(), "nothing moved");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn folder_moves_repair_retained_sidecars_before_changing_paths() {
     for command in ["folder.rename", "folder.move"] {
         for queue in ["pending", "undo", "redo"] {
@@ -190,6 +251,8 @@ fn folder_moves_repair_retained_sidecars_before_changing_paths() {
                     "redo" => s.redo.last_mut().unwrap().retry_sidecars.push(repair),
                     _ => s.pending_sidecar_repairs.push(repair),
                 }
+                // the destination folder is there, so it is the repair that blocks the move
+                std::fs::create_dir_all(root.join("Archive")).unwrap();
                 let params = if command == "folder.rename" {
                     serde_json::json!({"path": from, "name": "Holiday"})
                 } else {
