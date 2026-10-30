@@ -166,6 +166,9 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// When the sidecars of the library's photos were last listed for changes by other apps (monotonic app time).
+    #[serde(skip)]
+    pub sidecar_scan_at: f64,
     /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
     /// many were waiting then.
     #[serde(skip)]
@@ -421,6 +424,7 @@ impl Default for UiState {
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            sidecar_scan_at: 0.0,
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,

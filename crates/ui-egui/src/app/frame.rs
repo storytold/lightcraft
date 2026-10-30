@@ -115,6 +115,46 @@ impl LightcraftApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(3));
         }
+        // Preferences → XMP sidecars → "Re-read sidecars changed by other apps": list the .xmp files of the photos'
+        // folders every few seconds (on a worker thread: they may be on a network share); the engine waits until a
+        // file has held still and re-reads its photos (issue #3175)
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.xmp.reread_changed {
+            const LABEL: &str = "Sidecar Scan";
+            if now - self.ui.sidecar_scan_at >= 3.0
+                && self.import.is_none()
+                && self.sync_run.is_none()
+                && self.lightroom.is_none()
+                && !self.tasks.is_running(LABEL)
+            {
+                self.ui.sidecar_scan_at = now;
+                let folders = self.session.sidecar_watch_folders();
+                let work = move || lightcraft_engine::sidecar::watch::list_sidecars(&folders);
+                let done = move |app: &mut LightcraftApp, ctx: &egui::Context, listing: Vec<(String, u64, u64)>| {
+                    let Ok(r) = app.session.execute("library.sidecarScan", &serde_json::json!({"listing": listing, "at": now})) else { return };
+                    let count = |k: &str| r[k].as_array().map_or(0, Vec::len);
+                    let (updated, skipped) = (count("updated"), count("skipped"));
+                    let mut notes = Vec::new();
+                    if updated > 0 {
+                        notes.push(crate::i18n::tr_format!("Updated {} photo{} from XMP sidecars", updated, crate::i18n::plural_s(updated)));
+                    }
+                    if skipped > 0 {
+                        notes.push(crate::i18n::tr_format!(
+                            "Skipped {} photo{} whose own XMP sidecar write is still waiting",
+                            skipped,
+                            crate::i18n::plural_s(skipped)
+                        ));
+                    }
+                    if !notes.is_empty() {
+                        app.toast(ctx, notes.join(". "));
+                    }
+                };
+                if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
+                    log::warn!("{e}");
+                }
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(3));
+        }
         // automatic XMP writes that failed (a network share offline): tried again every few seconds once their files
         // are reachable, and said once when they start waiting and once when they're written
         #[cfg(not(target_arch = "wasm32"))]

@@ -35,7 +35,7 @@ pub(crate) fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-fn write_png(path: &Path, seed: u8) {
+pub(crate) fn write_png(path: &Path, seed: u8) {
     let (w, h) = (40usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 6) as u8, (i / w * 9) as u8, seed, 255]).collect();
     let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
@@ -134,7 +134,7 @@ fn auto_write_and_naming_preference() {
     assert!(!src.join("a.xmp").exists(), "auto-write is off by default");
 
     let v = s.execute("library.xmpPreferences", &json!({"autoWrite": true, "naming": "full"})).unwrap();
-    assert_eq!(v, json!({"autoWrite": true, "naming": "full"}));
+    assert_eq!(v, json!({"autoWrite": true, "naming": "full", "rereadChanged": false}));
     s.execute("photo.rate", &json!({"rating": 5})).unwrap();
     let sidecar = src.join("a.png.xmp");
     assert!(sidecar.is_file());
@@ -289,7 +289,7 @@ fn a_crs_change_after_a_read_is_taken_with_auto_write_on() {
 }
 
 /// A sidecar carrying only `xmp:Rating`.
-fn rating_sidecar(rating: u8) -> String {
+pub(crate) fn rating_sidecar(rating: u8) -> String {
     format!(
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="{rating}"/></rdf:RDF></x:xmpmeta>"#
     )

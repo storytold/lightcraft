@@ -41,7 +41,7 @@ pub mod recheck;
 pub mod reload;
 mod slideshow;
 mod sync;
-mod xmp;
+pub(crate) mod xmp;
 
 use serde::Serialize;
 use serde_json::Value;
