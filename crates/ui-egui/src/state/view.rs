@@ -175,7 +175,7 @@ impl InfoOverlay {
     }
 }
 
-/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// One line of the loupe's info overlay, chosen in View ▸ Loupe Overlay ▸ View Options… (Lightroom Classic's Loupe
 /// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -6,10 +6,10 @@ zooms to it, so checking whether the subject is sharp takes one key while cullin
 
 ## Using it
 
-- **View ▸ Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
+- **View ▸ Loupe Overlay ▸ Focus Point** (⌥F; `view.focusPoint {on?}`) draws the camera's AF frame as green corner brackets in
   Detail, Compare and Survey. It follows Rotate, flips and the crop; a point cropped away is not drawn. Off by
   default; the choice is saved with the app's settings.
-- **View ▸ Zoom to Focus Point** (`view.zoomToFocus {on?}`, on by default): Toggle Zoom (Z or Space) zooms in
+- **View ▸ Loupe Overlay ▸ Zoom to Focus Point** (`view.zoomToFocus {on?}`, on by default): Toggle Zoom (Z or Space) zooms in
   centred on the focus point instead of the last position. A click on the photo still zooms where you click, and a
   photo without a focus point zooms as before. On by default because it changes nothing for photos without a point,
   and for those with one the focus point is what a 1:1 check is for. In Compare the two panes share one pan, so Z
@@ -29,7 +29,7 @@ unchanged (no catalog format change).
 
 A library imported before focus points were read gets them by itself: when a library opens and some of its photos
 from a supported body have no point and haven't been looked at, LightCraft reads them in the background, with a
-**Reading focus points** row in the activity stack (n of N; ✕ stops it). **Photo ▸ Read Focus Points**
+**Reading focus points** row in the activity stack (n of N; ✕ stops it). **Photo ▸ Metadata ▸ Read Focus Points**
 (`photo.readFocusPoints`) starts the same job by hand. Photo ▸ Reload from Disk still fills a missing point too, but it
 re-reads and hashes whole files and runs while you wait, so it is for a few photos, not a library.
 

@@ -2,8 +2,8 @@
 
 LightCraft's slideshow follows Lightroom Classic's Slideshow module (no Adobe assets, templates or designs): the photos
 in view played full screen with a layout, overlays, intro and ending screens and fades, and exported as PDF, JPEG or
-video. There is no Slideshow module view yet: the settings live in Settings ▸ Slideshow (View ▸ Slideshow Options…)
-next to a live preview of the selected photo's slide, and View ▸ Slideshow (⌥⌘↩) plays.
+video. There is no Slideshow module view yet: the settings live in Settings ▸ Slideshow (View ▸ Slideshow ▸ Slideshow Options…)
+next to a live preview of the selected photo's slide, and View ▸ Slideshow ▸ Slideshow (⌥⌘↩) plays.
 
 | Part | Commands | Code |
 |---|---|---|
@@ -21,7 +21,7 @@ the same pixels through the same composer.
 
 ## Export
 
-View ▸ Export Slideshow… (or Export PDF / JPEG / Video at the end of Settings ▸ Slideshow) chooses a format and size,
+View ▸ Slideshow ▸ Export Slideshow… (or Export PDF / JPEG / Video at the end of Settings ▸ Slideshow) chooses a format and size,
 then asks where to write. The slides are the photos in view, in view order, between the intro and ending screens that
 are on; random order, repeat and manual slideshow are playback choices and don't apply. The slide aspect is the Layout's aspect preview
 (Screen exports 16:9).

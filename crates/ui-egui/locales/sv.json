@@ -2429,5 +2429,11 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "White": "Vit",
+  "Before/After": "Före/efter",
+  "Crop Overlay": "Beskärningsöverlägg",
+  "Loupe Overlay": "Lupp-överlägg",
+  "View Options…": "Visningsalternativ…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Visa → Lupp-överlägg → Visningsalternativ väljer vilka rader Info 1 och Info 2 visar."
 }

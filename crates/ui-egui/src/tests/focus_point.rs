@@ -1,4 +1,4 @@
-//! Headless tests of the camera's focus point (#1480): View ▸ Focus Point draws the box where the
+//! Headless tests of the camera's focus point (#1480): View ▸ Loupe Overlay ▸ Focus Point draws the box where the
 //! camera focused, through the user's rotation and crop; Toggle Zoom (Z) centres on it; the Info panel
 //! names the focus mode.
 
@@ -158,7 +158,7 @@ fn compare_and_survey_draw_each_photos_focus_point() {
 }
 
 /// A photo imported before focus points were read gets its point from the background reader the frame loop drives
-/// (`focus.pump`, started by itself once the library is open), and Photo ▸ Read Focus Points runs it on demand.
+/// (`focus.pump`, started by itself once the library is open), and Photo ▸ Metadata ▸ Read Focus Points runs it on demand.
 #[test]
 fn the_frame_loop_reads_focus_points_for_photos_imported_earlier() {
     let dir = std::env::temp_dir().join(format!("lc-ui-focus-scan-{}", std::process::id()));
@@ -181,7 +181,7 @@ fn the_frame_loop_reads_focus_points_for_photos_imported_earlier() {
     // a photo added later is read when asked (the menu item runs the command)
     add(&mut h.app, 9002, "later.ARW");
     let spec = h.app.session.commands().into_iter().find(|c| c.id == "photo.readFocusPoints").expect("the command");
-    assert_eq!(spec.menu, vec!["Photo"]);
+    assert_eq!(spec.menu, vec!["Photo", "Metadata"]);
     let r = run(&mut h, "photo.readFocusPoints", json!({}));
     assert_eq!(r["queued"], 1, "{r}");
     assert!(h.step_until(SETTLE, |h| has_point(h, 9002)));

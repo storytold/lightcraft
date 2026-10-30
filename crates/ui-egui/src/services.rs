@@ -65,7 +65,7 @@ pub struct Services {
     pub pick_model_file: Option<PickFiles>,
     /// Open dialog for preset files (`.lcpreset`, `.xmp`, `.lrtemplate`, `.zip`, `.dng`, Luminar `.lmp` / `.mplumpack`).
     pub pick_preset_files: Option<PickFiles>,
-    /// Open dialog for a GPS track log (`.gpx`; Photo ▸ Auto-Tag from Tracklog…).
+    /// Open dialog for a GPS track log (`.gpx`; Photo ▸ Metadata ▸ Auto-Tag from Tracklog…).
     pub pick_tracklog: Option<PickFiles>,
     /// Open dialog for a monitor ICC profile (`.icc` / `.icm`; Settings ▸ Display; desktop only).
     pub pick_display_profile: Option<PickFiles>,

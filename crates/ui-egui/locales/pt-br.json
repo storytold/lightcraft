@@ -142,6 +142,7 @@
   "Before/After (Y)": "Antes/Depois (Y)",
   "Before/After Settings": "Configurações de Antes/Depois",
   "Before/After Split": "Divisão Antes/Depois",
+  "Before/After": "Antes/Depois",
   "Before/After Split Top/Bottom": "Divisão Antes/Depois topo/base",
   "Before/After Top/Bottom": "Antes/Depois topo/base",
   "Begin Interaction": "Iniciar interação",
@@ -348,6 +349,7 @@
   "Cut": "Recortar",
   "Cut pages": "Recortar páginas",
   "Cycle Crop Overlay": "Alternar sobreposição de recorte",
+  "Crop Overlay": "Sobreposição de recorte",
   "Cycle Crop Overlay Orientation": "Alternar orientação da sobreposição de recorte",
   "Cycle Info Overlay": "Alternar sobreposição de informações",
   "Cycle Mask Overlay Color": "Alternar cor da sobreposição da máscara",
@@ -1608,6 +1610,7 @@
   "XMP sidecars": "Sidecars XMP",
   "Year": "Ano",
   "Yellow": "Amarelo",
+  "White": "Branco",
   "Yellow Hue": "Matiz do amarelo",
   "Yellow Luminance": "Luminância do amarelo",
   "Yellow Saturation": "Saturação do amarelo",
@@ -2202,5 +2205,8 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Loupe Overlay": "Sobreposição da lupa",
+  "View Options…": "Opções de exibição…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Exibir → Sobreposição da lupa → Opções de exibição escolhe as linhas que Info 1 e Info 2 mostram."
 }

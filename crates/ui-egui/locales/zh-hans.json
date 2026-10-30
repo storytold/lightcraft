@@ -141,6 +141,7 @@
   "Before/After (Y)": "修改前/修改后 (Y)",
   "Before/After Settings": "修改前/修改后设置",
   "Before/After Split": "修改前/修改后分屏",
+  "Before/After": "修改前/修改后",
   "Before/After Split Top/Bottom": "修改前/修改后上下分屏",
   "Before/After Top/Bottom": "修改前/修改后上下排列",
   "Begin Interaction": "开始交互",
@@ -345,6 +346,7 @@
   "Cut": "剪切",
   "Cut pages": "剪切页面",
   "Cycle Crop Overlay": "切换裁切叠加",
+  "Crop Overlay": "裁切叠加",
   "Cycle Crop Overlay Orientation": "切换裁切叠加方向",
   "Cycle Info Overlay": "切换信息叠加",
   "Cycle Mask Overlay Color": "切换蒙版叠加颜色",
@@ -1583,6 +1585,7 @@
   "XMP sidecars": "XMP 附属文件",
   "Year": "年",
   "Yellow": "黄色",
+  "White": "白色",
   "Yellow Hue": "黄色色相",
   "Yellow Luminance": "黄色明度",
   "Yellow Saturation": "黄色饱和度",
@@ -2200,5 +2203,8 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Loupe Overlay": "放大镜叠加",
+  "View Options…": "视图选项…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "视图 → 放大镜叠加 → 视图选项 用于选择“信息 1”和“信息 2”显示的行。"
 }

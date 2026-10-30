@@ -252,6 +252,7 @@
   "Before/After (Y)": "მანამდე/შემდეგ (Y)",
   "Before/After Settings": "მანამდე/შემდეგ პარამეტრები",
   "Before/After Split": "მანამდე/შემდეგ, გაყოფილი",
+  "Before/After": "მანამდე/შემდეგ",
   "Before/After Split Top/Bottom": "მანამდე/შემდეგ, გაყოფილი ზემოთ/ქვემოთ",
   "Before/After Top/Bottom": "მანამდე/შემდეგ ზემოთ/ქვემოთ",
   "Begin Interaction": "ურთიერთქმედების დაწყება",
@@ -516,6 +517,7 @@
   "Cut pages": "გვერდების ამოჭრა",
   "Cut, Copy, Paste and Select All. Esc in them gives back the text from before you started typing (in the Info panel it": "ხელმისაწვდომია ამოჭრა, კოპირება, ჩასმა და ყველაფრის მონიშვნა. Esc მათში აკრეფის დაწყებამდე არსებულ ტექსტს აბრუნებს (ინფორმაციის პანელში",
   "Cycle Crop Overlay": "ჩამოჭრის ზედდების მონაცვლეობა",
+  "Crop Overlay": "ჩამოჭრის ზედდება",
   "Cycle Crop Overlay Orientation": "ჩამოჭრის ზედდების ორიენტაციის მონაცვლეობა",
   "Cycle Info Overlay": "ინფორმაციის ზედდების მონაცვლეობა",
   "Cycle Mask Overlay Color": "ნიღბის ზედდების ფერის მონაცვლეობა",
@@ -2276,6 +2278,7 @@
   "XMP sidecars": "XMP თანმხლები ფაილები",
   "Year": "წელი",
   "Yellow": "ყვითელი",
+  "White": "თეთრი",
   "Yellow Hue": "ყვითლის ფერის ტონი",
   "Yellow Luminance": "ყვითლის სიკაშკაშე",
   "Yellow Saturation": "ყვითლის გაჯერება",
@@ -2734,5 +2737,8 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Loupe Overlay": "ლუპის ზედდება",
+  "View Options…": "ხედის პარამეტრები…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "ხედი → ლუპის ზედდება → ხედის პარამეტრები ირჩევს სტრიქონებს, რომლებსაც Info 1 და Info 2 აჩვენებს."
 }

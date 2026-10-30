@@ -137,6 +137,7 @@
   "Before/After (Y)": "Avant/Après (Y)",
   "Before/After Settings": "Réglages Avant/Après",
   "Before/After Split": "Avant/Après divisé",
+  "Before/After": "Avant/Après",
   "Before/After Split Top/Bottom": "Avant/Après divisé haut/bas",
   "Before/After Top/Bottom": "Avant/Après haut/bas",
   "Begin Interaction": "Commencer l'interaction",
@@ -340,6 +341,7 @@
   "Cut": "Couper",
   "Cut pages": "Couper les pages",
   "Cycle Crop Overlay": "Parcourir les incrustations de recadrage",
+  "Crop Overlay": "Incrustation de recadrage",
   "Cycle Crop Overlay Orientation": "Parcourir les orientations de l'incrustation de recadrage",
   "Cycle Info Overlay": "Parcourir les incrustations d'informations",
   "Cycle Mask Overlay Color": "Parcourir les couleurs de l'incrustation du masque",
@@ -1585,6 +1587,7 @@
   "XMP sidecars": "Fichiers annexes XMP",
   "Year": "Année",
   "Yellow": "Jaune",
+  "White": "Blanc",
   "Yellow Hue": "Teinte jaune",
   "Yellow Luminance": "Luminance jaune",
   "Yellow Saturation": "Saturation jaune",
@@ -2390,5 +2393,8 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Loupe Overlay": "Incrustation de la loupe",
+  "View Options…": "Options d'affichage…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Affichage → Incrustation de la loupe → Options d'affichage choisit les lignes que montrent Info 1 et Info 2."
 }

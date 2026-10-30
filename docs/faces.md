@@ -11,7 +11,7 @@ No model weights are part of LightCraft. Each one is a file you choose to get, f
 - **Face detection:** [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (232 KB, MIT).
   It runs in LightCraft's own code, with no extra runtime. It was trained on the WIDER FACE dataset; an MIT licence on
   weights does not settle that dataset's terms, so this is flagged for the maintainer. It finds faces; it does not
-  identify anyone. **Photo ▸ Detect Faces** offers the download the first time you use it.
+  identify anyone. **Photo ▸ Metadata ▸ Detect Faces** offers the download the first time you use it.
 - **Face recognition models** are large (AuraFace is 261 MB), and their licences and training data deserve a decision by
   the person installing them. Everything works without one: names from XMP, the People view, the face boxes.
 - **Recognition runs in LightCraft's own pure-Rust CPU interpreter**, shared with the detector. Dense
@@ -39,7 +39,7 @@ does check is listed under "Agreement and regression coverage".
 
 ## Downloading a model
 
-**Settings ▸ Faces ▸ Download** (or Photo ▸ Detect Faces, which offers it for the detector):
+**Settings ▸ Faces ▸ Download** (or Photo ▸ Metadata ▸ Detect Faces, which offers it for the detector):
 
 1. A dialog shows the model's licence, whether commercial use is allowed, what it was trained on (or that this is not
    known) and which site the file comes from. **Download stays disabled until you tick "I have read these terms and
@@ -226,7 +226,7 @@ a ResNet-100 (so it is not the accuracy choice its size suggests). InsightFace's
 
 ## Finding faces yourself
 
-**Photo ▸ Detect Faces** (`faces.detect`) runs the YuNet detector on the selected photos and adds what it finds as
+**Photo ▸ Metadata ▸ Detect Faces** (`faces.detect`) runs the YuNet detector on the selected photos and adds what it finds as
 unnamed face boxes, in one undo step. A new run replaces earlier detections; boxes that came from XMP, or that you drew or
 named, are never touched (and a face that already has one is not boxed a second time), and no sidecar is written. It looks at the photo upright and uncropped with default settings,
 so your edits and crops do not matter. `apply: false` only reports. It finds faces of about 10 pixels and up in a
@@ -248,7 +248,7 @@ suggest names for the ones you have not:
 - **Nothing is ever named for you.** A suggestion is only a label until you confirm it, and a suggestion appears only when
   the match is strong *and* clearly ahead of the next person: it is better to leave a face unnamed than to name it wrongly.
   Naming a face also makes it one of the faces the others are compared with, so the suggestions improve as you go.
-- Faces come from the names other apps wrote into your photos (read from XMP), from Photo ▸ Detect Faces, or both. A face is
+- Faces come from the names other apps wrote into your photos (read from XMP), from Photo ▸ Metadata ▸ Detect Faces, or both. A face is
   aligned using the detector's five landmarks (eyes, nose, mouth corners) when it finds the same face, and cut out by its box
   otherwise.
 - Everything stays on your computer. The embeddings (one short list of numbers per face) are cached in the library folder in

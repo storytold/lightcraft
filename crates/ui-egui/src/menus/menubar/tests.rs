@@ -278,25 +278,11 @@ fn bar_follows_the_registry_and_state() {
 }
 
 #[test]
-fn quit_ends_the_file_menu_after_unlisted_entries() {
-    let app = app();
-    // the File menu has registry entries the layout doesn't list (appended as fallbacks)
-    let listed = LAYOUT.iter().find(|(t, _)| *t == "File").unwrap().1;
-    let unlisted: Vec<String> = crate::menus::menu_entries(&app)
-        .into_iter()
-        .filter(|e| e.menu.first().map(String::as_str) == Some("File") && !listed.contains(&e.id.as_str()) && !HIDDEN.contains(&e.id.as_str()))
-        .map(|e| e.id)
-        .collect();
-    assert!(!unlisted.is_empty(), "no fallback File entries to order");
-    let bar = menu_bar(&app);
+fn quit_ends_the_file_menu_alone_in_its_group() {
+    let bar = menu_bar(&app());
     let file = &bar.iter().find(|(t, _)| t == "File").unwrap().1;
-    // Quit is the last item, alone in its separator group
     assert!(matches!(file.last(), Some(MenuNode::Item { id, .. }) if id == "app.quit"), "{file:?}");
     assert_eq!(file.get(file.len() - 2), Some(&MenuNode::Separator));
-    // every fallback entry is still reachable, before Quit
-    for id in &unlisted {
-        assert!(find(&file[..file.len() - 1], id).is_some(), "{id} missing before Quit");
-    }
 }
 
 #[test]
@@ -772,7 +758,7 @@ fn shortcut_text_per_platform() {
     assert_eq!(shortcut_text("Delete", true), "⌫");
 }
 
-/// Every item of a menu, submenus included.
+/// Every item of a menu, submenus included, in order.
 fn flat(nodes: &[MenuNode]) -> Vec<&MenuNode> {
     nodes
         .iter()
@@ -782,6 +768,126 @@ fn flat(nodes: &[MenuNode]) -> Vec<&MenuNode> {
             MenuNode::Separator => vec![],
         })
         .collect()
+}
+
+/// The app in each view whose menus differ (grid, loupe with a mask, compare).
+fn apps_in_every_view() -> Vec<LightcraftApp> {
+    [ViewMode::PhotoGrid, ViewMode::Detail, ViewMode::Compare]
+        .into_iter()
+        .map(|v| {
+            let mut a = app();
+            a.ui.view = v;
+            a.ui.right = RightPanel::Masking;
+            a
+        })
+        .collect()
+}
+
+/// Given every command that names a menu, Then the layout gives it a place: a slot in its
+/// menu's [`LAYOUT`] row (one-level path), or a submenu that [`LAYOUT`] or [`SUBMENUS`] places
+/// (two-level path). Nothing lands in an unsorted group at the end.
+#[test]
+fn every_menu_command_has_a_place_in_the_layout() {
+    let placed = |e: &crate::menus::MenuEntry| -> bool {
+        let Some(title) = e.menu.first() else { return true };
+        let top = LAYOUT.iter().filter(|(t, _)| t == title).flat_map(|(_, l)| l.iter().copied());
+        match e.menu.get(1) {
+            None => top.clone().any(|s| s == e.id),
+            Some(sub) => {
+                let nested = SUBMENUS.iter().filter(|(t, _, _)| t == title).flat_map(|(_, _, l)| l.iter().copied());
+                top.chain(nested).any(|s| s.strip_prefix('@') == Some(sub.as_str()))
+            }
+        }
+    };
+    let unplaced: Vec<String> = crate::menus::menu_entries(&app())
+        .into_iter()
+        .filter(|e| !HIDDEN.contains(&e.id.as_str()) && !placed(e))
+        .map(|e| format!("{} ({})", e.id, e.menu.join(" ▸ ")))
+        .collect();
+    assert!(unplaced.is_empty(), "commands without a place in LAYOUT: {unplaced:#?}");
+}
+
+/// Given the grid, the loupe or Compare with library photos selected, When a menu is opened,
+/// Then no command shows up twice in it (with the same parameters), under the same label or
+/// another one. The one repeat on purpose: Custom… ends File ▸ Export with Preset with the
+/// Export dialog.
+#[test]
+fn no_menu_offers_the_same_command_twice() {
+    const ON_PURPOSE: &[(&str, &str)] = &[("dialog.export", "Custom…")];
+    for a in apps_in_every_view() {
+        for (title, items) in menu_bar(&a) {
+            let mut seen: Vec<(&str, &Value, &str)> = Vec::new();
+            for n in flat(&items) {
+                let MenuNode::Item { id, params, label, .. } = n else { continue };
+                if ON_PURPOSE.contains(&(id.as_str(), label.as_str())) {
+                    continue;
+                }
+                if let Some((_, _, first)) = seen.iter().find(|(i, p, _)| i == id && *p == params) {
+                    panic!("{title} ({:?}): `{id}` {params} twice, as {first:?} and {label:?}", a.ui.view);
+                }
+                seen.push((id, params, label));
+            }
+        }
+    }
+}
+
+/// Given any view, Then every menu fits a laptop screen without scrolling: at most 40 rows,
+/// a separator counting as half a row (about 45 fit on a 14-inch MacBook's screen).
+#[test]
+fn every_menu_fits_a_laptop_screen() {
+    for a in apps_in_every_view() {
+        for (title, items) in menu_bar(&a) {
+            let seps = items.iter().filter(|n| **n == MenuNode::Separator).count();
+            let rows = items.len() - seps;
+            let height = rows as f32 + seps as f32 / 2.0;
+            assert!(height <= 40.0, "{title} ({:?}): {rows} rows and {seps} separators", a.ui.view);
+        }
+    }
+}
+
+/// Given the loupe, When a mask overlay mode or colour is chosen in View ▸ Mask Overlay, Then
+/// it is the one in use and the only one checked; the cycle items stay for their keys.
+#[test]
+fn mask_overlay_menu_lists_modes_and_colors_with_the_current_one_checked() {
+    use lightcraft_engine::pipeline::MaskView;
+    let mut a = app();
+    a.ui.view = ViewMode::Detail;
+    let mask_menu = |a: &LightcraftApp| -> Vec<MenuNode> {
+        let bar = menu_bar(a);
+        let view = &bar.iter().find(|(t, _)| t == "View").expect("View menu").1;
+        view.iter()
+            .find_map(|n| match n {
+                MenuNode::Submenu { label, children } if label == "Mask Overlay" => Some(children.clone()),
+                _ => None,
+            })
+            .expect("View ▸ Mask Overlay")
+    };
+    let checked_of = |kids: &[MenuNode], id: &str| -> Vec<Value> {
+        kids.iter()
+            .filter_map(|n| match n {
+                MenuNode::Item { id: i, params, checked: Some(true), .. } if i == id => Some(params.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let kids = mask_menu(&a);
+    for id in ["view.maskOverlay", "view.maskOverlayAll", "view.maskPins"] {
+        assert!(find(&kids, id).is_some(), "{id} in Mask Overlay");
+    }
+    let modes = kids.iter().filter(|n| matches!(n, MenuNode::Item { id, params, .. } if id == "view.maskOverlayMode" && !params.is_null())).count();
+    assert_eq!(modes, MaskView::ALL.len());
+    let colors = kids.iter().filter(|n| matches!(n, MenuNode::Item { id, params, .. } if id == "view.maskOverlayColor" && !params.is_null())).count();
+    assert_eq!(colors, crate::panels::masking::OVERLAY_COLORS.len());
+    for id in ["view.maskOverlayMode", "view.maskOverlayColor"] {
+        assert!(kids.iter().any(|n| matches!(n, MenuNode::Item { id: i, params, .. } if i == id && params.is_null())), "the cycle item {id} stays");
+        let catalog_path = super::super::ui_commands::UI_COMMANDS.iter().find(|c| c.0 == id).map(|c| c.3);
+        assert_eq!(catalog_path, Some("View>Mask Overlay"), "the command catalog (ui.menu.list) places {id} where the menu does");
+    }
+    run_item(&mut a, "view.maskOverlayMode", json!({"mode": MaskView::WhiteOnBlack.name()})).unwrap();
+    run_item(&mut a, "view.maskOverlayColor", json!({"color": "#28c846"})).unwrap();
+    let kids = mask_menu(&a);
+    assert_eq!(checked_of(&kids, "view.maskOverlayMode"), vec![json!({"mode": MaskView::WhiteOnBlack.name()})]);
+    assert_eq!(checked_of(&kids, "view.maskOverlayColor"), vec![json!({"color": "#28c846"})]);
 }
 
 /// Given the menu bar, Then an item that turns something on or off is named for the thing,

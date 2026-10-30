@@ -324,6 +324,7 @@
   "Window": "Вікно",
   "Wrote the XMP sidecars that were waiting": "XMP-файли, що очікували, записано",
   "Yellow": "Жовтий",
+  "White": "Білий",
   "Yes": "Так",
   "Zoom": "Масштаб",
   "Zoom In": "Збільшити",
@@ -477,6 +478,7 @@
   "Before/After (Y)": "До/після (Y)",
   "Before/After Settings": "Налаштування до/після",
   "Before/After Split": "Розділення до/після",
+  "Before/After": "До/після",
   "Before/After Split Top/Bottom": "Розділення до/після зверху/знизу",
   "Before/After Top/Bottom": "До/після зверху/знизу",
   "Begin Interaction": "Почати взаємодію",
@@ -617,6 +619,7 @@
   "Culling": "Відбір",
   "Custom template…": "Власний шаблон…",
   "Cycle Crop Overlay": "Перемкнути накладання кадрування",
+  "Crop Overlay": "Накладання кадрування",
   "Cycle Crop Overlay Orientation": "Перемкнути орієнтацію накладання кадрування",
   "Cycle Info Overlay": "Перемкнути накладання інформації",
   "Cycle Mask Overlay Color": "Перемкнути колір накладання маски",
@@ -2354,5 +2357,8 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Loupe Overlay": "Накладання лупи",
+  "View Options…": "Параметри перегляду…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Вигляд → Накладання лупи → Параметри перегляду вибирає рядки, які показують Info 1 та Info 2."
 }

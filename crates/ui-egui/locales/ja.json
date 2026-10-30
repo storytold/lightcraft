@@ -138,6 +138,7 @@
   "Before/After (Y)": "編集前／編集後（Y）",
   "Before/After Settings": "編集前／編集後の設定",
   "Before/After Split": "編集前／編集後の分割表示",
+  "Before/After": "編集前／編集後",
   "Before/After Split Top/Bottom": "編集前／編集後の上下分割表示",
   "Before/After Top/Bottom": "編集前／編集後の上下表示",
   "Begin Interaction": "操作を開始",
@@ -329,6 +330,7 @@
   "Custom template…": "カスタムテンプレート…",
   "Custom…": "カスタム…",
   "Cycle Crop Overlay": "切り抜きの重ね表示を切り替え",
+  "Crop Overlay": "切り抜きの重ね表示",
   "Cycle Crop Overlay Orientation": "切り抜きの重ね表示の向きを切り替え",
   "Cycle Info Overlay": "情報オーバーレイを切り替え",
   "Cycle Mask Overlay Color": "マスクの重ね表示の色を切り替え",
@@ -1513,6 +1515,7 @@
   "XMP sidecars": "XMPサイドカーファイル",
   "Year": "年",
   "Yellow": "イエロー",
+  "White": "ホワイト",
   "Yellow Hue": "イエローの色相",
   "Yellow Luminance": "イエローの輝度",
   "Yellow Saturation": "イエローの彩度",
@@ -2356,5 +2359,9 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Loupe Overlay": "ルーペのオーバーレイ",
+  "View Options…": "表示オプション…",
+  "View Options": "表示オプション",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "表示 → ルーペのオーバーレイ → 表示オプション で、情報1と情報2に表示する行を選びます。"
 }

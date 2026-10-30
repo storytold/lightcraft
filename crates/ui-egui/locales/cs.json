@@ -276,6 +276,7 @@
   "Before/After (Y)": "Před/Po (Y)",
   "Before/After Settings": "Nastavení Před/Po",
   "Before/After Split": "Rozdělené Před/Po",
+  "Before/After": "Před/Po",
   "Before/After Split Top/Bottom": "Rozdělené Před/Po nahoře/dole",
   "Before/After Top/Bottom": "Před/Po nahoře/dole",
   "Begin Interaction": "Zahájit interakci",
@@ -506,6 +507,7 @@
   "Cut": "Vyjmout",
   "Cut pages": "Vyjmout stránky",
   "Cycle Crop Overlay": "Přepnout překrytí ořezu",
+  "Crop Overlay": "Překrytí ořezu",
   "Cycle Crop Overlay Orientation": "Přepnout orientaci překrytí ořezu",
   "Cycle Info Overlay": "Přepnout překrytí informací",
   "Cycle Mask Overlay Color": "Přepnout barvu překrytí masky",
@@ -2055,6 +2057,7 @@
   "XMP sidecars": "Přidružené soubory XMP",
   "Year": "Rok",
   "Yellow": "Žlutá",
+  "White": "Bílá",
   "Yellow Hue": "Odstín žluté",
   "Yellow Luminance": "Jas žluté",
   "Yellow Saturation": "Sytost žluté",
@@ -2408,5 +2411,8 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Loupe Overlay": "Překrytí lupy",
+  "View Options…": "Možnosti zobrazení…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Zobrazení → Překrytí lupy → Možnosti zobrazení určuje, které řádky zobrazují Info 1 a Info 2."
 }

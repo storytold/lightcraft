@@ -80,28 +80,16 @@ pub fn specs() -> Vec<CommandSpec> {
             has_active,
             set_before
         ),
-        cmd!(
-            "beforeAfter.copyAfterToBefore",
-            "Copy After's Settings to Before",
-            ["View", "Before/After Settings"],
-            None,
-            "{}",
-            has_active,
-            |s, _| { set_before(s, &json!({"source": "current"})) }
-        ),
-        cmd!(
-            "beforeAfter.copyBeforeToAfter",
-            "Copy Before's Settings to After",
-            ["View", "Before/After Settings"],
-            None,
-            "{}",
-            has_active,
-            |s, _| { before_to_after(s, false) }
-        ),
-        cmd!("beforeAfter.swap", "Swap Before and After Settings", ["View", "Before/After Settings"], None, "{}", has_active, |s, _| {
+        cmd!("beforeAfter.copyAfterToBefore", "Copy After's Settings to Before", ["View", "Before/After"], None, "{}", has_active, |s, _| {
+            set_before(s, &json!({"source": "current"}))
+        }),
+        cmd!("beforeAfter.copyBeforeToAfter", "Copy Before's Settings to After", ["View", "Before/After"], None, "{}", has_active, |s, _| {
+            before_to_after(s, false)
+        }),
+        cmd!("beforeAfter.swap", "Swap Before and After Settings", ["View", "Before/After"], None, "{}", has_active, |s, _| {
             before_to_after(s, true)
         }),
-        cmd!("beforeAfter.resetBefore", "Reset Before to Import State", ["View", "Before/After Settings"], None, "{}", has_active, |s, _| {
+        cmd!("beforeAfter.resetBefore", "Reset Before to Import State", ["View", "Before/After"], None, "{}", has_active, |s, _| {
             set_before(s, &json!({"source": "import"}))
         }),
     ]

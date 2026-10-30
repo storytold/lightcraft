@@ -537,7 +537,7 @@ pub fn open_download_dialog(app: &mut LightcraftApp, m: &Value) {
     app.ui.dialog = Some(crate::state::Dialog::FaceModel { path: String::new(), info, accepted: false });
 }
 
-/// Photo ▸ Detect Faces without the detector: offer to download it (its terms first), the same as in Settings.
+/// Photo ▸ Metadata ▸ Detect Faces without the detector: offer to download it (its terms first), the same as in Settings.
 pub fn offer_detector(app: &mut LightcraftApp) {
     let list = app.session.execute("faces.models.list", &json!({})).unwrap_or(Value::Null);
     if let Some(m) = list["models"].as_array().and_then(|a| a.iter().find(|m| m["role"] == "detector" && m["installed"] != true)) {

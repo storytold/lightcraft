@@ -62,8 +62,8 @@ BIZ UDPGothic Regular, Noto Sans Thai Regular and Noto Sans Georgian Regular, an
 CJK SC separately. Release packages include each font's licence as OFL-<family>.txt; Windows
 installers include their texts in FONT-LICENCES.txt.
 
-Place names for reverse geocoding (Photo > Fill Location from GPS) are not part of LightCraft and
-are never distributed with it. On the user's request (Photo > Download Place Names) the app
+Place names for reverse geocoding (Photo > Metadata > Fill Location from GPS) are not part of LightCraft and
+are never distributed with it. On the user's request (Photo > Metadata > Download Place Names) the app
 downloads cities15000.zip, admin1CodesASCII.txt and countryInfo.txt from GeoNames
 (https://download.geonames.org/export/dump/) into the settings folder. GeoNames data is licensed
 under Creative Commons Attribution 4.0 (https://creativecommons.org/licenses/by/4.0/);

@@ -451,6 +451,8 @@ fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, vi
 
 /// Overlay colours offered as swatches (the colour of the selected one is used for the tint).
 pub const OVERLAY_COLORS: [[u8; 3]; 5] = [[230, 30, 40], [40, 200, 70], [40, 110, 240], [250, 210, 30], [255, 255, 255]];
+/// The names of [`OVERLAY_COLORS`], in the same order (View ▸ Mask Overlay lists them).
+pub const OVERLAY_COLOR_NAMES: [&str; 5] = ["Red", "Green", "Blue", "Yellow", "White"];
 
 /// How the selected mask is shown: overlay mode, colour, opacity, pins.
 fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {

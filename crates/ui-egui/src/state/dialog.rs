@@ -39,7 +39,7 @@ pub enum Dialog {
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
-    /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
+    /// View ▸ Slideshow ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
         settings: lightcraft_engine::slideshow_export::ExportSettings,
     },
@@ -341,7 +341,7 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
-    /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
+    /// View ▸ Loupe Overlay ▸ View Options… (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
     /// as they are made.
     ViewOptions,
 }

@@ -155,6 +155,7 @@
   "Before/After (Y)": "Vorher/Nachher (Y)",
   "Before/After Settings": "Vorher/Nachher-Einstellungen",
   "Before/After Split": "Vorher/Nachher geteilt",
+  "Before/After": "Vorher/Nachher",
   "Before/After Split Top/Bottom": "Vorher/Nachher geteilt – oben/unten",
   "Before/After Top/Bottom": "Vorher/Nachher – oben/unten",
   "Begin Interaction": "Interaktion beginnen",
@@ -367,6 +368,7 @@
   "Cut": "Ausschneiden",
   "Cut pages": "Seiten ausschneiden",
   "Cycle Crop Overlay": "Zuschnittüberlagerung wechseln",
+  "Crop Overlay": "Zuschnittüberlagerung",
   "Cycle Crop Overlay Orientation": "Ausrichtung der Zuschnittüberlagerung wechseln",
   "Cycle Info Overlay": "Infoüberlagerung wechseln",
   "Cycle Mask Overlay Color": "Farbe der Maskenüberlagerung wechseln",
@@ -1657,6 +1659,7 @@
   "XMP sidecars": "XMP-Begleitdateien",
   "Year": "Jahr",
   "Yellow": "Gelb",
+  "White": "Weiß",
   "Yellow Hue": "Gelb – Farbton",
   "Yellow Luminance": "Gelb – Luminanz",
   "Yellow Saturation": "Gelb – Sättigung",
@@ -3440,5 +3443,7 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "View Options…": "Ansichtsoptionen…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Ansicht → Lupenüberlagerung → Ansichtsoptionen legt fest, welche Zeilen Info 1 und Info 2 zeigen."
 }

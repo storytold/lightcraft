@@ -117,6 +117,7 @@
   "Before/After (Y)": "До/после (Y)",
   "Before/After Settings": "Настройки «до/после»",
   "Before/After Split": "Разделение «до/после»",
+  "Before/After": "До/после",
   "Before/After Split Top/Bottom": "Разделение «до/после» сверху/снизу",
   "Before/After Top/Bottom": "До/после сверху/снизу",
   "Begin Interaction": "Начать взаимодействие",
@@ -293,6 +294,7 @@
   "Cut": "Вырезать",
   "Cut pages": "Вырезать страницы",
   "Cycle Crop Overlay": "Переключить сетку кадрирования",
+  "Crop Overlay": "Сетка кадрирования",
   "Cycle Crop Overlay Orientation": "Переключить ориентацию сетки кадрирования",
   "Cycle Info Overlay": "Переключить информационную накладку",
   "Cycle Mask Overlay Color": "Переключить цвет наложения маски",
@@ -1351,6 +1353,7 @@
   "XMP sidecars": "XMP-файлы",
   "Year": "Год",
   "Yellow": "Жёлтый",
+  "White": "Белый",
   "Yellow Hue": "Тон жёлтого",
   "Yellow Luminance": "Яркость жёлтого",
   "Yellow Saturation": "Насыщенность жёлтого",
@@ -2349,5 +2352,8 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Loupe Overlay": "Накладка лупы",
+  "View Options…": "Параметры вида…",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Вид → Накладка лупы → Параметры вида выбирает строки, которые показывают Info 1 и Info 2."
 }

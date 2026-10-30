@@ -138,6 +138,7 @@
   "Before/After (Y)": "Prima/Dopo (Y)",
   "Before/After Settings": "Impostazioni Prima/Dopo",
   "Before/After Split": "Prima/Dopo diviso",
+  "Before/After": "Prima/Dopo",
   "Before/After Split Top/Bottom": "Prima/Dopo diviso sopra/sotto",
   "Before/After Top/Bottom": "Prima/Dopo sopra/sotto",
   "Begin Interaction": "Inizia interazione",
@@ -341,6 +342,7 @@
   "Cut": "Taglia",
   "Cut pages": "Taglia pagine",
   "Cycle Crop Overlay": "Cambia sovrapposizione del ritaglio",
+  "Crop Overlay": "Sovrapposizione del ritaglio",
   "Cycle Crop Overlay Orientation": "Cambia orientamento della sovrapposizione del ritaglio",
   "Cycle Info Overlay": "Cambia sovrapposizione delle informazioni",
   "Cycle Mask Overlay Color": "Cambia colore della sovrapposizione maschera",
@@ -1616,6 +1618,7 @@
   "XMP sidecars": "File XMP collaterali",
   "Year": "Anno",
   "Yellow": "Giallo",
+  "White": "Bianco",
   "Yellow Hue": "Tonalità giallo",
   "Yellow Luminance": "Luminanza giallo",
   "Yellow Saturation": "Saturazione giallo",
@@ -2342,7 +2345,6 @@
   "Use Defaults": "Usa predefiniti",
   "Show briefly when photo changes": "Mostra brevemente al cambio di foto",
   "Camera & Lens": "Fotocamera e obiettivo",
-  "View → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2.",
   "Before/After Side by Side": "Prima/Dopo affiancati",
   "Clipping": "Tagli tonali",
   "Mask Overlay": "Sovrapposizione maschera",
@@ -2361,5 +2363,7 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Loupe Overlay": "Sovrapposizione lente",
+  "View → Loupe Overlay → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Sovrapposizione lente → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2."
 }
