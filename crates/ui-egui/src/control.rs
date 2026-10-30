@@ -375,6 +375,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Ok(s) => s,
                 Err(e) => return err(e),
             };
+            // and so are the rows of its trees, which a settings file's are read past
+            let trees = match p.get("sidebarTrees").map(crate::tree_state::TreeState::parse).transpose() {
+                Ok(t) => t,
+                Err(e) => return err(format!("ui.set: {e}")),
+            };
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
             lightcraft_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {
@@ -384,6 +389,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     }
                     if let Some(sidebar) = sidebar {
                         u.sidebar = sidebar;
+                    }
+                    // (rows open for the session are not in what was written and read again; a
+                    // list that is given holds as it is given)
+                    match trees {
+                        Some(trees) => {
+                            u.sidebar_trees = trees;
+                            u.sidebar_trees.carry_session_under(&app.ui.sidebar_trees);
+                        }
+                        None => u.sidebar_trees.carry_session(&app.ui.sidebar_trees),
                     }
                     // `collapsedSidebar`, as scripts from before `sidebar` set it: the folded sections
                     if let Some(ids) = p.get("collapsedSidebar").and_then(Value::as_array) {

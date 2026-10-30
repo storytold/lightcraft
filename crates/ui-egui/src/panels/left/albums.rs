@@ -1,6 +1,6 @@
 use super::folders::{folder_menu, is_within};
-use super::rows::{INDENT_STEP, Row, indent_x, set_tree_open, tree_open, tree_toggle};
-use super::{Album, AlbumId, Align2, Icon, LibrarySource, LightcraftApp, Rect, Sense, Tokens, json, pos2, register, vec2};
+use super::rows::{INDENT_STEP, Inside, Row, indent_x, tree_toggle};
+use super::{Album, AlbumId, Align2, Branch, Icon, LibrarySource, LightcraftApp, Rect, Said, Sense, Tokens, json, pos2, register, vec2};
 
 /// Albums: the tree of albums and the folders they are sorted into. `reveal`: an album just made,
 /// whose folders open down to it.
@@ -13,14 +13,22 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
         open_to.push(p);
         cur = cat.album(p).and_then(|a| a.parent);
     }
-    albums_tree(app, ui, &kids, None, 0.0, &open_to);
+    albums_tree(app, ui, &kids, None, 0.0, &open_to, None);
 }
 
 /// The albums inside each folder (`None`: the top level), in the order they are listed.
 type AlbumKids = std::collections::HashMap<Option<AlbumId>, Vec<Album>>;
 
 /// `open_to`: folders forced open this frame (the way down to an album that was just made).
-fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, open_to: &[AlbumId]) {
+fn albums_tree(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    all: &AlbumKids,
+    parent: Option<AlbumId>,
+    indent: f32,
+    open_to: &[AlbumId],
+    above: Option<Said>,
+) {
     // 64 folders deep at most (16 points a level): a catalog that loops must not overflow the stack
     if indent > 64.0 * INDENT_STEP {
         return;
@@ -28,11 +36,11 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
     let Some(kids) = all.get(&parent) else { return };
     for a in kids {
         if a.folder {
-            let open_id = egui::Id::unique(("folder-open", a.id.0));
-            let mut open = tree_open(ui, open_id, true);
+            let branch = Branch::album(a.id.0);
+            let mut open = app.ui.sidebar_trees.is_open_under(&branch, above);
             if open_to.contains(&a.id) && !open {
                 open = true;
-                set_tree_open(ui, open_id, true);
+                app.ui.sidebar_trees.show(&branch, above);
             }
             let resp = Row::new(&format!("folder:{}", a.id.0), Icon::Folder, &a.name).indent(indent).sense(Sense::click_and_drag()).show(app, ui);
             // a folder is no source, so its row folds it too; the triangle is the same click, aimed
@@ -41,24 +49,34 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 app.ui.dragging_album = Some(a.id.0);
             }
             if album_drag_over(app, ui, &resp, a, has_children.then_some(&mut open), indent) {
-                set_tree_open(ui, open_id, true);
+                app.ui.sidebar_trees.show(&branch, above);
             }
             // what this frame draws; a click shows from the next one
             let draw_open = open;
             let mut toggled = false;
             if has_children {
-                let tri = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("albumToggle:{}", a.id.0));
+                let tri = tree_toggle(
+                    ui,
+                    &mut app.ui.sidebar_trees,
+                    &resp,
+                    indent,
+                    &branch,
+                    &mut open,
+                    format!("albumToggle:{}", a.id.0),
+                    Inside::OpensAndFolds,
+                );
                 toggled = tri.clicked();
                 // the triangle sits on the row and takes its clicks: the menu opens from it too
                 folder_menu(app, &tri, a);
             }
             // one click, one toggle: the triangle's is not the row's as well
             if resp.clicked() && !toggled {
-                set_tree_open(ui, open_id, !open);
+                app.ui.sidebar_trees.set(&branch, !open);
             }
             folder_menu(app, &resp, a);
             if draw_open {
-                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
+                let inside = app.ui.sidebar_trees.inside(&branch, above);
+                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to, inside);
             }
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);

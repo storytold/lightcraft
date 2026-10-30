@@ -157,6 +157,23 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### The sidebar's trees open as you left them
+- What you open or fold in the left sidebar stays that way the next time you start LightCraft: folders of albums,
+  folders in Local, years and months in By Date, folders in Folders, and keywords with keywords inside them. Until
+  now every tree started over at each launch (Albums with every folder open, a disk in Folders open down to where
+  the library branches, the rest folded).
+- Nothing changes until you fold or open something: each tree starts as it always has.
+- Rows that open by themselves (the folders above the one you browse, and the rows you hold photos over while
+  dragging) do so in each session, as before, and are not kept. One you had folded, by hand or with the rows above it,
+  and that opened this way stays open. Photo ▸ Show in Folders also opens the folders above the photo's folder, even when you folded one.
+- A folder you folded stays folded when LightCraft starts, or a library opens, on a folder inside it. Choosing
+  another folder inside it opens it, as before.
+- Kept with the app's settings, the same for every library: a folder of albums is remembered by its number, so
+  two libraries can share what one of them left. The 2,000 rows changed last are kept.
+- For scripts: `ui.set` takes `sidebarTrees`, the whole list of up to 2,000 rows such as
+  `[["album:12", false], ["date:2026", true]]` (it replaces the rows that were kept), and says what is wrong with
+  anything else.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
@@ -207,6 +224,21 @@
   `{date:%Y}/{date:%B}` files photos into 2026/January, 2026/February…, the layout many existing libraries already
   use. The names are English in every interface language, so folders don't change when the language does. Rename
   Photos and export file names take them too.
+
+### Open or fold a whole branch of the sidebar
+- Hold Option (Alt on Windows and Linux) and click a row's triangle in the left sidebar to open or fold that row
+  and all the rows inside it, however many: a folder of albums with the folders in it, a folder of the library
+  down to its last folder, a keyword with the keywords inside it, a year with its months. A plain click still
+  opens or folds the one row.
+- What you open or fold inside it afterwards holds for that row. A folder that appears inside it later is as
+  the last Option-click on a row above it left the rest.
+- A folder you choose inside a branch you had folded this way opens the rows above it, and they stay open.
+- In Local, Option-click folds everything inside the folder; opening opens the one folder (opening them all
+  would read every folder inside from the disk).
+- Remembered like any row you open or fold by hand, as one or two entries whatever the size of the branch.
+- For scripts: `ui.clickWidget` takes `alt: true` for this click. In `sidebarTrees`, what was said of the rows
+  inside a row is the row's name after `in:` (`["in:album:12", false]`), and the order of the list counts: a
+  row is as the last entry about it, or about the rows inside a row above it, has it.
 
 ## 2026-10-20
 

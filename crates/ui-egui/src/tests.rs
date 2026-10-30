@@ -77,6 +77,8 @@ mod tallies;
 mod temp_slider;
 mod titlebar;
 mod tool_overlay;
+mod tree_branch;
+mod tree_state;
 mod unsaved;
 mod view_cost;
 mod wb_selector;

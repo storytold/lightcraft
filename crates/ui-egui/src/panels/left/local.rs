@@ -59,7 +59,7 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
     for (i, (name, path)) in local.places.iter().enumerate() {
         let transient = local.browse_root.as_deref() == Some(path.as_str());
         let reveal = local.owner == Some(i);
-        folder_tree(app, ui, path, name, path, 0.0, current, reveal, transient);
+        folder_tree(app, ui, path, name, path, 0.0, current, reveal, transient, None);
     }
     if app.services.pick_folder.is_some() && Row::new("local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…")).show(app, ui).clicked() {
         let picked = app.services.pick_folder.as_mut().and_then(|f| f());
@@ -318,7 +318,7 @@ mod tests {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for index in 0..500 {
                         let path = format!("/lightcraft-test/folder-{index:04}");
-                        super::folder_tree(&mut app, ui, &path, &format!("Folder {index}"), &path, 0.0, None, false, false);
+                        super::folder_tree(&mut app, ui, &path, &format!("Folder {index}"), &path, 0.0, None, false, false, None);
                     }
                 });
             });
@@ -506,7 +506,7 @@ mod tests {
             let raw = HeadlessView::raw_input(egui::vec2(300.0, 200.0), 1.0, frame as f64 / 60.0, vec![]);
             view.run(raw, |ui| {
                 super::Row::new("all", super::Icon::Photos, "All Photos").show(&mut app, ui);
-                super::folder_tree(&mut app, ui, path, "Pictures", path, 0.0, None, false, false);
+                super::folder_tree(&mut app, ui, path, "Pictures", path, 0.0, None, false, false, None);
             });
             widgets = crate::widgets::take_registry(&view.ctx);
         }

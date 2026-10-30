@@ -565,6 +565,7 @@ impl LightcraftApp {
         // then draws with the new visuals. `ui` keeps its own call for a settings change made by
         // a command during the same pass; it is a no-op when the theme already matches.
         self.sync_theme(ctx);
+        panels::left::follow_shown(self, ctx);
         self.logic_background(ctx);
         self.perf.logic_ms = monotonic_ms() - t0;
     }
