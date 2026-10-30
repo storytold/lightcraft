@@ -1110,6 +1110,7 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::LabelNames { names, save_as: String::new() });
             Ok(Value::Null)
         }
+        "dialog.trashFiles" => crate::panels::trash_files::open(app, p),
         "dialog.rename" => {
             let template = p.get("template").and_then(Value::as_str).unwrap_or("{name}").to_string();
             app.ui.dialog = Some(Dialog::Rename { template, start: p.get("start").and_then(Value::as_u64).unwrap_or(1) as u32 });

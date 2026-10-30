@@ -305,5 +305,16 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Move the files of {n} photos to the Trash?": "Chuyển tệp của {n} ảnh vào Thùng rác?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Các ảnh ({n}) nằm trên ổ đĩa không có Thùng rác. Xóa vĩnh viễn tệp của chúng?",
+  "…and {n} more": "…và {n} nữa",
+  "Files erased: {files} (photos out of the library: {photos})": "Tệp đã xóa: {files} (ảnh rời khỏi thư viện: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Tệp đã chuyển vào Thùng rác: {files} (ảnh rời khỏi thư viện: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Đã dừng: số ảnh chưa xử lý tới: {n}, vẫn ở trong thư viện",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Tệp đã chuyển vào Thùng rác: {trashed}, tệp đã xóa: {erased} (ảnh rời khỏi thư viện: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Không thể chuyển và vẫn ở trong thư viện ({n}): {why}",
+  "Photos whose file was already gone: {n}": "Ảnh có tệp đã mất từ trước: {n}",
+  "Sidecars left in place: {n}": "Sidecar để lại tại chỗ: {n}",
+  "Files other photos still use, kept: {n}": "Tệp ảnh khác vẫn đang dùng, được giữ lại: {n}"
 }

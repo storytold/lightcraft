@@ -6,7 +6,7 @@ use super::{
     MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
     SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
     TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, trash_run, updates_ui, widgets,
 };
 
 mod control;
@@ -105,6 +105,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            trash_run: None,
+            trash_erase_later: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
@@ -417,6 +419,12 @@ impl LightcraftApp {
         }
     }
 
+    /// Quitting: file work in the background stops after the file in hand, and what it did is
+    /// kept (the photos whose files moved to the Trash leave the library). Waits at most a minute.
+    pub fn finish_background_file_work(&mut self) {
+        trash_run::settle_for_quit(self, std::time::Duration::from_secs(60));
+    }
+
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         self.toast_for(ctx, text, TOAST_SECONDS);
     }
@@ -431,6 +439,17 @@ impl LightcraftApp {
             Ok(_) => {}
             Err(e) => self.toast(ctx, e),
         }
+    }
+
+    /// A notice from code that has no frame at hand (a dialog's action): shown for `secs` seconds.
+    pub fn say(&mut self, text: impl Into<String>, secs: f64) {
+        let now = self.now();
+        self.ui.toast = Some((text.into(), now + secs, None));
+    }
+
+    /// The interface's clock (seconds), for code that has no frame at hand.
+    pub fn now(&self) -> f64 {
+        self.tick_now()
     }
 
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).

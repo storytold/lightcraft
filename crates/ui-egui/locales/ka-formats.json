@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Move the files of {n} photos to the Trash?": "გადავიტანოთ {n} ფოტოს ფაილები ურნაში?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n} ფოტო ისეთ დისკზეა, რომელსაც ურნა არ აქვს. წავშალოთ მათი ფაილები სამუდამოდ?",
+  "…and {n} more": "…და კიდევ {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "წაშლილი ფაილები: {files} (ბიბლიოთეკიდან ამოღებული ფოტოები: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "ურნაში გადატანილი ფაილები: {files} (ბიბლიოთეკიდან ამოღებული ფოტოები: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "შეწყდა: {n} ფოტომდე რიგი ვერ მივიდა და ბიბლიოთეკაში რჩება",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "ურნაში გადატანილი ფაილები: {trashed}, წაშლილი ფაილები: {erased} (ბიბლიოთეკიდან ამოღებული ფოტოები: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "{n} ვერ გადავიდა და ბიბლიოთეკაში რჩება: {why}",
+  "Photos whose file was already gone: {n}": "ფოტოები, რომელთა ფაილი უკვე აღარ იყო: {n}",
+  "Sidecars left in place: {n}": "ადგილზე დატოვებული თანმხლები ფაილები: {n}",
+  "Files other photos still use, kept: {n}": "ფაილები, რომლებსაც სხვა ფოტოები ჯერ კიდევ იყენებს (შენახულია): {n}"
 }

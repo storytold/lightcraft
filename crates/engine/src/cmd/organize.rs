@@ -111,6 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, name?} → {ids: [new photo ids]} — a new catalog entry sharing the original file, with independent settings; stacked with its original and named `name` or \"Copy N\"",
             has_selection,
             |s, p| {
+                s.refuse_while_trashing("photo.virtualCopy")?;
                 let targets = s.targets(p)?;
                 let name = str_param(p, "name").filter(|n| !n.trim().is_empty()).map(str::to_string);
                 let mut made = Vec::new();

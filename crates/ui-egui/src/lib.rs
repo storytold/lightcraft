@@ -45,6 +45,7 @@ pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod theme;
+pub mod trash_run;
 pub mod widgets;
 pub mod window_place;
 
@@ -304,6 +305,11 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// Move Files to Trash at work in the background.
+    pub trash_run: Option<trash_run::TrashRun>,
+    /// An Erase question a finished Move Files to Trash has to ask (photo ids, library generation),
+    /// waiting for the dialog slot to be free.
+    pub trash_erase_later: Option<(Vec<u64>, u64)>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.

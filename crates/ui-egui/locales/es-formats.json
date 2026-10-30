@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "No se pudo leer {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} añadida{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "¿Dónde debe ir el catálogo de Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})",
+  "Move the files of {n} photos to the Trash?": "¿Mover los archivos de {n} fotos a la papelera?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n} fotos están en un disco sin papelera. ¿Borrar sus archivos definitivamente?",
+  "…and {n} more": "…y {n} más",
+  "Files erased: {files} (photos out of the library: {photos})": "Archivos borrados: {files} (fotos fuera de la biblioteca: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Archivos movidos a la papelera: {files} (fotos fuera de la biblioteca: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Detenido: fotos no alcanzadas, siguen en la biblioteca: {n}",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Archivos movidos a la papelera: {trashed}, archivos borrados: {erased} (fotos fuera de la biblioteca: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Fotos que no se pudieron mover y siguen en la biblioteca ({n}): {why}",
+  "Photos whose file was already gone: {n}": "Fotos cuyo archivo ya no estaba: {n}",
+  "Sidecars left in place: {n}": "Archivos sidecar que se dejaron en su sitio: {n}",
+  "Files other photos still use, kept: {n}": "Archivos que otras fotos aún usan (conservados): {n}"
 }

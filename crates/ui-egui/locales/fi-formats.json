@@ -305,5 +305,16 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Move the files of {n} photos to the Trash?": "Siirretäänkö {n} kuvan tiedostot roskakoriin?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Nämä kuvat ({n}) ovat levyllä, jolla ei ole roskakoria. Poistetaanko niiden tiedostot pysyvästi?",
+  "…and {n} more": "…ja {n} muuta",
+  "Files erased: {files} (photos out of the library: {photos})": "Poistetut tiedostot: {files} (kirjastosta poistuneet kuvat: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Roskakoriin siirretyt tiedostot: {files} (kirjastosta poistuneet kuvat: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Pysäytetty: kuvia ei ehditty käsitellä: {n}, ne jäävät kirjastoon",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Roskakoriin siirretyt tiedostot: {trashed}, poistetut tiedostot: {erased} (kirjastosta poistuneet kuvat: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Ei voitu siirtää, jäävät kirjastoon ({n}): {why}",
+  "Photos whose file was already gone: {n}": "Kuvat, joiden tiedosto oli jo poissa: {n}",
+  "Sidecars left in place: {n}": "Paikoilleen jätetyt sivutiedostot: {n}",
+  "Files other photos still use, kept: {n}": "Säilytetyt tiedostot, joita muut kuvat vielä käyttävät: {n}"
 }

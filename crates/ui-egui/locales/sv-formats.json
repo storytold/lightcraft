@@ -305,5 +305,16 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Move the files of {n} photos to the Trash?": "Flytta filerna för {n} foton till papperskorgen?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Foton ({n}) ligger på en disk utan papperskorg. Radera deras filer permanent?",
+  "…and {n} more": "…och {n} till",
+  "Files erased: {files} (photos out of the library: {photos})": "Raderade filer: {files} (foton borttagna från biblioteket: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Filer flyttade till papperskorgen: {files} (foton borttagna från biblioteket: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Stoppad: foton som inte hann behandlas: {n}, de finns kvar i biblioteket",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Filer flyttade till papperskorgen: {trashed}, raderade filer: {erased} (foton borttagna från biblioteket: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Kunde inte flyttas och finns kvar i biblioteket ({n}): {why}",
+  "Photos whose file was already gone: {n}": "Foton vars fil redan saknades: {n}",
+  "Sidecars left in place: {n}": "Sidofiler som lämnats kvar: {n}",
+  "Files other photos still use, kept: {n}": "Filer som andra foton fortfarande använder, behållna: {n}"
 }

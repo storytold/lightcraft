@@ -172,6 +172,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{template: e.g. `{date}_{name}`, `Trip-{seq:3}` (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each), start?: first sequence number (1), ids?} — renames the files on disk (sidecars too, never overwriting: collisions get -1, -2…); undoable",
             has_selection,
             |s, p| {
+                s.refuse_while_trashing("photo.rename")?;
                 let (ids, template, start) = rename_args(s, p, "photo.rename")?;
                 let plans = s.plan_rename(&ids, &template, start);
                 let n = s.apply_rename(&plans)?;

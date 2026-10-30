@@ -217,6 +217,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             crate::panels::left::move_photos(app, Some(ids), folder).map(|n| json!({"moved": n}))
         }
+        Dialog::TrashFiles(ask) => crate::panels::trash_files::run(app, ask),
         // the catalog found: no file dialog; none: File ▸ Import Lightroom Catalog… asks for it
         Dialog::LightroomCatalog { catalog, .. } => {
             app.run("file.importLightroom", catalog.as_ref().map_or_else(|| json!({}), |c| json!({"path": c})))

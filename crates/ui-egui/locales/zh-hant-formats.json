@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Move the files of {n} photos to the Trash?": "要將 {n} 張照片的檔案移至垃圾桶嗎？",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "有 {n} 張照片位於沒有垃圾桶的磁碟上。要永久清除它們的檔案嗎？",
+  "…and {n} more": "…以及另外 {n} 個",
+  "Files erased: {files} (photos out of the library: {photos})": "已清除的檔案：{files} 個（移出照片庫的照片：{photos} 張）",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "已移至垃圾桶的檔案：{files} 個（移出照片庫的照片：{photos} 張）",
+  "Stopped: photos not reached stay in the library: {n}": "已停止：有 {n} 張照片未處理，仍留在照片庫中",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "已移至垃圾桶的檔案：{trashed} 個，已清除的檔案：{erased} 個（移出照片庫的照片：{photos} 張）",
+  "Photos that could not be moved stay in the library ({n}): {why}": "有 {n} 個無法移動，仍留在照片庫中：{why}",
+  "Photos whose file was already gone: {n}": "檔案已不存在的照片：{n} 張",
+  "Sidecars left in place: {n}": "保留在原處的附屬檔案：{n} 個",
+  "Files other photos still use, kept: {n}": "其他照片仍在使用而保留的檔案：{n} 個"
 }

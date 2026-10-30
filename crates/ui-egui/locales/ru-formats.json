@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Move the files of {n} photos to the Trash?": "Переместить файлы фото ({n}) в корзину?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Фото ({n}) находятся на диске без корзины. Стереть их файлы навсегда?",
+  "…and {n} more": "…и ещё {n}",
+  "Files erased: {files} (photos out of the library: {photos})": "Стёрто файлов: {files} (фото убрано из библиотеки: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Перемещено файлов в корзину: {files} (фото убрано из библиотеки: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Остановлено: до фото ({n}) дело не дошло, они остаются в библиотеке",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Перемещено файлов в корзину: {trashed}, стёрто файлов: {erased} (фото убрано из библиотеки: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Не удалось переместить ({n}), они остаются в библиотеке: {why}",
+  "Photos whose file was already gone: {n}": "Фото, файла которых уже не было: {n}",
+  "Sidecars left in place: {n}": "Оставлено сопроводительных файлов: {n}",
+  "Files other photos still use, kept: {n}": "Файлы, которые используют другие фото (оставлены): {n}"
 }

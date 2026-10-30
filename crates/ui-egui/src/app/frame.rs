@@ -1,6 +1,6 @@
 use super::{
     LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
-    shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    shortcuts, slideshow_export, state, sync, tasks, theme, trash_run, updates_ui, widgets,
 };
 
 impl LightcraftApp {
@@ -60,6 +60,7 @@ impl LightcraftApp {
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
         sync::poll_run(self, ctx);
+        trash_run::poll(self, ctx);
         // Import commits batches and must not run twice in one host frame. The first layout pass
         // and a hidden logic tick both report pass index 0; a second pass reports 1. A wall-clock
         // gate cannot express that (a slow discarded first pass would re-run it).

@@ -273,6 +273,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.showInFolders", "Show in Folders", None, "Photo"),
     ("app.openSamModelFolder", "Show in File Manager", None, ""),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
+    ("dialog.trashFiles", "Move Files to Trash…", None, "Photo"),
     ("dialog.labelNames", "Edit Color Label Names…", None, ""),
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),

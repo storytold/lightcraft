@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Move the files of {n} photos to the Trash?": "Placer les fichiers de {n} photos dans la corbeille ?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n} photos sont sur un disque sans corbeille. Effacer définitivement leurs fichiers ?",
+  "…and {n} more": "…et {n} de plus",
+  "Files erased: {files} (photos out of the library: {photos})": "Fichiers effacés : {files} (photos retirées de la bibliothèque : {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Fichiers placés dans la corbeille : {files} (photos retirées de la bibliothèque : {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Arrêté : photos non atteintes, elles restent dans la bibliothèque : {n}",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Fichiers placés dans la corbeille : {trashed}, fichiers effacés : {erased} (photos retirées de la bibliothèque : {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Photos qui n'ont pas pu être déplacées et restent dans la bibliothèque ({n}) : {why}",
+  "Photos whose file was already gone: {n}": "Photos dont le fichier avait déjà disparu : {n}",
+  "Sidecars left in place: {n}": "Fichiers annexes laissés en place : {n}",
+  "Files other photos still use, kept: {n}": "Fichiers encore utilisés par d'autres photos (conservés) : {n}"
 }

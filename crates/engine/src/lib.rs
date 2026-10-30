@@ -80,6 +80,8 @@ pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
 pub mod text;
+pub mod trash;
+pub mod trash_job;
 mod view;
 pub mod walk;
 
@@ -143,6 +145,17 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// Files to put back from the Trash (undo), or to move there again (redo), once `op` is
+    /// applied: a step of `photo.trashFiles`.
+    pub(crate) trash: Option<trash::TrashStep>,
+}
+
+/// An undo or redo step's label, with what could not be done about its files.
+fn noted(label: String, note: Option<String>) -> String {
+    match note {
+        Some(note) => format!("{label} ({note})"),
+        None => label,
+    }
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -320,6 +333,11 @@ pub struct Session {
     pub media: media::MediaCache,
     /// Current time provider (ISO 8601); injectable for tests and wasm.
     pub clock: Box<dyn Fn() -> String + Send>,
+    /// The Trash `photo.trashFiles` moves files to (the system's; tests use one of their own).
+    pub trash: std::sync::Arc<dyn trash::Bin>,
+    /// Held by a Move Files to Trash at work ([`trash_job::TrashPlan`]): another one, and the
+    /// commands that move files, wait for it ([`Session::refuse_while_trashing`]).
+    pub(crate) trash_busy: Arc<std::sync::atomic::AtomicBool>,
     depth: u32,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
@@ -440,6 +458,15 @@ impl Default for Session {
 }
 
 impl Session {
+    /// Commands that move files or undo a step wait while Move Files to Trash is at work: a path
+    /// it planned must not come to name another photo's file before it is moved or erased.
+    pub(crate) fn refuse_while_trashing(&self, c: &str) -> Result<()> {
+        if self.trash_busy.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(cmd::bad(c, "files are being moved to the Trash: try again when that has finished"));
+        }
+        Ok(())
+    }
+
     pub fn library_generation(&self) -> u64 {
         self.library_generation
     }
@@ -495,12 +522,14 @@ impl Session {
             pending_log: Vec::new(),
             media: media::MediaCache::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
+            trash: std::sync::Arc::new(trash::SystemBin),
             depth: 0,
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             library: None,
             library_identity: Arc::new(()),
+            trash_busy: Arc::default(),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
             last_merge: Default::default(),
@@ -633,7 +662,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            trash: None,
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -746,7 +782,8 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        // (and so do steps that moved files to the Trash: their undo is file work too)
+        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.trash.is_some()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -757,6 +794,7 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            trash: None,
         });
     }
 
@@ -764,6 +802,17 @@ impl Session {
     fn apply_silent(&mut self, op: Op) -> Result<()> {
         self.catalog.apply(op)?;
         Ok(())
+    }
+
+    /// The file work of a `photo.trashFiles` step being undone or redone, once its catalog op is
+    /// applied: files come back from the Trash, or go there again. Returns the step that
+    /// reverses it and what could not be done (the catalog step stands either way: a photo
+    /// whose file did not come back shows as missing).
+    fn trash_step(&self, step: Option<&trash::TrashStep>) -> (Option<trash::TrashStep>, Option<String>) {
+        let Some(step) = step else { return (None, None) };
+        let bin = self.trash.clone();
+        let (back, note) = step.run(bin.as_ref());
+        (Some(back), note)
     }
 
     pub fn undo_step(&mut self) -> Result<String> {
@@ -779,6 +828,7 @@ impl Session {
                 return Err(err);
             }
         };
+        let (trash, note) = self.trash_step(e.trash.as_ref());
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
@@ -787,8 +837,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            trash,
         });
-        Ok(e.label)
+        Ok(noted(e.label, note))
     }
 
     pub fn redo_step(&mut self) -> Result<String> {
@@ -804,6 +855,7 @@ impl Session {
                 return Err(err);
             }
         };
+        let (trash, note) = self.trash_step(e.trash.as_ref());
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
@@ -812,8 +864,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            trash,
         });
-        Ok(e.label)
+        Ok(noted(e.label, note))
     }
 
     /// After an undo or redo that changed one photo (its edit, rating, flag, label, metadata or

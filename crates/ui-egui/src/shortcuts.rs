@@ -38,7 +38,8 @@ pub fn bindable() -> &'static [Bindable] {
         }
         let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.default.and_then(parse)).collect();
         for c in lightcraft_engine::command_specs() {
-            if v.iter().any(|b| b.id == c.id) {
+            // (files go to the Trash only after the question: its dialog is what a key can open)
+            if v.iter().any(|b| b.id == c.id) || c.id == "photo.trashFiles" {
                 continue;
             }
             let default = c.shortcut.filter(|sc| parse(sc).is_some_and(|k| !ui_keys.contains(&k)));

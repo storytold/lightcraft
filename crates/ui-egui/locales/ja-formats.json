@@ -305,5 +305,16 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Move the files of {n} photos to the Trash?": "{n}枚の写真のファイルをゴミ箱に移動しますか？",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "{n}枚の写真はゴミ箱のないディスクにあります。ファイルを完全に消去しますか？",
+  "…and {n} more": "…ほか{n}個",
+  "Files erased: {files} (photos out of the library: {photos})": "消去したファイル: {files}個（ライブラリから除いた写真: {photos}枚）",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "ゴミ箱に移動したファイル: {files}個（ライブラリから除いた写真: {photos}枚）",
+  "Stopped: photos not reached stay in the library: {n}": "停止しました: {n}枚の写真は処理されず、ライブラリに残ります",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "ゴミ箱に移動したファイル: {trashed}個、消去したファイル: {erased}個（ライブラリから除いた写真: {photos}枚）",
+  "Photos that could not be moved stay in the library ({n}): {why}": "{n}個は移動できず、ライブラリに残ります: {why}",
+  "Photos whose file was already gone: {n}": "ファイルがすでになかった写真: {n}枚",
+  "Sidecars left in place: {n}": "そのまま残したサイドカー: {n}個",
+  "Files other photos still use, kept: {n}": "ほかの写真が使っているため残したファイル: {n}個"
 }

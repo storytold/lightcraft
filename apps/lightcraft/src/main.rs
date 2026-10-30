@@ -109,6 +109,9 @@ impl eframe::App for App {
         if let Err(e) = self.1.save(&self.0) {
             log::error!("{e}");
         }
+        // a Move Files to Trash at work stops after the file in hand, and its photos whose files
+        // moved leave the library before it is saved
+        self.0.finish_background_file_work();
         if let Err(e) = self.0.session.close_library() {
             log::error!("saving the library failed: {e}");
         }

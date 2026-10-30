@@ -286,6 +286,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.delete",
             "photo.restore",
             "photo.deletePermanently",
+            "dialog.trashFiles",
         ],
     ),
     (
@@ -367,6 +368,8 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
         "album.removePhotos" => in_normal_album(app) && !selection_deleted(app),
         // only where the trash is on screen
         "library.emptyRecentlyDeleted" => app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted,
+        // (not where there is no Trash to move files to: Windows and the browser)
+        "dialog.trashFiles" => crate::panels::trash_files::available(),
         _ => true,
     }
 }
@@ -982,7 +985,12 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
     let policy = native_command_policy(app, id);
     match policy {
         NativeCommand::Run => {
-            let _ = run_item(app, id, params);
+            // (a refused Move Files to Trash… says why: a run is at work, or too many photos)
+            if let Err(e) = run_item(app, id, params)
+                && id == "dialog.trashFiles"
+            {
+                app.say(e, crate::TOAST_SECONDS);
+            }
         }
         NativeCommand::Blocked => log::debug!("native menu: {id} is blocked while another window owns input"),
         NativeCommand::Quit => {}
@@ -1090,7 +1098,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         // an export that can't start (e.g. no folder), or a backup / restore the host refuses
         // (changes still unsaved, nothing stored in this browser), says why instead of doing nothing
         if let Err(e) = r
-            && matches!(id.as_str(), "app.export" | "app.exportPrevious" | "file.backupLibrary" | "file.restoreLibrary")
+            && matches!(id.as_str(), "app.export" | "app.exportPrevious" | "file.backupLibrary" | "file.restoreLibrary" | "dialog.trashFiles")
         {
             app.toast(ui.ctx(), e);
         }

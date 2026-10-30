@@ -536,8 +536,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.quit_prompt = None;
         if buttons.get(i).is_some_and(|(_, _, choice)| *choice == Choice::QuitAnyway) {
             app.session.activity.cancel_all();
-            // unsaved changes still get their own question
+            // unsaved changes still get their own question. (If that one is cancelled, the app
+            // goes on: a Move Files to Trash stopped by the line above then ends and says so.)
             if may_close(app) {
+                // files moving to the Trash stop after the one in hand, and what moved is kept
+                app.finish_background_file_work();
                 app.ui.quit = true;
             }
         }

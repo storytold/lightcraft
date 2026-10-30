@@ -305,5 +305,16 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Move the files of {n} photos to the Trash?": "Przenieść pliki {n} zdjęć do Kosza?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Zdjęcia ({n}) są na dysku bez Kosza. Usunąć ich pliki na zawsze?",
+  "…and {n} more": "…i {n} więcej",
+  "Files erased: {files} (photos out of the library: {photos})": "Usunięte pliki: {files} (zdjęcia usunięte z biblioteki: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "Pliki przeniesione do Kosza: {files} (zdjęcia usunięte z biblioteki: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Zatrzymano: nie dotarto do zdjęć ({n}), zostają w bibliotece",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "Pliki przeniesione do Kosza: {trashed}, usunięte pliki: {erased} (zdjęcia usunięte z biblioteki: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Nie udało się przenieść ({n}), zostają w bibliotece: {why}",
+  "Photos whose file was already gone: {n}": "Zdjęcia, których plik już nie istniał: {n}",
+  "Sidecars left in place: {n}": "Pliki pomocnicze pozostawione na miejscu: {n}",
+  "Files other photos still use, kept: {n}": "Pliki nadal używane przez inne zdjęcia, zachowane: {n}"
 }

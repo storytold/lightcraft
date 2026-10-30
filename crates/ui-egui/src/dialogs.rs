@@ -99,6 +99,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     });
     let mut close = false;
     let mut confirm = false;
+    // (the Delete question's "Move Files to Trash…": the other question takes this one's place)
+    let mut trash_instead = false;
     // Return presses OK in a dialog without a text field of its own (Lightroom's default button);
     // a widget that has the keyboard focus (a text field, a button or checkbox reached with Tab)
     // takes Return itself. Consumed before the dialog is drawn, so nothing else sees it too.
@@ -177,7 +179,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
             let row_h = ui.spacing().interact_size.y;
             ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                button_row(app, ui, &dlg, &mut close, &mut confirm);
+                button_row(app, ui, &dlg, &mut close, &mut confirm, &mut trash_instead);
             });
             if import {
                 crate::import::note_dialog_bottom(ui);
@@ -212,6 +214,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // (while the shortcuts editor records a key, it takes Esc itself to cancel; an open popup in
     // the dialog, such as a date picker's calendar, takes it to close itself)
     if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
+        close = true;
+    }
+    if trash_instead {
+        app.ui.dialog = None;
+        match crate::panels::trash_files::open(app, &json!({"settle": true})) {
+            Ok(_) => return,
+            Err(e) => app.toast(ctx, e),
+        }
         close = true;
     }
     if !raw_blocked && confirm {
@@ -270,6 +280,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
+        Dialog::TrashFiles(ask) => crate::panels::trash_files::title(ask),
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::SaveEffect { .. } => "New Effect Preset",
@@ -353,6 +364,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::KeywordTag { editing: None, .. } => "Create",
         Dialog::KeywordTag { .. } => "Save",
         Dialog::RemoveFolder { .. } => "Remove",
+        Dialog::TrashFiles(ask) => crate::panels::trash_files::button(ask),
         Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::SynchronizeFolder { .. } if informational => "Close",
@@ -377,7 +389,7 @@ fn sam_ok_label(dlg: &Dialog, sam: &SamState) -> &'static str {
 
 /// Whether the confirm button works: installing waits for the licence to be accepted (and Synchronize waits for the
 /// scan), a rename waits for its conflicts to be settled, smart-album rules that can't mean anything wait to be fixed.
-fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
+fn can_confirm(app: &LightcraftApp, ctx: &egui::Context, dlg: &Dialog, informational: bool) -> bool {
     let rename_blocked = match dlg {
         Dialog::RenamePerson { from, to, merge } => {
             let plan = person_rename_plan(&app.session.catalog, from, to);
@@ -389,19 +401,21 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
         dlg,
         Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
     );
+    // erasing files waits a moment after its question came up
+    let not_armed = matches!(dlg, Dialog::TrashFiles(ask) if !crate::panels::trash_files::armed(app, ctx, ask));
     let bad_rules =
         matches!(dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty());
-    !rename_blocked && (informational || (!waiting && !bad_rules))
+    !rename_blocked && (informational || (!waiting && !not_armed && !bad_rules))
 }
 
 /// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
-fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
+fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool, trash_instead: &mut bool) {
     let informational = is_informational(dlg);
     let sam = SamState::of(app);
     let cancel = cancel_label(dlg, &sam);
     let ok = ok_label(app, dlg, informational, &sam);
     let ok = ok.as_str();
-    let can_confirm = can_confirm(app, dlg, informational);
+    let can_confirm = can_confirm(app, ui.ctx(), dlg, informational);
     let primary = !informational && can_confirm && confirm_style(dlg) == ConfirmStyle::Primary;
     use crate::button::{Button, Kind};
     // (each kind of dialog its own buttons: the keyboard's place doesn't carry from a
@@ -420,12 +434,22 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     if !informational {
         buttons_w += cancel_button.desired_size(ui).x + gap;
     }
+    // Delete's question has a second answer: the files too (which asks its own question)
+    // (not while a run is at work, as the menu items are not: the Delete question would be lost)
+    let trash = matches!(dlg, Dialog::ConfirmDelete { .. }) && crate::menus::ui_enabled(app, "dialog.trashFiles");
+    let trash_button = Button::new("Move Files to Trash…").widget("button:dialogTrashFiles").id_salt(kind);
+    if trash {
+        buttons_w += trash_button.desired_size(ui).x + gap;
+    }
     if !ok.is_empty() {
         buttons_w += ok_button.desired_size(ui).x;
     }
     ui.add_space((ui.available_width() - buttons_w).max(0.0));
     if !informational && cancel_button.show(ui).clicked() {
         *close = true;
+    }
+    if trash && trash_button.show(ui).clicked() {
+        *trash_instead = true;
     }
     let r = (!ok.is_empty()).then(|| ok_button.show(ui));
     if r.is_some_and(|r| r.clicked()) {
@@ -463,6 +487,11 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             ) =>
         {
             app.toast(ctx, e)
+        }
+        // nothing could go to the Trash: say why (the photos and their files are as they were)
+        Err(e) if matches!(dlg, Dialog::TrashFiles(_)) => {
+            app.toast_for(ctx, e, 12.0);
+            closed = true;
         }
         // the SAM 3 dialog stays open to show the download (or why it can't start)
         Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
@@ -1827,6 +1856,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             crate::panels::mask_effects::manage_body(app, ui, search, selected, rename, confirm_delete, new_group)
         }
         Dialog::DeleteEffects { .. } => delete_effects_body(ui, t, dlg),
+        Dialog::TrashFiles(ask) => crate::panels::trash_files::body(app, ui, ask),
         Dialog::ConfirmDelete { count } => {
             let what =
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };

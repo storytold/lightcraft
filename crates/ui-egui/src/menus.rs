@@ -42,6 +42,13 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
+        // (photos of the library, on a system that has a Trash to move files to)
+        // (and not while one is at work or being asked about: a second waits for the first)
+        "dialog.trashFiles" => {
+            crate::panels::trash_files::available()
+                && app.trash_run.is_none()
+                && app.session.selected().iter().any(|id| app.session.catalog.photo(*id).is_some_and(|p| !p.local))
+        }
         "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),

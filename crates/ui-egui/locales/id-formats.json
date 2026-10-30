@@ -305,5 +305,16 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Move the files of {n} photos to the Trash?": "Pindahkan file dari {n} foto ke Tempat Sampah?",
+  "{n} photos are on a disk that has no Trash. Erase their files for good?": "Foto ({n}) berada di disk tanpa Tempat Sampah. Hapus file-nya secara permanen?",
+  "…and {n} more": "…dan {n} lagi",
+  "Files erased: {files} (photos out of the library: {photos})": "File dihapus: {files} (foto keluar dari pustaka: {photos})",
+  "Files moved to the Trash: {files} (photos out of the library: {photos})": "File dipindahkan ke Tempat Sampah: {files} (foto keluar dari pustaka: {photos})",
+  "Stopped: photos not reached stay in the library: {n}": "Dihentikan: foto yang belum dijangkau: {n}, tetap ada di pustaka",
+  "Files moved to the Trash: {trashed}, files erased: {erased} (photos out of the library: {photos})": "File dipindahkan ke Tempat Sampah: {trashed}, file dihapus: {erased} (foto keluar dari pustaka: {photos})",
+  "Photos that could not be moved stay in the library ({n}): {why}": "Tidak dapat dipindahkan dan tetap di pustaka ({n}): {why}",
+  "Photos whose file was already gone: {n}": "Foto yang file-nya sudah tidak ada: {n}",
+  "Sidecars left in place: {n}": "Sidecar yang dibiarkan di tempatnya: {n}",
+  "Files other photos still use, kept: {n}": "File yang masih dipakai foto lain, dipertahankan: {n}"
 }
