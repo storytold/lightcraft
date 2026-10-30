@@ -31,7 +31,7 @@ pub(crate) use body::grid_height;
 #[cfg(test)]
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
-pub(crate) use body::{DIALOG_SIZE, note_dialog_bottom};
+pub(crate) use body::{DIALOG_SIZE, READ_HINT, note_dialog_bottom, read_choices};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
 pub use scan::{ScanTask, browse, open, poll_scan, running};
@@ -77,6 +77,10 @@ pub struct ImportDialog {
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
+    /// What is read from the photos themselves (keywords, ratings and labels, titles and
+    /// captions, location, develop settings): the library's choice when the review opens.
+    #[serde(default)]
+    pub read: lightcraft_engine::import::ReadFromPhotos,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
@@ -241,6 +245,25 @@ mod tests {
         assert_eq!(grid_height(700.0, -50.0, 142.0), 700.0);
         assert_eq!(grid_height(700.0, f32::NAN, 142.0), 700.0);
         assert_eq!(grid_height(f32::INFINITY, 300.0, 142.0), DIALOG_SIZE[1] - DEFAULT_BELOW_GRID);
+    }
+
+    /// The example line previews names "as they will import": a kind the import does not read names nothing.
+    #[test]
+    fn the_example_leaves_out_what_the_import_does_not_read() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let mut info = lightcraft_engine::media::ProbeInfo::default();
+        info.meta.title = "Harbour".into();
+        app.session.import_probes.insert("img0.jpg".into(), info);
+        let mut d = ImportDialog::new(vec![ImportCandidate { path: "img0.jpg".into(), name: "img0.jpg".into(), ..Default::default() }]);
+        d.destination = "Photos".into();
+        d.rename = "{title}".into();
+        let sep = std::path::MAIN_SEPARATOR;
+        // (between "Photos" and the file name come the dated folders)
+        let name_of = |d: &ImportDialog| example_destination(&app, d).unwrap_or_default().rsplit(sep).next().unwrap_or_default().to_string();
+        assert_eq!(name_of(&d), "Harbour.jpg", "read: the title names the file");
+        d.read.descriptions = false;
+        assert_eq!(name_of(&d), "img0.jpg", "not read: the original name stays");
+        assert!(example_destination(&app, &d).is_some_and(|e| e.starts_with(&format!("Photos{sep}"))));
     }
 
     /// Six candidates, all checked; candidate 3 is a duplicate (unchecked, not importable).

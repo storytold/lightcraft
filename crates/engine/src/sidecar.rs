@@ -353,6 +353,19 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+    packet(p, cat, remove_location, Default::default())
+}
+
+/// The packet written into a photo's own sidecar: what the library has of the photo, less the
+/// kinds that were left in the file when it was imported ([`lightcraft_catalog::LeftInFile`]).
+/// Those are the file's: LightCraft says nothing of them there, whatever the photo was given
+/// here since, and with [`rules_for`] the sidecar keeps what it has of them.
+fn own_sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
+    packet(p, cat, false, p.left_in_file)
+}
+
+/// A photo's packet without the kinds in `left`.
+fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, left: lightcraft_catalog::LeftInFile) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
@@ -377,8 +390,19 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         ..Default::default()
     };
     let mut meta = meta;
-    if remove_location {
+    let no_location = remove_location || left.location;
+    if no_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
+    }
+    if left.keywords {
+        meta.keywords.clear();
+    }
+    if left.ratings {
+        (meta.rating, meta.label) = (None, None);
+    }
+    if left.descriptions {
+        (meta.title, meta.caption, meta.alt_text, meta.extended_description, meta.artist) = (None, None, None, None, None);
+        (meta.copyright, meta.copyright_marked, meta.usage_terms, meta.copyright_url) = (None, None, None, None);
     }
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
     let flag = match p.flag {
@@ -386,8 +410,14 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         Flag::Pick => "pick",
         Flag::Reject => "reject",
     };
-    let mut lc = vec![("settings", settings.as_str()), ("flag", flag)];
-    if !remove_location && !p.meta.location.trim().is_empty() {
+    let mut lc = Vec::new();
+    if !left.develop {
+        lc.push(("settings", settings.as_str()));
+    }
+    if !left.ratings {
+        lc.push(("flag", flag));
+    }
+    if !no_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
     lightcraft_meta::write_xmp_lc(&meta, &lc)
@@ -420,6 +450,42 @@ pub const OWNED: &[&str] = &[
 /// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
+
+/// LightCraft's own properties (`lc:*` in [`OWNED`]), each by name.
+const OWN: &[&str] = &["lc:settings", "lc:flag", "lc:location"];
+
+/// The properties of each kind that can be left in a photo's file.
+const KEYWORDS: &[&str] = &["dc:subject"];
+const RATINGS: &[&str] = &["xmp:Rating", "xmp:Label", "lc:flag"];
+const DESCRIPTIONS: &[&str] = &[
+    "dc:title",
+    "dc:description",
+    "dc:rights",
+    "dc:creator",
+    "Iptc4xmpCore:AltTextAccessibility",
+    "Iptc4xmpCore:ExtDescrAccessibility",
+    "xmpRights:Marked",
+    "xmpRights:UsageTerms",
+    "xmpRights:WebStatement",
+];
+const LOCATION: &[&str] = &["Iptc4xmpCore:Location", "photoshop:City", "photoshop:State", "photoshop:Country", "lc:location"];
+const DEVELOP: &[&str] = &["lc:settings"];
+
+/// The properties a sidecar written for a photo replaces ([`OWNED`]), less the ones of the kinds
+/// that were left in the photo's file when it was imported: those are neither replaced nor
+/// removed. ([`own_sidecar_packet`] states none of them, so [`OWNED_IF_STATED`] leaves the
+/// file's GPS alone too.)
+fn rules_for(left: lightcraft_catalog::LeftInFile) -> Vec<&'static str> {
+    // (nothing left in the file: the rules as they always were)
+    if left.is_nothing() {
+        return OWNED.to_vec();
+    }
+    let kinds =
+        [(left.keywords, KEYWORDS), (left.ratings, RATINGS), (left.descriptions, DESCRIPTIONS), (left.location, LOCATION), (left.develop, DEVELOP)];
+    let the_files: Vec<&'static str> = kinds.iter().filter(|(left, _)| *left).flat_map(|(_, props)| props.iter().copied()).collect();
+    // (`lc:*` by name, so that one of them can be the file's)
+    OWNED.iter().copied().filter(|p| *p != "lc:*").chain(OWN.iter().copied()).filter(|p| !the_files.contains(p)).collect()
+}
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -459,7 +525,12 @@ pub struct SidecarSaved {
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+fn sidecar_contents(
+    path: &Path,
+    fresh: String,
+    stamp: &str,
+    left: lightcraft_catalog::LeftInFile,
+) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
@@ -469,7 +540,8 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((fresh, false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    let owned = rules_for(left);
+    let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
     match std::str::from_utf8(&bytes)
         .map_err(|e| e.to_string())
         .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
@@ -815,7 +887,9 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        // (what stayed in the file at import is not written, and stays in its sidecar)
+        let fresh = own_sidecar_packet(p, &self.catalog);
+        let (data, merged, backup) = sidecar_contents(&path, fresh, &(self.clock)(), p.left_in_file).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })

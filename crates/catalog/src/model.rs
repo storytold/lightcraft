@@ -206,6 +206,35 @@ pub struct Meta {
     pub focus: Option<lightcraft_meta::FocusPoint>,
 }
 
+/// The kinds of thing a photo's file (or the sidecar beside it) says about it that were not
+/// read into the library when the photo was imported. They are the file's still: the library
+/// has no account of them, and a sidecar written for the photo must not take them out of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LeftInFile {
+    /// Keywords (and named regions).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub keywords: bool,
+    /// Rating, flag and colour label.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ratings: bool,
+    /// Title, caption, creator, copyright and its terms, the accessibility texts.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub descriptions: bool,
+    /// GPS and the place by name.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub location: bool,
+    /// Develop settings.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub develop: bool,
+}
+
+impl LeftInFile {
+    pub fn is_nothing(&self) -> bool {
+        *self == LeftInFile::default()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Version {
     pub name: String,
@@ -277,6 +306,11 @@ pub struct Photo {
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    /// What of the photo's own was not read when it was imported and so is the file's still
+    /// (see [`LeftInFile`]). Left out of the catalog JSON when it is nothing (most photos), so
+    /// older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "LeftInFile::is_nothing")]
+    pub left_in_file: LeftInFile,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +421,7 @@ impl Photo {
             as_shot_wb: None,
             content_hash: None,
             embedded_lens: None,
+            left_in_file: LeftInFile::default(),
             copy_of: None,
             copy_name: None,
             import_look: None,

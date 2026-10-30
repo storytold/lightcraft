@@ -67,6 +67,191 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// What is read from the photos themselves; a part that is `None` goes by the library's
+    /// own choice ([`ImportDefaults::read`]).
+    pub read: ReadChoice,
+}
+
+/// What of a photo's own an import reads into the library: the things a file, or the sidecar
+/// beside it, says about the photo that a person (or another program) put there. Everything by
+/// default. What the camera recorded (which camera and lens, the exposure, when it was taken,
+/// which way up) is always read: the library can't work without it.
+///
+/// A kind that is not read is left where it is: nothing is taken out of the file or sidecar, at
+/// import or by a sidecar written later (the photo remembers it: `Photo::left_in_file`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ReadFromPhotos {
+    /// Keywords, and the named regions of faces that go with them.
+    pub keywords: bool,
+    /// Star ratings, pick / reject flags and colour labels.
+    pub ratings: bool,
+    /// Title, caption, creator, copyright and its terms, and the accessibility texts.
+    pub descriptions: bool,
+    /// Where it was taken: GPS coordinates, and the place by name (location, city, state, country).
+    pub location: bool,
+    /// Develop settings a sidecar carries (LightCraft's own, or another editor's `crs:` ones).
+    pub develop: bool,
+}
+
+impl Default for ReadFromPhotos {
+    fn default() -> Self {
+        ReadFromPhotos::ALL
+    }
+}
+
+impl ReadFromPhotos {
+    pub const ALL: ReadFromPhotos = ReadFromPhotos { keywords: true, ratings: true, descriptions: true, location: true, develop: true };
+    /// The kinds, by the names commands know them under.
+    pub const KINDS: [&'static str; 5] = ["keywords", "ratings", "descriptions", "location", "develop"];
+
+    pub fn is_all(&self) -> bool {
+        *self == ReadFromPhotos::ALL
+    }
+
+    /// What reading this much leaves in the file.
+    pub fn left(&self) -> lightcraft_catalog::LeftInFile {
+        lightcraft_catalog::LeftInFile {
+            keywords: !self.keywords,
+            ratings: !self.ratings,
+            descriptions: !self.descriptions,
+            location: !self.location,
+            develop: !self.develop,
+        }
+    }
+
+    /// Everything but what was left in a photo's file: what a later look at its sidecar reads.
+    pub fn but(left: lightcraft_catalog::LeftInFile) -> ReadFromPhotos {
+        ReadFromPhotos {
+            keywords: !left.keywords,
+            ratings: !left.ratings,
+            descriptions: !left.descriptions,
+            location: !left.location,
+            develop: !left.develop,
+        }
+    }
+
+    /// What a file said about the photo, less the kinds that are not read.
+    pub fn of_the_file(&self, m: &mut lightcraft_catalog::Meta) {
+        if !self.keywords {
+            m.keywords.clear();
+            m.regions.clear();
+        }
+        if !self.descriptions {
+            for text in [
+                &mut m.title,
+                &mut m.caption,
+                &mut m.alt_text,
+                &mut m.extended_description,
+                &mut m.copyright,
+                &mut m.usage_terms,
+                &mut m.copyright_url,
+                &mut m.creator,
+            ] {
+                text.clear();
+            }
+            m.copyright_status = Default::default();
+        }
+        if !self.location {
+            m.gps = None;
+            for place in [&mut m.location, &mut m.city, &mut m.state, &mut m.country] {
+                place.clear();
+            }
+        }
+    }
+
+    /// What a sidecar said about the photo, less the kinds that are not read.
+    pub(crate) fn of_the_sidecar(&self, mut sc: crate::sidecar::SidecarData) -> crate::sidecar::SidecarData {
+        if !self.keywords {
+            (sc.keywords, sc.regions) = (None, None);
+        }
+        if !self.ratings {
+            (sc.rating, sc.flag, sc.label, sc.label_text) = (None, None, None, None);
+        }
+        if !self.descriptions {
+            (sc.title, sc.caption, sc.alt_text, sc.extended_description) = (None, None, None, None);
+            (sc.copyright, sc.copyright_marked, sc.usage_terms, sc.copyright_url, sc.creator) = (None, None, None, None, None);
+        }
+        if !self.location {
+            (sc.location, sc.city, sc.state, sc.country) = (None, None, None, None);
+        }
+        if !self.develop {
+            sc.develop = None;
+            // (nothing of its develop settings is carried over: there is nothing to warn of)
+            sc.warnings.clear();
+        }
+        sc
+    }
+
+    /// Whether a sidecar says something of a kind that is not read: what an import leaves in it, and so what a Copy
+    /// has to bring along with the photo ([`Self::of_the_sidecar`] leaves it out of the library).
+    pub(crate) fn skipped_in(&self, sc: &crate::sidecar::SidecarData) -> bool {
+        // (of the same sidecar: what it takes out is what is skipped; its warnings go with the develop settings)
+        let mut read = self.of_the_sidecar(sc.clone());
+        read.warnings.clone_from(&sc.warnings);
+        read != *sc
+    }
+}
+
+/// What one import says about what it reads: each kind, or `None` for the library's choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadChoice {
+    pub keywords: Option<bool>,
+    pub ratings: Option<bool>,
+    pub descriptions: Option<bool>,
+    pub location: Option<bool>,
+    pub develop: Option<bool>,
+}
+
+impl ReadChoice {
+    /// Everything, whatever the library says: for an import that brings its own account of the
+    /// photos and needs the files' to go with it (a Lightroom catalog's).
+    pub const ALL: ReadChoice =
+        ReadChoice { keywords: Some(true), ratings: Some(true), descriptions: Some(true), location: Some(true), develop: Some(true) };
+
+    /// The choice as a command gives it: an object of the kinds ([`ReadFromPhotos::KINDS`]),
+    /// each true or false; the ones left out are not chosen.
+    pub fn parse(v: &serde_json::Value) -> std::result::Result<ReadChoice, String> {
+        let kinds = ReadFromPhotos::KINDS.join(", ");
+        let Some(given) = v.as_object() else {
+            return Err(format!("`read` is an object of what to read from the photos ({kinds}), each true or false"));
+        };
+        let mut choice = ReadChoice::default();
+        for (kind, read) in given {
+            let Some(read) = read.as_bool() else { return Err(format!("`read.{kind}` is true or false ({kinds})")) };
+            match kind.as_str() {
+                "keywords" => choice.keywords = Some(read),
+                "ratings" => choice.ratings = Some(read),
+                "descriptions" => choice.descriptions = Some(read),
+                "location" => choice.location = Some(read),
+                "develop" => choice.develop = Some(read),
+                other => return Err(format!("`read` has no `{other}`: it is one of {kinds}")),
+            }
+        }
+        Ok(choice)
+    }
+
+    /// A choice of every kind.
+    pub fn of(read: ReadFromPhotos) -> ReadChoice {
+        ReadChoice {
+            keywords: Some(read.keywords),
+            ratings: Some(read.ratings),
+            descriptions: Some(read.descriptions),
+            location: Some(read.location),
+            develop: Some(read.develop),
+        }
+    }
+
+    /// What is read, the parts not chosen as `otherwise` (the library) has them.
+    pub fn over(&self, otherwise: ReadFromPhotos) -> ReadFromPhotos {
+        ReadFromPhotos {
+            keywords: self.keywords.unwrap_or(otherwise.keywords),
+            ratings: self.ratings.unwrap_or(otherwise.ratings),
+            descriptions: self.descriptions.unwrap_or(otherwise.descriptions),
+            location: self.location.unwrap_or(otherwise.location),
+            develop: self.develop.unwrap_or(otherwise.develop),
+        }
+    }
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the

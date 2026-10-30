@@ -54,7 +54,7 @@ pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
 use scan::{library_files, library_hashes};
 pub use types::{
     Duplicate, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved, OnDeleted,
-    Organize,
+    Organize, ReadChoice, ReadFromPhotos,
 };
 
 #[cfg(test)]

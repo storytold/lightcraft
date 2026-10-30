@@ -2429,5 +2429,11 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "What imports take from the photos themselves and the sidecars beside them. What is not read stays in the files, and LightCraft does not write it back into their sidecars either.": "Vad importer hämtar från själva fotona och från sidofilerna bredvid dem. Det som inte läses stannar kvar i filerna, och LightCraft skriver det inte heller tillbaka till deras sidofiler.",
+  "Read from photos": "Läs från fotona",
+  "Ratings and labels": "Betyg och etiketter",
+  "Develop settings": "Framkallningsinställningar",
+  "Titles and captions": "Titlar och bildtexter",
+  "Read": "Läs"
 }

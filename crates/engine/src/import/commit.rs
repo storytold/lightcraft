@@ -1,4 +1,4 @@
-use super::defaults::apply_import_defaults;
+use super::defaults::apply_import_defaults_beside;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
@@ -26,6 +26,8 @@ pub(super) struct Transfer {
     pub(super) how: How,
     /// Copy as DNG.
     pub(super) dng: bool,
+    /// Copy: the source's sidecar (and whether it is named after the stem) that goes with the copy.
+    pub(super) bring_sidecar: Option<(PathBuf, bool)>,
     /// The folder (lowercase) and [`name_family`]: transfers of one family can take each other's
     /// names, so they never run at the same time.
     pub(super) family: (String, String),
@@ -138,7 +140,7 @@ pub(super) fn run_transfers(
 
 /// Copy or move one planned file (and Copy as DNG); its item.
 fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> PreparedItem {
-    let Transfer { path, mut info, sidecar, dir, how, dng, .. } = t;
+    let Transfer { path, mut info, sidecar, dir, how, dng, bring_sidecar, .. } = t;
     let mut placed = None;
     let mut stored = match how {
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
@@ -167,6 +169,13 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
             Err(e) => log::warn!("import {path}: copy as DNG: {e}"),
         }
     }
+    // what this import leaves unread is in the source's sidecar: it goes with the copy, which is nothing without it
+    if let Some((sc, stem)) = &bring_sidecar
+        && let Err(e) = crate::import_move::copy_sidecar_beside(sc, *stem, Path::new(&stored))
+    {
+        let _ = std::fs::remove_file(&stored);
+        return PreparedItem::Failed(path, e);
+    }
     PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed }))
 }
 
@@ -185,6 +194,8 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
 /// taken back.
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
     let now = now.to_string();
+    // what is read from the photos themselves: this import's choice, else the library's
+    let read = opts.read.over(s.import_defaults.read);
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
@@ -249,7 +260,16 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                         purge.push(*old);
                     }
                 }
-                let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
+                // the photo's own copyright and creator, read or not: the library's defaults are
+                // for photos that have none
+                let stated = |file: &str, sidecar: Option<&String>| !file.trim().is_empty() || sidecar.is_some_and(|s| !s.trim().is_empty());
+                let own = (
+                    stated(&info.meta.copyright, sidecar.as_ref().and_then(|sc| sc.copyright.as_ref())),
+                    stated(&info.meta.creator, sidecar.as_ref().and_then(|sc| sc.creator.as_ref())),
+                );
+                // (only the kinds this import reads: the others stay in the file and its sidecar)
+                let sidecar =
+                    sidecar.map(|sc| read.of_the_sidecar(sc).resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
@@ -257,11 +277,14 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.file_size = info.file_size;
                 p.captured = info.captured;
                 p.meta = info.meta;
+                read.of_the_file(&mut p.meta);
+                // (what was not read is the file's still: a sidecar written later leaves it there)
+                p.left_in_file = read.left();
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
-                apply_import_defaults(s, &mut p);
+                apply_import_defaults_beside(s, &mut p, own);
                 if let Some(sc) = &sidecar {
                     crate::sidecar::merge_into(&mut p, sc, &now);
                     report.sidecars += 1;

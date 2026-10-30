@@ -1,4 +1,4 @@
-use super::{Deserialize, Photo, Serialize, Session};
+use super::{Deserialize, Photo, ReadFromPhotos, Serialize, Session};
 
 /// The develop settings a photo gets on import: raws start from their as-shot white balance with
 /// default sharpening / colour noise reduction, and file-embedded lens corrections on (as the
@@ -41,6 +41,10 @@ pub struct ImportDefaults {
     pub auto_album: Option<String>,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
+    /// What imports read from the photos themselves, unless one says otherwise (everything,
+    /// until chosen): also photos that are dropped in, found by Auto Import or Synchronize
+    /// Folder, or browsed in place.
+    pub read: ReadFromPhotos,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -70,12 +74,19 @@ impl ImportDefaults {
 /// Give a freshly imported photo its default settings: the camera defaults, then the matching
 /// default preset ([`ImportDefaults::preset_for`]), remembered as the photo's import look.
 pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
-    // metadata defaults fill gaps only: the file's own copyright / creator win
+    apply_import_defaults_beside(s, p, (false, false));
+}
+
+/// [`apply_import_defaults`] for a photo whose file has a copyright / a creator of its own
+/// that was not read (`own`): it is not given the library's in its place.
+pub(super) fn apply_import_defaults_beside(s: &Session, p: &mut Photo, own: (bool, bool)) {
+    // metadata defaults fill gaps only: the file's own copyright / creator win, also when they
+    // were left in the file
     let d = &s.import_defaults;
-    if p.meta.copyright.trim().is_empty() && !d.copyright.trim().is_empty() {
+    if p.meta.copyright.trim().is_empty() && !d.copyright.trim().is_empty() && !own.0 {
         p.meta.copyright = d.copyright.trim().to_string();
     }
-    if p.meta.creator.trim().is_empty() && !d.creator.trim().is_empty() {
+    if p.meta.creator.trim().is_empty() && !d.creator.trim().is_empty() && !own.1 {
         p.meta.creator = d.creator.trim().to_string();
     }
     if let Some(mp) = d.metadata_preset.as_ref().and_then(|n| s.metadata_presets.iter().find(|m| m.name.eq_ignore_ascii_case(n))) {

@@ -52,6 +52,10 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = i.get("creator").and_then(Value::as_str) {
             d.creator = v.trim().to_string();
         }
+        // (the kinds that are named: the others stay as they are)
+        if let Some(read) = i.get("read").filter(|r| !r.is_null()) {
+            d.read = crate::import::ReadChoice::parse(read).map_err(|e| bad(ID, e))?.over(d.read);
+        }
         match i.get("metadataPreset") {
             Some(Value::String(n)) if n.is_empty() || n == "none" => d.metadata_preset = None,
             Some(Value::String(n)) => {
@@ -110,7 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Library Preferences",
         [],
         None,
-        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), showOnCard?: bool (open the import review when a camera or card is connected)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
+        "{import?: {read?: {keywords?, ratings?, descriptions?, location?, develop?: bool} (what imports read from the photos themselves unless one says otherwise, see `library.import`; the kinds named change, the others stay; a Lightroom catalog import and Read Metadata from File always read everything; the library's default creator and copyright are not given to a photo whose own were left in the file), rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), showOnCard?: bool (open the import review when a camera or card is connected)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
         always,
         prefs
     )]

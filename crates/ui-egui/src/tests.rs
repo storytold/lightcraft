@@ -31,6 +31,7 @@ mod grading;
 mod grid;
 mod guided_guides;
 mod histogram_drag;
+mod import_read;
 mod info_dialogs;
 mod keymap;
 mod keyword_files;
