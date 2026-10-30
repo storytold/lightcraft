@@ -382,12 +382,23 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let total_h = lay.height + 12.0;
     let active = app.session.selection.active;
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
-    // comes back on screen; otherwise the scroll position is the user's
-    let scroll_to: Option<Rect> = if follow_active(ui.ctx(), egui::Id::unique("grid-follow-active"), active, app.session.source) {
-        active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied())
-    } else {
-        None
+    // comes back on screen; a new order (sort, reshuffle, grouping) keeps it in view if it was, else
+    // starts at the top; otherwise the scroll position is the user's
+    let seen_key = egui::Id::unique("grid-active-seen");
+    let (was_seen, settle_until) = ui.ctx().data(|d| d.get_temp::<(bool, f64)>(seen_key)).unwrap_or((false, 0.0));
+    let was_in_view = was_seen || ui.ctx().input(|i| i.time) < settle_until;
+    let follow = follow_active(ui.ctx(), egui::Id::unique("grid-follow-active"), Seen::grid(app));
+    let active_cell = match follow {
+        Follow::Stay => None,
+        Follow::Active | Follow::NewOrder => active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied()),
     };
+    let scroll_to: Option<Rect> = match follow {
+        Follow::Active => active_cell,
+        Follow::NewOrder if was_in_view => active_cell,
+        Follow::NewOrder | Follow::Stay => None,
+    };
+    let to_top = follow == Follow::NewOrder && scroll_to.is_none();
+    let mut active_seen = false;
     let mut visible_ids = HashSet::new();
     let mut visited = 0u64;
     // a wheel notch scrolls a third of the grid's height
@@ -403,6 +414,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.grid_scroll = Some(viewport.top());
         if let Some(r) = scroll_to {
             ui.scroll_to_rect(r.translate(origin.to_vec2()), None);
+        } else if to_top {
+            ui.scroll_to_rect(Rect::from_min_size(origin, vec2(1.0, 1.0)), Some(egui::Align::Min));
         }
         // only the rows on screen and a screen above and below it (their thumbnails are prefetched)
         let prefetch = viewport.expand2(vec2(0.0, viewport.height()));
@@ -416,6 +429,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 visible_ids.insert(id);
                 let r = rect.translate(origin.to_vec2());
                 let onscreen = rect.intersects(viewport);
+                active_seen |= onscreen && Some(id) == active;
                 cell(app, ui, id, r, square, onscreen, ppp);
                 if let Some((sid, pos)) = stacks.get(&id) {
                     stack_badge(app, ui, id, *sid, *pos, r, square);
@@ -446,37 +460,114 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             group_header(app, ui, run, &ids, hr, true);
         }
     });
+    // remembered for a new order next pass: the active photo is on screen, or a scroll to it was just asked
+    // for and may still be gliding (`SCROLL_SETTLE`)
+    let now = ui.ctx().input(|i| i.time);
+    let settled = if scroll_to.is_some() {
+        (true, now + SCROLL_SETTLE)
+    } else if to_top {
+        (false, 0.0)
+    } else {
+        (active_seen || now < settle_until, settle_until)
+    };
+    ui.ctx().data_mut(|d| d.insert_temp(seen_key, settled));
     app.caches.grid_stats.cells_visited += visited;
     app.renderer.evict_thumbs(&visible_ids, 600);
     let _ = (Color32::BLACK, StrokeKind::Inside, Stroke::NONE);
 }
 
+/// How long a scroll to the active photo may glide (egui's scroll animation lasts a fraction of a second):
+/// until then the photo counts as being on screen for the next new order.
+const SCROLL_SETTLE: f64 = 0.5;
+
+/// What a scrolling photo strip (the grid, the filmstrip) showed last pass, to tell what changed.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Seen {
+    pub active: Option<PhotoId>,
+    pub source: lightcraft_engine::LibrarySource,
+    /// Which order the photos were in (key, direction, shuffle seed): see [`arrangement`].
+    pub order: (SortKey, bool, u64),
+    /// The date grouping chosen, and what it comes to at the thumbnail size (`Auto` is days, months or years).
+    pub group: GroupBy,
+    pub shown: GroupBy,
+}
+
+impl Seen {
+    /// What the grid shows: the order and the date headers that lay it out.
+    pub(crate) fn grid(app: &LightcraftApp) -> Self {
+        let (order, group) = arrangement(&app.session.sort, app.session.source, true);
+        Seen { active: app.session.selection.active, source: app.session.source, order, group, shown: resolve_group(group, app.ui.thumb_size) }
+    }
+
+    /// What the filmstrip shows: the order (it has no date headers).
+    pub(crate) fn strip(app: &LightcraftApp) -> Self {
+        let (order, group) = arrangement(&app.session.sort, app.session.source, false);
+        Seen { active: app.session.selection.active, source: app.session.source, order, group, shown: group }
+    }
+}
+
+/// What the person chose that moves the photos in this source: the key, the direction and (only for a
+/// shuffle) its seed; and, in the grid, the date grouping of a source that shows date headers (a date
+/// key, Recently Added; not Recently Deleted), which moves photos around the layout though not in the
+/// order. Recently Added is always newest import first, so its sort does not matter. A seed or grouping
+/// the view ignores changes nothing the person can see. (`Auto` is compared as `Auto`, not as the day,
+/// month or year it comes to at this thumbnail size, so dragging the size slider never counts.)
+fn arrangement(sort: &lightcraft_catalog::Sort, source: lightcraft_engine::LibrarySource, grid: bool) -> ((SortKey, bool, u64), GroupBy) {
+    use lightcraft_engine::LibrarySource;
+    let order = match source {
+        LibrarySource::RecentlyAdded => (SortKey::ImportDate, false, 0),
+        _ => (sort.key, sort.ascending, if sort.key == SortKey::Random { sort.seed } else { 0 }),
+    };
+    let dated = match source {
+        LibrarySource::RecentlyDeleted => false,
+        LibrarySource::RecentlyAdded => true,
+        _ => matches!(sort.key, SortKey::CaptureDate | SortKey::ImportDate | SortKey::EditDate),
+    };
+    (order, if grid && dated { sort.group } else { GroupBy::Auto })
+}
+
+/// What a scrolling photo strip does on this pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Follow {
+    /// The scroll position is the user's.
+    Stay,
+    /// Bring the active photo into view.
+    Active,
+    /// The person asked for another arrangement (a sort, a reshuffle, a date grouping) and nothing
+    /// else changed: the photos moved, so the active photo is brought into view if it was on screen
+    /// before, else the strip starts over at its beginning.
+    NewOrder,
+}
+
 /// Should a scrolling photo strip (`key`: the grid, the filmstrip) bring the active photo into
 /// view on this pass? Yes when the active photo changed since the strip was last drawn, or when
-/// the strip was not drawn on the previous pass (view switch, panel shown again). Otherwise the
-/// scroll position is the user's: time passing, finished renders, edits to the photo or a released
-/// scroll bar never move it (issue #11).
-pub(crate) fn follow_active(ctx: &egui::Context, key: egui::Id, active: Option<PhotoId>, source: lightcraft_engine::LibrarySource) -> bool {
+/// the strip was not drawn on the previous pass (view switch, panel shown again), or when the
+/// person asked for another arrangement (sort key, direction, shuffle or date grouping). Otherwise the scroll position
+/// is the user's: time passing, finished renders, edits to the photo (even one that moves it in
+/// the order, a rating under a rating sort) or a released scroll bar never move it (issue #11).
+pub(crate) fn follow_active(ctx: &egui::Context, key: egui::Id, now: Seen) -> Follow {
     let pass = ctx.cumulative_pass_nr();
-    let last: Option<(Option<PhotoId>, lightcraft_engine::LibrarySource, u64)> = ctx.data(|d| d.get_temp(key));
-    ctx.data_mut(|d| d.insert_temp(key, (active, source, pass)));
+    let last: Option<(Seen, u64)> = ctx.data(|d| d.get_temp(key));
+    ctx.data_mut(|d| d.insert_temp(key, (now, pass)));
     match last {
-        Some((was, where_, drawn)) => follow_changed(was, where_, drawn, active, source, pass),
-        None => true,
+        Some((was, drawn)) => follow_changed(was, drawn, now, pass),
+        None => Follow::Active,
     }
 }
 
 /// Scroll when the active photo changes, the strip was not drawn last pass, or the same photo
-/// sits in a different library source (another album) (#1142).
-pub(crate) fn follow_changed(
-    was: Option<PhotoId>,
-    where_was: lightcraft_engine::LibrarySource,
-    drawn: u64,
-    active: Option<PhotoId>,
-    source: lightcraft_engine::LibrarySource,
-    pass: u64,
-) -> bool {
-    was != active || where_was != source || drawn + 1 < pass
+/// sits in a different library source (another album) (#1142); a new order alone is [`Follow::NewOrder`].
+pub(crate) fn follow_changed(was: Seen, drawn: u64, now: Seen, pass: u64) -> Follow {
+    // another grouping counts when the choice changed and what it comes to at this size did too
+    // (`Day` picked while `Auto` already shows days lays out nothing again)
+    let regrouped = was.group != now.group && was.shown != now.shown;
+    if was.active != now.active || was.source != now.source || drawn + 1 < pass {
+        Follow::Active
+    } else if was.order != now.order || regrouped {
+        Follow::NewOrder
+    } else {
+        Follow::Stay
+    }
 }
 
 /// How far a mouse wheel scrolls a photo strip this frame (`key`: the grid, the filmstrip; `area`: its
@@ -1532,8 +1623,48 @@ mod tests {
         let id = PhotoId(3);
         let all = lightcraft_engine::LibrarySource::All;
         let album = lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(9));
-        assert!(!follow_changed(Some(id), all, 4, Some(id), all, 5));
-        assert!(follow_changed(Some(id), all, 4, Some(id), album, 5));
+        let seen = |source| Seen { active: Some(id), source, order: (SortKey::CaptureDate, false, 0), group: GroupBy::Auto, shown: GroupBy::Day };
+        assert_eq!(follow_changed(seen(all), 4, seen(all), 5), Follow::Stay);
+        assert_eq!(follow_changed(seen(all), 4, seen(album), 5), Follow::Active);
+    }
+
+    #[test]
+    fn only_a_new_arrangement_is_a_new_order() {
+        use lightcraft_catalog::{GroupBy, Sort};
+        use lightcraft_engine::LibrarySource;
+        let at = |sort: Sort, source: LibrarySource, grid: bool| {
+            let (order, group) = arrangement(&sort, source, grid);
+            // 220 points is the default thumbnail size: `Auto` comes to days there
+            Seen { active: None, source, order, group, shown: if grid { resolve_group(group, 220.0) } else { group } }
+        };
+        let all = LibrarySource::All;
+        let sort = Sort::default();
+        let flipped = Sort { ascending: !sort.ascending, ..sort };
+        let regrouped = Sort { group: GroupBy::None, ..sort };
+        let named = Sort { key: SortKey::FileName, ..sort };
+        let named_regrouped = Sort { group: GroupBy::None, ..named };
+        let seeded = Sort { seed: 9, ..sort };
+        let new_order = |a: Seen, b: Seen| follow_changed(a, 4, b, 5);
+        assert_eq!(new_order(at(sort, all, true), at(flipped, all, true)), Follow::NewOrder);
+        assert_eq!(new_order(at(sort, all, true), at(regrouped, all, true)), Follow::NewOrder, "another grouping lays the photos out again");
+        let days = Sort { group: GroupBy::Day, ..sort };
+        assert_eq!(new_order(at(sort, all, true), at(days, all, true)), Follow::Stay, "Day while Auto already shows days changes nothing");
+        assert_eq!(new_order(at(days, all, true), at(sort, all, true)), Follow::Stay, "and back");
+        assert_eq!(new_order(at(sort, all, true), at(Sort { group: GroupBy::Month, ..sort }, all, true)), Follow::NewOrder);
+        assert_eq!(new_order(at(sort, all, false), at(regrouped, all, false)), Follow::Stay, "the filmstrip has no date headers");
+        assert_eq!(new_order(at(named, all, true), at(named_regrouped, all, true)), Follow::Stay, "a name sort has no date headers");
+        assert_eq!(new_order(at(sort, all, true), at(seeded, all, true)), Follow::Stay, "only a shuffle has a seed");
+        let shuffle = Sort { key: SortKey::Random, ..sort };
+        assert_eq!(new_order(at(shuffle, all, true), at(Sort { seed: 9, ..shuffle }, all, true)), Follow::NewOrder);
+        // Recently Added is always newest import first, grouped by import day: only the grouping counts
+        let added = LibrarySource::RecentlyAdded;
+        assert_eq!(new_order(at(sort, added, true), at(flipped, added, true)), Follow::Stay);
+        assert_eq!(new_order(at(sort, added, true), at(Sort { key: SortKey::Random, seed: 3, ..sort }, added, true)), Follow::Stay);
+        assert_eq!(new_order(at(named, added, true), at(named_regrouped, added, true)), Follow::NewOrder);
+        // Recently Deleted has no date headers
+        let deleted = LibrarySource::RecentlyDeleted;
+        assert_eq!(new_order(at(sort, deleted, true), at(regrouped, deleted, true)), Follow::Stay);
+        assert_eq!(new_order(at(sort, deleted, true), at(flipped, deleted, true)), Follow::NewOrder);
     }
 
     #[test]

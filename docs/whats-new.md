@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### A new sort order or a reshuffle keeps your place
+- Choosing another sort, flipping its direction, pressing Reshuffle or changing the date grouping no longer leaves the
+  grid scrolled to where the photos used to be. If the active photo was on screen, the grid scrolls to wherever it
+  landed (the filmstrip follows it too); if you had scrolled away from it, the grid starts at the top of the new
+  arrangement. Rating or editing a photo under a sort it affects still never moves the scroll position.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
