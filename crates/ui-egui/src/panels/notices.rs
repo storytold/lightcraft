@@ -64,7 +64,14 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         return true;
     }
     // before the library is touched: a Cancel here keeps working with it
-    let running = app.session.activity.running_cancellable();
+    let mut running = app.session.activity.running_cancellable();
+    // photos on their way to another folder can't be stopped, but quitting cuts the move short
+    if app.move_run.is_some()
+        && !app.quit_cuts_move
+        && let Some(task) = app.session.activity.list().into_iter().find(|t| t.kind == "move")
+    {
+        running.push(task);
+    }
     if !running.is_empty() {
         let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
         app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(running.len(), &names)));
@@ -536,10 +543,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.quit_prompt = None;
         if buttons.get(i).is_some_and(|(_, _, choice)| *choice == Choice::QuitAnyway) {
             app.session.activity.cancel_all();
+            // a move can't be stopped, so choosing to quit is what lets it be cut short
+            app.quit_cuts_move = true;
             // unsaved changes still get their own question
             if may_close(app) {
                 app.ui.quit = true;
             }
+        } else {
+            app.quit_cuts_move = false;
         }
         return;
     }
@@ -570,7 +581,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.quit_confirmed = true;
                 app.ui.quit = true;
             }
-            Some(Choice::Cancel | Choice::Ok) | None => app.quit_prompt = None,
+            Some(Choice::Cancel | Choice::Ok) | None => {
+                app.quit_prompt = None;
+                app.quit_cuts_move = false;
+            }
         }
         return;
     }

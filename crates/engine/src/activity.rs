@@ -72,8 +72,8 @@ impl Unit {
 #[serde(rename_all = "camelCase")]
 pub struct TaskInfo {
     pub id: u64,
-    /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `lightroom`, `merge`, `download`,
-    /// `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
+    /// A stable id: `import`, `export`, `scan`, `sync`, `move`, `previews`, `smartPreviews`, `lightroom`, `merge`,
+    /// `download`, `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
     pub kind: &'static str,
     /// English; the frontend translates it.
     pub label: String,

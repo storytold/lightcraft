@@ -1191,6 +1191,8 @@
   "Moves every photo imported from this disk to Recently Deleted; no file is touched": "Siirtää kaikki tältä levyltä tuodut kuvat Äskettäin poistettuihin; tiedostoihin ei kosketa",
   "Moves the files and their XMP sidecars into this folder; never overwrites": "Siirtää tiedostot ja niiden XMP-sivutiedostot tähän kansioon; ei koskaan korvaa mitään",
   "Moves the photos imported from this folder to Recently Deleted; no file is touched": "Siirtää tästä kansiosta tuodut kuvat Äskettäin poistettuihin; tiedostoihin ei kosketa",
+  "Moving photos": "Kuvia siirretään",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "Virhe pysäytti siirron (katso loki). Kirjasto seuraa jo siirrettyjä tiedostoja; XMP-sivutiedosto on voinut jäädä vanhaan paikkaan.",
   "Multi": "Useita",
   "Muted": "Hillitty",
   "Muted Film": "Hillitty filmi",

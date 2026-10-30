@@ -2332,6 +2332,8 @@
   "Image on Black": "Immagine su nero",
   "Image on White": "Immagine su bianco",
   "White on Black": "Bianco su nero",
+  "Moving photos": "Spostamento delle foto",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "Un errore ha interrotto lo spostamento (vedi il registro). La libreria segue i file già spostati; un file sidecar XMP potrebbe essere rimasto nella posizione precedente.",
   "View Options…": "Opzioni di visualizzazione…",
   "View Options": "Opzioni di visualizzazione",
   "Loupe View": "Vista lente",

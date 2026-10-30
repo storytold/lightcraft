@@ -23,6 +23,7 @@ pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+pub mod move_task;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -164,6 +165,8 @@ pub struct LightcraftApp {
     pub(crate) notice_input: panels::notices::PromptInput,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// Quit Anyway was chosen while photos were moving: the move (which has no ✕) is cut short.
+    pub quit_cuts_move: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).
@@ -295,6 +298,10 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// Photos being moved to another folder in the background (`move_task`).
+    pub move_run: Option<move_task::MoveRun>,
+    /// How the last background move ended (`ui.inspect` → `move.last`).
+    pub last_move: Option<Value>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.

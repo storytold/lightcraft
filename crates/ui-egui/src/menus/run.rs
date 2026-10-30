@@ -168,6 +168,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,
     // and a toast set by it was long over by the app's clock: it never showed)
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    if id == "photo.moveToFolder" && p.get("background").and_then(Value::as_bool) == Some(true) {
+        // the files move on a worker thread; `ui.inspect` → `move` says how it ended
+        return Some(crate::move_task::start(app, &ctx, p));
+    }
     const PARTS: [fn(&mut LightcraftApp, &egui::Context, &str, &Value) -> Option<Result<Value, String>>; 12] = [
         ui_commands_1,
         ui_commands_2,

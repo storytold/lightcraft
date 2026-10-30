@@ -2356,5 +2356,7 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Moving photos": "写真を移動中",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "エラーのため移動が停止しました（ログを参照）。ライブラリは移動済みのファイルに追従します。XMPサイドカーが元の場所に残っている場合があります。"
 }

@@ -38,12 +38,12 @@ mod plan;
 mod sidecar;
 mod tokens;
 
-pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
-use fs::{folded_path, same_contents};
-pub(crate) use moves::move_all;
+use fs::same_contents;
+pub(crate) use fs::{MoveFs, RealFs, folded_path};
 #[cfg(test)]
 pub(crate) use moves::move_file_with;
+pub(crate) use moves::{BatchMoveError, move_all, move_all_with};
 pub use moves::{MoveError, move_file};
 pub use plan::{plan_rename_photos, rename_photos};
 #[cfg(test)]

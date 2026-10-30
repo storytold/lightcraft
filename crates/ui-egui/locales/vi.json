@@ -1097,6 +1097,8 @@
   "Moves every photo imported from this disk to Recently Deleted; no file is touched": "Chuyển mọi ảnh nhập từ đĩa này sang Đã xóa gần đây; không đụng tệp",
   "Moves the files and their XMP sidecars into this folder; never overwrites": "Chuyển tệp và sidecar XMP vào thư mục này; không bao giờ ghi đè",
   "Moves the photos imported from this folder to Recently Deleted; no file is touched": "Chuyển ảnh nhập từ thư mục này sang Đã xóa gần đây; không đụng tệp",
+  "Moving photos": "Đang di chuyển ảnh",
+  "Moving was stopped by an error (see the log). The library follows the files that had moved; an XMP sidecar may have stayed at the old place.": "Việc di chuyển bị dừng do lỗi (xem nhật ký). Thư viện đi theo các tệp đã được di chuyển; sidecar XMP có thể vẫn ở chỗ cũ.",
   "Muted": "Dịu",
   "Muted Film": "Phim dịu",
   "My Photos": "Ảnh của tôi",
