@@ -393,6 +393,10 @@
   "Export": "Экспорт",
   "Export Album with Preset": "Экспортировать альбом с пресетом",
   "Export Album…": "Экспортировать альбом…",
+  "Export Folder…": "Экспортировать папку…",
+  "Export Folder with Preset": "Экспортировать папку с пресетом",
+  "This row covers more than one disk: export a folder inside it": "Эта строка охватывает несколько дисков: экспортируйте папку внутри неё",
+  "Exports this folder's photos and those in the folders inside it": "Экспортирует фото из этой папки и из папок внутри неё",
   "Export As…": "Экспортировать как…",
   "Export Group…": "Экспортировать группу…",
   "Export Now": "Экспортировать сейчас",
@@ -2349,5 +2353,9 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "No photo in this folder is in the library yet": "Ни одного фото из этой папки пока нет в библиотеке",
+  "Select the photos to move in the grid first": "Сначала выберите в сетке фото, которые нужно переместить",
+  "This place is kept in Local already": "Это место уже оставлено в «Локальном»",
+  "Only a place at the top of Local can be removed from it": "Убрать из «Локального» можно только место верхнего уровня"
 }

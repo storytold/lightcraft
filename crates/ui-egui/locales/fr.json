@@ -467,6 +467,10 @@
   "Export": "Exporter",
   "Export Album with Preset": "Exporter l'album avec un préréglage",
   "Export Album…": "Exporter l'album…",
+  "Export Folder…": "Exporter le dossier…",
+  "Export Folder with Preset": "Exporter le dossier avec un préréglage",
+  "This row covers more than one disk: export a folder inside it": "Cette ligne couvre plusieurs disques : exportez un dossier qu’elle contient",
+  "Exports this folder's photos and those in the folders inside it": "Exporte les photos de ce dossier et des dossiers qu’il contient",
   "Export As…": "Exporter sous…",
   "Export Group…": "Exporter le groupe…",
   "Export Now": "Exporter maintenant",
@@ -2390,5 +2394,9 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "No photo in this folder is in the library yet": "Aucune photo de ce dossier n’est encore dans la bibliothèque",
+  "Select the photos to move in the grid first": "Sélectionnez d’abord dans la grille les photos à déplacer",
+  "This place is kept in Local already": "Ce lieu est déjà conservé dans Local",
+  "Only a place at the top of Local can be removed from it": "Seul un lieu tout en haut de Local peut en être retiré"
 }

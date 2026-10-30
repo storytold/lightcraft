@@ -497,6 +497,10 @@
   "Export": "Exportieren",
   "Export Album with Preset": "Album mit Vorgabe exportieren",
   "Export Album…": "Album exportieren…",
+  "Export Folder…": "Ordner exportieren…",
+  "Export Folder with Preset": "Ordner mit Vorgabe exportieren",
+  "This row covers more than one disk: export a folder inside it": "Diese Zeile umfasst mehr als ein Laufwerk: einen Ordner darin exportieren",
+  "Exports this folder's photos and those in the folders inside it": "Exportiert die Fotos dieses Ordners und der Ordner darin",
   "Export As…": "Exportieren als…",
   "Export Group…": "Gruppe exportieren…",
   "Export Now": "Jetzt exportieren",
@@ -3440,5 +3444,9 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "No photo in this folder is in the library yet": "Kein Foto in diesem Ordner ist bisher in der Bibliothek",
+  "Select the photos to move in the grid first": "Wähle zuerst im Raster die Fotos aus, die du verschieben willst",
+  "This place is kept in Local already": "Dieser Ort wird bereits in „Lokal“ behalten",
+  "Only a place at the top of Local can be removed from it": "Nur ein Ort ganz oben in „Lokal“ kann daraus entfernt werden"
 }

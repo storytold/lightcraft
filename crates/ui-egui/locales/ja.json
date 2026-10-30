@@ -450,6 +450,10 @@
   "Export": "書き出し",
   "Export Album with Preset": "プリセットでアルバムを書き出す",
   "Export Album…": "アルバムを書き出す…",
+  "Export Folder…": "フォルダを書き出す…",
+  "Export Folder with Preset": "プリセットでフォルダを書き出す",
+  "This row covers more than one disk: export a folder inside it": "この行は複数のディスクにまたがっています。中のフォルダを書き出してください",
+  "Exports this folder's photos and those in the folders inside it": "このフォルダと中のフォルダにある写真を書き出します",
   "Export Group…": "グループを書き出す…",
   "Export Now": "今すぐ書き出す",
   "Export Point Curve Presets": "ポイントカーブのプリセットを書き出す",
@@ -2356,5 +2360,9 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "No photo in this folder is in the library yet": "このフォルダの写真はまだライブラリにありません",
+  "Select the photos to move in the grid first": "先にグリッドで移動する写真を選択してください",
+  "This place is kept in Local already": "この場所はすでにローカルに残されています",
+  "Only a place at the top of Local can be removed from it": "ローカルから除けるのは、ローカルの最上位にある場所だけです"
 }

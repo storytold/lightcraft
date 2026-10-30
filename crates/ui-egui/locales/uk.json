@@ -714,6 +714,10 @@
   "Expand/Collapse Stack": "Розгорнути/згорнути стос",
   "Export Album with Preset": "Експортувати альбом із набором налаштувань",
   "Export Album…": "Експортувати альбом…",
+  "Export Folder…": "Експортувати теку…",
+  "Export Folder with Preset": "Експортувати теку з набором налаштувань",
+  "This row covers more than one disk: export a folder inside it": "Цей рядок охоплює кілька дисків: експортуйте теку всередині нього",
+  "Exports this folder's photos and those in the folders inside it": "Експортує фото з цієї теки та з тек усередині неї",
   "Export Group…": "Експортувати групу…",
   "Export Now": "Експортувати зараз",
   "Export Point Curve Presets": "Експортувати набори налаштувань точкової кривої",
@@ -2354,5 +2358,9 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "No photo in this folder is in the library yet": "Жодного фото з цієї теки ще немає в бібліотеці",
+  "Select the photos to move in the grid first": "Спершу виберіть у сітці фото, які треба перемістити",
+  "This place is kept in Local already": "Це місце вже залишено в локальних",
+  "Only a place at the top of Local can be removed from it": "Вилучити з локальних можна лише місце верхнього рівня"
 }

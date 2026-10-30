@@ -1,7 +1,8 @@
 //! Photos dragged from the grid onto a Folders row move there on disk: the row lights up, the
 //! dragged label says where they will go, a closed folder held under the pointer opens, and a
 //! release asks first (unless the person said not to), then moves the files (one undo step).
-//! Photos that can't go there, or are there already, say so and stay where they are.
+//! Photos that can't go there, or are there already, say so and stay where they are. A folder's
+//! menu does the same with Move Selected Photos Here, grayed out until photos are selected.
 
 use std::path::{Path, PathBuf};
 
@@ -344,5 +345,88 @@ fn a_question_left_open_while_another_library_opens_moves_nothing() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["error"].as_str().unwrap_or_default().contains("Another library was opened"), "{r}");
     assert!(trip.join("beach.png").is_file() && !home.join("beach.png").exists(), "nothing moved");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Move Selected Photos Here stays in a folder's menu with nothing selected, grayed out (a click
+/// moves nothing), so the menu keeps its shape; once a photo is selected it moves its file there.
+#[test]
+fn move_selected_photos_here_is_grayed_out_until_photos_are_selected() {
+    let (root, trip, home) = folders("menu-move");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let garden = id_of(&h, "garden.png");
+    let menu_item = |h: &mut Headless| {
+        let at = folder_row(h, &trip).unwrap().center();
+        let r = h.request("ui.click", json!({"x": at.x, "y": at.y, "button": "right"}), std::time::Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "folderMovePhotosHere"}), std::time::Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "listed: {r}");
+        h.step();
+        h.step();
+    };
+    h.app.run("library.select", json!({"ids": []})).unwrap();
+    h.app.ui.toast = None;
+    menu_item(&mut h);
+    // an enabled row would try and say "no photos to move"; a grayed-out one says nothing
+    assert!(h.app.ui.toast.is_none(), "a grayed-out row does nothing: {}", toast(&h));
+    assert!(home.join("garden.png").is_file() && !trip.join("garden.png").exists(), "grayed out: nothing moved");
+    // close the menu, then select the photo and open it again
+    let r = h.request("ui.key", json!({"key": "Escape"}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    h.app.run("library.select", json!({"ids": [garden], "active": garden})).unwrap();
+    h.step();
+    menu_item(&mut h);
+    assert!(trip.join("garden.png").is_file() && !home.join("garden.png").exists(), "the selected photo's file moved");
+    let path = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(garden)).map(|p| p.source.clone());
+    assert!(
+        matches!(&path, Some(lightcraft_catalog::Source::File { path }) if Path::new(path) == trip.join("garden.png")),
+        "the library follows the file: {path:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Export Folder with Preset ▸ a preset runs that preset's export, in the background, on exactly
+/// the folder's photos and those of the folders inside it: the files written are theirs, and a
+/// neighbour folder's photo stays out.
+#[test]
+fn export_folder_with_a_preset_writes_exactly_the_folders_photos() {
+    let (root, trip, home) = folders("menu-export");
+    std::fs::create_dir_all(trip.join("dunes")).unwrap();
+    std::fs::copy(trip.join("beach.png"), trip.join("dunes").join("sand.png")).unwrap();
+    let out = root.join("out");
+    let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes").join("sand.png"), false), (home.join("garden.png"), false)]);
+    h.app.services.write_shared = Some(std::sync::Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+    h.app.run("export.savePreset", json!({"name": "Tiny PNG", "params": {"format": "png", "longEdge": 4}})).unwrap();
+    // a preset names no folder: the last export's is used
+    h.app.session.last_export = Some(json!({"dir": out}));
+    click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
+    let at = folder_row(&h, &trip).unwrap().center();
+    let r = h.request("ui.click", json!({"x": at.x, "y": at.y, "button": "right"}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    for id in ["folderExportPresetMenu", "folderExportPreset:Tiny PNG"] {
+        let r = h.request("ui.clickWidget", json!({"id": id}), std::time::Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.step();
+        h.step();
+    }
+    assert!(h.app.ui.dialog.is_none(), "a preset starts without asking: {}", toast(&h));
+    let t0 = std::time::Instant::now();
+    while (h.app.export.is_some() || h.app.last_export_result.is_none()) && t0.elapsed() < std::time::Duration::from_secs(60) {
+        h.step();
+    }
+    let last = h.app.last_export_result.clone().expect("the export reports");
+    assert_eq!(last["files"].as_array().map(Vec::len).or(last["files"].as_u64().map(|n| n as usize)), Some(2), "{last}");
+    let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    names.sort();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.iter().any(|n| n.contains("beach")) && names.iter().any(|n| n.contains("sand")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("garden")), "{names:?}");
     let _ = std::fs::remove_dir_all(&root);
 }

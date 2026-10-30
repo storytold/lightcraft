@@ -664,6 +664,10 @@
   "Export": "Exportovat",
   "Export Album with Preset": "Exportovat album s přednastavením",
   "Export Album…": "Exportovat album…",
+  "Export Folder…": "Exportovat složku…",
+  "Export Folder with Preset": "Exportovat složku s přednastavením",
+  "This row covers more than one disk: export a folder inside it": "Tento řádek zahrnuje více disků: exportujte některou ze složek v něm",
+  "Exports this folder's photos and those in the folders inside it": "Exportuje fotografie z této složky i ze složek v ní",
   "Export As…": "Exportovat jako…",
   "Export Containing Keywords": "Exportovat nadřazená klíčová slova",
   "Export Group…": "Exportovat skupinu…",
@@ -2408,5 +2412,9 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "No photo in this folder is in the library yet": "V této složce zatím není žádná fotografie z knihovny",
+  "Select the photos to move in the grid first": "Nejprve v mřížce vyberte fotografie, které chcete přesunout",
+  "This place is kept in Local already": "Toto místo už je v místních souborech ponecháno",
+  "Only a place at the top of Local can be removed from it": "Z místních souborů lze odebrat jen místo na jejich nejvyšší úrovni"
 }

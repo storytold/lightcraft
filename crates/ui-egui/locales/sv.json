@@ -687,6 +687,10 @@
   "Export": "Exportera",
   "Export Album with Preset": "Exportera album med förinställning",
   "Export Album…": "Exportera album…",
+  "Export Folder…": "Exportera mapp…",
+  "Export Folder with Preset": "Exportera mapp med förinställning",
+  "This row covers more than one disk: export a folder inside it": "Den här raden omfattar flera diskar: exportera en mapp inuti den",
+  "Exports this folder's photos and those in the folders inside it": "Exporterar fotona i den här mappen och i mapparna inuti den",
   "Export As…": "Exportera som…",
   "Export Contact Sheet PDF": "Exportera kontaktark som PDF",
   "Export Containing Keywords": "Exportera överordnade nyckelord",
@@ -2429,5 +2433,9 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "No photo in this folder is in the library yet": "Inget foto i den här mappen finns i biblioteket än",
+  "Select the photos to move in the grid first": "Markera först de foton som ska flyttas i rutnätet",
+  "This place is kept in Local already": "Den här platsen är redan behållen i Lokalt",
+  "Only a place at the top of Local can be removed from it": "Bara en plats högst upp i Lokalt kan tas bort därifrån"
 }

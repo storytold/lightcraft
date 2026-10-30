@@ -638,6 +638,10 @@
   "Export": "Ekspor",
   "Export Album with Preset": "Ekspor album dengan preset",
   "Export Album…": "Ekspor album…",
+  "Export Folder…": "Ekspor folder…",
+  "Export Folder with Preset": "Ekspor folder dengan preset",
+  "This row covers more than one disk: export a folder inside it": "Baris ini mencakup lebih dari satu disk: ekspor salah satu folder di dalamnya",
+  "Exports this folder's photos and those in the folders inside it": "Mengekspor foto di folder ini dan di folder-folder di dalamnya",
   "Export As…": "Ekspor sebagai…",
   "Export Contact Sheet PDF": "Ekspor PDF lembar kontak",
   "Export Containing Keywords": "Ekspor kata kunci induk",
@@ -2339,5 +2343,9 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "No photo in this folder is in the library yet": "Belum ada foto dari folder ini di pustaka",
+  "Select the photos to move in the grid first": "Pilih dulu foto yang akan dipindahkan di grid",
+  "This place is kept in Local already": "Tempat ini sudah disimpan di Lokal",
+  "Only a place at the top of Local can be removed from it": "Hanya tempat di tingkat teratas Lokal yang bisa dikeluarkan dari Lokal"
 }

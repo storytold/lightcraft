@@ -472,6 +472,10 @@
   "Export": "匯出",
   "Export Album with Preset": "使用預設集匯出相簿",
   "Export Album…": "匯出相簿…",
+  "Export Folder…": "匯出資料夾…",
+  "Export Folder with Preset": "使用預設集匯出資料夾",
+  "This row covers more than one disk: export a folder inside it": "此列涵蓋多個磁碟：請匯出其中的資料夾",
+  "Exports this folder's photos and those in the folders inside it": "匯出此資料夾及其內部資料夾中的照片",
   "Export As…": "匯出為…",
   "Export Group…": "匯出群組…",
   "Export Now": "立即匯出",
@@ -2157,5 +2161,9 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "No photo in this folder is in the library yet": "此資料夾中還沒有照片在照片庫中",
+  "Select the photos to move in the grid first": "請先在格狀檢視中選擇要移動的照片",
+  "This place is kept in Local already": "此位置已保留在本機",
+  "Only a place at the top of Local can be removed from it": "只有本機最上層的位置才能從本機移除"
 }

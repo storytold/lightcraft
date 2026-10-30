@@ -494,6 +494,10 @@
   "Export": "Exportar",
   "Export Album with Preset": "Exportar álbum con ajuste preestablecido",
   "Export Album…": "Exportar álbum…",
+  "Export Folder…": "Exportar carpeta…",
+  "Export Folder with Preset": "Exportar carpeta con ajuste preestablecido",
+  "This row covers more than one disk: export a folder inside it": "Esta fila abarca más de un disco: exporta una carpeta dentro de ella",
+  "Exports this folder's photos and those in the folders inside it": "Exporta las fotos de esta carpeta y las de las carpetas que contiene",
   "Export As…": "Exportar como…",
   "Export Group…": "Exportar grupo…",
   "Export Now": "Exportar ahora",
@@ -2358,5 +2362,9 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "No photo in this folder is in the library yet": "Ninguna foto de esta carpeta está todavía en la biblioteca",
+  "Select the photos to move in the grid first": "Primero selecciona en la cuadrícula las fotos que quieres mover",
+  "This place is kept in Local already": "Este lugar ya se conserva en Local",
+  "Only a place at the top of Local can be removed from it": "Solo un lugar del nivel superior de Local se puede quitar de Local"
 }
