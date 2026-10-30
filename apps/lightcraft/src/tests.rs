@@ -1,5 +1,30 @@
 use super::*;
 
+/// Global Menu state must follow logic/control ticks even without a single UI pass.
+#[cfg(target_os = "linux")]
+#[test]
+fn global_menu_state_is_published_after_logic_without_drawing() {
+    use lightcraft_ui_egui::control::ControlRequest;
+    fn filmstrip(items: &[craft_desktop::Item]) -> Option<bool> {
+        items.iter().find_map(|item| {
+            if item.action.as_ref().is_some_and(|action| action.command == "view.filmstrip") { item.checked } else { filmstrip(&item.children) }
+        })
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut host = App(LightcraftApp::new(Session::new(), Services::default()).with_control(rx), PrefsWriter::default(), None);
+    let ctx = egui::Context::default();
+    let initial = host.0.ui.filmstrip;
+    assert_eq!(filmstrip(&host.run_linux_logic(&ctx).items), Some(initial));
+    for expected in [!initial, initial] {
+        let (request, response) = ControlRequest::new("ui.menu.invoke", serde_json::json!({"command": "view.filmstrip"}));
+        tx.send(request).unwrap();
+        let published = host.run_linux_logic(&ctx);
+        assert!(response.try_recv().unwrap()["ok"].as_bool().unwrap());
+        assert_eq!(host.0.ui.filmstrip, expected);
+        assert_eq!(filmstrip(&published.items), Some(expected), "publish the state after draining control requests, without waiting for ui()");
+    }
+}
+
 fn dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-app-prefs-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -444,6 +469,8 @@ fn on_exit_ends_the_process_on_macos() {
             app,
             PrefsWriter::default(),
             #[cfg(target_os = "macos")]
+            None,
+            #[cfg(target_os = "linux")]
             None,
         );
         println!("calling on_exit");

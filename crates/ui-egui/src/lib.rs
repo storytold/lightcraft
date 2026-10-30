@@ -32,6 +32,7 @@ pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+pub mod native_menu;
 pub mod panels;
 pub mod pick;
 pub mod recheck;

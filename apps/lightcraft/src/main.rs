@@ -76,10 +76,42 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(
+    LightcraftApp,
+    PrefsWriter,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "linux")] Option<craft_desktop::appmenu::Bridge>,
+);
+
+#[cfg(target_os = "linux")]
+impl App {
+    /// Publishable state after a logic-only tick, including menu and control commands.
+    /// Wayland may keep processing logic while no UI frame is drawn.
+    fn run_linux_logic(&mut self, ctx: &egui::Context) -> craft_desktop::Menu {
+        if let Some(menu) = self.2.as_mut() {
+            for click in menu.take_events() {
+                if let Err(error) = lightcraft_ui_egui::native_menu::activate(&mut self.0, click) {
+                    log::warn!("global menu command: {error}");
+                    self.0.notices.push(error);
+                }
+            }
+        }
+        self.0.logic(ctx);
+        self.1.tick(&mut self.0, ctx);
+        lightcraft_ui_egui::native_menu::snapshot(&self.0)
+    }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "linux")]
+        if self.2.is_some() {
+            let snapshot = self.run_linux_logic(ctx);
+            if let Some(menu) = &self.2 {
+                menu.publish(snapshot);
+            }
+            return;
+        }
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
             && m.update(&mut self.0, ctx)
@@ -102,8 +134,14 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
         self.0.ui(ui);
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &self.2 {
+            menu.publish(lightcraft_ui_egui::native_menu::snapshot(&self.0));
+        }
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        #[cfg(target_os = "linux")]
+        self.2.take();
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
         if let Err(e) = self.1.save(&self.0) {
@@ -322,11 +360,24 @@ fn main() -> eframe::Result {
                 #[cfg(target_os = "macos")]
                 let menu =
                     (std::env::var_os("LIGHTCRAFT_NO_NATIVE_MENU").is_none()).then(|| native_menu::NativeMenu::install(&mut app, &cc.egui_ctx));
+                #[cfg(target_os = "linux")]
+                let global_menu = cc.winit_window().and_then(|window| {
+                    let repaint = cc.egui_ctx.clone();
+                    craft_desktop::appmenu::Bridge::start(
+                        window.clone(),
+                        APP_ID,
+                        "LIGHTCRAFT",
+                        lightcraft_ui_egui::native_menu::snapshot(&app),
+                        move || repaint.request_repaint(),
+                    )
+                });
                 Ok(Box::new(App(
                     app,
                     writer,
                     #[cfg(target_os = "macos")]
                     menu,
+                    #[cfg(target_os = "linux")]
+                    global_menu,
                 )))
             }),
         )

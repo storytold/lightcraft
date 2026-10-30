@@ -592,6 +592,16 @@ RISC-V (riscv64): `lightcraft-<ver>-linux-riscv64.tar.gz`, a tarball only (glibc
 On a Wayland desktop LightCraft runs through XWayland when it is available, because only X11 gives
 windows file drag-and-drop; set `LIGHTCRAFT_WAYLAND=1` to use native Wayland (sharper fractional scaling, no drop).
 
+**KDE Plasma Global Menu:** LightCraft exports the same File, Edit, View, Photo, Window and Help
+commands as its local menu, including live availability, checkmarks, translations and shortcuts.
+The local menu remains available whether or not Plasma's Global Menu widget is present. Both
+native Wayland (KWin's AppMenu protocol) and X11/XWayland are implemented; native Wayland uses
+the small, documented safe accessor in `vendor/winit/CRAFT_PATCH.md`.
+`LIGHTCRAFT_NO_GLOBAL_MENU=1` disables this optional integration.
+System light/dark appearance is already available through Settings → Interface → Appearance Mode → Auto;
+custom themes remain selectable. See [KDE integration and verification](docs/KDE_INTEGRATION.md)
+for limitations and the manual test matrix; implementation is not a claim that every desktop setup was tested.
+
 ### FreeBSD
 
 | Build | File |

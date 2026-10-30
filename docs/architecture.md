@@ -6,6 +6,14 @@ How LightCraft is built today. The longer design document (`plan/architecture.md
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
 on 2026-10-10 (≈ 202,000 tracked lines in 505 files: 24 library crates, 3 apps and `xtask`).
 
+**Linux integration update (2026-10-21):** `ui-egui::native_menu` projects the existing
+`menubar::MenuNode` model into the portable `craft-desktop` snapshot. The desktop host alone
+enables its Linux transport (D-Bus export, X11 properties/registrar, or a same-connection
+Wayland AppMenu association). The vendored winit patch only exposes a safe surface clone;
+the application adds no unsafe code. Commands return to the UI thread and are revalidated
+against the current library generation, menu state and modal guards before `menubar::run_item`.
+The local menu and shortcut handling remain unchanged. See [KDE_INTEGRATION.md](KDE_INTEGRATION.md).
+
 ## Layers
 
 `cargo xtask layers` (part of `cargo xtask ci`, `xtask/src/layers.rs`) enforces that nothing below
@@ -88,5 +96,6 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
+| 2026-10-21 | minor | Shared optional Linux Global Menu transport, existing command-model adapter and safe Wayland surface accessor; validation matrix documented |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

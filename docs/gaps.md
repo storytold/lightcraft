@@ -8,6 +8,16 @@ working on). When you close a gap, delete or shrink its entry, update its rows i
 [parity-checklist.md](parity-checklist.md), and the numbers in [target-app-parity.md](target-app-parity.md)
 and [ROADMAP.md](../ROADMAP.md) if they move.
 
+**KDE/Linux update (2026-10-21):** Global Menu is implemented for native Wayland and
+X11/XWayland using the existing command model. Native Plasma Wayland smoke testing passed
+(actual panel requests/actions, Filmstrip state, modal disabling, Auto/dark and explicit Light).
+X11/Flatpak verification, fractional/mixed-DPI coverage, system accent colours and exact Breeze
+palettes remain separate work; no platform/parity score
+is raised by this integration alone. The reconciled winit fork now implements native Wayland
+file drops; application interoperability still needs live verification. Full eight-stage CI
+passed on 2026-10-30 with required pinned fonts; corpus/model/font/runtime skips are recorded
+in [KDE_INTEGRATION.md](KDE_INTEGRATION.md).
+
 Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app-parity.md#how-hours-are-calibrated)).
 `B` marks a gap that blocks **beta**.
 
@@ -99,6 +109,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-19 | minor | Gap 9 shrinks: `.github/workflows/ci.yml` runs `cargo xtask ci` on Linux x64 for every PR and push to main; macOS and Windows remain |
 | 2026-10-19 | minor | Gap 21: Indonesian (`id`) shipped with every catalog message but What's New; four new languages left (Hindi, Arabic, Korean, Vietnamese), 135–239 h |
 | 2026-10-19 | minor | Gap 27: the released 0.9.1 x64 MSI is tested on Windows 11 Pro 24H2 (a fresh install and an upgrade from 0.8.0 end on the completion page, so #790 is fixed; the upgrade keeps a custom folder; Launch starts the app; removal leaves nothing behind); uninstalling from Settings → Apps still ends with no confirmation (#892, #931); hours unchanged |
+| 2026-10-21 | minor | Record Linux AppMenu implementation, native Plasma smoke and 4 adapter / 24 local-menu test passes; retain untested runtime/DPI/theme limits without changing parity estimates |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 4 follow-up: the diagnostic overlays (Visualize Spots, Point Color range, HDR range) render zoom windows too; soft proofing runs on the GPU |
