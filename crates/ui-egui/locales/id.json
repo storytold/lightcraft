@@ -2339,5 +2339,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Go Deeper": "Masuk lebih dalam",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "Folder sedalam ini tidak dicantumkan di sini. Klik untuk menambahkan folder ini ke Lokal sebagai lokasi tersendiri, sehingga bisa dibuka lebih jauh",
+  "Opens as its own place": "Terbuka sebagai lokasi tersendiri"
 }

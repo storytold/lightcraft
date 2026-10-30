@@ -56,7 +56,7 @@ pub(super) fn indent_x(ctx: &egui::Context, indent: f32) -> f32 {
 
 /// [`indent_x`] for a row being laid out, which also notes how deep the tree goes, for next
 /// frame's step.
-fn drawn_indent(ui: &egui::Ui, indent: f32) -> f32 {
+pub(super) fn drawn_indent(ui: &egui::Ui, indent: f32) -> f32 {
     ui.data_mut(|d| {
         let m = d.get_temp_mut_or_insert_with::<f32>(egui::Id::unique("left-deepest-indent-next"), || 0.0);
         *m = m.max(indent);

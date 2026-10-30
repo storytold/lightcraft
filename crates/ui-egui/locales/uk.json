@@ -2354,5 +2354,8 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Go Deeper": "Глибше",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "Теки на такій глибині тут не показуються. Клацніть, щоб додати цю теку до локальних як окреме місце й розгортати її далі",
+  "Opens as its own place": "Відкривається як окреме місце"
 }

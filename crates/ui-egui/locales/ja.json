@@ -2356,5 +2356,8 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Go Deeper": "さらに深く",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "これより深いフォルダはここには表示されません。クリックするとこのフォルダを独立した場所としてローカルに追加し、そこでさらに開けます",
+  "Opens as its own place": "独立した場所として開きます"
 }

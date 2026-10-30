@@ -2327,5 +2327,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Go Deeper": "Siirry syvemmälle",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "Näin syviä kansioita ei listata tässä. Napsauta lisätäksesi tämän kansion Paikalliseen omaksi paikakseen, jolloin voit avata sen pidemmälle",
+  "Opens as its own place": "Avautuu omana paikkanaan"
 }

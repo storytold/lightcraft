@@ -2429,5 +2429,8 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Go Deeper": "Gå djupare",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "Så här djupa mappar listas inte här. Klicka för att lägga till den här mappen i Lokalt som en egen plats, så att du kan öppna den längre",
+  "Opens as its own place": "Öppnas som en egen plats"
 }

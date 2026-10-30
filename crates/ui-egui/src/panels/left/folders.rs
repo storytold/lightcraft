@@ -1,7 +1,11 @@
 use super::albums::pointer_over_row;
-use super::local::{same_folder, subfolders};
-use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, out_of_sight, set_tree_open, tree_open, tree_toggle};
-use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Tokens, json, register, vec2};
+use super::local::{LocalView, add_local_root_checked, same_folder, subfolders};
+use super::rows::{INDENT_STEP, LIBFOLDER_REVEALED, Row, drawn_indent, note_width, out_of_sight, set_tree_open, tree_open, tree_toggle};
+use super::{Album, FolderNode, Icon, LibrarySource, LightcraftApp, Sense, Tokens, json, pos2, register, vec2};
+
+/// How far a Local place is listed below its row: eight levels (each one [`INDENT_STEP`] wide), which also
+/// bounds [`folder_tree`]'s recursion whatever is on disk.
+const LOCAL_DEPTH: f32 = INDENT_STEP * 8.0;
 
 /// A folder on disk with a disclosure triangle: click browses it, the triangle lists its
 /// subfolders. In the tree that holds the folder being browsed (`reveal`), the folders on the
@@ -18,10 +22,16 @@ pub(super) fn folder_tree(
     name: &str,
     path: &str,
     indent: f32,
-    current: Option<&str>,
+    view: &LocalView,
     reveal: bool,
     transient: bool,
 ) {
+    let current = view.current;
+    // a folder that is a place of its own is drawn twice when the place it lies in is open down
+    // to it: the row inside is another row (the open state is keyed by the place a row is drawn in);
+    // the places are the ones Local draws (the built-in ones too), and a place taken out of Local
+    // with Remove from Local is not among them, so it is not drawn twice
+    let also_place = indent > 0.0 && view.places.iter().any(|(_, p)| same_folder(p, path));
     let open_id = egui::Id::unique(("folder-open", place.to_string(), path.to_string()));
     let sel = current.is_some_and(|c| same_folder(c, path));
     let on_the_way = !sel && current.is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
@@ -99,9 +109,43 @@ pub(super) fn folder_tree(
             }
         });
     }
-    if open && indent < INDENT_STEP * 8.0 {
+    if open && indent < LOCAL_DEPTH {
         for (n, p) in subfolders(ui, path).iter() {
-            folder_tree(app, ui, place, n, p, indent + INDENT_STEP, current, reveal, false);
+            folder_tree(app, ui, place, n, p, indent + INDENT_STEP, view, reveal, false);
+        }
+    } else if open && !subfolders(ui, path).is_empty() {
+        deeper_row(app, ui, name, path, indent, also_place);
+    }
+}
+
+/// As deep as one place is listed: says so, and offers the way on, instead of an open folder that seems to
+/// hold nothing. `also_place`: the folder is a place of its own, so only its note is drawn.
+fn deeper_row(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str, path: &str, indent: f32, also_place: bool) {
+    if also_place {
+        // already a place of its own: say where its folders are
+        let t = Tokens::get(ui.ctx());
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 29.0), Sense::hover());
+        register(ui, format!("localDeeperNote:{path}"), r);
+        let galley = ui.painter().layout_no_wrap(crate::i18n::tr("Opens as its own place").to_string(), t.font(12.5), t.text_dim);
+        // (placed like the Go Deeper row below: through the step the tree is drawn with now)
+        let x = 42.0 + drawn_indent(ui, indent + 24.0);
+        note_width(ui, x + galley.size().x + 18.0);
+        ui.painter().galley(pos2(r.left() + x, r.center().y - galley.size().y / 2.0), galley, t.text_dim);
+    } else {
+        let more = Row::new(&format!("localDeeper:{path}"), Icon::Plus, crate::i18n::tr("Go Deeper"))
+            .indent(indent + 24.0)
+            .show(app, ui)
+            .on_hover_text(crate::i18n::tr(
+                "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further",
+            ));
+        if more.clicked() {
+            // the folder is checked on a worker (it can lie on a network share that has stopped answering), then
+            // kept; the folder went away (or its drive) while the listed row was still shown: the refusal is said
+            let name = name.to_string();
+            add_local_root_checked(app, ui.ctx(), path, move |app, ctx| {
+                // (this row is the folder inside another place from now on, open as it was)
+                app.toast(ctx, crate::i18n::tr_format!("“{name}” is now a place in Local: open it there", name = name));
+            });
         }
     }
 }

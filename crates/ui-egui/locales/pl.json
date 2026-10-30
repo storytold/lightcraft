@@ -2283,5 +2283,8 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Go Deeper": "Przejdź głębiej",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "Tak głęboko położone foldery nie są tu wyświetlane. Kliknij, aby dodać ten folder do lokalnych jako osobne miejsce i otwierać go dalej",
+  "Opens as its own place": "Otwiera się jako osobne miejsce"
 }

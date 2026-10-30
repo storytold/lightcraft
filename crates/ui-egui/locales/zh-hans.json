@@ -2200,5 +2200,8 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Go Deeper": "继续深入",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "这么深的文件夹不在此处列出。点按可将此文件夹作为单独的位置添加到本地，以便继续展开",
+  "Opens as its own place": "作为单独的位置打开"
 }

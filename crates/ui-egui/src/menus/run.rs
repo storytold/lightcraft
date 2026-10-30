@@ -838,16 +838,11 @@ fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         "local.addRoot" => {
             // a folder kept in Local's sidebar (saved with the UI state); nothing on disk changes
             let Some(path) = p.get("path").and_then(Value::as_str) else { return Some(Err("local.addRoot needs a path".into())) };
-            let abs = std::path::absolute(path).map(|a| a.to_string_lossy().trim_end_matches(['/', '\\']).to_string()).unwrap_or(path.into());
-            let abs = if abs.is_empty() { path.to_string() } else { abs };
+            let abs = crate::panels::left::local_root_path(path);
             if !std::path::Path::new(&abs).is_dir() {
                 return Some(Err(format!("{path}: not a folder")));
             }
-            use crate::panels::left::same_folder;
-            if !app.ui.local_roots.iter().any(|r| same_folder(r, &abs)) {
-                app.ui.local_roots.push(abs.clone());
-            }
-            app.ui.hidden_locations.retain(|h| !same_folder(h, &abs));
+            crate::panels::left::keep_local_root(app, &abs);
             Ok(json!({"roots": app.ui.local_roots}))
         }
         "local.hide" => match p.get("path").and_then(Value::as_str) {

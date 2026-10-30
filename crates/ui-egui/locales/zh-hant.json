@@ -2157,5 +2157,8 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Go Deeper": "繼續深入",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "這麼深的資料夾不會列在這裡。按一下可將此資料夾作為獨立位置加入本機，以便繼續展開",
+  "Opens as its own place": "作為獨立位置開啟"
 }

@@ -2202,5 +2202,8 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Go Deeper": "Ir mais fundo",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "Pastas tão profundas não são listadas aqui. Clique para adicionar esta pasta a Local como um lugar próprio e abri-la mais",
+  "Opens as its own place": "Abre como um lugar próprio"
 }

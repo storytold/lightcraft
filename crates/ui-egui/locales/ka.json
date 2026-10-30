@@ -2734,5 +2734,8 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Go Deeper": "უფრო ღრმად",
+  "Folders this deep are not listed here. Click to add this folder to Local as a place of its own, so you can open it further": "ამ სიღრმის საქაღალდეები აქ არ ჩანს. დააწკაპეთ, რომ ეს საქაღალდე „ლოკალურს“ ცალკე ადგილად დაემატოს და შემდგომ გახსნათ",
+  "Opens as its own place": "იხსნება როგორც ცალკე ადგილი"
 }
