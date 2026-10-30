@@ -2429,5 +2429,11 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Don't import files already in the library": "Importera inte filer som redan finns i biblioteket",
+  "Synchronize Folder can bring in files already in the library elsewhere": "Synkronisera mapp kan ta in filer som redan finns på annan plats i biblioteket",
+  "Synchronize Folder has a \"Don't import files already in the library\" box under Import new photos, ticked as before; unticked, files whose content a photo of another folder already has come in as photos of their own, and the library remembers the choice for next time.": "Synkronisera mapp har under Importera nya foton rutan ”Importera inte filer som redan finns i biblioteket”, ikryssad som förut; avbockad kommer filer vars innehåll ett foto i en annan mapp redan har in som egna foton, och biblioteket kommer ihåg valet till nästa gång.",
+  "A copy of a photo in Recently Deleted stays out either way.": "En kopia av ett foto bland Nyligen raderade förblir utanför i båda fallen.",
+  "For scripts and agents: `folder.scanChanges` now returns `duplicates` as a list of those files, each with the photo it matches (`existing`), where it used to return a count; `library.importPreview` still returns a number under `duplicates`, and `folder.synchronize` takes `importDuplicates`.": "För skript och agenter: `folder.scanChanges` returnerar nu `duplicates` som en lista över dessa filer, var och en med det foto den motsvarar (`existing`), där den förut returnerade ett antal; `library.importPreview` returnerar fortfarande ett tal under `duplicates`, och `folder.synchronize` tar `importDuplicates`.",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "En fil med samma innehåll som ett foto i biblioteket, under ett annat namn eller i en annan mapp. Bocka ur för att ta in sådana filer som egna foton. Kommer ihåg till nästa synkronisering."
 }

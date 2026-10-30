@@ -2339,5 +2339,11 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Don't import files already in the library": "Jangan impor file yang sudah ada di pustaka",
+  "Synchronize Folder can bring in files already in the library elsewhere": "Sinkronkan folder dapat memasukkan file yang sudah ada di pustaka di tempat lain",
+  "Synchronize Folder has a \"Don't import files already in the library\" box under Import new photos, ticked as before; unticked, files whose content a photo of another folder already has come in as photos of their own, and the library remembers the choice for next time.": "Sinkronkan folder memiliki kotak \"Jangan impor file yang sudah ada di pustaka\" di bawah Impor foto baru, dicentang seperti sebelumnya; jika centangnya dilepas, file yang isinya sudah dimiliki sebuah foto di folder lain masuk sebagai foto tersendiri, dan pustaka mengingat pilihan itu untuk lain kali.",
+  "A copy of a photo in Recently Deleted stays out either way.": "Salinan foto di Baru dihapus tetap tidak masuk, apa pun pilihannya.",
+  "For scripts and agents: `folder.scanChanges` now returns `duplicates` as a list of those files, each with the photo it matches (`existing`), where it used to return a count; `library.importPreview` still returns a number under `duplicates`, and `folder.synchronize` takes `importDuplicates`.": "Untuk skrip dan agen: `folder.scanChanges` kini mengembalikan `duplicates` sebagai daftar file tersebut, masing-masing dengan foto yang cocok (`existing`), padahal sebelumnya mengembalikan jumlah; `library.importPreview` tetap mengembalikan angka pada `duplicates`, dan `folder.synchronize` menerima `importDuplicates`.",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "File dengan isi yang sama dengan foto di pustaka, dengan nama lain atau di folder lain. Hapus centang untuk memasukkan file seperti itu sebagai foto tersendiri. Diingat untuk sinkronisasi berikutnya."
 }

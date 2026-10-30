@@ -17,7 +17,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Scan Folder for Changes",
             [],
             None,
-            "{path, disk?: bool (a whole disk or share, or a folder holding disks)} — compare a folder of the library (and the folders inside it) with the disk; changes nothing → {path, new: [{path, name, format, …}] files the library doesn't have, duplicates: files whose content it already has, unreadable: [{path, error}], missing: [{id, path}] photos whose file is gone, moved: [{id, from, to}] photos whose file is elsewhere in the folder (same content), metadata: [{id, path}] photos whose XMP sidecar was saved after they came in or were last edited here and says something the library doesn't}",
+            "{path, disk?: bool (a whole disk or share, or a folder holding disks)} — compare a folder of the library (and the folders inside it) with the disk; changes nothing → {path, new: [{path, name, format, …}] files the library doesn't have, duplicates: [{path, name, …, existing?: photoId}] (a list of candidates, no longer a count; library.importPreview's `duplicates` is still a count) files whose content a photo already has (the library's photo, or none for a copy of a file found earlier in the scan): imported only with importDuplicates, unreadable: [{path, error}], missing: [{id, path}] photos whose file is gone, moved: [{id, from, to}] photos whose file is elsewhere in the folder (same content), metadata: [{id, path}] photos whose XMP sidecar was saved after they came in or were last edited here and says something the library doesn't}",
             always,
             |s, p| {
                 const C: &str = "folder.scanChanges";
@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Synchronize Folder",
             [],
             None,
-            "{path, disk?: bool, scanned?: bool, importNew?: true, relinkMoved?: true, removeMissing?: false, readMetadata?: false} — bring a folder of the library up to date with the disk (see folder.scanChanges): import its new files in place, relink photos whose file was renamed or moved within it, move photos whose file is gone to Recently Deleted, read XMP sidecars saved by other apps (the sidecar wins); acts on the last folder.scanChanges of the folder while it is current (the folder's photos unchanged), else scans again — or, with `scanned: true`, refuses; one undo step, no file is touched → {imported, relinked, removed, read, failed: [[path, error]]}",
+            "{path, disk?: bool, scanned?: bool, importNew?: true, importDuplicates?: bool (with importNew, the files whose content a photo already has come in too, as photos of their own; default: the library's setting, library.preferences import.importDuplicates, off), relinkMoved?: true, removeMissing?: false, readMetadata?: false} — bring a folder of the library up to date with the disk (see folder.scanChanges): import its new files in place, relink photos whose file was renamed or moved within it, move photos whose file is gone to Recently Deleted, read XMP sidecars saved by other apps (the sidecar wins); acts on the last folder.scanChanges of the folder while it is current (the folder's photos unchanged), else scans again — or, with `scanned: true`, refuses; one undo step, no file is touched → {imported, relinked, removed, read, failed: [[path, error]]}",
             always,
             sync
         ),
@@ -46,6 +46,7 @@ fn sync(s: &mut Session, p: &Value) -> Result<Value> {
     let d = SyncChoice::default();
     let choice = SyncChoice {
         import_new: bool_or(p, "importNew", d.import_new),
+        import_duplicates: bool_or(p, "importDuplicates", s.import_defaults.import_duplicates),
         relink_moved: bool_or(p, "relinkMoved", d.relink_moved),
         remove_missing: bool_or(p, "removeMissing", d.remove_missing),
         read_metadata: bool_or(p, "readMetadata", d.read_metadata),

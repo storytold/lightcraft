@@ -2327,5 +2327,11 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Don't import files already in the library": "Älä tuo tiedostoja, jotka ovat jo kirjastossa",
+  "Synchronize Folder can bring in files already in the library elsewhere": "Synkronoi kansio voi tuoda tiedostoja, jotka ovat jo kirjastossa muualla",
+  "Synchronize Folder has a \"Don't import files already in the library\" box under Import new photos, ticked as before; unticked, files whose content a photo of another folder already has come in as photos of their own, and the library remembers the choice for next time.": "Synkronoi kansio -valintaikkunassa on Tuo uudet kuvat -kohdan alla ruutu ”Älä tuo tiedostoja, jotka ovat jo kirjastossa”, valittuna kuten ennenkin; kun valinta poistetaan, tiedostot, joiden sisältö on jo jonkin toisen kansion kuvalla, tulevat mukaan omina kuvinaan, ja kirjasto muistaa valinnan seuraavaa kertaa varten.",
+  "A copy of a photo in Recently Deleted stays out either way.": "Äskettäin poistettujen kuvan kopio jää pois kummassakin tapauksessa.",
+  "For scripts and agents: `folder.scanChanges` now returns `duplicates` as a list of those files, each with the photo it matches (`existing`), where it used to return a count; `library.importPreview` still returns a number under `duplicates`, and `folder.synchronize` takes `importDuplicates`.": "Skripteille ja agenteille: `folder.scanChanges` palauttaa nyt `duplicates`-kentän luettelona näistä tiedostoista, kunkin mukana kuva, jota se vastaa (`existing`), kun se ennen palautti lukumäärän; `library.importPreview` palauttaa `duplicates`-kentässä edelleen luvun, ja `folder.synchronize` ottaa parametrin `importDuplicates`.",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "Tiedosto, jonka sisältö on sama kuin kirjaston kuvalla, toisella nimellä tai toisessa kansiossa. Poista valinta, jos haluat tuoda tällaiset tiedostot omina kuvinaan. Muistetaan seuraavaa synkronointia varten."
 }

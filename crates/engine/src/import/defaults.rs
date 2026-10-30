@@ -41,6 +41,10 @@ pub struct ImportDefaults {
     pub auto_album: Option<String>,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
+    /// Synchronize Folder brings in files whose content a photo of the library already has (at
+    /// another path) as photos of their own: "Don't import files already in the library" turned
+    /// off, and kept as it was last left. Off (such files left out) unless turned on.
+    pub import_duplicates: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

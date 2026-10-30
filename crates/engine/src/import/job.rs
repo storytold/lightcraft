@@ -1,5 +1,6 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
 use super::files::{expand, probe_all};
+use super::scan::note_content;
 use super::types::{ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -114,13 +115,13 @@ impl Prepared {
     /// Preparation may have run while another import added the same path or content.
     pub fn revalidate_add(&mut self, s: &Session) {
         let mut paths = HashMap::new();
-        let mut hashes = HashMap::new();
+        let mut hashes: HashMap<String, (bool, PhotoId)> = HashMap::new();
         for photo in s.catalog.photos() {
             if let Source::File { path } = &photo.source {
                 paths.insert(normalize_import_path(path), photo.id);
             }
             if let Some(hash) = &photo.content_hash {
-                hashes.insert(hash.clone(), photo.id);
+                note_content(&mut hashes, hash, photo.id);
             }
         }
         let mut items = Vec::with_capacity(self.items.len());
@@ -131,7 +132,7 @@ impl Prepared {
             };
             let ReadyFile { path, stored, info, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(crate::sync::base_hash(hash)).map(|(_, id)| *id));
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);
@@ -228,6 +229,7 @@ impl ImportJob {
     /// of the shared stem sidecars they read ([`crate::sidecar::ImportStems`]).
     fn look_up_library(&mut self) -> Option<lightcraft_catalog::Catalog> {
         let (library, fresh) = self.library.take()?;
+        let mut by_hash = HashMap::new();
         for p in library.photos() {
             // a trashed photo is replaced by a fresh import, so it doesn't count as a duplicate
             if p.deleted && fresh {
@@ -236,10 +238,14 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            if let Some(h) = &p.content_hash {
-                self.by_hash.insert(h.clone(), Some(p.id));
+            // importing suspected duplicates: only a trashed photo's content still matches
+            if let Some(h) = &p.content_hash
+                && (p.deleted || !self.opts.import_duplicates)
+            {
+                note_content(&mut by_hash, h, Some(p.id));
             }
         }
+        self.by_hash.extend(by_hash.into_iter().map(|(h, (_, id))| (h, id)));
         Some(library)
     }
 
@@ -399,7 +405,9 @@ impl ImportJob {
                 }
                 _ => path.clone(),
             };
-            if let Some(h) = &info.content_hash {
+            if let Some(h) = &info.content_hash
+                && !self.opts.import_duplicates
+            {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
@@ -423,6 +431,7 @@ impl ImportJob {
             };
             if let PreparedItem::Ready(r) = &item
                 && let Some(h) = &r.info.content_hash
+                && !self.opts.import_duplicates
             {
                 self.by_hash.insert(h.clone(), None);
             }

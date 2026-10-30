@@ -45,22 +45,39 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
     by_path
 }
 
-/// Which photo of the library has each of the contents `hashes` (the later one where several
-/// have it). One pass over the library, and an entry only for a content that was asked about.
+/// Records that photo `id`, whose catalog key is `key`, has the content `key` stands for: the map
+/// is keyed by the content (a Duplicate's `:dup<id>` key is the original's plus a suffix, and a
+/// file's own hash is the plain one). Where several photos have the content, the one with the
+/// plain key is kept, else the later one.
+pub(super) fn note_content<V>(by_hash: &mut HashMap<String, (bool, V)>, key: &str, value: V) {
+    let base = crate::sync::base_hash(key);
+    let plain = base.len() == key.len();
+    match by_hash.get_mut(base) {
+        Some((had_plain, _)) if *had_plain && !plain => {}
+        Some(slot) => *slot = (plain, value),
+        None => {
+            by_hash.insert(base.to_string(), (plain, value));
+        }
+    }
+}
+
+/// Which photo of the library has each of the contents `hashes` (the one with the content's own
+/// key where several have it, else the later one). One pass over the library, and an entry only
+/// for a content that was asked about.
 pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
     let wanted: std::collections::HashSet<&str> = hashes.collect();
     let mut by_hash = HashMap::new();
     if wanted.is_empty() {
-        return by_hash;
+        return HashMap::new();
     }
     for p in library.photos() {
         if let Some(h) = &p.content_hash
-            && wanted.contains(h.as_str())
+            && wanted.contains(crate::sync::base_hash(h))
         {
-            by_hash.insert(h.clone(), p.id);
+            note_content(&mut by_hash, h, p.id);
         }
     }
-    by_hash
+    by_hash.into_iter().map(|(h, (_, id))| (h, id)).collect()
 }
 
 /// Progress and cancellation of a running [`scan_with`].

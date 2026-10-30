@@ -172,6 +172,38 @@ fn the_dialog_says_what_changed_in_the_folder() {
     assert_eq!(in_library(&h), vec!["a.png", "b.png"], "scanning changed nothing");
 }
 
+/// A file with the bytes of a library photo, under another name: "Don't import files already in
+/// the library" is ticked at first, and the file is skipped. Unticked, Synchronize brings it in as a
+/// photo of its own, and the library keeps the choice: the next dialog opens unticked.
+#[test]
+fn unticking_dont_import_files_already_in_the_library_brings_the_copies_in_and_is_remembered() {
+    let dir = Scratch::new("copies");
+    let mut h = changed_folder(&dir);
+    std::fs::copy(dir.path("trip/a.png"), dir.path("trip/a again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    assert_eq!((counts(&h).new, counts(&h).duplicates), (1, 1), "{:?}", counts(&h));
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { import_duplicates: false, .. })), "ticked at first");
+    let unticked = |h: &Headless| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { import_duplicates: true, .. }));
+    let mut landed = false;
+    for _ in 0..5 {
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "syncSkipDuplicates"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        if h.step_until(Duration::from_secs(3), unticked) {
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "the box never unticked: {:?}", h.app.ui.dialog);
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a again.png", "a.png", "b.png", "c.png"], "the copy came in beside c");
+    assert!(h.app.session.import_defaults.import_duplicates, "the library keeps the choice");
+    // the next dialog opens as it was left
+    std::fs::copy(dir.path("trip/c.png"), dir.path("trip/c again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    assert!(unticked(&h), "{:?}", h.app.ui.dialog);
+}
+
 #[test]
 fn synchronizing_with_the_defaults_imports_the_new_photos_only() {
     let dir = Scratch::new("defaults");
@@ -241,6 +273,62 @@ fn confirming_a_folder_with_nothing_to_bring_in_starts_nothing() {
     assert!(h.app.sync_run.is_none() && h.app.session.activity.list().is_empty(), "no job that does nothing");
     h.step();
     assert!(h.app.session.folder_changes.is_none(), "the scan is let go");
+}
+
+/// A folder whose only news is a copy of a library photo keeps the box "Don't import files already
+/// in the library" and Cancel, so the copy can be brought in; but with the box ticked, confirming
+/// has nothing to do and starts no job; unticked, it imports the copy.
+#[test]
+fn a_folder_whose_only_news_is_a_copy_offers_the_box_and_starts_nothing_while_it_is_ticked() {
+    let dir = Scratch::new("copies-only");
+    let mut h = imported_folder(&dir, || {});
+    std::fs::copy(dir.path("trip/a.png"), dir.path("trip/a again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    let c = counts(&h);
+    assert_eq!((c.new, c.copies, c.duplicates), (0, 1, 1), "{c:?}");
+    h.step();
+    assert!(shown(&h, "syncSkipDuplicates") && shown(&h, "button:dialogCancel"), "the choice is there to make");
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["upToDate"], true, "{r}");
+    assert!(h.app.sync_run.is_none() && h.app.session.activity.list().is_empty(), "no job that does nothing");
+    assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
+    // unticked, the same dialog brings the copy in
+    open_and_scan(&mut h, &dir.path("trip"));
+    let unticked = |h: &Headless| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { import_duplicates: true, .. }));
+    let mut landed = false;
+    for _ in 0..5 {
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "syncSkipDuplicates"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        if h.step_until(Duration::from_secs(3), unticked) {
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "the box never unticked: {:?}", h.app.ui.dialog);
+    synchronize(&mut h);
+    assert_eq!(in_library(&h), vec!["a again.png", "a.png", "b.png"]);
+}
+
+/// With "Import new photos" unticked, the copies the box under it would bring in are not imported
+/// either: a copies-only folder with that box unticked and Import new photos off starts no job.
+#[test]
+fn a_copies_only_folder_with_import_new_off_starts_nothing_even_with_the_box_unticked() {
+    let dir = Scratch::new("copies-no-new");
+    let mut h = imported_folder(&dir, || {});
+    std::fs::copy(dir.path("trip/a.png"), dir.path("trip/a again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    h.step();
+    match &mut h.app.ui.dialog {
+        Some(Dialog::SynchronizeFolder { import_new, import_duplicates, .. }) => (*import_new, *import_duplicates) = (false, true),
+        other => panic!("{other:?}"),
+    }
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["upToDate"], true, "{r}");
+    assert!(h.app.sync_run.is_none() && h.app.session.activity.list().is_empty(), "no job that does nothing");
+    assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
 }
 
 #[test]
@@ -313,6 +401,7 @@ fn a_synchronize_and_an_import_never_run_at_once() {
         disk: false,
         counts: Some(crate::state::SyncCounts { new: 1, ..Default::default() }),
         import_new: true,
+        import_duplicates: false,
         relink_moved: true,
         remove_missing: false,
         read_metadata: false,
@@ -422,4 +511,15 @@ fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_
     p.listed.store(true, Relaxed);
     p.checked.store(10, Relaxed);
     assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
+}
+
+#[test]
+fn counts_too_large_to_add_are_still_changes_to_make() {
+    use crate::state::SyncCounts;
+    let huge = SyncCounts { new: usize::MAX, copies: 1, ..Default::default() };
+    assert!(!huge.up_to_date(), "usize::MAX new files plus one copy is not zero");
+    assert!(!huge.nothing_to_do(true, true));
+    let huge_sum = SyncCounts { moved: usize::MAX, missing: 1, ..Default::default() };
+    assert!(!huge_sum.nothing_to_do(false, false));
+    assert!(SyncCounts::default().up_to_date() && SyncCounts::default().nothing_to_do(true, true));
 }

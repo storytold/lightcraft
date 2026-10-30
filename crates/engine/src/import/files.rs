@@ -253,6 +253,7 @@ pub(super) fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: O
 #[cfg(test)]
 mod prepared_tests {
     use super::*;
+    use crate::import::commit_prepared;
     use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 
     /// Extensions the picker may offer: every one in [`EXTENSIONS`], minus the
@@ -322,6 +323,36 @@ mod prepared_tests {
         prepared.revalidate_add(&s);
         assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "path", .. })));
         assert!(matches!(prepared.items.get(1), Some(PreparedItem::Ready(_))));
+    }
+
+    /// A photo whose key is `<hash>:dup<id>` still stands for its content: a file with that
+    /// content that became Ready meanwhile is a duplicate, not a new photo.
+    #[test]
+    fn revalidate_add_matches_a_duplicate_keyed_photo_by_its_content() {
+        let mut s = Session::new();
+        let path = std::env::temp_dir().join("lightcraft-revalidate-dupkey.jpg");
+        let mut twin = Photo::new(PhotoId(7), Source::File { path: "/elsewhere/twin.jpg".into() }, "twin.jpg", "JPG", 1, 1, "now");
+        twin.content_hash = Some("abc123:dup5".into());
+        s.commit("twin", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        let info = ProbeInfo { format: "JPG".into(), content_hash: Some("abc123".into()), ..ProbeInfo::default() };
+        let ready = ReadyFile { path: path.to_string_lossy().into(), stored: path.to_string_lossy().into(), info, sidecar: None, placed: None };
+        let mut prepared = Prepared { scanned: 1, items: vec![PreparedItem::Ready(Box::new(ready))] };
+        prepared.revalidate_add(&s);
+        assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "content", existing: Some(PhotoId(7)), .. })));
+    }
+
+    /// A Duplicate without a named original is matched by content, and a photo keyed
+    /// `<hash>:dup<id>` stands for its content too.
+    #[test]
+    fn commit_names_a_duplicate_keyed_photo_as_the_original_by_content() {
+        let mut s = Session::new();
+        let mut twin = Photo::new(PhotoId(7), Source::File { path: "/elsewhere/twin.jpg".into() }, "twin.jpg", "JPG", 1, 1, "now");
+        twin.content_hash = Some("abc123:dup5".into());
+        s.commit("twin", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        let dup = PreparedItem::Duplicate { path: "/new/c.jpg".into(), existing: None, reason: "content", hash: Some("abc123".into()) };
+        let prepared = Prepared { scanned: 1, items: vec![dup] };
+        let r = commit_prepared(&mut s, &ImportOptions::default(), "now", prepared).unwrap();
+        assert_eq!(r.duplicates.first().map(|d| d.existing), Some(Some(7)), "{:?}", r.duplicates);
     }
 
     fn unread_paths(n: usize) -> Vec<String> {
