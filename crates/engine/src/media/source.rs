@@ -169,10 +169,11 @@ impl DecodedSource {
         mixed
     }
 
-    /// Cache cost: the picture, its segmentation mattes, its denoised twin and room for the lazy mix.
+    /// Cache cost: the picture, its segmentation mattes and transparency, its denoised twin and room for the lazy mix.
     pub fn bytes(&self) -> usize {
         let mattes = self.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
         let mattes = mattes + self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.len() * 4);
+        let mattes = mattes + self.info.as_ref().and_then(|i| i.alpha.as_ref()).map_or(0, |a| a.data.len() * 4);
         self.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
     }
 
@@ -234,7 +235,15 @@ impl SourceRef {
                 // Lanczos, not a box average: a box at 2-3:1 halves the contrast of detail near
                 // the output's resolution limit and aliases what is finer
                 let image = lightcraft_raster::resample::fit(&from.image, *max_edge, *max_edge, lightcraft_raster::resample::Filter::Lanczos3);
-                return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
+                // the transparency is fitted with the pixels (the same size and filter)
+                let info = from.info.clone().map(|i| SourceInfo {
+                    alpha: i.alpha.as_ref().map(|a| {
+                        let a = lightcraft_raster::resample::resize(a, image.width, image.height, lightcraft_raster::resample::Filter::Lanczos3);
+                        Arc::new(a)
+                    }),
+                    ..i
+                });
+                return Ok(DecodedSource { image: Arc::new(image), denoised: None, info, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {

@@ -429,6 +429,21 @@ impl crate::Session {
         space: lightcraft_pipeline::OutputSpace,
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
+        self.export_job_with_alpha(id, max_w, max_h, space, depth, false)
+    }
+
+    /// [`Self::export_job`]; with `alpha`, for a file that keeps transparency (PNG, TIFF, WebP): the
+    /// render is of the source's colour without the white its transparent areas are flattened onto,
+    /// with [`Rendered::alpha`] (issue #2976). A source without transparency renders as without.
+    pub fn export_job_with_alpha(
+        &mut self,
+        id: PhotoId,
+        max_w: usize,
+        max_h: usize,
+        space: lightcraft_pipeline::OutputSpace,
+        depth: lightcraft_pipeline::OutputDepth,
+        alpha: bool,
+    ) -> Result<RenderJob, String> {
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
         // image that the file keeps (Lightroom's merged DNGs)
@@ -452,7 +467,11 @@ impl crate::Session {
         }
         job.request.space = space;
         job.request.depth = depth;
+        job.request.alpha = alpha;
         job.key ^= (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db);
+        if alpha {
+            job.key ^= 0x8ebc_6af0_9c88_c6e3;
+        }
         Ok(job)
     }
 

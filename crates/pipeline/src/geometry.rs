@@ -8,7 +8,7 @@
 use lightcraft_develop::{DevelopSettings, EmbeddedLens};
 use lightcraft_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect};
 use lightcraft_raster::resample::{Filter, resize};
-use lightcraft_raster::{Rgb32f, par_rows};
+use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
 use crate::optics::{Warp, reorient_lens};
 
@@ -275,6 +275,86 @@ impl Frame {
         }
     }
 
+    /// [`Self::sample`] of a source flattened onto white (`lightcraft_codecs::to_working`) together
+    /// with its straight alpha `alpha` (the source's size), for an output that keeps transparency
+    /// (issue #2976). Colour and alpha are resampled with the same weights, and each output pixel
+    /// is unflattened after that, so the colour comes out alpha-weighted: no white from transparent
+    /// pixels is mixed into edges. Lens corrections: red and blue are unflattened with the alpha at
+    /// their own (chromatic aberration) positions, the output alpha follows green, and the vignette
+    /// gain applies to the unflattened colour. What the mapping brings in from outside the source
+    /// has alpha 0. Returns the straight colour and its alpha.
+    pub fn sample_with_alpha(&self, src: &Rgb32f, alpha: &Plane, w: usize, h: usize) -> (Rgb32f, Plane) {
+        let orient = |i: &Rgb32f| if self.orient == Orientation::Normal { None } else { Some(i.oriented(self.orient)) };
+        let (oriented, oriented_a) = (orient(src), if self.orient == Orientation::Normal { None } else { Some(alpha.oriented(self.orient)) });
+        let (o, oa) = (oriented.as_ref().unwrap_or(src), oriented_a.as_ref().unwrap_or(alpha));
+        let plan = self.sample_plan(src.width, src.height, w, h);
+        let (base, base_a) = match plan.prefilter {
+            Some((nw, nh)) => {
+                (std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)), std::borrow::Cow::Owned(resize(oa, nw, nh, Filter::Mitchell)))
+            }
+            None => (std::borrow::Cow::Borrowed(o), std::borrow::Cow::Borrowed(oa)),
+        };
+        // colour and alpha side by side, so one pass fills both
+        let mut both: Vec<[f32; 4]> = vec![[0.0; 4]; w.saturating_mul(h)];
+        let affine = |both: &mut Vec<[f32; 4]>, xf: Affine| {
+            par_rows(both, w, |y, row| {
+                for (x, px) in row.iter_mut().enumerate() {
+                    let p = xf.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let a = alpha_at(&base_a, p.x as f32, p.y as f32);
+                    let v = base.sample_bilinear(p.x as f32, p.y as f32).map(|f| unflatten(f, a));
+                    *px = [v[0], v[1], v[2], a];
+                }
+            });
+        };
+        match (plan.mode, self.warp.as_ref()) {
+            (SampleMode::Copy, _) => {
+                for ((px, v), &a) in both.iter_mut().zip(&base.data).zip(&base_a.data) {
+                    let v = v.map(|f| unflatten(f, a));
+                    *px = [v[0], v[1], v[2], a];
+                }
+            }
+            (SampleMode::Warp(o2t), Some(wp)) => {
+                let (per_channel, gain) = (wp.per_channel(), wp.has_gain());
+                let (sx, sy) = (plan.sx, plan.sy);
+                par_rows(&mut both, w, |y, row| {
+                    for (x, px) in row.iter_mut().enumerate() {
+                        let Some((c, g)) = wp.frame(&o2t, x, y) else {
+                            *px = [BLANK[0], BLANK[1], BLANK[2], 0.0];
+                            continue;
+                        };
+                        // (inside the frame: the warp has decided the point shows the image)
+                        let (gx, gy) = ((g.x * sx) as f32, (g.y * sy) as f32);
+                        let a = bilinear(&base_a, gx, gy);
+                        let mut v = base.sample_bilinear(gx, gy).map(|f| unflatten(f, a));
+                        if per_channel {
+                            for ch in [0usize, 2] {
+                                let q = wp.corrected_to_source(c, ch);
+                                let (qx, qy) = ((q.x * sx) as f32, (q.y * sy) as f32);
+                                v[ch] = unflatten(base.sample_bilinear(qx, qy)[ch], bilinear(&base_a, qx, qy));
+                            }
+                        }
+                        if gain {
+                            let k = wp.gain(g);
+                            v = v.map(|c| c * k);
+                        }
+                        *px = [v[0], v[1], v[2], a];
+                    }
+                });
+            }
+            // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
+            (SampleMode::Warp(o2t), None) => affine(&mut both, Affine::scale(plan.sx, plan.sy) * o2t),
+            (SampleMode::Affine(xf), _) => affine(&mut both, xf),
+        }
+        let mut img = Rgb32f::new(w, h);
+        let mut a = Plane::new(w, h);
+        for ((p, o), px) in img.data.iter_mut().zip(a.data.iter_mut()).zip(&both) {
+            *p = [px[0], px[1], px[2]];
+            // (the Mitchell prefilter rings a little past 0 and 1)
+            *o = if px[3].is_finite() { px[3].clamp(0.0, 1.0) } else { 0.0 };
+        }
+        (img, a)
+    }
+
     /// The crop rectangle as a quad in normalized oriented coordinates (for overlays).
     pub fn crop_quad_norm(&self) -> [Point; 4] {
         let r = self.crop.rect_px(self.ow, self.oh);
@@ -346,6 +426,45 @@ fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usi
         }
     });
     out
+}
+
+/// Undo the flatten onto white (`f = c·a + (1 − a)` in linear light) of a value resampled with
+/// its alpha `a` (both with the same weights, so the result is the alpha-weighted colour). Pixels
+/// with almost no alpha keep the white: their colour is not recoverable. The colour is clamped at
+/// 0: a prefilter's negative lobe next to an edge, divided by a small alpha, would undershoot.
+#[inline]
+fn unflatten(f: f32, a: f32) -> f32 {
+    const VISIBLE: f32 = 1.0 / 1024.0;
+    if a.is_finite() && a >= VISIBLE { ((f - (1.0 - a)) / a).max(0.0) } else { f }
+}
+
+/// Bilinear alpha at pixel coordinates `(x, y)` of `a`; 0 off the image, which (as for a warp,
+/// `Warp::edges`) has a half-pixel margin, where its edge pixels extend.
+fn alpha_at(a: &Plane, x: f32, y: f32) -> f32 {
+    const MARGIN: f32 = 0.5;
+    let (w, h) = (a.width as f32, a.height as f32);
+    if !(x >= -MARGIN && y >= -MARGIN && x <= w + MARGIN && y <= h + MARGIN) {
+        return 0.0;
+    }
+    bilinear(a, x, y)
+}
+
+/// Bilinear sample of `a` at pixel coordinates `(x, y)`, with the weights of
+/// `Rgb32f::sample_bilinear` at the same point (the edge pixel past the edge); 0 for an empty
+/// plane or a coordinate that is not finite.
+fn bilinear(a: &Plane, x: f32, y: f32) -> f32 {
+    if a.data.is_empty() || !x.is_finite() || !y.is_finite() {
+        return 0.0;
+    }
+    let fx = x.clamp(-1.0, a.width as f32 + 1.0) - 0.5;
+    let fy = y.clamp(-1.0, a.height as f32 + 1.0) - 0.5;
+    let (x0, y0) = (fx.floor(), fy.floor());
+    let (tx, ty) = (fx - x0, fy - y0);
+    let (x0, y0) = (x0 as isize, y0 as isize);
+    let (p, q, r, t) = (a.get_clamped(x0, y0), a.get_clamped(x0 + 1, y0), a.get_clamped(x0, y0 + 1), a.get_clamped(x0 + 1, y0 + 1));
+    let top = p + (q - p) * tx;
+    let bot = r + (t - r) * tx;
+    top + (bot - top) * ty
 }
 
 /// Whole-image rectangle in normalized coordinates.

@@ -202,6 +202,7 @@ fn load_bytes_now(
                 local_tone,
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
+                alpha: None,
             },
             used_reduced,
         ));
@@ -209,8 +210,17 @@ fn load_bytes_now(
     let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
+    let orientation = Orientation::from_exif(d.orientation);
+    // the transparency, fitted and oriented with the pixels, for exports that keep it (issue #2976);
+    // a channel that is opaque everywhere is not kept (a decoder's fit brings 1.0 back as 0.99999994:
+    // that is not transparency, and the photo must render as an opaque one)
+    const OPAQUE: f32 = 1.0 - 1e-4;
+    let alpha = d.alpha.filter(|a| (a.width, a.height) == (img.width, img.height) && a.data.iter().any(|&v| v < OPAQUE)).map(|a| {
+        let a = if a.width.max(a.height) > max_edge { fit(&a, max_edge, max_edge, Filter::Mitchell) } else { a };
+        Arc::new(a.into_oriented(orientation))
+    });
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+    Ok((img.into_oriented(orientation), None, SourceInfo { alpha, ..SourceInfo::default() }, false))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from

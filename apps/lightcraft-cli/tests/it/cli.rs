@@ -502,6 +502,49 @@ fn snapshot_starts_without_a_gpu() {
     }
 }
 
+/// Issue #2976: a transparent PNG exported as PNG kept its pixels but lost its alpha (flattened
+/// onto white); JPEG still composites onto white.
+#[test]
+fn transparent_png_export_keeps_its_alpha() {
+    let input = tmp("alpha-in.png");
+    // 300 × 200, transparent, with an opaque 150 × 100 rectangle in the middle
+    let img =
+        lightcraft_raster::Rgba8::from_fn(
+            300,
+            200,
+            |x, y| if (75..225).contains(&x) && (50..150).contains(&y) { [200, 40, 30, 255] } else { [0, 0, 0, 0] },
+        );
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+    std::fs::write(&input, png).unwrap();
+    let (png_out, jpg_out) = (tmp("alpha-out.png"), tmp("alpha-out.jpg"));
+    for out in [&png_out, &jpg_out] {
+        let _ = std::fs::remove_file(out);
+        let (ok, lines, err) = run_cli(&["--import", input.to_str().unwrap(), "app.export", &format!("path={}", out.display())], None);
+        assert!(ok && lines.iter().all(|l| l["ok"] == true), "{err} {lines:?}");
+    }
+
+    let d = lightcraft_codecs::decode(&std::fs::read(&png_out).unwrap(), Default::default()).unwrap();
+    assert!(d.has_alpha, "the PNG keeps an alpha channel");
+    assert_eq!((d.width, d.height), (300, 200));
+    let px = d.to_srgb8();
+    for (x, y) in [(2, 2), (297, 2), (2, 197), (297, 197), (40, 100)] {
+        assert_eq!(px.get(x, y)[3], 0, "transparent at ({x}, {y})");
+    }
+    let centre = px.get(150, 100);
+    assert_eq!(centre[3], 255, "opaque in the rectangle");
+    assert!(centre[0].abs_diff(200) <= 2 && centre[1].abs_diff(40) <= 2 && centre[2].abs_diff(30) <= 2, "{centre:?}");
+    // the rectangle's edge stays where it was, without a white fringe
+    assert_eq!(px.get(74, 100)[3], 0);
+    let edge = px.get(75, 100);
+    assert_eq!(edge[3], 255);
+    assert!(edge[1] < 60, "no white fringe: {edge:?}");
+
+    let j = lightcraft_codecs::decode(&std::fs::read(&jpg_out).unwrap(), Default::default()).unwrap();
+    assert!(!j.has_alpha);
+    let corner = j.to_srgb8().get(2, 2);
+    assert!(corner.iter().take(3).all(|&c| c >= 250), "JPEG composites onto white: {corner:?}");
+}
+
 fn run_cli(args: &[&str], stdin: Option<&str>) -> (bool, Vec<Value>, String) {
     let mut child = Command::new(binary()).arg("run").args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     if let Some(text) = stdin {

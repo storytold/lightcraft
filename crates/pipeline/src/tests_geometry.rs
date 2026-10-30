@@ -524,3 +524,143 @@ fn auto_straighten_leaves_steep_lines_alone() {
     let deg = level(&tilted_scene(8.0, 30.0)).expect("8° is");
     assert!((deg + 8.0).abs() < 0.5, "{deg}");
 }
+
+/// Issue #2976: an alpha plane resamples exactly as the pixels do (here: a grey copy of the same
+/// plane), for plain, cropped / straightened / flipped / resized and warped frames, and the colour
+/// that comes back from a source flattened onto white is its own colour wherever there is any
+/// alpha: the flatten is undone after resampling, so no white is mixed into edges. Areas the warp
+/// brings in from outside the source are transparent.
+#[test]
+fn alpha_follows_the_pixels_through_every_frame() {
+    use crate::geometry::Frame;
+    use lightcraft_geom::Orientation;
+    use lightcraft_geom::Rect;
+    use lightcraft_raster::Plane;
+    let (w, h) = (240, 160);
+    let colour = [0.6f32, 0.2, 0.1];
+    let soft = Plane::from_fn(w, h, |x, y| grid_value(Point::new(x as f64 + 0.5, y as f64 + 0.5), 24.0));
+    // a hard-edged rectangle: the case a resample mixes white into when it unflattens too early
+    let hard = Plane::from_fn(w, h, |x, y| if (60..180).contains(&x) && (40..120).contains(&y) { 1.0 } else { 0.0 });
+    let mut cropped = DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
+    cropped.crop.geometry.rect = Rect::new(0.1, 0.2, 0.9, 0.7);
+    cropped.crop.geometry.angle = 3.0;
+    cropped.crop.flip_h = true;
+    let mut lens = DevelopSettings::default();
+    lens.optics.distortion = 40.0;
+    lens.geometry.vertical = -30.0;
+    for (plane_name, plane) in [("soft", &soft), ("hard", &hard)] {
+        let grey = Rgb32f::from_fn(w, h, |x, y| [plane.get(x, y); 3]);
+        let flat = Rgb32f::from_fn(w, h, |x, y| {
+            let a = plane.get(x, y);
+            colour.map(|c| c * a + (1.0 - a))
+        });
+        for (frame_name, s, out) in
+            [("plain", DevelopSettings::default(), (w, h)), ("cropped", cropped.clone(), (90, 70)), ("warped", lens.clone(), (180, 120))]
+        {
+            let name = format!("{plane_name} {frame_name}");
+            let f = Frame::new(w, h, &s, true);
+            let (ow, oh) = out;
+            let (img, a) = f.sample_with_alpha(&flat, plane, ow, oh);
+            let g = f.sample(&grey, ow, oh);
+            assert_eq!((a.width, a.height, img.width, img.height), (ow, oh, ow, oh), "{name}");
+            let mut outside = 0;
+            for (i, ((&av, gp), cp)) in a.data.iter().zip(&g.data).zip(&img.data).enumerate() {
+                if gp[1] == crate::geometry::BLANK[1] && gp[0] == crate::geometry::BLANK[0] {
+                    assert_eq!(av, 0.0, "{name}: outside the source at {i}");
+                    outside += 1;
+                    continue;
+                }
+                assert!((av - gp[1].clamp(0.0, 1.0)).abs() < 1e-4, "{name} at {i}: alpha {av} vs pixel {}", gp[1]);
+                if av > 0.01 {
+                    assert!(
+                        cp.iter().zip(colour).all(|(c, want)| (c - want).abs() < 2e-3),
+                        "{name} at {i} (alpha {av}): colour {cp:?}, not {colour:?}"
+                    );
+                }
+            }
+            if frame_name == "warped" {
+                assert!(outside > 0, "the warp brings in area from outside the source");
+            }
+        }
+    }
+    // a plane that is opaque everywhere gives back the plain resample (to float rounding: the
+    // prefilter brings 1.0 back as 0.99999994; opaque sources never take this path)
+    let opaque = Plane::from_fn(w, h, |_, _| 1.0);
+    let src = Rgb32f::from_fn(w, h, |x, y| [x as f32 / w as f32, y as f32 / h as f32, 0.3]);
+    let f = Frame::new(w, h, &cropped, true);
+    let (img, a) = f.sample_with_alpha(&src, &opaque, 90, 70);
+    let plain = f.sample(&src, 90, 70);
+    assert!(img.data.iter().zip(&plain.data).all(|(p, q)| p.iter().zip(q).all(|(a, b)| (a - b).abs() < 1e-5)));
+    assert!(a.data.iter().all(|&v| (v - 1.0).abs() < 1e-5));
+}
+
+/// Review of #2976: the colour that comes back from the unflatten is never negative, even where a
+/// downscale's prefilter (Mitchell, with negative lobes) meets a low-alpha pixel next to an edge
+/// between two colours: dividing by a small alpha would blow the lobe's undershoot up.
+#[test]
+fn unflattened_colour_is_never_negative() {
+    use crate::geometry::Frame;
+    use lightcraft_raster::Plane;
+    let (w, h) = (240, 160);
+    // a red | green edge, with an alpha that falls off to almost nothing across it
+    let colour = |x: usize| if x < 120 { [0.9f32, 0.0, 0.0] } else { [0.0, 0.9, 0.0] };
+    let alpha = Plane::from_fn(w, h, |x, _| {
+        if x < 118 {
+            1.0
+        } else if x < 122 {
+            0.02
+        } else {
+            1.0
+        }
+    });
+    let flat = Rgb32f::from_fn(w, h, |x, y| {
+        let a = alpha.get(x, y);
+        colour(x).map(|c| c * a + (1.0 - a))
+    });
+    let f = Frame::new(w, h, &DevelopSettings::default(), true);
+    // 4:1, so the Mitchell prefilter runs
+    let (img, a) = f.sample_with_alpha(&flat, &alpha, 60, 40);
+    let worst = img.data.iter().zip(&a.data).filter(|(_, av)| **av > 0.0).flat_map(|(p, _)| p.iter().copied()).fold(f32::INFINITY, f32::min);
+    assert!(worst >= 0.0, "a colour channel came back negative: {worst}");
+}
+
+/// Review of #2976: `sample_with_alpha` through a lens warp with chromatic-aberration correction
+/// (red and blue sampled at their own positions, each unflattened with the alpha there) and a
+/// vignette correction (the gain applied to the unflattened colour): a hard-edged source of one
+/// colour comes back as that colour times the gain, as the plain resample of the opaque colour
+/// gives it, wherever its alpha shows; no white from the transparent area gets into any channel.
+#[test]
+fn alpha_sampling_handles_chromatic_aberration_and_vignette() {
+    use crate::geometry::Frame;
+    use lightcraft_raster::Plane;
+    let (w, h) = (240, 160);
+    let colour = [0.6f32, 0.25, 0.1];
+    let alpha = Plane::from_fn(w, h, |x, y| if (50..190).contains(&x) && (30..130).contains(&y) { 1.0 } else { 0.0 });
+    let flat = Rgb32f::from_fn(w, h, |x, y| {
+        let a = alpha.get(x, y);
+        colour.map(|c| c * a + (1.0 - a))
+    });
+    let opaque = Rgb32f::from_fn(w, h, |_, _| colour);
+    let mut s = DevelopSettings::default();
+    s.optics.ca_red = 80.0;
+    s.optics.ca_blue = -80.0;
+    s.optics.vignetting = 60.0;
+    let f = Frame::new(w, h, &s, true);
+    let warp = f.warp.as_ref().expect("the lens corrections make a warp");
+    assert!(warp.per_channel() && warp.has_gain(), "both branches are on");
+    // a slight downscale (with the prefilter), so the edges fall between pixels
+    let (ow, oh) = (190, 127);
+    let (img, a) = f.sample_with_alpha(&flat, &alpha, ow, oh);
+    let reference = f.sample(&opaque, ow, oh);
+    let (mut checked, mut partial) = (0, 0);
+    for (i, ((p, q), &av)) in img.data.iter().zip(&reference.data).zip(&a.data).enumerate() {
+        if av > 0.05 {
+            assert!(p.iter().zip(q).all(|(c, r)| (c - r).abs() <= 2e-3 * r.max(1.0)), "pixel {i} (alpha {av}): {p:?}, want {q:?}");
+            checked += 1;
+            partial += usize::from(av < 0.95);
+        }
+    }
+    assert!(checked > 8_000 && partial > 100, "{checked} pixels checked, {partial} on the edge");
+    // the gain is really there: the corners of the opaque area are brighter than its middle
+    assert!(reference.get(42, 26)[0] > reference.get(95, 63)[0]);
+}

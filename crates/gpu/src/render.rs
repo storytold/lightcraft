@@ -788,7 +788,7 @@ pub fn render(
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
     }
-    Some(Rendered { image, histogram, deep: None })
+    Some(Rendered { image, histogram, deep: None, alpha: None })
 }
 
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).
