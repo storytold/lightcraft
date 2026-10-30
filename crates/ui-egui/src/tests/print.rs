@@ -315,6 +315,57 @@ fn printing_shows_a_row_in_the_activity_stack_and_stops() {
 }
 
 #[test]
+fn a_print_that_fails_leaves_a_row_that_still_knows_its_folder() {
+    use lightcraft_engine::activity::Ending;
+    let mut app = LightcraftApp::new(
+        lightcraft_engine::Session::with_demo(),
+        Services { write_shared: Some(Arc::new(|_, _| Err("The disk is full".into()))), ..Default::default() },
+    );
+    app.session.execute("print.set", &json!({"job": {"ppi": 100.0}})).unwrap();
+    let ids: Vec<_> = app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let dir = std::env::temp_dir().join("lc-print-fails");
+    let path = dir.join("Full.pdf").to_string_lossy().into_owned();
+    crate::export_task::start_print(&mut app, &json!({"path": path, "ids": ids})).unwrap();
+    let ctx = egui::Context::default();
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while app.export.is_some() && std::time::Instant::now() < until {
+        crate::export_task::poll(&mut app, &ctx);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.export.is_none(), "the print did not end");
+    let rows = app.session.activity.finished();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].ending, rows[0].detail.as_str()), (Ending::Failed, "The disk is full"), "{:?}", rows[0]);
+    // the row can still show where the PDF was going
+    assert_eq!(rows[0].path.as_deref(), Some(dir.to_string_lossy().as_ref()), "{:?}", rows[0]);
+}
+
+/// A print that ended leaves a finished row (`activity.finished`): its headline is in the interface's language, like
+/// the rest of the row.
+#[test]
+fn a_finished_print_row_is_in_the_interface_language() {
+    crate::i18n::set_language(crate::i18n::Locale::De);
+    let mut app =
+        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { write_shared: Some(Arc::new(|_, _| Ok(()))), ..Default::default() });
+    app.session.activity.keep_after(0);
+    app.session.execute("print.set", &json!({"job": {"ppi": 100.0}})).unwrap();
+    let ids: Vec<_> = app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let path = std::env::temp_dir().join("lc-print-de").join("Druck.pdf").to_string_lossy().into_owned();
+    crate::export_task::start_print(&mut app, &json!({"path": path, "ids": ids})).unwrap();
+    let ctx = egui::Context::default();
+    let until = std::time::Instant::now() + Duration::from_secs(60);
+    while app.export.is_some() && std::time::Instant::now() < until {
+        crate::export_task::poll(&mut app, &ctx);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let rows = app.session.activity.finished();
+    // the catalog's own words, not ours: the row says what the German catalog says
+    let headline = crate::i18n::tr_format!("Printed to PDF: {photos} photos, {pages} pages", photos = 1, pages = 1);
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    assert_eq!(rows.first().map(|r| r.summary.as_str()), Some(headline.as_str()), "{rows:?}");
+}
+
+#[test]
 fn the_print_menu_item_needs_a_photo_and_is_listed() {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
     assert!(crate::menus::ui_enabled(&app, "dialog.print"));

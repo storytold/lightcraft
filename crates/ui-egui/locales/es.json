@@ -2184,6 +2184,7 @@
   "Add to Apple Photos": "Añadir a Fotos de Apple",
   "Adding to Apple Photos…": "Añadiendo a Fotos de Apple…",
   "not added to Apple Photos (cancelled)": "no se añadieron a Fotos de Apple (cancelado)",
+  "cancelled": "cancelado",
   "The first time, macOS asks whether LightCraft may control Photos.": "La primera vez, macOS pregunta si LightCraft puede controlar Fotos.",
   "Adding to Apple Photos": "Añadiendo a Fotos de Apple",
   "\"saved in memory but not written to disk\", the top bar shows a warning, and LightCraft keeps retrying until the": "«guardado en memoria pero no escrito en el disco», la barra superior muestra un aviso y LightCraft lo sigue intentando hasta que el",

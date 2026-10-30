@@ -76,6 +76,8 @@ fn recheck_result_is_dropped_after_switching_libraries() {
     assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
     assert!(app.ui.toast.is_none(), "{:?}", app.ui.toast);
     assert!(app.session.catalog.photo(id).is_none(), "the other library is untouched");
+    // the user did not stop it: no row asks for attention
+    assert!(app.session.activity.finished().iter().all(|r| !r.ending.needs_attention()), "{:?}", app.session.activity.finished());
 }
 
 /// The notice's Reload from Disk re-reads the file in the background (a row in the activity stack,
@@ -241,6 +243,27 @@ fn reload_with_bad_ids_names_the_command() {
     assert!(!background.contains("``") && !background.starts_with("photo.reload:"), "{background}");
 }
 
+/// A Reload that could not read a file says so in its row: it did not do everything it was asked to.
+#[test]
+fn a_reload_that_could_not_read_a_file_leaves_a_row_naming_it() {
+    let dir = Dir(std::env::temp_dir().join(format!("lc-ui-reload-unread-{}", std::process::id())));
+    let (mut app, id) = app_with_stale_photo(&dir.0);
+    let ctx = egui::Context::default();
+    app.session.activity.keep_after(0);
+    app.session.media.file_probe = Some(std::sync::Arc::new(|path| Err(format!("{path}: could not be read"))));
+    let path = match &app.session.catalog.photo(id).unwrap().source {
+        lightcraft_catalog::Source::File { path } => path.clone(),
+        other => panic!("not a file: {other:?}"),
+    };
+    app.run("photo.reload", json!({"ids": [id.0]})).unwrap();
+    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+    let finished = app.session.activity.finished();
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    let row = &finished[0];
+    assert_eq!((row.kind, row.ending, row.failed), ("reload", lightcraft_engine::activity::Ending::Problems, 1), "{row:?}");
+    assert_eq!((row.failures[0].name.as_str(), row.failures[0].reason.as_str()), (path.as_str(), format!("{path}: could not be read").as_str()));
+}
+
 /// A Reload stopped from the activity stack before its file was read says nothing (the raw wasn't
 /// tried again); one stopped after the file was read still says what came of it.
 #[test]
@@ -250,7 +273,9 @@ fn a_cancelled_reload_reports_only_what_it_did() {
     let (mut app, id) = app_with_stale_photo(&dir.0);
     let ctx = egui::Context::default();
     let native = app.session.media.file_probe.clone().unwrap();
+    app.session.activity.keep_after(0);
     for read in [false, true] {
+        app.session.activity.dismiss_all();
         // (the probe has started, the probe may return)
         let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
         let worker_gate = gate.clone();
@@ -273,6 +298,12 @@ fn a_cancelled_reload_reports_only_what_it_did() {
         gate.0.lock().unwrap().1 = true;
         gate.1.notify_all();
         assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
+        // however it went, the row says it was stopped: ✕ was pressed
+        let finished = app.session.activity.finished();
+        assert!(
+            finished.len() == 1 && finished[0].kind == "reload" && finished[0].ending == lightcraft_engine::activity::Ending::Stopped,
+            "{finished:?}"
+        );
         if read {
             assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
             assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
