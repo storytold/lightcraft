@@ -2327,5 +2327,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Näppäimet toimivat sivupalkissa: nuolet liikuttavat, Enter avaa, kirjoita etsiäksesi, Esc palaa kuviin",
+  "This row has no name to change": "Tällä rivillä ei ole nimeä, jota voisi muuttaa"
 }

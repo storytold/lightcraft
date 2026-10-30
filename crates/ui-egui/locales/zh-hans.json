@@ -2200,5 +2200,7 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "按键现在作用于边栏：方向键移动，回车打开，输入文字查找，Esc 返回照片",
+  "This row has no name to change": "此行没有可更改的名称"
 }

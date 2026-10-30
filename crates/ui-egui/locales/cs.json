@@ -2408,5 +2408,7 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Klávesy ovládají postranní panel: šipky přesouvají, Enter otevírá, psaním hledáte, Esc vrací k fotografiím",
+  "This row has no name to change": "Tento řádek nemá název, který by šlo změnit"
 }

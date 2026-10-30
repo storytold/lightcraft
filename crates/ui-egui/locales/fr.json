@@ -2390,5 +2390,7 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Les touches sont dans la barre latérale : les flèches déplacent, Entrée ouvre, tapez pour chercher, Échap revient aux photos",
+  "This row has no name to change": "Cette ligne n’a pas de nom à modifier"
 }

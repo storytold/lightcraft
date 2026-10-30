@@ -2202,5 +2202,7 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "As teclas estão na barra lateral: as setas movem, Enter abre, digite para achar, Esc volta às fotos",
+  "This row has no name to change": "Esta linha não tem um nome para mudar"
 }

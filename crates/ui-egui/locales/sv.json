@@ -2429,5 +2429,7 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Tangenterna styr sidofältet: piltangenterna flyttar, Enter öppnar, skriv för att söka, Esc går tillbaka till fotona",
+  "This row has no name to change": "Raden har inget namn att ändra"
 }

@@ -2339,5 +2339,7 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Tombol berlaku di bilah samping: panah untuk berpindah, Enter untuk membuka, ketik untuk mencari, Esc untuk kembali ke foto",
+  "This row has no name to change": "Baris ini tidak punya nama yang bisa diubah"
 }

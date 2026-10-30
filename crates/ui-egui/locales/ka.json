@@ -2734,5 +2734,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "კლავიშები გვერდით ზოლს მართავს: ისრები გადაადგილებს, Enter ხსნის, აკრიფეთ საძებნად, Esc ფოტოებს უბრუნდება",
+  "This row has no name to change": "ამ მწკრივს შესაცვლელი სახელი არ აქვს"
 }

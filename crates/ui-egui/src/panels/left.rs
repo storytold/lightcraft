@@ -32,10 +32,10 @@ use local::{local_now, local_rows};
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
 use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
 pub(crate) use rows::{content_width, indent_step, step_for};
-pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;
+pub(crate) use sections::{PlacedSection, SECTION_HEADER};
 use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sections_menu};
 
 /// Draw the My Photos sidebar: title and open-library name, the scrollable sources, albums,

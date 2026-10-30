@@ -2349,5 +2349,7 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Клавиши работают в боковой панели: стрелки перемещают, Enter открывает, набор текста ищет, Esc возвращает к фотографиям",
+  "This row has no name to change": "У этой строки нет имени, которое можно изменить"
 }

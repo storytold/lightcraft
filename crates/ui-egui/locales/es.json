@@ -2358,5 +2358,7 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Las teclas están en la barra lateral: las flechas mueven, Intro abre, escribe para buscar, Esc vuelve a las fotos",
+  "This row has no name to change": "Esta fila no tiene un nombre que cambiar"
 }
