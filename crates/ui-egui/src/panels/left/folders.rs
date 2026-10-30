@@ -117,7 +117,12 @@ pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Al
                     ("Create Smart Album from Filter…", "dialog.newSmartAlbum"),
                     ("Create Folder…", "dialog.newFolder"),
                 ] {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
+                    // (a view that can't be saved as rules greys out the one that saves it, and says why)
+                    let why_not = if command == "dialog.newSmartAlbum" { app.session.view_save_refusal() } else { None };
+                    let item = ui.add_enabled(why_not.is_none(), egui::Button::new(crate::i18n::tr(label)));
+                    if let Some(why) = why_not {
+                        item.on_disabled_hover_text(why);
+                    } else if item.clicked() {
                         let _ = app.run(command, json!({"parent": a.id.0}));
                         ui.close();
                     }
@@ -318,6 +323,9 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
         let leads_on = n.own == 0 && n.children.len() == 1;
         let mut open = tree_open(ui, open_id, n.volume || leads_on);
         // a row whose path would cover other disks' photos too only opens and closes
+        if n.selectable {
+            app.ui.side.folders.saw(n.path.clone());
+        }
         let name = if n.selectable { n.name.clone() } else { crate::i18n::tr("This Computer").to_string() };
         let id = format!("libfolder:{}", n.path);
         if !out_of_sight(app, ui, &id, &name, Some(n.count), indent, n.label.is_some()) {
@@ -332,9 +340,7 @@ pub(super) fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[F
 /// One drawn row of [`folder_rows`], shown as `name`; `open_id` and `open` are its triangle's.
 #[allow(clippy::too_many_arguments)]
 fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &str, name: &str, indent: f32, open_id: egui::Id, open: &mut bool) {
-    let sel = n.selectable
-        && app.session.source == LibrarySource::LibraryFolder
-        && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path));
+    let sel = n.selectable && crate::panels::side_select::folder_shown(app, &n.path);
     // the label is said with the name, as it is shown beside it
     let spoken = match n.label {
         Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
@@ -354,8 +360,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
     let resp = resp.on_hover_text(tip);
     if resp.clicked() && !toggled {
         if n.selectable {
-            // a source like an album or a Local folder: it replaces what the grid showed
-            let _ = app.run("library.source", json!({"kind": "libraryFolder", "path": n.path}));
+            crate::panels::side_select::folder_clicked(app, ui, &n.path);
         } else {
             *open = !*open;
             set_tree_open(ui, open_id, *open);

@@ -1,5 +1,18 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### Choose several albums, folders, keywords or dates in the sidebars
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one, except rows
+  inside a folder that is closed. The grid shows the photos of any of them, each once, and the title says how many
+  albums or folders are shown. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel, Keywords) the same clicks pick several keywords. Picking does not change the grid.
+- With several albums shown, Remove from Album is not offered and the Delete key is the photos' Delete (it asks first
+  while Settings ▸ Confirm before moving photos to Recently Deleted is on), because there is no telling which album is meant.
+- Menus, dragging and the Keyword List's − button still act on one row; choosing several rows for those comes in a
+  later change. When several albums are shown, Delete stays the photos' Delete, as above.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -156,6 +169,16 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Several albums, folders, keywords or dates shown at once (agents)
+- `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
+  browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
+  `libraryFolders` and `albums`. The single fields stay and count as one
+  more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click that use
+  this come in a later change. When the albums shown include a smart album, New Smart Album from Filter… is grayed out
+  and says why, as `album.createSmart` does.
+- `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
+  it), so editing a smart album saved from a view of several albums no longer loses them.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

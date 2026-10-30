@@ -79,7 +79,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let selection = app.session.selected();
     let ticks = app.caches.keyword_ticks(&app.session.catalog, &selection);
+    app.ui.side.keyword_list.begin_frame();
     for r in &rows {
+        app.ui.side.keyword_list.saw(r.path.clone());
         row(app, ui, r, &selection, &ticks, filter.trim().is_empty());
     }
     ui.add_space(12.0);
@@ -94,6 +96,11 @@ pub(crate) fn follow(app: &mut LightcraftApp, from: &str, to: &str) {
         && is_under(&k, from)
     {
         app.ui.keyword_list_selected = Some(reparent(&k, from, &to));
+    }
+    for k in &mut app.ui.side.keyword_list_also {
+        if is_under(k, from) {
+            *k = reparent(k, from, &to);
+        }
     }
     for o in &mut app.ui.keyword_list_open {
         if is_under(o, from) {
@@ -175,10 +182,11 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         app.ui.dragging_keyword = Some(r.path.clone());
     }
     drop_target(app, ui, rect, &r.path);
-    let picked = app.ui.keyword_list_selected.as_deref().is_some_and(|k| same(k, &r.path));
+    let picked = super::side_select::list_is_picked(app, &r.path);
     let inner = Rect::from_min_max(rect.min + vec2(16.0, 0.0), rect.max - vec2(16.0, 0.0));
     if picked {
         ui.painter().rect_filled(inner, 4.0, t.canvas);
+        register(ui, format!("keywordPicked:{}", r.path), inner);
     } else if resp.hovered() {
         ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
     }
@@ -268,7 +276,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     if ar.on_hover_text(crate::i18n::tr("Show Photos with Keyword")).clicked() {
         super::left::browse_all_photos(app, true);
-        let _ = app.run("library.filter", json!({"keyword": r.path}));
+        let _ = app.run("library.filter", json!({"keyword": r.path, "keywords": []}));
     }
     // the name, cut short before the arrow
     let room = (arrow.left() - 4.0 - (x + 34.0)).max(0.0);
@@ -284,9 +292,10 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     }
     let resp = resp.on_hover_text(r.path.replace('|', " › "));
     if resp.clicked() {
-        app.ui.keyword_list_selected = Some(r.path.clone());
+        super::side_select::list_clicked(app, ui, &r.path);
     }
-    if resp.double_clicked() {
+    // (not with Cmd or Shift held: those clicks pick rows)
+    if resp.double_clicked() && ui.input(|i| !i.modifiers.command && !i.modifiers.shift) {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
     crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
@@ -383,7 +392,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     }
     if item(ui, "show", crate::i18n::tr("Show Photos with Keyword"), true) {
         super::left::browse_all_photos(app, true);
-        let _ = app.run("library.filter", json!({"keyword": path}));
+        let _ = app.run("library.filter", json!({"keyword": path, "keywords": []}));
     }
     ui.separator();
     if item(ui, "purge", crate::i18n::tr("Purge Unused Keywords"), true) {
@@ -572,7 +581,7 @@ impl Ticks {
 }
 
 /// The keyword is in the tree (any case).
-fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
+pub(crate) fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
     tree.iter().any(|n| same(&n.path, path) || (lightcraft_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
 }
 

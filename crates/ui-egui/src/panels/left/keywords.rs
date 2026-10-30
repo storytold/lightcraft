@@ -1,4 +1,3 @@
-use super::dates::browse_all_photos;
 use super::rows::{INDENT_STEP, Row, out_of_sight, tree_open, tree_toggle};
 use super::{Icon, KeywordNode, LightcraftApp, json};
 
@@ -11,6 +10,7 @@ pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[
         let open_id = (!n.children.is_empty()).then(|| egui::Id::unique(("kw-open", n.path.to_lowercase())));
         let mut open = open_id.is_some_and(|k| tree_open(ui, k, false));
         let id = format!("keyword:{}", n.path);
+        app.ui.side.keywords.saw(n.path.clone());
         if !out_of_sight(app, ui, &id, &n.name, Some(n.count), indent, false) {
             keyword_row(app, ui, n, &id, indent, open_id, &mut open);
         }
@@ -22,16 +22,14 @@ pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[
 
 /// One drawn row of [`keyword_rows`]; `open_id` and `open` are its triangle's when it has rows inside it.
 fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: &str, indent: f32, open_id: Option<egui::Id>, open: &mut bool) {
-    let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
+    let sel = crate::panels::side_select::keyword_shown(app, &n.path);
     let resp = Row::new(id, Icon::Tag, &n.name).count(Some(n.count)).selected(sel).indent(indent).show(app, ui);
     if let Some(k) = open_id {
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path));
     }
     let resp = resp.on_hover_text(if n.children.is_empty() { n.path.clone() } else { format!("{} (includes the keywords below it)", n.path) });
     if resp.clicked() {
-        let v = if sel { serde_json::Value::Null } else { json!(n.path) };
-        browse_all_photos(app, !sel);
-        let _ = app.run("library.filter", json!({"keyword": v}));
+        crate::panels::side_select::keyword_clicked(app, ui, &n.path);
     }
     crate::widgets::context_menu(&resp, |ui| {
         let has_sel = app.session.active().is_some();
