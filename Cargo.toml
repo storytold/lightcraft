@@ -106,8 +106,8 @@ rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
 # macOS: the profile of the screen showing the window (safe AppKit bindings; muda and wgpu use the same)
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSColorSpace", "NSResponder", "NSScreen", "NSWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSButton", "NSColorSpace", "NSControl", "NSPanel", "NSResponder", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSGeometry"] }
 # Linux: the desktop's dark/light setting from the XDG settings portal (Settings ▸ Interface ▸
 # Appearance Mode ▸ Auto). Pure Rust; the version accesskit already brings in, pinned to it.
 zbus = "=5.19.0"

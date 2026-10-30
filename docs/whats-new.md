@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### macOS: the traffic lights are centred on the top bar
+- The red, yellow and green window buttons now sit in the middle of the top bar's height, in line with its buttons and search field. Before, they kept macOS's own title-bar position and sat about 4 points higher. They stay centred when the window is resized, leaves full screen or changes appearance.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
