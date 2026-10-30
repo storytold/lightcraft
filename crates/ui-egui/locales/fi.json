@@ -2327,5 +2327,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Filter settings": "Suodata asetuksia",
+  "No setting matches what is typed.": "Mikään asetus ei vastaa kirjoitettua.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Kokeile yhtä sanaa tai sen osaa: haku kattaa välilehtien ja osioiden nimet, otsikot ja selitykset."
 }

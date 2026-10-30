@@ -6,7 +6,7 @@ use super::{RichText, Tokens, register};
 /// use is outlined. Applied on the next frame ([`LightcraftApp::sync_theme`]).
 pub(super) fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings, system: Option<egui::Theme>) {
     use crate::state::{AppearanceMode as M, DarkTheme, LightTheme};
-    heading(ui, t, crate::i18n::tr("Appearance"));
+    heading(ui, t, "Appearance");
     ui.label(RichText::new(crate::i18n::tr("Appearance Mode")).color(t.text_label));
     ui.horizontal_wrapped(|ui| {
         choices(ui, "settingsAppearance", &[(M::Auto, "Sync with System"), (M::Dark, "Dark Mode"), (M::Light, "Light Mode")], &mut s.appearance_mode);

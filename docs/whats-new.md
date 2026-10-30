@@ -2,6 +2,15 @@
 
 ## 2026-10-24
 
+### Settings has a filter that finds a section on whatever tab it is
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first, or ↓
+  to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The choices of a
+  closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, `settingsFound:<tab>:<section>`
+  for each section found, and `heading:<its English name>` for where a section starts, whatever the interface
+  language.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

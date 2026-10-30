@@ -1,4 +1,4 @@
-use super::{LABEL_W, RichText, Tokens, register};
+use super::{GOTO, LABEL_W, RichText, Tokens, register};
 
 /// `path` shortened to fit `max` (as `width` measures it) by dropping leading folders, after
 /// either kind of separator, so that its end stays (`…/Pictures/Library`,
@@ -51,7 +51,15 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
 
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    // `text` is the heading's English name (its message key). It is shown translated and
+    // registered as `heading:{text}` whatever the language, where a section starts: for the
+    // filter, scripts and tests that look for one.
+    let r = ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    register(ui, format!("heading:{text}"), r.rect);
+    // (chosen from what the filter found: the section is brought to the top of the page)
+    if ui.data(|d| d.get_temp::<(&'static str, String)>(egui::Id::unique(GOTO))).is_some_and(|(_, section)| section == text) {
+        r.scroll_to_me(Some(egui::Align::TOP));
+    }
 }
 
 pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {

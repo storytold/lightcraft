@@ -2339,5 +2339,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Filter settings": "Filter pengaturan",
+  "No setting matches what is typed.": "Tidak ada pengaturan yang cocok dengan yang diketik.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Coba satu kata atau sebagiannya: yang dicari adalah nama tab dan bagian, label, serta penjelasan."
 }
