@@ -228,10 +228,13 @@ impl Frame {
 
     /// The most pixels this frame's render may have: [`MAX_RENDER_PIXELS`], or this frame's own
     /// (cropped) pixel count when that is larger — a render is never held below the photo's own
-    /// size.
+    /// size. The exemption is the source's own pixels at most: the crop rectangle comes from
+    /// settings (a sidecar, a preset, `develop.merge`, `render --settings`), and a turned crop is
+    /// deliberately left unclipped to 0..1 (`DevelopSettings::keep_in_range`, issue #1946), so it
+    /// can name more pixels than the photo has and must not lift the ceiling with them.
     fn pixel_ceiling(&self) -> f64 {
         let (nw, nh) = self.native_size();
-        (nw * nh).max(MAX_RENDER_PIXELS)
+        (nw.min(self.ow) * nh.min(self.oh)).max(MAX_RENDER_PIXELS)
     }
 
     /// Output pixels per unit of the oriented image's long edge.
@@ -521,5 +524,21 @@ mod tests {
         let f = Frame::new(400_000_000, 200_000_000, &s, true); // 8e16 px of its own
         assert_eq!(f.fit(400_000_000, 200_000_000), (400_000_000, 200_000_000));
         assert_eq!(f.fit(800_000_000, 400_000_000), (400_000_000, 200_000_000));
+    }
+
+    /// The crop rectangle comes from settings (a sidecar, a preset, `develop.merge`,
+    /// `render --settings`), and a turned crop is deliberately left unclipped to 0..1
+    /// (`DevelopSettings::keep_in_range`), so a hostile or typo'd one can name more pixels than the
+    /// photo has. It must not lift the ceiling with them: the exemption stops at the photo's own
+    /// pixels, so the fit below lands at 512 megapixels, not at the ~2 gigapixels the crop names.
+    #[test]
+    fn an_out_of_bounds_crop_cannot_lift_the_ceiling_past_the_photo() {
+        let mut s = DevelopSettings::default();
+        s.crop.geometry.rect = Rect::new(-4_000.0, -4_000.0, 4_001.0, 4_001.0); // ~2e9 px "of its own"
+        s.crop.geometry.angle = 5.0;
+        let f = Frame::new(8, 4, &s, true);
+        let (w, h) = f.fit(200_000, 100_000);
+        assert!((w as i64 - 32_000).abs() <= 1 && (h as i64 - 16_000).abs() <= 1, "{w}×{h}");
+        assert!((w * h) as f64 <= MAX_RENDER_PIXELS * 1.001, "{} px", w * h);
     }
 }
