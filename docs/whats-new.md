@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-10-26
+
+### Lens distortion correction for the Sony A7 III
+- Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
+  the A7R IVA's: straight lines stay straight at wide angles (the FE 16–35 F4 ZA at 16 mm shifts detail near the
+  corners by up to about 40 px on a 24 MP photo) and at long ones (the FE 28–70 at 70 mm). Measured against the
+  camera's JPEG, the median error is well under a pixel (up to about 1.5 px in the 16 mm corners). Optics ▸ Enable Lens Corrections turns it off and Profile Distortion scales
+  it; photos imported before this pick it up with Photo ▸ Reload from Disk. Vignetting and chromatic aberration
+  from Sony files are not applied yet.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

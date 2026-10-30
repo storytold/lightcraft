@@ -1069,8 +1069,8 @@ fn sony_embedded_distortion_is_limited_to_validated_models() {
     for (name, model, expected) in [
         ("arw-sony-a7rm4a-compressed.arw", "ILCE-7RM4A", 1),
         ("arw-sony-a9m2-compressed.arw", "ILCE-9M2", 0),
-        ("arw-sony-a7m3-compressed.arw", "ILCE-7M3", 0),
-        ("arw-sony-a7m3-uncompressed.arw", "ILCE-7M3", 0),
+        ("arw-sony-a7m3-compressed.arw", "ILCE-7M3", 1),
+        ("arw-sony-a7m3-uncompressed.arw", "ILCE-7M3", 1),
         ("arw-sony-a7m4-14bit.arw", "ILCE-7M4", 0),
         ("arw-sony-a7m4-lossless-l.arw", "ILCE-7M4", 0),
         ("arw-sony-a7m4-lossless-m.arw", "ILCE-7M4", 0),
@@ -1227,7 +1227,7 @@ fn a_sony_fixture_that_differs_from_its_pin_fails() {
 
 /// Sony's lens-correction records (`lightcraft_raw::lens_metadata`, `crates/raw/src/vendor/arw_lens.rs`) on the public
 /// samples: shading, CA and distortion decoded from the raw IFD with their settings, equal to their `SR2SubIFD` copies,
-/// the same from header and full decode, and nothing applied beyond the validated ILCE-7RM4A distortion. Expected
+/// the same from header and full decode, and nothing applied beyond the validated ILCE-7RM4A and ILCE-7M3 distortion. Expected
 /// tables and settings: what ExifTool, run as a black-box tool, prints for these files. Every file is checked against
 /// its pinned SHA-256 before it is decoded; absent files are skipped.
 #[test]
@@ -1351,13 +1351,13 @@ fn sony_lens_records_of_the_public_samples() {
         eprintln!("{name}: shading, CA and distortion decoded; distortion {status:?}");
         checked += 1;
     }
-    // every Sony corpus file: only the ILCE-7RM4A's distortion is ever applied, and an applied status is an opcode
+    // every Sony corpus file: only the ILCE-7RM4A's and ILCE-7M3's distortion is ever applied, and an applied status is an opcode
     for (name, _) in SONY_SAMPLES {
         let Some(bytes) = pinned_sony(&root, name) else { continue };
         let info = probe_info(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         let Some(s) = &info.lens_metadata.sony else { continue };
         let applied = s.distortion.status == SonyLensStatus::Applied;
-        assert_eq!(applied, info.metadata.model.as_deref() == Some("ILCE-7RM4A"), "{name}");
+        assert_eq!(applied, matches!(info.metadata.model.as_deref(), Some("ILCE-7RM4A" | "ILCE-7M3")), "{name}");
         assert_eq!(info.opcodes.list3.len(), usize::from(applied), "{name}");
         assert!(![s.shading.status, s.chromatic_aberration.status].contains(&SonyLensStatus::Applied), "{name}");
         checked += 1;
