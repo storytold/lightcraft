@@ -315,6 +315,14 @@ fn levels_cover_sizes_and_large_exports_use_the_original() {
     }
     let loupe = s.render_job(p.id, 1600, 1600, false, true).unwrap();
     assert_eq!(loupe.level, SourceLevel::Preview);
+    // …but an export of the same size develops the whole sensor, not the preview's binned mosaic (#3270)
+    let (space, depth) = (lightcraft_pipeline::OutputSpace::Srgb, lightcraft_pipeline::OutputDepth::U8);
+    let export = s.export_job(p.id, 1600, 1600, space, depth).unwrap();
+    assert_eq!(export.level, SourceLevel::Full);
+    assert_ne!(export.key, loupe.key);
+    assert_eq!(s.export_job(p.id, 2560, 2560, space, depth).unwrap().level, SourceLevel::Full);
+    // thumbnail-sized outputs (contact-sheet cells) stay on the thumbnail source
+    assert_eq!(s.export_job(p.id, 256, 256, space, depth).unwrap().level, SourceLevel::Thumb);
     assert_ne!(loupe.key, s.render_job(p.id, 1600, 1600, false, true).unwrap().draft().key);
     // two photos with identical settings and size never share a result key
     let plain: Vec<_> = s.catalog.photos().filter(|p| !p.is_edited()).map(|p| p.id).take(2).collect();

@@ -430,6 +430,16 @@ impl crate::Session {
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        // An export of a preview's size develops the whole sensor, not the preview's binned mosaic (a 2×2 block
+        // mean, then a box fit): resized from a full demosaic it keeps the fine detail (issue #3270). Thumbnail-sized
+        // outputs (contact-sheet cells, tiny exports) stay on the cheap thumbnail source.
+        if job.level == SourceLevel::Preview {
+            let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+            job.level = SourceLevel::Full;
+            job.source = self.media.source_ref(&p, SourceLevel::Full);
+            // (the level is part of the result key)
+            job.key ^= ((SourceLevel::Preview as u64) << 60) ^ ((SourceLevel::Full as u64) << 60);
+        }
         // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
         // image that the file keeps (Lightroom's merged DNGs)
         let reduced = match &job.source {

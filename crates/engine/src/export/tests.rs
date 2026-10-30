@@ -1471,7 +1471,10 @@ fn export_weights_follow_the_source_and_output_sizes() {
     let mb = |b: usize| b >> 20;
     // a full-size 24 MP export (measured peak ~1.2 GB)
     assert_eq!(mb(render_weight(6000 * 4000, 6000, SourceLevel::Full, 6000 * 4000)), 1098);
-    // 2048 px from the 2560 px preview (measured ~150 MB)
+    // 2048 px from the full sensor (an export of a preview's size no longer reads the binned preview, #3270):
+    // the 24 MP source dominates
+    assert_eq!(mb(render_weight(6000 * 4000, 6000, SourceLevel::Full, 2048 * 1365)), 370);
+    // (the 2560 px preview level weighs 145 MB for the same output, as measured)
     assert_eq!(mb(render_weight(6000 * 4000, 6000, SourceLevel::Preview, 2048 * 1365)), 145);
     // a photo smaller than the preview level is its own source
     assert_eq!(render_weight(1000 * 500, 1000, SourceLevel::Preview, 0), 1000 * 500 * 12);
