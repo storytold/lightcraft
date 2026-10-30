@@ -156,6 +156,20 @@ fn chroma_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
     put_rgb(i, vec3<f32>(c0.x / y, c0.y / y, c0.z / y));
 }
 
+// Global colour NR must not floor positive luminance: doing so darkens flat shadows.
+// The render input is non-negative, so RGB/Y is bounded by the luminance coefficients.
+@compute @workgroup_size(256)
+fn nr_chroma_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let c0 = rgb_a(i);
+    let y = lum2020(c0);
+    let divisor = select(1.0, y, y > 0.0);
+    put_rgb(i, vec3<f32>(c0.x / divisor, c0.y / divisor, c0.z / divisor));
+}
+
 // Colour NR: blend chromaticity towards its blur and re-apply luminance (a: image, b: chroma,
 // c: blurred chroma). P[1] = t.
 @compute @workgroup_size(256)

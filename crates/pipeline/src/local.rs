@@ -400,6 +400,13 @@ fn nr_radius(sigma: f32) -> (f32, f32) {
     (NR_MIN_SIGMA, (sigma / made).powi(2).min(1.0))
 }
 
+/// Defend the render boundary as well as the UI: settings can also arrive through saved JSON
+/// or direct Rust callers. Keep valid slider values bit-identical; invalid values must never
+/// turn smoothing into extrapolation or collapse the intended noise tolerance.
+fn nr_unit(value: f64) -> f32 {
+    if value.is_finite() { (value.clamp(0.0, 100.0) / 100.0) as f32 } else { 0.0 }
+}
+
 /// Noise-reduction parameters at `scale` output pixels per pixel of the original
 /// ([`crate::Plan::detail_scale`]; see [`denoise`]). Noise lives at the original's pixels, so the
 /// radii are the full-size radii times `scale`, and the guided filter's `eps` (the variance it
@@ -407,17 +414,17 @@ fn nr_radius(sigma: f32) -> (f32, f32) {
 /// multiplies by `scale²`. A radius below [`NR_MIN_SIGMA`] fades instead ([`nr_radius`]): previews look like
 /// the full-size render scaled down (issue #960). At `scale` 1 these are the full-size parameters.
 pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrColor>) {
-    let lum = (s.detail.nr_luminance / 100.0) as f32;
-    let col = (s.detail.nr_color / 100.0) as f32;
+    let lum = nr_unit(s.detail.nr_luminance);
+    let col = nr_unit(s.detail.nr_color);
     let scale = if scale.is_finite() { scale.clamp(0.0, 1.0) } else { 1.0 };
     let l = (lum > 0.0).then(|| nr_radius((1.0 + 2.5 * lum) * scale)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
-        let detail = (s.detail.nr_detail / 100.0) as f32;
+        let detail = nr_unit(s.detail.nr_detail);
         let eps = ((0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail)) * scale * scale).max(1e-7);
         NrLum { sigma, eps, k: lum.sqrt() * w }
     });
-    let smooth = 1.0 + (s.detail.nr_color_smoothness / 100.0) as f32;
+    let smooth = 1.0 + nr_unit(s.detail.nr_color_smoothness);
     let c = (col > 0.0).then(|| nr_radius((1.5 + 6.0 * col) * scale * smooth)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
-        let keep = (s.detail.nr_color_detail / 100.0) as f32 * 0.5;
+        let keep = nr_unit(s.detail.nr_color_detail) * 0.5;
         NrColor { sigma, t: col * (1.0 - keep) * w }
     });
     (l, c)
@@ -453,8 +460,12 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     if let Some(nr) = col {
         let _t = crate::profiling().then(std::time::Instant::now);
         let chroma = img.map(|c| {
-            let y = luminance_2020(c).max(1e-6);
-            [c[0] / y, c[1] / y, c[2] / y]
+            // The input has non-negative channels. For positive Y, RGB/Y is bounded by
+            // the luminance coefficients even arbitrarily close to black. Flooring Y
+            // darkens a flat shadow when we reapply its actual (smaller) luminance.
+            let y = luminance_2020(c);
+            let divisor = if y > 0.0 { y } else { 1.0 };
+            [c[0] / divisor, c[1] / divisor, c[2] / divisor]
         });
         let b = gaussian(&chroma, nr.sigma);
         for_rows(&mut img.data, w, |y, row| {

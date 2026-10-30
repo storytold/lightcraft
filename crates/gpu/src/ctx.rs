@@ -51,6 +51,7 @@ const MODULES: &[Module] = &[
             "wb_k",
             "nr_lum",
             "chroma_k",
+            "nr_chroma_k",
             "nr_col",
             "subsample",
             "redeye_k",
@@ -793,6 +794,16 @@ pub fn groups1(n: usize) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn global_nr_shader_validates_without_an_adapter() {
+        let m = super::MODULES.iter().find(|m| m.entries.contains(&"nr_chroma_k")).unwrap();
+        let source = super::module_source(m, &super::constants());
+        let module = wgpu::naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap();
+    }
+
     #[test]
     fn limits_override_parses() {
         assert_eq!(super::parse_limits("webgpu"), Some((128 << 20, 256 << 20)));

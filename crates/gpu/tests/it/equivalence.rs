@@ -50,6 +50,29 @@ fn camera_tone_and_relative_wb() {
     check("camera chroma curve edited", &src, &info, &s, &RenderRequest::fit(320, 240));
 }
 
+/// Colour NR must agree below the old 1e-6 chromaticity denominator floor too.
+#[test]
+fn colour_nr_in_deep_shadows_matches_cpu() {
+    if !gpu() {
+        return;
+    }
+    for level in [1e-8, 1e-7, 1e-6] {
+        let src = Arc::new(Rgb32f::from_fn(96, 64, |x, y| {
+            let colour = if y < 32 { [1.6, 0.8, 0.4] } else { [0.4, 0.8, 1.6] };
+            let texture = 1.0 + 0.1 * (x as f32 * 0.7).sin();
+            colour.map(|v| v * level * texture)
+        }));
+        let mut s = DevelopSettings::default();
+        // Expose after NR to make the shadow-floor defect observable in the 8-bit comparison.
+        s.light.exposure = 20.0;
+        s.detail.nr_color = 100.0;
+        check("deep shadow colour NR", &src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 64));
+        s.detail.nr_color = 400.0;
+        s.detail.nr_luminance = 400.0;
+        check("bounded shadow NR", &src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 64));
+    }
+}
+
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {
     Arc::new(lightcraft_scenes::demo_library()[i].render(w, h))
 }

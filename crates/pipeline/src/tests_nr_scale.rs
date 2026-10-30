@@ -209,3 +209,186 @@ fn crop_does_not_change_the_noise_reduction_scale() {
     assert_eq!((p.w, p.h), (200, 100));
     assert!((p.detail_scale - 1.0).abs() < 1e-6, "{}", p.detail_scale);
 }
+
+#[test]
+fn nr_settings_are_bounded_at_the_render_boundary() {
+    let setters: [fn(&mut DevelopSettings, f64); 5] = [
+        |s, v| s.detail.nr_luminance = v,
+        |s, v| s.detail.nr_color = v,
+        |s, v| s.detail.nr_detail = v,
+        |s, v| s.detail.nr_color_detail = v,
+        |s, v| s.detail.nr_color_smoothness = v,
+    ];
+    for set in setters {
+        for value in [-1e300, -1.0, 0.0, 50.0, 100.0, 101.0, 1e300, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut s = DevelopSettings::default();
+            s.detail.nr_luminance = 50.0;
+            s.detail.nr_color = 50.0;
+            set(&mut s, value);
+            let mut bounded = s.clone();
+            let expected = if value.is_finite() { value.clamp(0.0, 100.0) } else { 0.0 };
+            set(&mut bounded, expected);
+            for scale in [0.0, 0.1, 0.5, 1.0] {
+                let params = nr_params(&s, scale);
+                assert_eq!(params, nr_params(&bounded, scale), "value={value}, scale={scale}");
+                if let Some(l) = params.0 {
+                    assert!(l.sigma.is_finite() && (1.0..=3.5).contains(&l.sigma));
+                    assert!(l.eps.is_finite() && l.eps > 0.0);
+                    assert!((0.0..=1.0).contains(&l.k));
+                }
+                if let Some(c) = params.1 {
+                    assert!(c.sigma.is_finite() && (1.0..=15.0).contains(&c.sigma));
+                    assert!((0.0..=1.0).contains(&c.t));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn excessive_nr_matches_the_slider_endpoint_on_texture_and_colour_edges() {
+    // Fine luminance texture, a luminance edge and an isoluminant colour edge. A saved
+    // out-of-range strength must never invert texture/colour by extrapolating past the blur.
+    let src = Rgb32f::from_fn(96, 64, |x, y| {
+        let texture = if (x + y) % 2 == 0 { 0.015 } else { -0.015 };
+        let base = if x < 48 { 0.18 } else { 0.36 };
+        let colour = if y < 32 { 0.03 } else { -0.03 };
+        [base + texture + colour, base + texture, base + texture - colour]
+    });
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 100.0;
+    s.detail.nr_color = 100.0;
+    let mut endpoint = src.clone();
+    denoise(&mut endpoint, &s, 1.0);
+    s.detail.nr_luminance = 400.0;
+    s.detail.nr_color = 400.0;
+    let mut excessive = src;
+    denoise(&mut excessive, &s, 1.0);
+    assert_eq!(excessive.data, endpoint.data);
+    assert!(excessive.data.iter().flatten().all(|v| v.is_finite() && *v >= 0.0));
+}
+
+#[test]
+fn excessive_nr_quality_comparison() {
+    use crate::local::{NrColor, NrLum, apply_nr};
+    let clean = Rgb32f::from_fn(192, 128, |x, y| {
+        let base = if x < 96 { 0.18 } else { 0.36 };
+        let fine = 0.015 * (x as f32 * 1.2).sin() * (y as f32 * 0.7).cos();
+        let colour = if y < 64 { 0.06 } else { -0.06 };
+        [base + fine + colour, base + fine, base + fine - colour]
+    });
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut noisy = clean.clone();
+    for p in &mut noisy.data {
+        *p = p.map(|v| v + 0.005 * rng.normal());
+    }
+    let mut before = noisy.clone();
+    // Original nr_params at strength 400, Detail/Smoothness 50, scale 1.
+    apply_nr(&mut before, Some(NrLum { sigma: 11.0, eps: 0.002 + 16.0 * 0.25 * 0.65, k: 2.0 }), Some(NrColor { sigma: 25.5 * 1.5, t: 3.0 }));
+    let mut after = noisy;
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 400.0;
+    s.detail.nr_color = 400.0;
+    denoise(&mut after, &s, 1.0);
+    let before_l = rms_log(&before, &clean);
+    let after_l = rms_log(&after, &clean);
+    let before_c = rms_chroma(&before, &clean);
+    let after_c = rms_chroma(&after, &clean);
+    eprintln!("out-of-range NR quality: log-luminance RMS {before_l:.6} -> {after_l:.6} EV; chromaticity RMS {before_c:.6} -> {after_c:.6}");
+    assert!(after_l < before_l * 0.5);
+    assert!(after_c < before_c * 0.5);
+}
+
+#[test]
+fn valid_nr_parameters_keep_the_legacy_mapping() {
+    for value in [0.0, 0.1, 1.0, 25.0, 50.0, 99.9, 100.0] {
+        for detail in [0.0, 50.0, 100.0] {
+            let mut s = DevelopSettings::default();
+            s.detail.nr_luminance = value;
+            s.detail.nr_color = value;
+            s.detail.nr_detail = detail;
+            s.detail.nr_color_detail = detail;
+            s.detail.nr_color_smoothness = detail;
+            let (l, c) = nr_params(&s, 1.0);
+            if value == 0.0 {
+                assert_eq!((l, c), (None, None));
+                continue;
+            }
+            let amount = (value / 100.0) as f32;
+            let detail = (detail / 100.0) as f32;
+            assert_eq!(
+                l,
+                Some(crate::local::NrLum { sigma: 1.0 + 2.5 * amount, eps: 0.002 + amount * amount * 0.25 * (1.0 - 0.7 * detail), k: amount.sqrt() })
+            );
+            assert_eq!(c, Some(crate::local::NrColor { sigma: (1.5 + 6.0 * amount) * (1.0 + detail), t: amount * (1.0 - detail * 0.5) }));
+        }
+    }
+}
+
+#[test]
+fn colour_nr_keeps_flat_deep_shadows_and_black() {
+    for level in [0.0, 1e-12, 1e-9, 1e-7, 1e-6, 0.18] {
+        for colour in [[1.0; 3], [1.6, 0.8, 0.4]] {
+            let pixel = colour.map(|v| v * level);
+            let src = Rgb32f::filled(48, 32, pixel);
+            for amount in [0.1, 25.0, 100.0] {
+                let mut s = DevelopSettings::default();
+                s.detail.nr_color = amount;
+                let mut filtered = src.clone();
+                denoise(&mut filtered, &s, 1.0);
+                for actual in filtered.data.iter().flatten() {
+                    assert!(actual.is_finite());
+                }
+                for actual in &filtered.data {
+                    for (a, b) in actual.iter().zip(pixel) {
+                        assert!((a - b).abs() <= b.abs() * 2e-5, "level={level}, amount={amount}: {actual:?} != {pixel:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn colour_nr_preserves_luminance_of_noisy_deep_shadows() {
+    use lightcraft_color::luminance_2020;
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut src = Rgb32f::filled(96, 64, [1e-8; 3]);
+    for p in &mut src.data {
+        *p = p.map(|v| v * (1.0 + 0.2 * rng.normal()).max(0.1));
+    }
+    let mut filtered = src.clone();
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 100.0;
+    denoise(&mut filtered, &s, 1.0);
+    for (before, after) in src.data.iter().zip(&filtered.data) {
+        let y = luminance_2020(*before);
+        assert!((luminance_2020(*after) - y).abs() <= y * 2e-5);
+    }
+    // Optional, reproducible visual report; generated images stay outside the repository.
+    if let Some(dir) = std::env::var_os("LIGHTCRAFT_NR_REPORT") {
+        let old_chroma = src.map(|p| p.map(|v| v / lightcraft_color::luminance_2020(p).max(1e-6)));
+        let blurred = lightcraft_raster::blur::gaussian(&old_chroma, nr_params(&s, 1.0).1.unwrap().sigma);
+        let before = Rgb32f::from_fn(src.width, src.height, |x, y| {
+            let p = src.get(x, y);
+            let a = old_chroma.get(x, y);
+            let b = blurred.get(x, y);
+            [0, 1, 2].map(|k| (a[k] + (b[k] - a[k]) * 0.75) * luminance_2020(p))
+        });
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut display = DevelopSettings::default();
+        display.detail.nr_color = 0.0;
+        display.light.exposure = 20.0;
+        for (name, img) in [("before", &before), ("after", &filtered)] {
+            let rendered = render(img, &SourceInfo::default(), &display, &RenderRequest::fit(96, 64)).image;
+            let bytes: Vec<u8> = rendered.data.iter().flatten().copied().collect();
+            image::save_buffer(dir.join(format!("{name}.png")), &bytes, 96, 64, image::ColorType::Rgba8).unwrap();
+        }
+    }
+    let chroma_error = |img: &Rgb32f| rms_chroma(&img.map(|p| p.map(|v| v * 1e8)), &Rgb32f::filled(96, 64, [1.0; 3]));
+    let noisy_error = chroma_error(&src);
+    let filtered_error = chroma_error(&filtered);
+    eprintln!("deep-shadow chromaticity RMS: {noisy_error:.6} -> {filtered_error:.6}; luminance relative error <= 0.00002");
+    assert!(filtered_error < noisy_error * 0.5);
+}

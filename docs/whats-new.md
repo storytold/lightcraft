@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Colour noise reduction keeps deep shadows from darkening
+- Colour noise reduction no longer darkens a uniform near-black area simply because its
+  luminance is below a numerical floor. The correction applies to CPU and GPU rendering.
+- Noise reduction also bounds out-of-range parameters before filtering, preventing excessive
+  smoothing or inverted colour detail from malformed settings. Existing settings remain readable;
+  the normal-range filter and slider response are unchanged apart from the shadow correction.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

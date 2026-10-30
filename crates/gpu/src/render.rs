@@ -844,7 +844,7 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     }
     if let Some(nr) = col {
         let chroma = cx.gpu.buffer(n * 3);
-        map(cx, "chroma_k", n, &[], [Some(&img), None, None], &chroma);
+        map(cx, "nr_chroma_k", n, &[], [Some(&img), None, None], &chroma);
         let b = gaussian(cx, &chroma, w, h, 3, nr.sigma);
         let out = cx.gpu.buffer(n * 3);
         map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), Some(&chroma), Some(&b)], &out);
