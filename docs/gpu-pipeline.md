@@ -49,6 +49,9 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
+- `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
+  otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
+  without a GPU (below); the app never sets it.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -262,6 +265,31 @@ non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
 (`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
+
+**Running them without a GPU (issue #1050).** `Gpu::new` turns down software adapters, so on a
+machine without a hardware GPU (a VM, a container) every GPU test skips.
+`LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` lets them through for one run (tests only: the app never sets it):
+
+```sh
+log="$(mktemp -d)/gpu-skips.jsonl"   # a new private directory; an absolute path, as tests run in crates/gpu
+LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1 LIGHTCRAFT_SKIP_LOG="$log" cargo test -p lightcraft-gpu --tests
+grep '"need":"gpu"' "$log" | grep -v 'lost on purpose'   # no output: no GPU test skipped but the device-loss one
+```
+
+- **Linux:** Mesa's lavapipe (Vulkan; `mesa-vulkan-drivers` on Debian and Ubuntu). Its storage
+  bindings stop at 128 MiB (the WebGPU default), so the two big-source tests use a 117 MiB source:
+  above what a view keeps with its stages (96 MiB) and small enough to be uploaded there.
+- **Windows:** WARP, the DX12 software rasterizer that ships with Windows (shaders through FXC, as
+  above).
+- **macOS:** Metal is a hardware adapter, so the tests run without the variable.
+
+A machine with a hardware GPU picks it over the software adapter, variable or not. Each test that
+skips prints `skipped (gpu): …` and appends a line to the `LIGHTCRAFT_SKIP_LOG` file; with a software
+adapter the only one left should be the device-loss test (`no GPU device, or one that can't be lost on
+purpose here`). Measured 2026-10-11 on lavapipe and WARP, and again 2026-10-30 on lavapipe (Mesa's
+llvmpipe on LLVM 20, 143 compared renders), every compared render stayed within **max 1 LSB, mean ≤
+0.0003 LSB**, as on the M4 Pro. The equivalence binary takes about 20 s on lavapipe and several
+minutes on WARP.
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
