@@ -68,10 +68,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     let job = move || {
         let _ = tx.send(scan_with(input, &paths, &p));
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("lc-import-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
-    #[cfg(target_arch = "wasm32")]
-    job();
+    crate::tasks::worker("lc-import-scan", job)?;
     let guard = scan_guard(app, &progress, false);
     app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
     Ok(json!({"scanning": true}))
@@ -98,14 +95,6 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         app.session.keep_active_in_view();
         return Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}));
     }
-    if let Some(t) = app.scan.take() {
-        t.progress.cancel.store(true, Ordering::Relaxed);
-    }
-    app.import = None;
-    app.session.browse = Some(lightcraft_engine::Browse { path: dir_s.clone(), subfolders });
-    app.session.source = lightcraft_engine::LibrarySource::Folder;
-    // the photos the library already knows from this folder show at once: keep or pick the active one
-    app.session.keep_active_in_view();
     let (input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
@@ -130,10 +119,16 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         };
         let _ = tx.send(scan_with(input, &files, &p));
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("lc-browse-scan".into()).spawn(job).map_err(|e| format!("could not start: {e}"))?;
-    #[cfg(target_arch = "wasm32")]
-    job();
+    // started before anything changes: a worker that can't start leaves the view as it was
+    crate::tasks::worker("lc-browse-scan", job)?;
+    if let Some(t) = app.scan.take() {
+        t.progress.cancel.store(true, Ordering::Relaxed);
+    }
+    app.import = None;
+    app.session.browse = Some(lightcraft_engine::Browse { path: dir_s.clone(), subfolders });
+    app.session.source = lightcraft_engine::LibrarySource::Folder;
+    // the photos the library already knows from this folder show at once: keep or pick the active one
+    app.session.keep_active_in_view();
     let guard = scan_guard(app, &progress, true);
     app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard });
     app.renderer.forget_imports();
