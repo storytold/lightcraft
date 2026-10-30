@@ -118,7 +118,7 @@ fn backups(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let folder = folder.display().to_string();
     heading(ui, t, crate::i18n::tr("Backups"));
     row(ui, t, crate::i18n::tr("Folder"), |ui| {
-        ui.add(egui::Label::new(RichText::new(folder.clone()).color(t.text)).truncate()).on_hover_text(folder.clone());
+        path_label(ui, "settingsBackupFolder", &folder, egui::TextStyle::Body.resolve(ui.style()), t.text, 0.0);
     });
     if !chosen {
         row(ui, t, "", |ui| hint(ui, t, crate::i18n::tr("In the library folder")));
