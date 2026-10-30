@@ -371,9 +371,9 @@ pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: 
 }
 
 /// The Reset button's tooltip with the reset shortcut as this platform writes it (issue #1751).
-pub(super) fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
+pub(super) fn reset_tip(profile: crate::keymap_profiles::KeyProfile, keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
     let base = crate::i18n::tr("Reset all edits");
-    match crate::shortcuts::shortcut_of(keymap, "develop.reset") {
+    match crate::shortcuts::shortcut_of(profile, keymap, "develop.reset") {
         Some(sc) => format!("{base} ({})", crate::menubar::shortcut_text(sc, mac)),
         None => base.to_string(),
     }

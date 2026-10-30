@@ -68,6 +68,7 @@ pub fn native_menu_delivers(sc: &str) -> bool {
 /// the translated label instead, leaving their dispatch with egui. Ordinary G stays in the
 /// native key-equivalent column because AppKit never hands it to the menu.
 pub fn native_item_presentation<'a>(
+    profile: crate::keymap_profiles::KeyProfile,
     keymap: &crate::shortcuts::Keymap,
     id: &str,
     params: &Value,
@@ -75,7 +76,7 @@ pub fn native_item_presentation<'a>(
     shortcut: Option<&'a str>,
 ) -> (String, Option<&'a str>) {
     let label = display_item_label(id, params, label);
-    let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(keymap, id);
+    let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(profile, keymap, id);
     match shortcut.filter(|sc| borrowed && native_menu_delivers(sc)) {
         Some(sc) => (format!("{label} ({})", shortcut_text(sc, true)), None),
         None => (label.to_string(), shortcut),
@@ -85,9 +86,13 @@ pub fn native_item_presentation<'a>(
 /// Cache key for native menu structure and effective accelerator ownership. A transfer from
 /// a direct grid binding to a borrowed cycle hint must rebuild native handles and republish
 /// their owned shortcuts even when the visible menu model is identical.
-pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::shortcuts::Keymap) -> String {
+pub fn native_menu_structure(
+    bar: &[(String, Vec<MenuNode>)],
+    profile: crate::keymap_profiles::KeyProfile,
+    keymap: &crate::shortcuts::Keymap,
+) -> String {
     /// Add stable identities and effective native keys; live checked values stay outside the cache key.
-    fn walk(n: &[MenuNode], out: &mut String, keymap: &crate::shortcuts::Keymap) {
+    fn walk(n: &[MenuNode], out: &mut String, profile: crate::keymap_profiles::KeyProfile, keymap: &crate::shortcuts::Keymap) {
         for x in n {
             match x {
                 MenuNode::Item { id, params, label, checked, shortcut, .. } => {
@@ -96,13 +101,13 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
                     out.push_str(shortcut.as_deref().unwrap_or(""));
                     // A key can change owners while both visible hints stay identical.
                     out.push('|');
-                    out.push_str(native_item_presentation(keymap, id, params, label, shortcut.as_deref()).1.unwrap_or(""));
+                    out.push_str(native_item_presentation(profile, keymap, id, params, label, shortcut.as_deref()).1.unwrap_or(""));
                 }
                 MenuNode::Separator => out.push('-'),
                 MenuNode::Submenu { label, children } => {
                     out.push('[');
                     out.push_str(label);
-                    walk(children, out, keymap);
+                    walk(children, out, profile, keymap);
                     out.push(']');
                 }
             }
@@ -112,7 +117,7 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
     let mut s = format!("{};", crate::i18n::language().code());
     for (t, items) in bar {
         s.push_str(t);
-        walk(items, &mut s, keymap);
+        walk(items, &mut s, profile, keymap);
     }
     s
 }
@@ -631,7 +636,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     "view.layoutImage",
                     Value::Null,
                     "Layout Image",
-                    crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.layoutImage"),
+                    crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "view.layoutImage"),
                     chosen,
                     Some(li.show && chosen),
                 ),
@@ -658,7 +663,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 .map(|m| item("view.toolOverlay", json!({"mode": m.name()}), m.label(), None, true, Some(app.ui.tool_overlay == m)))
                 .collect();
             v.push(MenuNode::Separator);
-            let shortcut = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.toolOverlay");
+            let shortcut = crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "view.toolOverlay");
             v.push(item("view.toolOverlay", Value::Null, "Cycle Tool Overlay", shortcut, true, None));
             v
         }
@@ -832,9 +837,11 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     // Shift+P picks and advances in Library; don't advertise it on Presets in those views.
     let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
     // in an album the Delete key removes from the album (issue #1805): the menu says so
-    let delete_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.delete");
+    let delete_key = crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "photo.delete");
     let shortcut = match e.id.as_str() {
-        "view.photoGrid" | "view.squareGrid" => shortcut.or_else(|| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.gridToggle")),
+        "view.photoGrid" | "view.squareGrid" => {
+            shortcut.or_else(|| crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "view.gridToggle"))
+        }
         "album.removePhotos" => delete_key,
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
         _ => shortcut,

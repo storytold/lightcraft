@@ -68,19 +68,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
     ui.painter().text(pos2(hr.left() + 24.0, hr.bottom() - 10.0), Align2::LEFT_CENTER, crate::i18n::tr("Edit"), t.semibold(15.0), t.text);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
-        let tip = reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac);
-        let clicks = header_buttons(ui, crate::is_bw(&d), d.hdr.enabled, &tip);
-        if clicks.auto {
-            let _ = app.run("develop.auto", json!({}));
-            app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
-        }
-        if clicks.bw {
-            let _ = app.run("develop.treatment", json!({}));
-        }
-        if clicks.hdr {
-            let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
-        }
-        reset_clicked = clicks.reset;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
+                let _ = app.run("develop.auto", json!({}));
+                app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
+            }
+            let bw = crate::is_bw(&d);
+            if text_button(ui, "bw", crate::i18n::tr("B&W"), bw).clicked() {
+                let _ = app.run("develop.treatment", json!({}));
+            }
+            // HDR editing, next to B&W as Lightroom has it
+            if text_button(ui, "hdr", crate::i18n::tr("HDR"), d.hdr.enabled)
+                .on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"))
+                .clicked()
+            {
+                let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
+                    .on_hover_text(reset_tip(app.ui.settings.profile(), &app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                    .clicked()
+                {
+                    reset_clicked = true;
+                }
+            });
+        });
     });
     if let Some(why) = &preview_only {
         let reload = egui::Frame::NONE

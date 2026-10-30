@@ -344,6 +344,14 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.view = ViewMode::Detail;
             Ok(Value::Null)
         }
+        "view.develop" => {
+            // the Develop module: the Edit panel with the Detail view (Classic's D, Ctrl+Alt+2)
+            if app.ui.right != RightPanel::Edit {
+                panel(app, ctx, RightPanel::Edit, "Edit");
+            }
+            app.ui.view = ViewMode::Detail;
+            Ok(Value::Null)
+        }
         "view.compare" => crate::panels::compare::enter_compare(app),
         "view.focusPoint" => {
             // {on?}; no params toggles. The camera's focus point (Sony, from the file) over the photo.
@@ -1311,6 +1319,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.setKeymapProfile" => crate::shortcuts::set_keymap_profile(app, p),
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)
