@@ -160,7 +160,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         None => location,
     };
     if lightcraft_engine::library::is_library(&dir) {
-        return Err(format!("{}: there is a library here already; open it with File ▸ Open Library…", dir.display()));
+        return Err(format!("{}: there is a library here already; open it with File → Open Library…", dir.display()));
     }
     if dir.is_file() {
         return Err(format!("{}: is a file; a library is a folder", dir.display()));

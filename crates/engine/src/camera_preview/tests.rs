@@ -1,3 +1,5 @@
+use super::colour::starting_colour_tags_with_correction;
+use super::proxy::{align_profile_geometry, resample_correspondence};
 use super::*;
 
 fn steep_toe_scene() -> (Rgb32f, Rgb32f) {
@@ -661,7 +663,7 @@ fn corpus_lens_corrected_jpegs_pair_with_the_warped_sensor() {
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
         let (Some((plain, reference, _)), Some((chosen, chosen_reference, _))) =
-            (proxies(&raw, &bytes, &t, PROXY, 0.0, None), proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&lens)))
+            (proxies(&raw, &bytes, &t, PROXY, 0.0, None, None), proxies(&raw, &bytes, &t, PROXY, 0.0, Some(&lens), None))
         else {
             continue;
         };
@@ -905,6 +907,191 @@ fn cr3_camera_framing_is_measured_independently_of_tone_and_rejects_unrelated_ed
     assert!(estimate_cr3_framing(&sensor, &reference).is_none(), "unrelated edges cannot change the framing");
 }
 
+fn profile_geometry_scene(w: usize, h: usize) -> Rgb32f {
+    let mut sensor = Rgb32f::new(w, h);
+    for (i, p) in sensor.data.iter_mut().enumerate() {
+        let (x, y) = ((i % w) as f32 * 192.0 / w as f32, (i / w) as f32 * 128.0 / h as f32);
+        let v = 0.35 + 0.13 * (x * 0.15 + y * 0.22).sin() + 0.1 * (x * 0.33 - y * 0.14).sin() + 0.07 * (x * 0.09 - y * 0.31).cos();
+        *p = [v * (0.9 + 0.15 * (y * 0.023).sin()), v, v * (0.9 + 0.15 * (x * 0.019).cos())];
+    }
+    sensor
+}
+
+fn synthetic_profile_lens() -> lightcraft_develop::EmbeddedLens {
+    lightcraft_develop::EmbeddedLens {
+        warp: Some(lightcraft_develop::EmbeddedWarp {
+            planes: [[1.04, -0.24, 0.08, 0.0, 0.0, 0.0]; 3],
+            center: lightcraft_geom::Point::new(0.48, 0.53),
+            radius: 0.61,
+        }),
+        ..Default::default()
+    }
+}
+
+fn profile_geometry_target(sensor: &Rgb32f, lens: &lightcraft_develop::EmbeddedLens, framing: Cr3Framing) -> Rgb32f {
+    let mut warp = lightcraft_pipeline::optics::Warp::identity(sensor.width as f64, sensor.height as f64);
+    warp.lens = Some(*lens);
+    warp.lens_dist = 1.0;
+    let warped = resample_correspondence(sensor, |x, y| warp.corrected_to_source(lightcraft_geom::Point::new(x, y), 1));
+    resample_correspondence(&warped, |x, y| {
+        let (x, y) = framing.source(x as f32, y as f32, sensor.width, sensor.height);
+        lightcraft_geom::Point::new(f64::from(x), f64::from(y))
+    })
+}
+
+fn geometry_rms(a: &Rgb32f, b: &Rgb32f) -> f64 {
+    let mut error = 0.0;
+    let mut n = 0;
+    for (a, b) in a.data.iter().zip(&b.data) {
+        for (&a, &b) in a.iter().zip(b) {
+            if a.is_finite() && b.is_finite() {
+                error += f64::from(a - b).powi(2);
+                n += 1;
+            }
+        }
+    }
+    assert!(n > 256);
+    (error / f64::from(n)).sqrt()
+}
+
+#[test]
+fn external_profile_geometry_aligns_lens_and_framing_before_colour() {
+    let sensor = profile_geometry_scene(384, 256);
+    let lens = synthetic_profile_lens();
+    let expected = profile_geometry_target(&sensor, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    let mut jpeg = expected.clone();
+    jpeg.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let mask = Rgb32f::new(sensor.width, sensor.height);
+    let (aligned, _) = align_profile_geometry(&sensor, &mask, &jpeg, &lens, lightcraft_geom::Orientation::Normal)
+        .expect("lens and bounded framing pass independent geometry gates");
+    assert!(geometry_rms(&aligned, &expected) < 0.008, "the training sensor is correctly registered despite a nonlinear camera tone");
+    assert!(geometry_rms(&sensor, &expected) > 0.05, "synthetic mismatch is material");
+}
+
+#[test]
+fn external_profile_geometry_accepts_lens_only_and_rejects_unrelated_or_already_aligned() {
+    let sensor = profile_geometry_scene(384, 256);
+    let lens = synthetic_profile_lens();
+    let expected = profile_geometry_target(&sensor, &lens, Cr3Framing::IDENTITY);
+    let mask = Rgb32f::new(sensor.width, sensor.height);
+    let (aligned, _) = align_profile_geometry(&sensor, &mask, &expected, &lens, lightcraft_geom::Orientation::Normal)
+        .expect("lens alone aligns; no improvement over its own framing is required");
+    assert!(geometry_rms(&aligned, &expected) < 0.001);
+    assert!(
+        align_profile_geometry(&sensor, &mask, &sensor, &lens, lightcraft_geom::Orientation::Normal).is_none(),
+        "already aligned original is preserved"
+    );
+    let mut unrelated = sensor.clone();
+    for (i, p) in unrelated.data.iter_mut().enumerate() {
+        let (x, y) = ((i % sensor.width) as f32, (i / sensor.width) as f32);
+        *p = [0.35 + 0.13 * (x * 0.41 - y * 0.07).sin() + 0.1 * (x * 0.04 + y * 0.39).cos(); 3];
+    }
+    assert!(align_profile_geometry(&sensor, &mask, &unrelated, &lens, lightcraft_geom::Orientation::Normal).is_none());
+    unrelated.data.fill([0.2; 3]);
+    assert!(align_profile_geometry(&sensor, &mask, &unrelated, &lens, lightcraft_geom::Orientation::Normal).is_none());
+    assert!(
+        align_profile_geometry(&sensor, &mask, &expected, &Default::default(), lightcraft_geom::Orientation::Normal).is_none(),
+        "no geometric profile leaves the established path alone"
+    );
+}
+
+#[test]
+fn external_profile_geometry_preserves_oriented_default_crop_and_resolution() {
+    let lens = synthetic_profile_lens();
+    for (w, h) in [(192, 128), (384, 256)] {
+        // This is the developed default crop: no active-area offset is applied a second time.
+        let sensor = profile_geometry_scene(w, h);
+        let target = profile_geometry_target(&sensor, &lens, Cr3Framing::IDENTITY);
+        let mask = Rgb32f::new(w, h);
+        for exif in 1..=8 {
+            let orientation = lightcraft_geom::Orientation::from_exif(exif);
+            let oriented = lightcraft_pipeline::optics::reorient_lens(&lens, orientation, w as f64, h as f64);
+            let (aligned, _) =
+                align_profile_geometry(&sensor, &mask, &target, &oriented, orientation).expect("oriented resolved lens maps back to the sensor crop");
+            assert!(geometry_rms(&aligned, &target) < 0.001, "orientation {exif}, {w}x{h}");
+        }
+    }
+}
+
+#[test]
+fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
+    use lightcraft_raw::{BlackLevel, RawData, Rect};
+    let (w, h) = (416, 288);
+    let scene = profile_geometry_scene(w, h);
+    let mut raw = raw_of(RawFormat::Cr2, "Synthetic", "Uncalibrated", Default::default());
+    raw.width = w;
+    raw.height = h;
+    raw.cpp = 3;
+    raw.data = RawData::F32(scene.data.iter().flatten().copied().collect());
+    raw.black = BlackLevel::uniform(0.0);
+    raw.white = vec![1.0];
+    raw.active_area = Rect::new(0, 0, w, h);
+    raw.crop = Rect::new(16, 16, 384, 256);
+    raw.linearized = true;
+    raw.wb_multipliers = Some([1.0; 3]);
+    let transform = lightcraft_raw::color::camera_transform(&raw, D65);
+    assert!(transform.matrix_is_fallback);
+    let mut sensor = sensor_proxy(&raw, 2, 384).unwrap();
+    assert_eq!((sensor.width, sensor.height), (384, 256));
+    sensor.map_in_place(|p| transform.matrix.apply_f32(p));
+    let lens = synthetic_profile_lens();
+    let mut target = profile_geometry_target(&sensor, &lens, Cr3Framing { scale: 0.95, offset: [0.006, -0.004] });
+    target.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let to_srgb = lightcraft_color::SRGB.from_xyz().mul(&REC2020.to_xyz());
+    let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let pixels: Vec<u8> = target.data.iter().flat_map(|p| to_srgb.apply_f32(*p).map(|v| (srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+    let image = lightcraft_codecs::EncodeImage::new(384, 256, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 98, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
+    let mut file = b"II*\0\x08\0\0\0\x02\0".to_vec();
+    for (tag, value) in [(0x0201u16, 38u32), (0x0202, jpeg.len() as u32)] {
+        file.extend(tag.to_le_bytes());
+        file.extend(4u16.to_le_bytes());
+        file.extend(1u32.to_le_bytes());
+        file.extend(value.to_le_bytes());
+    }
+    file.extend(0u32.to_le_bytes());
+    file.extend(jpeg);
+    let (plain, reference, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
+    let (mut aligned, _, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
+    let mut plain_render = plain;
+    plain_render.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    aligned.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    assert!(
+        geometry_rms(&aligned, &reference) < geometry_rms(&plain_render, &reference) * 0.3,
+        "the file-local route uses the resolved crop-relative correction"
+    );
+    let error = |pairs: Vec<([f64; 3], [f64; 3])>| {
+        let sum: f64 = pairs.iter().map(|(x, y)| transform.matrix.apply(*x).iter().zip(y).map(|(x, y)| (x.powf(0.7) - y).powi(2)).sum::<f64>()).sum();
+        sum / pairs.len() as f64
+    };
+    let before = error(profile_pairs(&raw, &file, None, None).unwrap());
+    let after = error(profile_pairs(&raw, &file, None, Some(&lens)).unwrap());
+    assert!(after < before * 0.1, "pooled colour calibration uses the same geometry: {before} -> {after}");
+    // Merge / DNG conversion must encode the same calibrated colour as opening the RAW.
+    let mut opened = raw.clone();
+    let (_, t, look) = starting_colour(&mut opened, &file, None, Some(&lens));
+    assert!(look.is_some(), "the synthetic corrected preview supplies a camera look");
+    let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
+    let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(&raw));
+    let expected_tags = dng_colour(&raw.color, &white, &t, look.as_ref()).unwrap();
+    let tags = starting_colour_tags_with_correction(&mut raw, &file, Some(&lens)).unwrap();
+    assert_eq!(tags, expected_tags, "DNG tags use the resolved correspondence geometry too");
+}
+
+#[test]
+fn correspondence_mask_keeps_every_contributing_clipped_sample_and_invalid_border() {
+    let mut mask = Rgb32f::new(8, 6);
+    mask.data[2 * 8 + 3] = [1.0; 3];
+    let result = resample_correspondence(&mask, |x, y| lightcraft_geom::Point::new(x + 0.75, y + 0.5));
+    assert!(result.data[8 + 2][0] > 0.0 && result.data[8 + 3][0] > 0.0);
+    assert!(result.data[2 * 8 + 2][0] > 0.0 && result.data[2 * 8 + 3][0] > 0.0);
+    assert_eq!(result.data[0][0], 0.0);
+    assert!(result.data[7][0].is_nan() && result.data[5 * 8][0].is_nan());
+    // The final box reduction retains fractional positive masks as clipped too.
+    let reduced = resize(&result, 4, 3, Filter::Box);
+    assert!(reduced.data.iter().any(|p| p[0] > 0.0));
+}
+
 /// The guarded fit is assessed on real sensor data, never on the JPEG fallback. A corpus
 /// download or an unfinished codec cannot make this test claim a successful RAW calibration.
 #[test]
@@ -928,7 +1115,7 @@ fn corpus_cr3_gets_a_framing_aligned_camera_look() {
     assert_eq!(raw.format, RawFormat::Cr3);
     assert_eq!(raw.info().developed_size(), (6000, 4000));
     let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-    let look = fit_preview(&raw, &bytes, &transform, None).0;
+    let look = fit_preview(&raw, &bytes, &transform, None, None).0;
     eprintln!("R100 guarded colour fit accepted: {}", look.is_some());
     assert!(look.is_some(), "this R100 corpus photo has enough matching colour after camera-framing alignment");
     let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
@@ -965,7 +1152,7 @@ fn corpus_uses_the_bundled_profile(file: &str, model: &str) {
     let lens = lens_geometry(&raw.opcodes.list3);
     raw.opcodes.list3.retain(|op| !op.is_lens_correction());
     let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-    let look = fit_preview(&raw, &bytes, &transform, lens.as_ref()).0.expect("fit accepted");
+    let look = fit_preview(&raw, &bytes, &transform, lens.as_ref(), None).0.expect("fit accepted");
     let expected = bundled.matrix().mul(&transform.matrix.inverse().unwrap());
     for (row, want) in look.matrix.0.iter().zip(expected.0) {
         for (got, want) in row.iter().zip(want) {
@@ -1346,9 +1533,9 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let mut raw = lightcraft_raw::decode(&bytes).unwrap();
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-        let look = fit_preview(&raw, &bytes, &transform, None).0.expect("a camera look");
+        let look = fit_preview(&raw, &bytes, &transform, None, None).0.expect("a camera look");
         // the look fitted to the JPEG, as before this change
-        let (sensor, reference, clipped) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None).unwrap();
+        let (sensor, reference, clipped) = proxies(&raw, &bytes, &transform, PROXY, 0.0, None, None).unwrap();
         let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
         let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
@@ -2033,12 +2220,12 @@ fn monochrome_look_reads_the_files_black_and_white_jpeg() {
         tiff
     };
     let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
-    let look = monochrome_look(&raw, &file([1.0; 3]), &t, None).expect("a tone curve from the black-and-white JPEG");
+    let look = monochrome_look(&raw, &file([1.0; 3]), &t, None, None).expect("a tone curve from the black-and-white JPEG");
     assert!(look.matrix == Mat3::IDENTITY && look.hue_sat.is_none(), "on the transform's colour");
     let curve = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let mid = curve.apply(0.25);
     assert!((mid - (1.0 - (-0.75f32).exp())).abs() < 0.05, "the camera's curve at 0.25: {mid}");
-    assert!(monochrome_look(&raw, &file([1.0, 0.9, 0.8]), &t, None).is_none(), "a tinted JPEG is not black and white");
+    assert!(monochrome_look(&raw, &file([1.0, 0.9, 0.8]), &t, None, None).is_none(), "a tinted JPEG is not black and white");
 }
 
 /// The black-and-white fit has the partial look's checks: a JPEG of another picture, or one the default curve

@@ -36,7 +36,8 @@ pub fn database() -> Option<&'static LensDb> {
 }
 
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
-/// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
+/// re-expressed after `orientation`. Without a lens name/specification, a unique fixed-mount profile may identify it.
+/// `None` without a database, focal length or unambiguous matching profile.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
@@ -44,10 +45,27 @@ pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orient
         Some(model) => db.find_lens(m.lens_make.as_deref(), model, camera)?,
         // Nikon DSLRs record only the lens specification ("24-70mm f/2.8"); a profile must be named exactly that
         // (a user's alias), since the specification fits other makers' lenses too
-        None => {
-            let name = lightcraft_lensdb::spec_name(m.lens_spec?);
-            db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
-        }
+        None => match m.lens_spec {
+            Some(spec) => {
+                let name = lightcraft_lensdb::spec_name(spec);
+                db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
+            }
+            None => {
+                let camera = camera?;
+                // Lensfun reserves lowercase initial mount names for fixed-lens cameras:
+                // https://lensfun.github.io/manual/latest/el_mount.html
+                // This is an exact identity, never interchangeable-mount compatibility.
+                if !camera.mount.chars().next().is_some_and(char::is_lowercase) {
+                    return None;
+                }
+                let mut profiles = db.lenses.iter().filter(|lens| lens.mounts.iter().any(|mount| mount == &camera.mount));
+                let profile = profiles.next()?;
+                if profiles.next().is_some() {
+                    return None;
+                }
+                profile
+            }
+        },
     };
     let crop = frame_crop_factor(camera.map(|c| c.crop_factor), focal, m.focal_length_35mm);
     let shot = Shot { focal, aperture: m.f_number, distance: None, crop_factor: crop, width: w, height: h };
@@ -100,6 +118,41 @@ mod tests {
             f_number: Some(3.5),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn unnamed_fixed_lens_requires_unique_exact_lowercase_mount() {
+        let mut db = LensDb::parse(DB).unwrap();
+        db.cameras[0].mount = "compact-tc1".into();
+        db.lenses[0].mounts = vec!["compact-tc1".into()];
+        let unnamed = lightcraft_meta::Metadata { lens_model: None, lens_spec: None, ..meta() };
+        let at = |db: &LensDb, m: &lightcraft_meta::Metadata| lookup(db, m, 6000.0, 4000.0, Orientation::Normal);
+        let expected = at(&db, &meta()).unwrap();
+        assert_eq!(at(&db, &unnamed), Some(expected));
+        let mut changed = db.clone();
+        changed.lenses.push(changed.lenses[0].clone());
+        assert!(at(&changed, &unnamed).is_none(), "duplicate profiles are ambiguous");
+        assert_eq!(at(&changed, &meta()), Some(expected), "named route keeps existing behaviour");
+        changed = db.clone();
+        changed.lenses[0].mounts = vec!["Compact-tc1".into()];
+        assert!(at(&changed, &unnamed).is_none(), "mount identity is case sensitive");
+        changed.lenses[0].mounts = vec!["compact-other".into()];
+        assert!(at(&changed, &unnamed).is_none(), "another fixed mount is not compatible");
+        changed.lenses[0].mounts.clear();
+        assert!(at(&changed, &unnamed).is_none(), "missing mount is not an identity");
+        for mount in ["Interchangeable", "", "1fixed"] {
+            changed = db.clone();
+            changed.cameras[0].mount = mount.into();
+            changed.lenses[0].mounts = vec![mount.into()];
+            assert!(at(&changed, &unnamed).is_none(), "only lowercase initial fixed mounts qualify: {mount}");
+        }
+        changed = db.clone();
+        changed.cameras.clear();
+        assert!(at(&changed, &unnamed).is_none(), "no camera means no fixed mount");
+        let specified = lightcraft_meta::Metadata { lens_spec: Some([18.0, 55.0, 3.5, 5.6]), ..unnamed };
+        assert!(at(&db, &specified).is_none(), "unmatched specification does not fall back to a fixed mount");
+        let wrongly_named = lightcraft_meta::Metadata { lens_model: Some("Unknown 1000mm".into()), ..meta() };
+        assert!(at(&db, &wrongly_named).is_none(), "unmatched lens name does not fall back");
     }
 
     #[test]

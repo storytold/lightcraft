@@ -30,6 +30,14 @@ nor a name with a maker in it ("Samyang 85mm f/1.4" for "85mm f/1.4") is taken; 
 files names its profile that way, e.g. a lensfun entry with an extra `<model>24-70mm f/2.8</model>` for the one
 24-70 f/2.8 the photographer owns. lensfun's own database has no such names, so it doesn't correct these files.
 
+A fixed-lens camera that records neither a lens model nor a lens specification can use its camera database
+entry's mount instead. [Lensfun reserves lowercase initial mount names for fixed-lens cameras](https://lensfun.github.io/manual/latest/el_mount.html).
+The existing camera lookup is retained; exactly one lens profile with its case-sensitive mount is accepted. Missing,
+uppercase interchangeable, mismatching or ambiguous mounts retain the no-profile fallback. Named lenses and
+specification aliases keep their existing lookup rules; an unmatched name/specification does not trigger this
+fallback. This identifies an available correction, not evidence that the camera JPEG uses it: calibration still
+requires the independent geometry gates described in [Camera preview colour](camera-preview-colour.md).
+
 | Correction | Models | Interpolated over |
 |---|---|---|
 | Distortion | `poly3`, `poly5`, `ptlens` | focal length |
@@ -51,4 +59,4 @@ the image centre (lensfun's `<center>` offsets are not read).
 - Only raws: rendered images (JPEG, HEIF, TIFF) are often already corrected in camera.
 - The focus distance is not read from maker notes yet: vignetting uses the farthest calibrated distance.
 - No manual make / model picker yet; matching is automatic.
-- Not yet validated against real photos and another renderer; the tests use synthetic profiles and grids.
+- Automated tests use synthetic profiles and grids. Limited real-file validation of the fixed-mount fallback and its use for colour correspondences covers five private G7 X II photographs; this does not establish geometric accuracy across other cameras or profiles.

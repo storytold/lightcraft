@@ -115,7 +115,7 @@ pub enum EngineError {
     /// The folder (or file) asked for is a Lightroom Classic catalog or part of one, not a
     /// LightCraft library (issue #891): nothing was created or opened. `catalog`: the `.lrcat`
     /// to import with `library.importLightroom`, when one was found.
-    #[error("{} is a Lightroom Classic catalog, not a LightCraft library; import it into a LightCraft library with File ▸ Import Lightroom Catalog…{}", path.display(), catalog.as_ref().map_or(String::new(), |c| format!(" ({})", c.display())))]
+    #[error("{} is a Lightroom Classic catalog, not a LightCraft library; import it into a LightCraft library with File → Import Lightroom Catalog…{}", path.display(), catalog.as_ref().map_or(String::new(), |c| format!(" ({})", c.display())))]
     LightroomCatalog { path: std::path::PathBuf, catalog: Option<std::path::PathBuf> },
     /// The work was cancelled (by the person, an agent or a newer request): not a failure.
     #[error("{0}")]
