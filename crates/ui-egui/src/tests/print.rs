@@ -28,10 +28,11 @@ fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+#[track_caller]
 fn click(h: &mut Headless, id: &str) {
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settled(T, "after ui.clickWidget");
+    h.settled(T, &format!("after clicking {id}"));
 }
 
 #[track_caller]
