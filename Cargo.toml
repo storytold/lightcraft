@@ -142,6 +142,8 @@ debug = "line-tables-only"
 
 [profile.release]
 debug = "line-tables-only"
+lto = "thin"
+codegen-units = 1
 
 [profile.dist]
 inherits = "release"
@@ -149,8 +151,15 @@ lto = "thin"
 codegen-units = 1
 debug = false
 
-# `cargo xtask web`: the browser build. Size matters more than build time: fat LTO, one codegen
-# unit, no symbols, abort on panic (wasm32 can't unwind anyway), size-optimized code — except the
+[profile.dev.package]
+candle-core = { opt-level = 3 }
+candle-nn = { opt-level = 3 }
+gemm = { opt-level = 3 }
+gemm-f32 = { opt-level = 3 }
+gemm-common = { opt-level = 3 }
+lightcraft-segment = { opt-level = 3 }
+lightcraft-inpaint = { opt-level = 3 }
+
 # crates that do per-pixel work, which stay at opt-level 3 (opt-level "s"/"z" there costs ~50 %/
 # ~130 % render time; measured in docs/web.md → Bundle size).
 [profile.web]

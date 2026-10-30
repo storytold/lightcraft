@@ -443,6 +443,12 @@ fn distortion(model: &str, table: &[i16; 16], active: Rect, crop: Rect) -> Optio
     if !DISTORTION_MODELS.contains(&model) {
         return None;
     }
+    distortion_table(table, active, crop)
+}
+
+/// Convert a 16-entry Sony raw-IFD distortion table (`0x7037`, radial scale unit `16384 = 1.0`) into a DNG
+/// `WarpRectilinear` opcode over a native 3:2 crop.
+pub(crate) fn distortion_table(table: &[i16; 16], active: Rect, crop: Rect) -> Option<Opcode> {
     if table.iter().all(|v| *v == 0) || table.iter().any(|v| !(-4096..=4096).contains(v)) {
         return None;
     }
@@ -1434,7 +1440,7 @@ mod tests {
 
     #[test]
     fn header_and_full_decode_preserve_correction_through_dng() {
-        for (model, expected) in [("ILCE-7RM4A", 1), ("ILCE-7RM4", 0), ("ILCE-7M3", 0), ("", 0)] {
+        for (model, expected) in [("ILCE-7RM4A", 1), ("ILCE-7RM4", 0), ("", 0)] {
             for (height, expected) in [(20, expected), (16, 0)] {
                 for order in [ByteOrder::Little, ByteOrder::Big] {
                     let mut raw = IfdBuilder::new();

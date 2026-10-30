@@ -187,3 +187,16 @@ impl<T> SonyField<T> {
         self.raw_ifd != SonyCopy::Absent || self.sr2 != SonyCopy::Absent
     }
 }
+
+impl SonyLensCorrections {
+    /// Convert this record's raw-IFD 16-entry distortion table (`0x7037`) into a DNG `WarpRectilinear` opcode
+    /// when the capture is native 3:2 Bayer.
+    pub fn distortion_opcode(&self) -> Option<crate::Opcode> {
+        if self.geometry.linear_ycbcr || !self.geometry.native_3_2 || self.distortion.table.source != Some(SonySource::RawIfd) {
+            return None;
+        }
+        let table = self.distortion.table.value.as_ref()?;
+        let (w, h) = (self.geometry.storage_width, self.geometry.storage_height);
+        crate::vendor::arw_lens::distortion_table(table, Rect::new(0, 0, w, h), self.geometry.reference)
+    }
+}

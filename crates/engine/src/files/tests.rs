@@ -1265,7 +1265,7 @@ fn dng_sky_matte_drives_the_sky_mask() {
     assert_eq!((img.width, img.height), (8, 16));
     assert!(info.mattes.is_some());
     let sky = Mask {
-        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky }],
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::sky() }],
         adjust: LocalAdjustments { exposure: -3.0, ..Default::default() },
         ..Default::default()
     };

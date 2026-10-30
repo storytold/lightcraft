@@ -408,21 +408,21 @@ fn sky_uses_the_sources_matte() {
     let mut mattes = Mattes::default();
     mattes.push(MatteKind::Sky, left_matte(w, h, 0.5));
     let f = frame(w, h);
-    let heuristic = shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, None);
-    let matte = shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    let heuristic = shape_alpha(&MaskShape::sky(), &f, w, h, &img, &l, 0.0, None);
+    let matte = shape_alpha(&MaskShape::sky(), &f, w, h, &img, &l, 0.0, Some(&mattes));
     assert!(heuristic.get(150, 5) > 0.9 && heuristic.get(25, 90) < 0.1, "{} {}", heuristic.get(150, 5), heuristic.get(25, 90));
     assert!(matte.get(150, 5) < 0.01 && matte.get(25, 90) > 0.99, "{} {}", matte.get(150, 5), matte.get(25, 90));
     // mattes of other kinds leave the heuristic alone
     let mut hair = Mattes::default();
     hair.push(MatteKind::Hair, left_matte(w, h, 0.5));
-    assert_eq!(shape_alpha(&MaskShape::Sky, &f, w, h, &img, &l, 0.0, Some(&hair)), heuristic);
+    assert_eq!(shape_alpha(&MaskShape::sky(), &f, w, h, &img, &l, 0.0, Some(&hair)), heuristic);
     // rotated 90° clockwise, the source's left half is the top half; a preview and a larger
     // render agree
     let s = lightcraft_develop::DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
     let f = Frame::new(w, h, &s, true);
     for (ow, oh) in [(100, 200), (25, 50)] {
         let small = Rgb32f::filled(ow, oh, [0.5, 0.7, 1.4]);
-        let a = shape_alpha(&MaskShape::Sky, &f, ow, oh, &small, &small.map(crate::local::log_lum), 0.0, Some(&mattes));
+        let a = shape_alpha(&MaskShape::sky(), &f, ow, oh, &small, &small.map(crate::local::log_lum), 0.0, Some(&mattes));
         let at = |x: f64, y: f64| a.get((x * ow as f64) as usize, (y * oh as f64) as usize);
         assert!(at(0.5, 0.2) > 0.99 && at(0.5, 0.8) < 0.01, "{ow}×{oh}: {} {}", at(0.5, 0.2), at(0.5, 0.8));
     }
@@ -441,12 +441,71 @@ fn people_and_subject_use_person_mattes() {
     mattes.push(MatteKind::Hair, right);
     let f = frame(w, h);
     let eval = |shape: &MaskShape| shape_alpha(shape, &f, w, h, &img, &l, 0.0, Some(&mattes));
-    let subject = eval(&MaskShape::Subject);
+    let subject = eval(&MaskShape::subject());
     assert!(subject.get(10, 50) > 0.99 && subject.get(190, 50) > 0.99 && subject.get(100, 50) < 0.01);
-    let background = eval(&MaskShape::Background);
+    let background = eval(&MaskShape::background());
     assert!(background.get(100, 50) > 0.99 && background.get(10, 50) < 0.01);
     let hair = eval(&MaskShape::People { person: 0, parts: vec!["Hair".into()] });
     assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+}
+
+#[test]
+fn ai_masks_with_segmask_sample_segmentation() {
+    use lightcraft_develop::SegMask;
+    let (w, h) = (100, 100);
+    let img = Rgb32f::filled(w, h, [0.5; 3]);
+    let l = img.map(crate::local::log_lum);
+    let f = frame(w, h);
+    // logits: positive on left half, negative on right half
+    let side = 16;
+    let logits: Vec<f32> = (0..side * side).map(|i| if (i % side) < side / 2 { 10.0 } else { -10.0 }).collect();
+    let seg = SegMask::from_logits(side, &logits);
+    let subj = MaskShape::Subject { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
+    let out = shape_alpha(&subj, &f, w, h, &img, &l, 0.0, None);
+    assert!(out.get(10, 50) > 0.99, "left half selected: {}", out.get(10, 50));
+    assert!(out.get(90, 50) < 0.01, "right half unselected: {}", out.get(90, 50));
+
+    let bg = MaskShape::Background { seg: seg.invert(), detail: vec![], edge: 0.0 };
+    let out_bg = shape_alpha(&bg, &f, w, h, &img, &l, 0.0, None);
+    assert!(out_bg.get(10, 50) < 0.01, "left half unselected in inverted bg: {}", out_bg.get(10, 50));
+    assert!(out_bg.get(90, 50) > 0.99, "right half selected in inverted bg: {}", out_bg.get(90, 50));
+}
+
+#[test]
+fn stored_segmentation_takes_precedence_over_source_mattes() {
+    use lightcraft_develop::SegMask;
+    let (w, h) = (100, 100);
+    let img = Rgb32f::filled(w, h, [0.5; 3]);
+    let l = img.map(crate::local::log_lum);
+    let f = frame(w, h);
+
+    // Matte covers left half (x < 50)
+    let mut mattes = Mattes::default();
+    mattes.push(MatteKind::Sky, left_matte(w, h, 0.5));
+    mattes.push(MatteKind::Skin, left_matte(w, h, 0.5));
+
+    // Stored segmentation selects the right half (x >= 50)
+    let side = 16;
+    let logits: Vec<f32> = (0..side * side).map(|i| if (i % side) >= side / 2 { 10.0 } else { -10.0 }).collect();
+    let seg = SegMask::from_logits(side, &logits);
+
+    // Sky with stored seg uses the segmentation (right half selected), ignoring the sky matte (left half)
+    let sky_stored = MaskShape::Sky { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
+    let sky_alpha = shape_alpha(&sky_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(sky_alpha.get(90, 50) > 0.99, "stored segmentation wins for sky (right half): {}", sky_alpha.get(90, 50));
+    assert!(sky_alpha.get(10, 50) < 0.01, "matte fallback skipped when stored seg present: {}", sky_alpha.get(10, 50));
+
+    // Subject with stored seg uses the segmentation, ignoring the person matte
+    let subj_stored = MaskShape::Subject { seg: Some(seg), detail: vec![], edge: 0.0 };
+    let subj_alpha = shape_alpha(&subj_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(subj_alpha.get(90, 50) > 0.99, "stored segmentation wins for subject: {}", subj_alpha.get(90, 50));
+    assert!(subj_alpha.get(10, 50) < 0.01, "matte fallback skipped for subject: {}", subj_alpha.get(10, 50));
+
+    // Sky without stored seg falls back to the matte (left half)
+    let sky_fallback = MaskShape::sky();
+    let fb_alpha = shape_alpha(&sky_fallback, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(fb_alpha.get(10, 50) > 0.99, "fallback uses matte: {}", fb_alpha.get(10, 50));
+    assert!(fb_alpha.get(90, 50) < 0.01, "fallback leaves unselected: {}", fb_alpha.get(90, 50));
 }

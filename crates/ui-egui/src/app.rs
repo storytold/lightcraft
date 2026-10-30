@@ -478,6 +478,9 @@ impl LightcraftApp {
         // a download finishing while its dialog is closed: say so once
         if self.ui.sam_downloading && !download.running {
             self.ui.sam_downloading = false;
+            if download.finished {
+                self.session.segment_warmup();
+            }
             let open = matches!(self.ui.dialog, Some(state::Dialog::SamModel { .. }));
             match sam_download_ended(&download) {
                 _ if open => {}
@@ -485,6 +488,39 @@ impl LightcraftApp {
                 Some((text, false)) => self.toast(ctx, text),
                 None => {}
             }
+        }
+        // When the SAM 3 model is loaded and the user is in Detail / Masking / Remove view,
+        // pre-encode the active photo in the background so the first AI click or stroke is instant.
+        // Debounce warmup so it does not run on every frame during develop-setting changes,
+        // and skip warmup while an interaction (slider drag, stroke) is active.
+        if self.session.interaction.is_some() {
+            self.ui.warmup_due = None;
+        } else if self.session.segmenter.loaded()
+            && !self.session.segmenter.busy()
+            && matches!(self.ui.view, state::ViewMode::Detail)
+            && self.session.active().is_some()
+        {
+            if self.session.is_segment_warmed() {
+                self.ui.warmup_due = None;
+            } else {
+                let key = self.session.active_segment_key().unwrap_or(0);
+                match self.ui.warmup_due {
+                    Some((due, due_key)) if due_key == key => {
+                        if now >= due {
+                            self.ui.warmup_due = None;
+                            self.session.segment_warmup();
+                        } else {
+                            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+                        }
+                    }
+                    _ => {
+                        self.ui.warmup_due = Some((now + 0.3, key));
+                        ctx.request_repaint_after(std::time::Duration::from_millis(300));
+                    }
+                }
+            }
+        } else {
+            self.ui.warmup_due = None;
         }
         if let Some((due, mask)) = self.ui.detail_due {
             if now >= due && !self.session.segmenter.busy() && !self.session.segmenter.detail_busy() {

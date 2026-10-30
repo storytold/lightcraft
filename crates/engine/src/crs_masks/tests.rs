@@ -46,7 +46,7 @@ fn corrections_become_masks() {
     let sky = &s.masks[0];
     assert_eq!(sky.name, "Darker sky");
     assert_eq!((sky.adjust.exposure, sky.adjust.saturation, sky.adjust.temp, sky.adjust.amount), (-1.0, 30.0, -10.0, 100.0));
-    assert_eq!(sky.components[0].shape, MaskShape::Sky);
+    assert_eq!(sky.components[0].shape, MaskShape::sky());
     assert_eq!(sky.components[1].op, MaskOp::Intersect);
     let MaskShape::Linear { start, end } = &sky.components[1].shape else { panic!() };
     assert_eq!((start.y, end.y), (0.0, 0.6), "full effect at the Full point");

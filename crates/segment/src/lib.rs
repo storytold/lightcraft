@@ -65,6 +65,8 @@ pub enum Error {
     Model(String),
     #[error("SAM 3 model files not found in {0} (expected model.safetensors, vocab.json, merges.txt)")]
     Missing(PathBuf),
+    #[error("SAM 3 cancelled")]
+    Cancelled,
     #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     Candle(#[from] candle_core::Error),
@@ -113,6 +115,7 @@ pub struct Sam3 {
     tracker: Option<tracker::Tracker>,
     detector: Option<detector::Detector>,
     tokenizer: Option<tokenizer::Tokenizer>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -150,7 +153,29 @@ impl Sam3 {
         }
         let weights = weights::Weights::open(&dir.join(WEIGHTS_FILE))?;
         let backbone = vit::Vit::new(Self::vb(&weights, &device).pp("detector_model.vision_encoder.backbone"))?;
-        Ok(Self { dir: dir.to_path_buf(), device, weights, backbone, tracker_neck: None, tracker: None, detector: None, tokenizer: None })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            device,
+            weights,
+            backbone,
+            tracker_neck: None,
+            tracker: None,
+            detector: None,
+            tokenizer: None,
+            cancel: None,
+        })
+    }
+
+    /// Install an optional cancellation flag checked between ViT and DETR layers.
+    pub fn set_cancel(&mut self, cancel: Option<Arc<std::sync::atomic::AtomicBool>>) {
+        self.cancel = cancel;
+    }
+
+    fn check_cancel(&self) -> Result<()> {
+        if self.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
+        Ok(())
     }
 
     fn vb<'a>(w: &Arc<weights::Weights>, device: &Device) -> VarBuilder<'a> {
@@ -171,7 +196,12 @@ impl Sam3 {
 
     /// Run the backbone on preprocessed pixels `[1, 3, 1008, 1008]` (−1..1).
     pub fn encode_pixels(&self, pixels: &Tensor) -> Result<Encoded> {
-        Ok(Encoded { backbone: self.backbone.forward(&pixels.to_device(&self.device)?)?, tracker: None, detector: None })
+        self.check_cancel()?;
+        Ok(Encoded {
+            backbone: self.backbone.forward_cancellable(&pixels.to_device(&self.device)?, self.cancel.as_deref())?,
+            tracker: None,
+            detector: None,
+        })
     }
 
     fn tracker_parts(&mut self) -> Result<(&neck::Neck, &tracker::Tracker)> {
@@ -230,13 +260,17 @@ impl Sam3 {
     /// `threshold` (0..1, 0.5 is the reference default) are merged into one mask; `None` when
     /// nothing matches.
     pub fn segment_text(&mut self, enc: &mut Encoded, text: &str, threshold: f32) -> Result<Option<Prediction>> {
+        self.check_cancel()?;
+        let cancel = self.cancel.clone();
         let (det, tok) = self.detector_parts()?;
         if enc.detector.is_none() {
             enc.detector = Some(det.features(&enc.backbone)?);
         }
         let f = enc.detector.as_ref().ok_or_else(|| Error::Model("detector features".into()))?;
         let (ids, valid) = tok.encode(text);
-        let out = det.predict(f, &ids, &valid)?;
+        let Some(out) = det.predict_cancellable(f, &ids, &valid, Some(threshold), cancel.as_deref())? else {
+            return Ok(None);
+        };
         Ok(detector::merge(&out, threshold))
     }
 

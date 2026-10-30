@@ -70,6 +70,7 @@ impl Default for MediaCache {
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
+            probed_lens: std::collections::HashSet::new(),
         }
     }
 }
@@ -104,6 +105,7 @@ impl MediaCache {
         self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
         self.previews.clear();
         self.full.clear();
+        self.probed_lens.clear();
     }
 
     /// How many full-resolution originals to keep at once (at least one). Compare and Reference
@@ -246,11 +248,22 @@ impl MediaCache {
         self.enforce_budget();
     }
 
+    /// Embedded lens data read while decoding any cached level of `id`.
+    pub fn cached_lens(&self, id: PhotoId) -> Option<lightcraft_develop::EmbeddedLens> {
+        self.thumbs
+            .peek(&id)
+            .into_iter()
+            .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .find_map(|s| s.info.as_ref()?.lens)
+    }
+
     /// Forget a photo's decoded sources (e.g. after its file changed).
     pub fn forget(&mut self, id: PhotoId) {
         self.thumbs.remove(&id);
         self.previews.retain(|e| e.0 != id);
         self.full.retain(|e| e.0 != id);
+        self.probed_lens.remove(&id);
     }
 
     /// (decoded thumbnail sources, bytes).

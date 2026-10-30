@@ -49,9 +49,9 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
         MaskShape::ColorRange { .. } => ("Color Range", Icon::Picker),
         MaskShape::LuminanceRange { .. } => ("Luminance Range", Icon::Sliders),
         MaskShape::DepthRange { .. } => ("Depth Range", Icon::Sliders),
-        MaskShape::Subject => ("Subject", Icon::Subject),
-        MaskShape::Sky => ("Sky", Icon::Sky),
-        MaskShape::Background => ("Background", Icon::Subject),
+        MaskShape::Subject { .. } => ("Subject", Icon::Subject),
+        MaskShape::Sky { .. } => ("Sky", Icon::Sky),
+        MaskShape::Background { .. } => ("Background", Icon::Subject),
         MaskShape::Object { .. } => ("Object", Icon::Subject),
         MaskShape::Prompt { .. } => ("Describe", Icon::Subject),
         MaskShape::People { .. } => ("People", Icon::Subject),
@@ -157,26 +157,37 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         describe_field(app, ui, true);
-        let seg = &app.session.segmenter;
-        let status = if seg.analyzing() {
-            Some("Analyzing the photo for AI masks…")
-        } else if seg.busy() {
-            Some("Selecting…")
-        } else if seg.detail_busy() || app.ui.detail_due.is_some() {
-            Some("Refining the mask's detail…")
-        } else {
-            None
+        let status = {
+            let seg = &app.session.segmenter;
+            if seg.analyzing() {
+                Some("Analyzing the photo for AI masks…")
+            } else if seg.busy() {
+                Some("Selecting…")
+            } else if seg.detail_busy() || app.ui.detail_due.is_some() {
+                Some("Refining the mask's detail…")
+            } else {
+                None
+            }
         };
         if let Some(status) = status {
             ui.add_space(4.0);
+            let mut cancel_clicked = false;
             ui.horizontal_top(|ui| {
                 crate::progress::spinner(ui, 14.0);
                 ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
+                if icon_button(ui, "maskSamCancel", Icon::Close, vec2(20.0, 20.0), false, true, "Cancel AI selection").clicked() {
+                    cancel_clicked = true;
+                }
             });
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            if cancel_clicked {
+                app.session.segmenter.cancel_all();
+                app.ui.detail_due = None;
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            }
         }
         // the model download, while its dialog is closed
-        let download = seg.download_status();
+        let download = app.session.segmenter.download_status();
         if download.running && app.ui.dialog.is_none() {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -604,7 +615,11 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 }
             }
         }
-        MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } => {
+        MaskShape::Object { edge, .. }
+        | MaskShape::Prompt { edge, .. }
+        | MaskShape::Subject { edge, .. }
+        | MaskShape::Sky { edge, .. }
+        | MaskShape::Background { edge, .. } => {
             // Edge: how crisp the selection's border is (−100 hard … 0 as computed … 100 soft)
             let spec = ControlSpec {
                 id: "edge",
@@ -617,12 +632,19 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 decimals: 0,
                 track: Track::Centered,
             };
-            let out = slider(ui, &spec, *edge, true, None);
+            let out = slider(ui, &spec, *edge, shape.seg().is_some(), None);
             let base = shape.clone();
             apply_slider_out(app, &spec, out, |app, v| {
                 let mut s = base.clone();
-                if let MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } = &mut s {
-                    *edge = v.clamp(-100.0, 100.0);
+                match &mut s {
+                    MaskShape::Object { edge, .. }
+                    | MaskShape::Prompt { edge, .. }
+                    | MaskShape::Subject { edge, .. }
+                    | MaskShape::Sky { edge, .. }
+                    | MaskShape::Background { edge, .. } => {
+                        *edge = v.clamp(-100.0, 100.0);
+                    }
+                    _ => {}
                 }
                 app.run("mask.update", json!({"component": comp, "shape": s}))
             });

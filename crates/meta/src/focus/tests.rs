@@ -396,7 +396,12 @@ fn the_synthetic_arw_is_laid_out_as_described() {
 
 #[test]
 fn cameras_that_can_have_a_point() {
-    assert!(camera_supported("SONY ILCE-1") && camera_supported("Sony ILCE-7SM3 "));
+    assert!(
+        camera_supported("SONY ILCE-1")
+            && camera_supported("Sony ILCE-7SM3 ")
+            && camera_supported("SONY ILCE-6400")
+            && camera_supported("SONY ILCE-7M3")
+    );
     for c in ["SONY ILCE-7M4", "Canon EOS R5", "", "SONY", "ILCE-1", "SON"] {
         assert!(!camera_supported(c), "{c}");
     }

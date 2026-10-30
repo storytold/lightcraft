@@ -156,12 +156,16 @@ impl Vit {
     }
 
     /// `pixels`: `[1, 3, 1008, 1008]` normalized to −1..1. Returns `[1, 1024, 72, 72]`.
-    pub fn forward(&self, pixels: &Tensor) -> Result<Tensor> {
+    /// Checks `cancel` between layers when provided.
+    pub fn forward_cancellable(&self, pixels: &Tensor, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Tensor> {
         let x = self.patch.forward(pixels)?; // [1, C, 72, 72]
         let b = x.dim(0)?;
         let x = x.flatten_from(2)?.transpose(1, 2)?.broadcast_add(&self.pos)?;
         let mut x = self.ln_pre.forward(&x.reshape((b, GRID, GRID, HIDDEN))?)?;
         for l in &self.layers {
+            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(Error::Cancelled);
+            }
             let rope = if l.window > 0 { &self.rope_window } else { &self.rope_global };
             x = l.forward(&x, rope)?;
         }

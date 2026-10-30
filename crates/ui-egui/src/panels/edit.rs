@@ -325,7 +325,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(8.0);
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
-        let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
+        let has_lens = app.session.has_lens(id);
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
             if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
@@ -335,10 +335,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
-            if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
-                );
+            if lp && d.section_enabled("optics") {
+                if has_lens {
+                    if let Some(lens_name) = app.session.catalog.photo(id).map(|p| p.meta.lens.clone()).filter(|s| !s.is_empty()) {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr_format!("Profile: {}", lens_name)).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr("Built-in lens profile applied.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
+                    );
+                }
             }
         });
         if d.optics.lens_profile {

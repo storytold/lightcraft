@@ -959,9 +959,30 @@ pub enum MaskShape {
         feather: f64,
     },
     /// AI / automatic selections, evaluated by a segmenter.
-    Subject,
-    Sky,
-    Background,
+    Subject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
+    Sky {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
+    Background {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
     /// One object picked by clicks (SAM 3 point prompts): `hint` holds the clicks that include,
     /// `exclude` the ones that exclude; `seg` the segmentation computed from them.
     Object {
@@ -997,6 +1018,35 @@ pub enum MaskShape {
     Landscape {
         class: String,
     },
+}
+
+impl MaskShape {
+    /// Create an automatic Subject mask shape with default empty segmentation.
+    pub fn subject() -> Self {
+        MaskShape::Subject { seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// Create an automatic Sky mask shape with default empty segmentation.
+    pub fn sky() -> Self {
+        MaskShape::Sky { seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// Create an automatic Background mask shape with default empty segmentation.
+    pub fn background() -> Self {
+        MaskShape::Background { seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// The segmentation mask data for shapes that carry one (Object, Describe/Prompt, Subject, Sky, Background).
+    pub fn seg(&self) -> Option<&crate::SegMask> {
+        match self {
+            MaskShape::Object { seg, .. }
+            | MaskShape::Prompt { seg, .. }
+            | MaskShape::Subject { seg, .. }
+            | MaskShape::Sky { seg, .. }
+            | MaskShape::Background { seg, .. } => seg.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

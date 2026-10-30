@@ -18,28 +18,63 @@ pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
 pub fn database() -> Option<&'static LensDb> {
     static DB: OnceLock<Option<LensDb>> = OnceLock::new();
     DB.get_or_init(|| {
-        let dir = PathBuf::from(std::env::var_os(ENV)?);
-        match LensDb::load_dir(&dir) {
-            Ok((db, errors)) => {
-                for (file, e) in errors {
-                    log::warn!("lens database: skipped {file}: {e}");
+        for dir in lensfun_candidate_dirs() {
+            match LensDb::load_dir(&dir) {
+                Ok((db, errors)) => {
+                    for (file, e) in errors {
+                        log::warn!("lens database: skipped {file}: {e}");
+                    }
+                    if !db.lenses.is_empty() {
+                        return Some(db);
+                    }
                 }
-                (!db.lenses.is_empty()).then_some(db)
-            }
-            Err(e) => {
-                log::warn!("{e}");
-                None
+                Err(e) => {
+                    log::warn!("lens database load from {}: {e}", dir.display());
+                }
             }
         }
+        None
     })
     .as_ref()
+}
+
+/// Find external lensfun database candidate directories from the environment, user config, and common system locations.
+fn lensfun_candidate_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(d) = std::env::var_os(ENV) {
+        let p = PathBuf::from(d);
+        if p.is_dir() {
+            dirs.push(p);
+        }
+    }
+    if let Some(p) = crate::config::config_dir().map(|d| d.join("lensfun")).filter(|p| p.is_dir()) {
+        dirs.push(p);
+    }
+    let candidates = [
+        "/usr/share/lensfun/version_1",
+        "/usr/share/lensfun/version_2",
+        "/var/lib/lensfun-updates/version_1",
+        "/var/lib/lensfun-updates/version_2",
+        "/usr/local/share/lensfun/version_1",
+        "/usr/local/share/lensfun/version_2",
+        "/opt/homebrew/share/lensfun/version_1",
+        "/opt/homebrew/share/lensfun/version_2",
+    ];
+    for c in candidates {
+        let p = PathBuf::from(c);
+        if p.is_dir() {
+            dirs.push(p);
+        }
+    }
+    dirs
 }
 
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
 /// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
-    let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
+    let fallback_cam = sony_fallback_camera(m.make.as_deref(), m.model.as_deref());
+    let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default()).or(fallback_cam.as_ref());
     let lens = match m.lens_model.as_deref() {
         Some(model) => db.find_lens(m.lens_make.as_deref(), model, camera)?,
         // Nikon DSLRs record only the lens specification ("24-70mm f/2.8"); a profile must be named exactly that
@@ -55,6 +90,54 @@ pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orient
     Some(lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h))
 }
 
+/// Built-in mount and sensor crop-factor fallback for Sony E-mount bodies (e.g. `ILCE-6400`) when an older
+/// lensfun XML database lists the lens but not the body.
+fn sony_fallback_camera(make: Option<&str>, model: Option<&str>) -> Option<lightcraft_lensdb::Camera> {
+    let model = model?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let is_sony = make.is_some_and(|mk| mk.trim().to_ascii_uppercase().starts_with("SONY"))
+        || model.starts_with("ILCE-")
+        || model.starts_with("ZV-E")
+        || model.starts_with("NEX-");
+    if !is_sony {
+        return None;
+    }
+    let upper = model.to_ascii_uppercase();
+    let crop_factor = if upper.starts_with("ILCE-6")
+        || upper.starts_with("ILCE-5")
+        || upper.starts_with("ILCE-3")
+        || upper.starts_with("ZV-E10")
+        || upper.starts_with("NEX-")
+    {
+        1.53
+    } else if upper.starts_with("ILCE-7") || upper.starts_with("ILCE-9") || upper.starts_with("ILCE-1") || upper.starts_with("ZV-E1") {
+        1.0
+    } else {
+        return None;
+    };
+    Some(lightcraft_lensdb::Camera { maker: "Sony".into(), model: model.into(), mount: "Sony E".into(), crop_factor })
+}
+
+/// Sony E-mount bodies whose in-file 16-entry raw-IFD distortion table (`0x7037`) is used by the engine when no
+/// DNG opcode or external lensfun database profile is available.
+const SONY_EMBEDDED_FALLBACK_MODELS: &[&str] =
+    &["ILCE-6400", "ILCE-6000", "ILCE-6100", "ILCE-6300", "ILCE-6500", "ILCE-6600", "ILCE-6700", "ILCE-7M3", "ILCE-7C", "ZV-E10", "ZV-E10M2"];
+
+/// Construct embedded lens distortion correction for Sony E-mount models using their raw-IFD table.
+fn sony_embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<EmbeddedLens> {
+    let model = raw.metadata.model.as_deref()?.trim();
+    if !SONY_EMBEDDED_FALLBACK_MODELS.contains(&model) {
+        return None;
+    }
+    let sony = raw.lens_metadata.sony.as_ref()?;
+    let op = sony.distortion_opcode()?;
+    let mut tmp = raw.clone();
+    tmp.opcodes.list3.push(op);
+    crate::files::embedded_lens(&tmp)
+}
+
 /// The crop factor of the recorded frame, which scales the profile's radii: the body's (`camera`), else what the
 /// 35 mm equivalent focal length implies. A body shooting a crop of its sensor (a full-frame camera in APS-C /
 /// Super 35 mode, or switched there by an APS-C lens) records a larger 35 mm equivalent than its own crop factor
@@ -68,13 +151,16 @@ fn frame_crop_factor(camera: Option<f64>, focal: f64, focal_35mm: Option<f64>) -
     }
 }
 
-/// [`crate::files::embedded_lens`], else the database profile ([`lookup`]) for a raw with metadata `meta`.
+/// [`crate::files::embedded_lens`], else the database profile ([`lookup`]) for a raw with metadata `meta`,
+/// else the engine's Sony embedded ARW distortion fallback.
 pub fn for_raw(raw: &lightcraft_raw::RawInfo, meta: impl FnOnce() -> lightcraft_meta::Metadata) -> Option<EmbeddedLens> {
-    crate::files::embedded_lens(raw).or_else(|| {
-        let db = database()?;
-        let (w, h) = raw.developed_size();
-        lookup(db, &meta(), w as f64, h as f64, raw.orientation)
-    })
+    crate::files::embedded_lens(raw)
+        .or_else(|| {
+            let db = database()?;
+            let (w, h) = raw.developed_size();
+            lookup(db, &meta(), w as f64, h as f64, raw.orientation)
+        })
+        .or_else(|| sony_embedded_lens(raw))
 }
 
 #[cfg(test)]
@@ -235,5 +321,56 @@ mod tests {
         assert!(before > 2.0, "the recorded line is curved: {before} px");
         // 8-bit output and a 2 px line: the centroid measurement itself is good to about a pixel
         assert!(after < 1.0 && after < before / 8.0, "corrected line bent by {after} px (uncorrected {before})");
+    }
+
+    #[test]
+    fn sony_a6400_uses_fallback_aps_c_camera_and_embedded_arw_distortion() {
+        // 1. Even when a lensfun XML has the E-mount lens but omits the ILCE-6400 camera entry,
+        //    sony_fallback_camera supplies Sony E mount + 1.53 APS-C crop factor.
+        let db = LensDb::parse(
+            r#"<lensdatabase>
+              <lens><maker>Sony</maker><model>E PZ 16-50mm F3.5-5.6 OSS</model><mount>Sony E</mount><cropfactor>1.53</cropfactor>
+                <calibration>
+                  <distortion model="poly3" focal="16" k1="-0.045" />
+                  <vignetting model="pa" focal="16" aperture="3.5" distance="1000" k1="-0.5" k2="0" k3="0" />
+                </calibration>
+              </lens></lensdatabase>"#,
+        )
+        .unwrap();
+        let m = lightcraft_meta::Metadata {
+            make: Some("SONY".into()),
+            model: Some("ILCE-6400".into()),
+            lens_model: Some("E PZ 16-50mm F3.5-5.6 OSS".into()),
+            focal_length: Some(16.0),
+            f_number: Some(3.5),
+            ..Default::default()
+        };
+        let lens = lookup(&db, &m, 6000.0, 4000.0, Orientation::Normal).expect("a6400 lensfun profile");
+        assert!(lens.warp.is_some() && lens.vignette.is_some());
+
+        // 2. Without any lensfun database, an ILCE-6400 ARW with an embedded 0x7037 distortion table
+        //    resolves its embedded lens warp through `for_raw`.
+        use lightcraft_tiff::tags::{self as t, photometric};
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+        let (w, h) = (72u32, 48u32);
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        raw.set(0x7037, Value::SShort(vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479]));
+        raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![2000u16.to_le_bytes().repeat((w * h) as usize)] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("SONY".into()));
+        ifd0.set(t::MODEL, Value::Ascii("ILCE-6400".into()));
+        ifd0.add_sub_ifd(raw);
+        let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        let info = lightcraft_raw::probe_info(&bytes).unwrap();
+        let fallback = sony_embedded_lens(&info).expect("a6400 embedded ARW distortion fallback");
+        assert!(fallback.warp.is_some());
     }
 }

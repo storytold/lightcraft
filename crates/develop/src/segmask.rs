@@ -53,6 +53,18 @@ impl SegMask {
         let q = miniz_oxide::inflate::decompress_to_vec_with_limit(&z, side * side).ok()?;
         (q.len() == side * side).then(|| q.iter().map(|b| f32::from(*b as i8) / SCALE).collect())
     }
+
+    /// Invert the mask: negates every logit, so selected becomes unselected and vice versa.
+    pub fn invert(&self) -> Option<SegMask> {
+        let mut logits = self.logits()?;
+        for l in &mut logits {
+            *l = -*l;
+        }
+        Some(match self.rect {
+            Some(r) => SegMask::from_logits_in(self.side as usize, &logits, r),
+            None => SegMask::from_logits(self.side as usize, &logits),
+        })
+    }
 }
 
 /// Most zoomed-in detail patches one AI mask component keeps (the app makes one; each costs a
@@ -168,6 +180,20 @@ mod tests {
         let back: crate::DevelopSettings = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
         let crate::MaskShape::Prompt { detail, .. } = &back.masks[0].components[0].shape else { panic!("a Prompt") };
         assert_eq!(detail.len(), MAX_DETAIL);
+    }
+
+    #[test]
+    fn segmask_invert_negates_logits() {
+        let side = 8;
+        let l: Vec<f32> = (0..side * side).map(|i| (i as f32 - 32.0) / 4.0).collect();
+        let m = SegMask::from_logits_in(side, &l, [0.1, 0.2, 0.8, 0.9]);
+        let inv = m.invert().unwrap();
+        assert_eq!(inv.rect, Some([0.1, 0.2, 0.8, 0.9]));
+        let orig_logits = m.logits().unwrap();
+        let inv_logits = inv.logits().unwrap();
+        for (a, b) in orig_logits.iter().zip(&inv_logits) {
+            assert!((a + b).abs() <= 1e-5, "expected negation: {a} vs {b}");
+        }
     }
 
     #[test]

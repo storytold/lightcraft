@@ -79,6 +79,8 @@ pub struct MediaCache {
     pub rendered: Arc<PreviewCache>,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
+    /// Photos whose files have already been probed for embedded lens data.
+    pub probed_lens: std::collections::HashSet<PhotoId>,
 }
 
 #[cfg(test)]

@@ -1180,7 +1180,7 @@
   "Reverse the order": "逆順にする",
   "Review": "レビュー",
   "Review Import": "読み込み内容を確認",
-  "Right-click a photo ▸ Set as Reference Photo, then View → Reference View (Shift+R)": "写真を右クリックして参照写真に設定し、「表示 → 参照表示」（⇧R）を選択してください",
+  "Right-click a photo → Set as Reference Photo, then View → Reference View (Shift+R)": "写真を右クリックして参照写真に設定し、「表示 → 参照表示」（⇧R）を選択してください",
   "Right-click a preset to delete it": "プリセットを右クリックして削除",
   "Rights Usage Terms": "利用条件",
   "Rotate": "回転",

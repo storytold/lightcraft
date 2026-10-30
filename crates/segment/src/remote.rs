@@ -108,20 +108,35 @@ impl Client {
     }
 }
 
+/// Extract text-prompted segmentation logits for a compound prompt with alternative groups (`|`)
+/// and comma-separated phrase lists.
 pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> crate::Result<Option<Vec<f32>>> {
-    let mut merged: Option<Vec<f32>> = None;
-    for phrase in text.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
-        if let Some(p) = model.segment_text(enc, phrase, 0.5)? {
-            if let Some(m) = &mut merged {
-                for (a, b) in m.iter_mut().zip(p.logits) {
-                    *a = a.max(b);
+    let mut best_group: Option<(f32, Vec<f32>)> = None;
+    for group in text.split('|').map(str::trim).filter(|g| !g.is_empty()) {
+        let mut merged: Option<Vec<f32>> = None;
+        let mut group_score = 0.0f32;
+        for phrase in group.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
+            if let Some(p) = model.segment_text(enc, phrase, 0.40)? {
+                group_score = group_score.max(p.score);
+                if let Some(m) = &mut merged {
+                    for (a, b) in m.iter_mut().zip(p.logits) {
+                        *a = a.max(b);
+                    }
+                } else {
+                    merged = Some(p.logits);
                 }
-            } else {
-                merged = Some(p.logits);
+            }
+        }
+        if let Some(m) = merged {
+            if group_score >= 0.55 {
+                return Ok(Some(m));
+            }
+            if best_group.as_ref().is_none_or(|(s, _)| group_score > *s) {
+                best_group = Some((group_score, m));
             }
         }
     }
-    Ok(merged)
+    Ok(best_group.map(|(_, m)| m))
 }
 
 fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<Option<Vec<f32>>, String> {

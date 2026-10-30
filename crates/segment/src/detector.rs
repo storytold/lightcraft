@@ -210,12 +210,34 @@ impl Detector {
 
     /// Run the detector for one tokenized prompt.
     pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool]) -> Result<Output> {
+        self.predict_cancellable(f, ids, valid, None, None)?.ok_or_else(|| Error::Model("detector skipped without threshold".into()))
+    }
+
+    /// Run the detector with an optional score `threshold` (when no query exceeds `threshold`, the
+    /// expensive 288×288 pixel decoder is skipped and `Ok(None)` is returned) and an optional
+    /// cancellation flag checked between layers.
+    pub fn predict_cancellable(
+        &self,
+        f: &Features,
+        ids: &[u32],
+        valid: &[bool],
+        threshold: Option<f32>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Option<Output>> {
+        let check = || {
+            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(Error::Cancelled);
+            }
+            Ok(())
+        };
+        check()?;
         let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?; // [1, 32, 256]
         let text_bias = padding_bias(valid, &self.device)?;
 
         // DETR encoder: image tokens attend to themselves and to the prompt
         let mut x = f.flat.clone();
         for l in &self.encoder {
+            check()?;
             let h = l.ln1.forward(&x)?;
             let hp = (&h + &f.pos)?;
             x = (&x + l.self_attn.forward(&hp, &hp, &h, None)?)?;
@@ -233,6 +255,7 @@ impl Detector {
         let mut queries = None;
         let mut presence = None;
         for l in &self.decoder {
+            check()?;
             let qpos = self.ref_point_head.forward(&self.box_sine(&boxes)?)?.pad_with_zeros(1, 1, 0)?;
             let bias = self.rpb(&boxes, f.side)?;
             let q = (&h + &qpos)?;
@@ -259,12 +282,23 @@ impl Detector {
         let pt = self.score_text_proj.forward(&pooled)?; // [1, 256]
         let pq = self.score_query_proj.forward(&queries)?; // [1, 200, 256]
         let logits = (pq.matmul(&pt.unsqueeze(2)?)? / (HIDDEN as f64).sqrt())?.clamp(-12f32, 12f32)?;
+        let logits_vec = to_vec(&logits)?;
+        let presence_val = to_vec(&presence)?.first().copied().unwrap_or(-10.0);
+        if let Some(thresh) = threshold {
+            let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+            let p = s(presence_val);
+            if !logits_vec.iter().any(|l| s(*l) * p > thresh) {
+                return Ok(None);
+            }
+        }
+        check()?;
 
         // masks: the encoder memory attends to the prompt, then a pixel decoder up to 288²
         let mem = (&memory + self.prompt_attn.forward(&self.prompt_ln.forward(&memory)?, &text, &text, Some(&text_bias))?)?;
         let [l0, l1, _] = &f.levels[..] else { return Err(Error::Model("detector levels".into())) };
         let mut prev = mem.transpose(1, 2)?.reshape((1, HIDDEN, f.side, f.side))?;
         for (i, skip) in [l1, l0].into_iter().enumerate() {
+            check()?;
             let (_, _, sh, sw) = skip.dims4()?;
             prev = (prev.upsample_nearest2d(sh, sw)? + skip)?;
             let (Some(conv), Some(norm)) = (self.pixel_convs.get(i), self.pixel_norms.get(i)) else {
@@ -272,6 +306,7 @@ impl Detector {
             };
             prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
         }
+        check()?;
         let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
         let semantic = to_vec(&self.semantic_proj.forward(&prev)?)?;
         let (_, c, mh, mw) = inst.dims4()?;
@@ -285,14 +320,7 @@ impl Detector {
         let masks = e.matmul(&inst.reshape((1, c, mh * mw))?)?.reshape((QUERIES, mh, mw))?;
         let boxes = cxcywh_to_xyxy(&boxes)?;
         let bv = to_vec(&boxes)?;
-        Ok(Output {
-            masks,
-            logits: to_vec(&logits)?,
-            presence: to_vec(&presence)?.first().copied().unwrap_or(-10.0),
-            boxes: bv.as_chunks::<4>().0.to_vec(),
-            text,
-            semantic,
-        })
+        Ok(Some(Output { masks, logits: logits_vec, presence: presence_val, boxes: bv.as_chunks::<4>().0.to_vec(), text, semantic }))
     }
 }
 

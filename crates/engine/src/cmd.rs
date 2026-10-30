@@ -28,6 +28,7 @@ pub mod manage;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
+pub use masks::SUBJECT_CONCEPT;
 mod merge;
 pub mod metadata;
 pub mod missing;

@@ -584,6 +584,15 @@ impl Session {
         // last-resort guard: a panic in a command is that command's error, not a crash
         let r = guard::catch(&format!("`{id}`"), || f(self)).unwrap_or_else(|e| Err(EngineError::Other(e)));
         self.depth -= 1;
+        if self.depth == 0 {
+            self.reconcile_segmenter();
+            let clear_ai = self.active() != was_active
+                || (matches!(id, "edit.undo" | "edit.reset" | "mask.delete" | "mask.deleteAll" | "mask.component")
+                    && self.active().and_then(|p| self.develop_of(p)).is_some_and(|d| d.masks.is_empty()));
+            if clear_ai {
+                self.segmenter.cancel_all();
+            }
+        }
         if self.depth == 0 && was_active.is_some() && self.active() != was_active {
             self.previous_active = was_active;
             if let Some(left) = was_active {
@@ -918,6 +927,10 @@ impl Session {
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+        let lens_profile_turned_on = settings.optics.lens_profile && self.develop_of(id).is_none_or(|old| !old.optics.lens_profile);
+        if lens_profile_turned_on {
+            self.ensure_embedded_lens(id);
+        }
         let now = (self.clock)();
         // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990)
         let requested = settings;

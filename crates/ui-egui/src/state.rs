@@ -202,6 +202,9 @@ pub struct UiState {
     /// each click or description, so the pass runs once the clicking stops (monotonic app time).
     #[serde(skip)]
     pub detail_due: Option<(f64, u32)>,
+    /// When to trigger background AI warmup for the active photo in Detail view (app time and photo key).
+    #[serde(skip)]
+    pub warmup_due: Option<(f64, u64)>,
     /// A mask component being renamed inline: (mask id, component index, name).
     pub renaming_component: Option<(u32, usize, String)>,
     /// Close the window on the next frame (File → Quit).
@@ -430,6 +433,7 @@ impl Default for UiState {
             renaming_mask: None,
             describe: None,
             detail_due: None,
+            warmup_due: None,
             sam_downloading: false,
             renaming_component: None,
             quit: false,

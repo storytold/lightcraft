@@ -79,7 +79,7 @@ impl FocusPoint {
 
 /// Sony bodies whose focus tags have been checked against real files. Another body may store the same
 /// tags differently (or not mean the same by them): it shows no focus point until its files are checked.
-pub const SONY_MODELS: &[&str] = &["ILCE-1", "ILCE-7SM3"];
+pub const SONY_MODELS: &[&str] = &["ILCE-1", "ILCE-7SM3", "ILCE-6400", "ILCE-7M3"];
 
 /// Whether a camera as the catalog names it (`"SONY ILCE-1"`: the Exif Make, a space, the Model) is
 /// one whose files can carry a focus point, so a photo from any other camera is never opened to look.
