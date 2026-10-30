@@ -94,13 +94,15 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             }
             let resp = ui.interact(cr, egui::Id::unique(("film", id.0)), Sense::click());
             let failed = app.renderer.thumb(*id).is_none() && app.renderer.failure(Slot::Thumb(*id)).is_some();
-            crate::widgets::announce(&resp, film_spoken(app.session.catalog.photo(*id).map_or("", |p| p.file_name.as_str()), failed));
-            register(ui, format!("film:{}", id.0), cr);
             let state = app.session.selection.state_of(*id);
+            let selected = state != lightcraft_engine::SelectionState::NotSelected;
+            // the same name as the grid's cell for this photo (file, rating, flag, label), and whether it is selected
+            let name = app.session.catalog.photo(*id).map(|p| crate::panels::grid::photo_spoken(&app.session.catalog, p)).unwrap_or_default();
+            crate::widgets::announce_cell(&resp, film_spoken(&name, failed), selected);
+            register(ui, format!("film:{}", id.0), cr);
             let sel = state == lightcraft_engine::SelectionState::Active;
             let p = ui.painter();
             let label = app.session.catalog.photo(*id).and_then(|ph| ph.label);
-            let selected = state != lightcraft_engine::SelectionState::NotSelected;
             let base = if selected {
                 t.cell_selected
             } else if resp.hovered() {
@@ -192,14 +194,15 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     });
 }
 
-/// What a screen reader says for a filmstrip thumbnail: the file, and why there is no picture
+/// What a screen reader says for a filmstrip thumbnail: the photo's name as the grid says it
+/// ([`crate::panels::grid::photo_spoken`]: file, rating, flag, label), and why there is no picture
 /// when the thumbnail failed (the painted `!` has no name of its own). The name is empty when the
-/// catalog no longer has the photo (or its file name is blank); the reason then stands alone.
-pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
-    match (file_name.is_empty(), failed) {
-        (_, false) => file_name.to_string(),
+/// catalog no longer has the photo; the reason then stands alone.
+pub(crate) fn film_spoken(name: &str, failed: bool) -> String {
+    match (name.is_empty(), failed) {
+        (_, false) => name.to_string(),
         (true, true) => crate::i18n::tr("This photo can't be opened").to_string(),
-        (false, true) => format!("{file_name}, {}", crate::i18n::tr("This photo can't be opened")),
+        (false, true) => format!("{name}, {}", crate::i18n::tr("This photo can't be opened")),
     }
 }
 
