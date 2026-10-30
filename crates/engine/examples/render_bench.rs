@@ -78,6 +78,37 @@ fn typical() -> DevelopSettings {
     s
 }
 
+/// [`typical`] plus three masks: a radial gradient, a brush (three strokes) and either a linear
+/// gradient with Refine Edges (`refine`; such edits render on the CPU) or a Subject mask (the
+/// heuristic, which the GPU renderer evaluates on the CPU).
+fn with_masks(refine: bool) -> DevelopSettings {
+    use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let mut s = typical();
+    let mask = |id: u32, shape: MaskShape, exposure: f64, refine: f64| Mask {
+        id,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+        adjust: LocalAdjustments { exposure, clarity: 10.0, ..Default::default() },
+        refine,
+        ..Default::default()
+    };
+    let radial = MaskShape::Radial { center: Point::new(0.45, 0.5), rx: 0.3, ry: 0.2, angle: 15.0, feather: 60.0, invert: false };
+    let strokes = (0..3)
+        .map(|i| BrushStroke {
+            points: (0..40).map(|k| Point::new(0.1 + k as f64 * 0.02, 0.2 + i as f64 * 0.25 + (k as f64 * 0.3).sin() * 0.05)).collect(),
+            size: 0.04,
+            ..Default::default()
+        })
+        .collect();
+    let third = if refine {
+        mask(3, MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.6) }, -0.5, 60.0)
+    } else {
+        mask(3, MaskShape::Subject, 0.3, 0.0)
+    };
+    s.masks = vec![mask(1, radial, 0.5, 0.0), mask(2, MaskShape::Brush { strokes }, -0.3, 0.0), third];
+    s
+}
+
 /// Max and mean |Δ| (8-bit, RGB) between two renders.
 fn diff(a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8) -> (u8, f64) {
     let (mut max, mut sum) = (0u8, 0u64);
@@ -357,6 +388,32 @@ fn main() {
             let g = develop(&full, &info, &s, &at(w0, Quality::Full), None, true).image;
             let (max, mean) = diff(&c, &g);
             println!("gpu vs cpu, window: max {max} LSB, mean {mean:.4} LSB");
+        }
+    }
+    if run("masks") {
+        // three masks (one with Refine Edges, or one Subject mask): a global exposure drag and a
+        // mask's own exposure drag, both of which leave the masks' alphas as they were
+        for refine in [true, false] {
+            let m = with_masks(refine);
+            let what = if refine { "masks+refine" } else { "masks+subject" };
+            let caches = [StageCache::default(), StageCache::default()];
+            for (req, size) in [(&view, "loupe 1920×1280"), (&draft, "draft 1152×768")] {
+                for g in backends {
+                    drop(develop(&preview, &info, &m, req, Some(&caches[*g as usize]), *g));
+                }
+                row(&format!("{size} exposure drag, {what}:"), &mut |g| {
+                    let mut t = m.clone();
+                    k += 1.0;
+                    t.light.exposure = 0.3 + (k % 50.0) * 0.01;
+                    drop(develop(&preview, &info, &t, req, Some(&caches[g as usize]), g));
+                });
+                row(&format!("{size} mask exposure drag, {what}:"), &mut |g| {
+                    let mut t = m.clone();
+                    k += 1.0;
+                    t.masks[0].adjust.exposure = 0.5 + (k % 50.0) * 0.01;
+                    drop(develop(&preview, &info, &t, req, Some(&caches[g as usize]), g));
+                });
+            }
         }
     }
     if run("finish") {

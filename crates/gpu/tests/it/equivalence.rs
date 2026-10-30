@@ -586,6 +586,67 @@ fn cached_renders_match_uncached() {
     }
 }
 
+/// Mask alphas kept on the device across a slider drag: a warm render equals a fresh one whatever
+/// the edit (one each mask reads, and ones none of them read), the CPU's result within the bounds,
+/// and the alphas count in the stages' device bytes.
+#[test]
+fn cached_renders_with_masks_match_uncached() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 900, 600);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(640, 640);
+    let comp = |shape: MaskShape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let mask = |id: u32, shape: MaskShape| Mask { id, components: vec![comp(shape)], ..Default::default() };
+    let mut s = DevelopSettings::default();
+    typical(&mut s);
+    let stroke = BrushStroke { points: (0..10).map(|k| Point::new(0.1 + 0.07 * k as f64, 0.6)).collect(), size: 0.04, ..Default::default() };
+    s.masks = vec![
+        mask(1, MaskShape::Radial { center: Point::new(0.4, 0.5), rx: 0.3, ry: 0.2, angle: 0.0, feather: 50.0, invert: false }),
+        mask(2, MaskShape::Brush { strokes: vec![stroke] }),
+        mask(3, MaskShape::LuminanceRange { lo: 0.3, hi: 0.7, lo_feather: 0.1, hi_feather: 0.1 }),
+        // no kernel: evaluated on the CPU and uploaded
+        mask(4, MaskShape::Subject),
+    ];
+    for (i, m) in s.masks.iter_mut().enumerate() {
+        m.adjust.exposure = 0.3 * i as f64 - 0.4;
+        m.adjust.clarity = 20.0;
+    }
+    let steps: Vec<Box<dyn Fn(&mut DevelopSettings)>> = vec![
+        Box::new(|_| {}),
+        Box::new(|s| s.light.exposure = 0.8),
+        Box::new(|s| s.masks[0].adjust.exposure = 1.0),
+        Box::new(|s| s.masks[3].adjust.amount = 50.0),
+        Box::new(|s| {
+            s.masks[0].components[0].shape =
+                MaskShape::Radial { center: Point::new(0.6, 0.4), rx: 0.2, ry: 0.2, angle: 0.0, feather: 30.0, invert: false }
+        }),
+        Box::new(|s| s.masks.swap(1, 2)),
+        Box::new(|s| {
+            s.wb.mode = WbMode::Custom;
+            s.wb.temp = 4300.0;
+        }),
+        Box::new(|s| s.masks[1].visible = false),
+    ];
+    for (i, step) in steps.iter().enumerate() {
+        step(&mut s);
+        let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+        let fresh = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu");
+        assert_eq!(warm.image, fresh.image, "step {i}");
+    }
+    check("masks after a cached drag", &src, &info, &s, &req);
+    // three visible masks of 4 B/px held on the device besides the stages
+    let out = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu").image;
+    let n = out.width * out.height;
+    let with = lightcraft_gpu::stage_bytes(&cache);
+    s.masks.clear();
+    let fresh = StageCache::default();
+    lightcraft_gpu::render(&src, &info, &s, &req, Some(&fresh)).expect("gpu");
+    assert!(with >= lightcraft_gpu::stage_bytes(&fresh) + 3 * 4 * n, "{with}");
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.

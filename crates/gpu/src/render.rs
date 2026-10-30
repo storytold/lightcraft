@@ -9,6 +9,7 @@ use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
+use lightcraft_pipeline::masks::{AlphaCache, AlphaKeys, alpha_key};
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
@@ -34,6 +35,9 @@ struct Entry {
     sampled: Arc<Buf>,
     lin: Option<(u64, Arc<Buf>)>,
     planes: Planes,
+    /// Alphas of the last render's masks, as [`lightcraft_pipeline::masks::AlphaCache`] keeps them
+    /// on the CPU (same keys).
+    masks: AlphaCache<Buf>,
 }
 
 /// Spatial planes of one linear image (`key` = its `lin_key`), each tagged with its radius.
@@ -106,6 +110,8 @@ impl GpuStages {
             p.clarity.iter().for_each(|(_, b)| add(b));
             p.texture.iter().for_each(|(_, b)| add(b));
             p.dark.iter().for_each(|(_, b, _)| add(b));
+            p.chroma.iter().for_each(|(_, b)| add(b));
+            e.masks.planes().for_each(&mut add);
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
             add(b);
@@ -649,6 +655,7 @@ pub fn render(
     lap("wb/nr", &mut t, &mut cx);
 
     // 3. spatial planes
+    let mut alphas = cached.as_ref().map(|e| e.masks.clone()).unwrap_or_default();
     let mut planes = match cached.map(|e| e.planes) {
         Some(p) if p.key == plan.lin_key => p,
         _ => Planes { key: plan.lin_key, ..Default::default() },
@@ -659,13 +666,13 @@ pub fn render(
         prep.air = a;
     }
     lap("planes", &mut t, &mut cx);
-    if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
-    }
 
     // 4. masks
-    let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host);
+    let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host, &mut alphas);
     lap("masks", &mut t, &mut cx);
+    if let Some(c) = stages {
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes, masks: alphas });
+    }
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(FinishParamsInput {
@@ -960,14 +967,25 @@ fn guided_cross_max(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, s
 
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
 /// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
-/// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
-fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+/// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU. A mask whose alpha `alphas`
+/// holds (same [`alpha_key`]) is copied from there; `alphas` keeps this render's.
+fn masks(
+    cx: &mut Cx<'_>,
+    lin: &Buf,
+    prep: &Prep,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    alphas: &mut AlphaCache<Buf>,
+) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    let old = alphas.take(plan.mattes.as_ref());
     if list.is_empty() {
         return (None, Vec::new());
     }
+    let keys = AlphaKeys { geo: plan.geo, image: plan.lin_key };
+    let mut used = Vec::with_capacity(list.len());
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let frame = &plan.frame;
@@ -982,6 +1000,12 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
     }
     let comp_plane = cx.gpu.buffer(n);
     for (mi, m) in list.iter().enumerate() {
+        let key = alpha_key(m, keys, ev);
+        if let Some((_, b)) = old.iter().find(|(k, _)| *k == key) {
+            cx.copy_into(b, &alpha, mi * n);
+            used.push((key, b.clone()));
+            continue;
+        }
         let mut first = true;
         for comp in &m.components {
             let op = match comp.op {
@@ -1092,7 +1116,9 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
             &[None, None, None, Some(&comp_plane), Some(&alpha)],
             groups1(n),
         );
+        used.push((key, Arc::new(cx.slice(&alpha, mi * n, n))));
     }
+    alphas.keep(plan.mattes.as_ref(), used);
     let terms = list.iter().map(|m| mask_terms(&m.adjust)).collect();
     (Some(alpha), terms)
 }

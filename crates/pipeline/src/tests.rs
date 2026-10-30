@@ -305,6 +305,188 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
     }
 }
 
+/// [`typical_edits`] plus masks of every kind the alpha cache must tell apart: ones that read
+/// only the frame (gradients, a brush), the image (Auto Mask, Subject, Refine Edges) or the image
+/// and the exposure (luminance and colour range, Sky).
+fn masked_edits() -> DevelopSettings {
+    use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let comp = |op: MaskOp, shape: MaskShape| MaskComponent { name: None, op, invert: false, shape };
+    let mask = |id: u32, components: Vec<MaskComponent>, refine: f64| Mask {
+        id,
+        components,
+        adjust: LocalAdjustments { exposure: 0.4 * (id as f64 - 3.0), clarity: 20.0, noise: 30.0, ..Default::default() },
+        refine,
+        ..Default::default()
+    };
+    let stroke = |y: f64, auto_mask: bool| BrushStroke {
+        points: (0..12).map(|k| Point::new(0.1 + k as f64 * 0.06, y)).collect(),
+        size: 0.05,
+        auto_mask,
+        ..Default::default()
+    };
+    let mut s = typical_edits();
+    s.masks = vec![
+        mask(
+            1,
+            vec![
+                comp(MaskOp::Add, MaskShape::Radial { center: Point::new(0.4, 0.5), rx: 0.3, ry: 0.2, angle: 10.0, feather: 50.0, invert: false }),
+                comp(MaskOp::Subtract, MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(0.0, 0.4) }),
+            ],
+            0.0,
+        ),
+        mask(2, vec![comp(MaskOp::Add, MaskShape::Linear { start: Point::new(0.5, 1.0), end: Point::new(0.5, 0.3) })], 60.0),
+        mask(3, vec![comp(MaskOp::Add, MaskShape::LuminanceRange { lo: 0.3, hi: 0.7, lo_feather: 0.1, hi_feather: 0.1 })], 0.0),
+        mask(4, vec![comp(MaskOp::Add, MaskShape::ColorRange { samples: vec![[0.6, -0.05, -0.08]], refine: 50.0 })], 0.0),
+        mask(5, vec![comp(MaskOp::Add, MaskShape::Brush { strokes: vec![stroke(0.3, false), stroke(0.7, true)] })], 0.0),
+        mask(6, vec![comp(MaskOp::Add, MaskShape::Sky), comp(MaskOp::Intersect, MaskShape::Background)], 0.0),
+    ];
+    s
+}
+
+/// A cached render with masks is the same image as an uncached one through any edit, global or
+/// to a mask, at either size.
+#[test]
+fn stage_cache_with_masks_matches_uncached_render_through_a_slider_session() {
+    use crate::{Quality, StageCache, render_cached};
+    use lightcraft_develop::{BrushStroke, MaskShape};
+    use lightcraft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(scene());
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let full = RenderRequest::fit(200, 200);
+    let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(120, 120) };
+    let mut s = masked_edits();
+    let steps: Vec<Box<dyn Fn(&mut DevelopSettings)>> = vec![
+        Box::new(|_| {}),
+        Box::new(|s| s.light.exposure = -0.6),
+        Box::new(|s| s.light.contrast = 30.0),
+        Box::new(|s| s.masks[0].adjust.exposure = 1.2),
+        Box::new(|s| s.masks[1].refine = 30.0),
+        Box::new(|s| s.masks[2].components[0].shape = MaskShape::LuminanceRange { lo: 0.2, hi: 0.6, lo_feather: 0.1, hi_feather: 0.2 }),
+        Box::new(|s| s.masks[3].adjust.amount = 40.0),
+        Box::new(|s| s.masks[4].invert = true),
+        Box::new(|s| {
+            if let MaskShape::Brush { strokes } = &mut s.masks[4].components[0].shape {
+                strokes.push(BrushStroke { points: vec![Point::new(0.5, 0.5), Point::new(0.6, 0.55)], erase: true, ..Default::default() });
+            }
+        }),
+        Box::new(|s| s.masks[5].visible = false),
+        Box::new(|s| s.masks.swap(0, 1)),
+        Box::new(|s| {
+            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.temp = 4200.0;
+        }),
+        Box::new(|s| s.effects.clarity = -20.0),
+        Box::new(|s| s.masks[5].visible = true),
+        Box::new(|s| s.crop.geometry.rect = lightcraft_geom::Rect::new(0.05, 0.1, 0.9, 0.85)),
+        Box::new(|s| s.light.exposure = 0.9),
+        // (last: a draft then keeps the wide planes of the image before noise reduction)
+        Box::new(|s| s.detail.nr_luminance = 40.0),
+    ];
+    let nr_step = steps.len() - 1;
+    for (i, step) in steps.iter().enumerate() {
+        step(&mut s);
+        for req in [&full, &draft] {
+            let a = render_cached(&src, &info, &s, req, &cache).image;
+            let b = render(&src, &info, &s, req).image;
+            if i != nr_step || req.quality != Quality::Draft {
+                assert_eq!(a, b, "step {i} {:?}", req.quality);
+            }
+            // and the alphas held are those a cold cache evaluates
+            let fresh = StageCache::default();
+            render_cached(&src, &info, &s, req, &fresh);
+            let (warm, cold) = (cached_alphas(&cache), cached_alphas(&fresh));
+            assert_eq!(warm.len(), cold.len(), "step {i} {:?}", req.quality);
+            for (k, (a, b)) in warm.iter().zip(&cold).enumerate() {
+                assert!(**a == **b, "step {i} {:?}: mask {k} is stale", req.quality);
+            }
+        }
+    }
+}
+
+/// The alphas held by the stage cache's most recent entry, in mask order.
+fn cached_alphas(cache: &crate::StageCache) -> Vec<std::sync::Arc<lightcraft_raster::Plane>> {
+    cache.entries.lock().unwrap().last().unwrap().masks.planes().cloned().collect()
+}
+
+#[test]
+fn mask_alphas_are_reused_until_what_they_read_changes() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::MaskShape;
+    use lightcraft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(scene());
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(200, 200);
+    // radial − linear (reads the frame only), linear with Refine Edges (the image), luminance
+    // range (the image and the exposure)
+    let mut s = masked_edits();
+    s.masks.truncate(3);
+    render_cached(&src, &info, &s, &req, &cache);
+    let step = |s: &DevelopSettings| -> Vec<bool> {
+        let before = cached_alphas(&cache);
+        render_cached(&src, &info, s, &req, &cache);
+        let after = cached_alphas(&cache);
+        assert_eq!(after.len(), before.len());
+        before.iter().zip(&after).map(|(a, b)| Arc::ptr_eq(a, b)).collect()
+    };
+    // exposure: only the range mask reads it
+    s.light.exposure += 0.5;
+    assert_eq!(step(&s), [true, true, false]);
+    // a mask's own sliders (except Amount) and global sliders no mask reads
+    s.masks[0].adjust.exposure = -1.0;
+    s.masks[2].adjust.clarity = 50.0;
+    s.effects.clarity = 40.0;
+    s.light.highlights = 10.0;
+    assert_eq!(step(&s), [true, true, true]);
+    // Amount scales the alpha
+    s.masks[1].adjust.amount = 50.0;
+    assert_eq!(step(&s), [true, false, true]);
+    // the image changes (white balance): the masks that read it
+    s.wb.mode = lightcraft_develop::WbMode::Custom;
+    s.wb.temp = 4000.0;
+    assert_eq!(step(&s), [true, false, false]);
+    // a shape moves: that mask only
+    s.masks[0].components[0].shape = MaskShape::Radial { center: Point::new(0.6, 0.5), rx: 0.3, ry: 0.2, angle: 10.0, feather: 50.0, invert: false };
+    assert_eq!(step(&s), [false, true, true]);
+    // the frame changes (a flip: same size): all of them
+    s.crop.flip_h = true;
+    assert_eq!(step(&s), [false, false, false]);
+    // a hidden mask's alpha is let go: only the visible masks' are held
+    s.masks[2].visible = false;
+    render_cached(&src, &info, &s, &req, &cache);
+    assert_eq!(cached_alphas(&cache).len(), 2);
+}
+
+/// The memory a stage cache reports covers every buffer it holds, the mask alphas and the blurred
+/// chromaticity (local Noise / Moiré) included.
+#[test]
+fn stage_cache_bytes_count_mask_alphas_and_the_chroma_plane() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(scene());
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let mut s = DevelopSettings::default();
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.3, ry: 0.3, angle: 0.0, feather: 50.0, invert: false };
+    s.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+        adjust: LocalAdjustments { noise: 40.0, ..Default::default() },
+        ..Default::default()
+    });
+    let img = render_cached(&src, &info, &s, &RenderRequest::fit(200, 200), &cache).image;
+    let n = img.width * img.height;
+    // the sampled and linear images (12 B/px each), log luminance and the texture band that local
+    // Noise reads (4 B/px each), the blurred chromaticity (12 B/px) and the mask's alpha (4 B/px)
+    assert_eq!(cache.bytes(), (12 + 12 + 4 + 4 + 12 + 4) * n);
+}
+
 #[test]
 fn exposure_after_spatial_filters_equals_exposing_the_source() {
     // The pipeline filters the image before exposure and applies exposure per pixel; filters on

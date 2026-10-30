@@ -9,6 +9,7 @@
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
 use lightcraft_raster::{Image, Plane, Rgb32f};
+use std::sync::Arc;
 
 use crate::for_rows;
 use crate::geometry::Frame;
@@ -128,7 +129,8 @@ impl Mattes {
 pub struct Evaluated {
     /// The mask's id ([`Mask::id`]).
     pub id: u32,
-    pub alpha: Plane,
+    /// Shared with the [`AlphaCache`] that keeps it for the next render.
+    pub alpha: Arc<Plane>,
     pub adjust: LocalAdjustments,
 }
 
@@ -144,8 +146,174 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
+        .map(|m| Evaluated { id: m.id, alpha: Arc::new(evaluate_one(m, frame, w, h, img, log_l, ev, mattes)), adjust: m.adjust })
         .collect()
+}
+
+/// What a render's masks are evaluated against besides their own definitions: [`alpha_key`] keys
+/// each alpha by the parts of it the mask reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlphaKeys {
+    /// The output frame and size (`Plan::geo`): every mask depends on it.
+    pub geo: u64,
+    /// The image the masks see, before exposure (`Plan::lin_key`): range masks, the Sky / Subject
+    /// / Background heuristics, Auto Mask brushes and Refine Edges read it.
+    pub image: u64,
+}
+
+/// Alpha planes (`P`: a CPU [`Plane`], or a renderer's device buffer) of the last render's visible
+/// masks, keyed by [`alpha_key`]. A slider drag that changes nothing a mask reads (Exposure for
+/// gradients and brushes, Clarity, the mask's own sliders except Amount) reuses its alpha instead
+/// of evaluating it again. Holds only the masks of the last render (one plane per visible mask),
+/// tied to the segmentation mattes they were evaluated with.
+pub struct AlphaCache<P = Plane> {
+    mattes: Option<Arc<Mattes>>,
+    slots: Vec<(u64, Arc<P>)>,
+}
+
+impl<P> Clone for AlphaCache<P> {
+    fn clone(&self) -> Self {
+        AlphaCache { mattes: self.mattes.clone(), slots: self.slots.clone() }
+    }
+}
+
+impl<P> Default for AlphaCache<P> {
+    fn default() -> Self {
+        AlphaCache { mattes: None, slots: Vec::new() }
+    }
+}
+
+impl<P> AlphaCache<P> {
+    /// The alphas held for a render with `mattes` (none when the mattes changed), taken out of
+    /// the cache: hand back the ones the render used with [`Self::keep`].
+    pub fn take(&mut self, mattes: Option<&Arc<Mattes>>) -> Vec<(u64, Arc<P>)> {
+        let same = match (&self.mattes, mattes) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        let slots = std::mem::take(&mut self.slots);
+        if same { slots } else { Vec::new() }
+    }
+
+    /// Hold `slots` (the alphas a render with `mattes` used), dropping everything else.
+    pub fn keep(&mut self, mattes: Option<&Arc<Mattes>>, slots: Vec<(u64, Arc<P>)>) {
+        self.mattes = mattes.cloned();
+        self.slots = slots;
+    }
+
+    /// The alphas held.
+    pub fn planes(&self) -> impl Iterator<Item = &Arc<P>> {
+        self.slots.iter().map(|(_, p)| p)
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+}
+
+/// Whether the alpha of mask `m` reads the image (`.0`) and the global exposure (`.1`), beyond
+/// its own definition and the frame. Errs towards yes: a mask said to read something it doesn't
+/// is only evaluated more often than it needs to be.
+pub fn reads(m: &Mask) -> (bool, bool) {
+    let (mut image, mut exposure) = (m.refine > 0.0, false);
+    for c in &m.components {
+        let (i, e) = match &c.shape {
+            MaskShape::Linear { .. } | MaskShape::Radial { .. } | MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => (false, false),
+            MaskShape::Prompt { .. } => (false, false),
+            // a stored segmentation (or no clicks) reads nothing; clicks without one take the heuristic
+            MaskShape::Object { seg, detail, .. } => (seg.is_none() && detail.is_empty(), false),
+            MaskShape::Brush { strokes } => (strokes.iter().any(|s| s.auto_mask), false),
+            // (with a source matte these read neither: counted as if they did)
+            MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } | MaskShape::Sky => (true, true),
+            MaskShape::Subject | MaskShape::Background | MaskShape::People { .. } => (true, false),
+        };
+        image |= i;
+        exposure |= e;
+    }
+    (image, exposure)
+}
+
+/// Feeds `Debug` output to a hasher without building the string.
+struct HashWrite<'a, H: std::hash::Hasher>(&'a mut H);
+
+impl<H: std::hash::Hasher> std::fmt::Write for HashWrite<'_, H> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.write(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// The key of mask `m`'s alpha in a render with `keys` and global exposure `ev`: everything
+/// [`evaluate_one`] reads — its components, Refine Edges, Invert and Amount, the frame, and the
+/// image and exposure for the masks that read them ([`reads`]). Not its other sliders, name or id.
+pub fn alpha_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
+    use std::fmt::Write;
+    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher};
+    let (image, exposure) = reads(m);
+    let mut h = BuildHasherDefault::<DefaultHasher>::default().build_hasher();
+    keys.geo.hash(&mut h);
+    image.then_some(keys.image).hash(&mut h);
+    exposure.then_some(ev.to_bits()).hash(&mut h);
+    (m.refine.to_bits(), m.invert, m.adjust.amount.to_bits()).hash(&mut h);
+    // (`Debug` of an f64 round-trips: distinct definitions write distinct text)
+    let _ = write!(HashWrite(&mut h), "{:?}", m.components);
+    h.finish()
+}
+
+/// [`evaluate`], reusing the alphas `cache` holds for masks whose inputs are unchanged and keeping
+/// this render's there. The result is identical to [`evaluate`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_cached(
+    masks: &[Mask],
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Arc<Mattes>>,
+    keys: AlphaKeys,
+    cache: &mut AlphaCache,
+) -> Vec<Evaluated> {
+    let old = cache.take(mattes);
+    let mut used = Vec::new();
+    let out = masks
+        .iter()
+        .filter(|m| m.visible && !m.components.is_empty())
+        .map(|m| {
+            let key = alpha_key(m, keys, ev);
+            let alpha = match old.iter().find(|(k, _)| *k == key) {
+                Some((_, a)) => a.clone(),
+                None => Arc::new(evaluate_one(m, frame, w, h, img, log_l, ev, mattes.map(|a| &**a))),
+            };
+            used.push((key, alpha.clone()));
+            Evaluated { id: m.id, alpha, adjust: m.adjust }
+        })
+        .collect();
+    cache.keep(mattes, used);
+    out
+}
+
+/// `f(a, b)` for each value `a` of `p` and the value `b` at the same index of `q`, row-parallel.
+fn zip_rows(p: &mut Plane, q: &Plane, f: impl Fn(&mut f32, f32) + Sync + Send) {
+    let w = p.width;
+    for_rows(&mut p.data, w, |y, row| {
+        let Some(src) = q.data.get(y * w..y * w + row.len()) else { return };
+        for (a, b) in row.iter_mut().zip(src) {
+            f(a, *b);
+        }
+    });
+}
+
+/// `f` on each value of `p`, row-parallel.
+fn map_rows(p: &mut Plane, f: impl Fn(&mut f32) + Sync + Send) {
+    let w = p.width;
+    for_rows(&mut p.data, w, |_, row| row.iter_mut().for_each(&f));
 }
 
 /// The alpha plane of mask `m` (whether visible or not): its components combined, inverted and
@@ -157,19 +325,17 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
     for comp in &m.components {
         let mut c = shape_alpha(&comp.shape, frame, w, h, img, log_l, ev, mattes);
         if comp.invert {
-            c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+            map_rows(&mut c, |v| *v = 1.0 - *v);
         }
         if first && comp.op != MaskOp::Intersect {
             alpha = c;
             first = false;
             continue;
         }
-        for (a, c) in alpha.data.iter_mut().zip(&c.data) {
-            *a = match comp.op {
-                MaskOp::Add => a.max(*c),
-                MaskOp::Subtract => *a * (1.0 - c),
-                MaskOp::Intersect => *a * c,
-            };
+        match comp.op {
+            MaskOp::Add => zip_rows(&mut alpha, &c, |a, c| *a = a.max(c)),
+            MaskOp::Subtract => zip_rows(&mut alpha, &c, |a, c| *a *= 1.0 - c),
+            MaskOp::Intersect => zip_rows(&mut alpha, &c, |a, c| *a *= c),
         }
         first = false;
     }
@@ -179,16 +345,15 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
         let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
         let refined = guided_cross(log_l, &alpha, sigma, 0.02);
-        for (a, r) in alpha.data.iter_mut().zip(&refined.data) {
-            *a += (r - *a) * k.sqrt();
-        }
+        let t = k.sqrt();
+        zip_rows(&mut alpha, &refined, |a, r| *a += (r - *a) * t);
     }
     if m.invert {
-        alpha.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        map_rows(&mut alpha, |v| *v = 1.0 - *v);
     }
     let amt = (m.adjust.amount / 100.0) as f32;
     if (amt - 1.0).abs() > 1e-6 {
-        alpha.data.iter_mut().for_each(|v| *v *= amt);
+        map_rows(&mut alpha, |v| *v *= amt);
     }
     alpha
 }
@@ -243,37 +408,42 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         MaskShape::Brush { strokes } => rasterize_brush(strokes, frame, w, h, img, log_l, &mut out),
         MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
             let (lo, hi, lf, hf) = (*lo as f32, *hi as f32, (*lo_feather as f32).max(1e-3), (*hi_feather as f32).max(1e-3));
-            for (v, l) in out.data.iter_mut().zip(&log_l.data) {
+            zip_rows(&mut out, log_l, |v, l| {
                 // map log luminance to a 0..1 perceptual scale (−8..+4 EV)
                 let y = ((l + ev + 8.0) / 12.0).clamp(0.0, 1.0);
                 *v = smooth(lo - lf, lo, y) * (1.0 - smooth(hi, hi + hf, y));
-            }
+            });
         }
         MaskShape::ColorRange { samples, refine } => {
             let tol = color_range_tolerance(*refine);
             let samples: Vec<[f32; 3]> = samples.iter().map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
-            for (v, c) in out.data.iter_mut().zip(&img.data) {
-                let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
-                let d = samples
-                    .iter()
-                    .map(|s| ((lab[1] - s[1]).powi(2) + (lab[2] - s[2]).powi(2) + 0.25 * (lab[0] - s[0]).powi(2)).sqrt())
-                    .fold(f32::MAX, f32::min);
-                *v = 1.0 - smooth(tol * 0.5, tol, d);
-            }
+            for_rows(&mut out.data, w, |y, row| {
+                let Some(src) = img.data.get(y * w..y * w + row.len()) else { return };
+                for (v, c) in row.iter_mut().zip(src) {
+                    let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
+                    let d = samples
+                        .iter()
+                        .map(|s| ((lab[1] - s[1]).powi(2) + (lab[2] - s[2]).powi(2) + 0.25 * (lab[0] - s[0]).powi(2)).sqrt())
+                        .fold(f32::MAX, f32::min);
+                    *v = 1.0 - smooth(tol * 0.5, tol, d);
+                }
+            });
         }
         MaskShape::Sky => {
             // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
             let m = frame.out_to_norm(w, h);
-            for (i, v) in out.data.iter_mut().enumerate() {
-                let (x, y) = (i % w, i / w);
-                let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let c = img.data[i].map(|v| v * gain);
-                let l = log_l.data[i] + ev;
-                let blue = (c[2] - c[0]).max(0.0) / (c[2] + 1e-4);
-                let top = 1.0 - smooth(0.25, 0.7, n.y as f32);
-                *v = top * smooth(-3.5, -1.0, l) * (0.4 + 0.6 * smooth(0.0, 0.3, blue).max(smooth(0.0, 1.5, l)));
-            }
+            for_rows(&mut out.data, w, |y, row| {
+                let (Some(cs), Some(ls)) = (img.data.get(y * w..y * w + row.len()), log_l.data.get(y * w..y * w + row.len())) else { return };
+                for (x, (v, (c, l))) in row.iter_mut().zip(cs.iter().zip(ls)).enumerate() {
+                    let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let c = c.map(|v| v * gain);
+                    let l = l + ev;
+                    let blue = (c[2] - c[0]).max(0.0) / (c[2] + 1e-4);
+                    let top = 1.0 - smooth(0.25, 0.7, n.y as f32);
+                    *v = top * smooth(-3.5, -1.0, l) * (0.4 + 0.6 * smooth(0.0, 0.3, blue).max(smooth(0.0, 1.5, l)));
+                }
+            });
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
         MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
@@ -293,18 +463,20 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
-            for (i, v) in out.data.iter_mut().enumerate() {
-                let (x, y) = (i % w, i / w);
-                let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let d = (((n.x - 0.5) / 0.35).powi(2) + ((n.y - 0.55) / 0.4).powi(2)).sqrt() as f32;
-                let contrast = (log_l.data[i] - blur.data[i]).abs();
-                *v = (1.0 - smooth(0.6, 1.0, d)) * (0.5 + 0.5 * smooth(0.05, 0.6, contrast));
-            }
+            for_rows(&mut out.data, w, |y, row| {
+                let (Some(ls), Some(bs)) = (log_l.data.get(y * w..y * w + row.len()), blur.data.get(y * w..y * w + row.len())) else { return };
+                for (x, (v, (l, b))) in row.iter_mut().zip(ls.iter().zip(bs)).enumerate() {
+                    let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let d = (((n.x - 0.5) / 0.35).powi(2) + ((n.y - 0.55) / 0.4).powi(2)).sqrt() as f32;
+                    let contrast = (l - b).abs();
+                    *v = (1.0 - smooth(0.6, 1.0, d)) * (0.5 + 0.5 * smooth(0.05, 0.6, contrast));
+                }
+            });
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
         MaskShape::Background => {
             let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev, mattes);
-            s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+            map_rows(&mut s, |v| *v = 1.0 - *v);
             out = s;
         }
         MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => {}
@@ -673,19 +845,37 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     let mp = gaussian(p, sigma);
     let cip = gaussian(&guide.zip_map(p, |a, b| a * b), sigma);
     let cii = gaussian(&guide.map(|a| a * a), sigma);
+    let w = p.width;
+    let rows = |y: usize, len: usize| y * w..y * w + len;
+    // a = cov(I, p) / (var(I) + eps), b = mean(p) − a · mean(I)
     let mut a = Plane::new(p.width, p.height);
-    let mut b = Plane::new(p.width, p.height);
-    for i in 0..p.data.len() {
-        let var = (cii.data[i] - mi.data[i] * mi.data[i]).max(0.0);
-        let k = (cip.data[i] - mi.data[i] * mp.data[i]) / (var + eps);
-        a.data[i] = k;
-        b.data[i] = mp.data[i] - k * mi.data[i];
-    }
-    let (ma, mb) = (gaussian(&a, sigma), gaussian(&b, sigma));
-    let mut q = Plane::new(p.width, p.height);
-    for i in 0..q.data.len() {
-        q.data[i] = (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0);
-    }
+    for_rows(&mut a.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(cii), Some(mi), Some(cip), Some(mp)) = (cii.data.get(r.clone()), mi.data.get(r.clone()), cip.data.get(r.clone()), mp.data.get(r))
+        else {
+            return;
+        };
+        for (k, (((cii, mi), cip), mp)) in row.iter_mut().zip(cii.iter().zip(mi).zip(cip).zip(mp)) {
+            let var = (cii - mi * mi).max(0.0);
+            *k = (cip - mi * mp) / (var + eps);
+        }
+    });
+    let mut b = mp;
+    for_rows(&mut b.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(ks), Some(mi)) = (a.data.get(r.clone()), mi.data.get(r)) else { return };
+        for (b, (k, mi)) in row.iter_mut().zip(ks.iter().zip(mi)) {
+            *b -= k * mi;
+        }
+    });
+    let (ma, mut q) = (gaussian(&a, sigma), gaussian(&b, sigma));
+    for_rows(&mut q.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(ma), Some(g)) = (ma.data.get(r.clone()), guide.data.get(r)) else { return };
+        for (q, (a, g)) in row.iter_mut().zip(ma.iter().zip(g)) {
+            *q = (a * g + *q).clamp(0.0, 1.0);
+        }
+    });
     q
 }
 
@@ -731,9 +921,7 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
             // the refinement fills gaps along edges; it never takes paint away
             stroke_alpha = stroke_alpha.zip_map(&q, f32::max);
         }
-        for (o, a) in out.data.iter_mut().zip(&stroke_alpha.data) {
-            *o = if erase { *o * (1.0 - a) } else { o.max(*a) };
-        }
+        zip_rows(out, &stroke_alpha, |o, a| *o = if erase { *o * (1.0 - a) } else { o.max(a) });
     }
 }
 

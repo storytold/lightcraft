@@ -588,8 +588,8 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
 }
 
-/// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
-/// reusing whatever `planes` already holds for it. Missing planes are computed side by side (each
+/// The spatial planes and mask alphas the per-pixel stage needs for `img` (white-balanced, before
+/// exposure), reusing whatever `planes` and `alphas` already hold for it. Missing planes are computed side by side (each
 /// one alone scales poorly: the guided filters work on small subsampled grids).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare(
@@ -599,7 +599,8 @@ pub(crate) fn prepare(
     px_per_long: f64,
     q: Quality,
     planes: &mut Planes,
-    mattes: Option<&masks::Mattes>,
+    mattes: Option<&Arc<masks::Mattes>>,
+    alphas: (&mut masks::AlphaCache, masks::AlphaKeys),
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
@@ -645,7 +646,8 @@ pub(crate) fn prepare(
         None => (None, 1.0),
     };
     let ev = s.light.exposure as f32;
-    let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
+    let (cache, keys) = alphas;
+    let masks = timed("masks", || masks::evaluate_cached(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes, keys, cache));
     Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
