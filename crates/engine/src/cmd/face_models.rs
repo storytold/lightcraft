@@ -501,6 +501,7 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"embedder": st.embedder}))
 }
 
+/// Enable or disable face recognition, requiring an installed recognition model when enabling it.
 fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.enable";
     let dir = models_dir(s, C)?;
@@ -511,7 +512,7 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     let usable =
         st.embedder.as_deref().is_some_and(|id| installed_models(&dir).iter().any(|i| i.manifest.id == id && i.manifest.role == Role::Embedder));
     if on && !usable {
-        return Err(bad(C, "choose a recognition model first (Settings ▸ Faces ▸ Use)"));
+        return Err(bad(C, "choose a recognition model first (Settings → Faces → Use)"));
     }
     st.enabled = on;
     write_settings(&dir, &st)?;

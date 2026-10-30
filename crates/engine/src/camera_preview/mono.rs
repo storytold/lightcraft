@@ -33,12 +33,18 @@ pub(super) fn monochrome(reference: &Rgb32f) -> bool {
 /// and flatter than the same body's photos shot in colour. But the JPEG still shows the camera's tone curve.
 /// `transform` is the colour the photo gets otherwise (the spectral matrices or the fallback's); the look keeps it and
 /// adds the tone curve alone ([`fit_tone_only_with`]), as [`fit_look_with`] tries the photo's own colour after a profile's. The
-/// chroma curve stays neutral: the JPEG has no colourfulness to learn.
-pub(super) fn monochrome_look(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, lens: Option<&LensGeometry>) -> Option<CameraLook> {
+/// chroma curve stays neutral: the JPEG has no colourfulness to learn. `correction` may align CR3 correspondence geometry.
+pub(super) fn monochrome_look(
+    raw: &RawImage,
+    bytes: &[u8],
+    transform: &CameraTransform,
+    lens: Option<&LensGeometry>,
+    correction: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<CameraLook> {
     if !file_local_look(raw.format) {
         return None;
     }
-    let (sensor, reference, clipped) = proxies(raw, bytes, transform, PROXY, 0.0, lens)?;
+    let (sensor, reference, clipped) = proxies(raw, bytes, transform, PROXY, 0.0, lens, correction)?;
     if !monochrome(&reference) {
         return None;
     }

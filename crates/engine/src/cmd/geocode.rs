@@ -119,6 +119,8 @@ fn fill(meta: &mut lightcraft_catalog::Meta, place: &lightcraft_geocode::Place, 
     }
 }
 
+/// Populate place metadata for targeted photos with valid GPS coordinates using the local database.
+/// Existing fields are preserved unless `overwrite` is requested.
 fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "metadata.reverseGeocode";
     let overwrite = bool_or(p, "overwrite", false);
@@ -141,7 +143,7 @@ fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "none of these photos has a GPS position"));
     }
     let dir = dataset_dir(p).ok_or_else(|| bad(C, "no settings folder: give `dataset`"))?;
-    let names = s.place_names.load(&dir).map_err(|e| bad(C, format!("{e}: download the place names first (Photo ▸ Download Place Names)")))?;
+    let names = s.place_names.load(&dir).map_err(|e| bad(C, format!("{e}: download the place names first (Photo → Download Place Names)")))?;
     // a large selection shows in the activity stack and can be stopped
     let task = (todo.len() > 1).then(|| s.activity.start("geocode", "Looking up places", Cancel::Yes));
     let mut ops = Vec::new();

@@ -50,7 +50,8 @@ use pairs::{
 pub(crate) use proxy::LensGeometry;
 #[cfg(test)]
 use proxy::{
-    Cr3Framing, MIN_PREVIEW_FRACTION, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at, sensor_proxy, structure_agrees,
+    Cr3Framing, MIN_PREVIEW_FRACTION, align_profile_geometry, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at,
+    resample_correspondence, sensor_proxy, structure_agrees,
 };
 pub(crate) use proxy::{fit_profile, lens_geometry, profile_pairs};
 #[cfg(test)]
@@ -79,7 +80,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// a tone-only fallback for near-black scenes with too few colour pairs (#1587); DNG tone fitting uses a
 /// lens-corrected proxy when the file carries lens opcodes; validated A7CR distortion, including the lens data
 /// stored with each smart preview.
-pub const LOOK_VERSION: u32 = 12;
+/// 14: geometry-gated external lens and camera framing, including CR3, for JPEG correspondences.
+pub const LOOK_VERSION: u32 = 14;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

@@ -98,9 +98,18 @@ These are camera-JPEG look estimates, **not measured spectral calibration or Lig
 
 ### Canon CR3
 
-CR3 uses the same colour gates and relative WB. Its sensor and JPEG proxies are first oriented identically. Canon can crop its JPEG differently from the sensor; no lens distortion correction is applied to the sensor proxy, so a strongly distortion-corrected JPEG can fail the gates. A fixed 96-pixel proxy measures this remaining framing from luminance-gradient directions: scale is limited to 0.9–1.1 and translation to two proxy pixels. At least 192 edges are required; two thirds train the framing and the remaining third must independently reach direction agreement ≥0.90 with an improvement ≥0.04. At least 80% of each edge set must remain usable. Weak, flat, unrelated or already aligned references keep the sensor framing. This alignment affects training correspondences only; the RAW render still uses the actual sensor pixels.
+For CR3 with a fallback camera matrix and no in-file geometric warp, a resolved lens
+profile can also propose the correspondence geometry. It must pass the existing
+training/held-out direction gates and must not reduce agreement against the established
+framing fallback on either split. Sensor, clipping mask and JPEG share orientation;
+white balance is applied once. Rejected or missing profiles retain the framing path.
+This changes calibration pairs, not the optics baked into the rendered RAW, and does
+not enable profile-based correspondences for other RAW formats.
+See [CR3 profile correspondence geometry](cr3-profile-alignment.md) for guards and scope.
 
-On the public CC0 EOS R100 / RF-S 18–45 mm sample, the measured framing scale was 0.968. Held-out edge agreement rose from 0.7291 to 0.9194, and the unchanged colour gates accepted the fit (held-out RMS 0.10625 → 0.07704). The corpus test asserts acceptance after decoding the sensor RAW, and synthetic tests cover nonlinear camera tone, known crop/translation and unrelated references. The matrix, tone and hue/saturation table are estimated from the file; no third-party camera matrix or decoder calibration source is copied.
+CR3 uses the same colour gates and relative WB. Its sensor and JPEG proxies are first oriented identically. Canon can crop its JPEG differently from the sensor; without an accepted lens-profile proposal, a strongly distortion-corrected JPEG can still fail the gates. A fixed 96-pixel proxy measures this remaining framing from luminance-gradient directions: scale is limited to 0.9–1.1 and translation to two proxy pixels. At least 192 edges are required; two thirds train the framing and the remaining third must independently reach direction agreement ≥0.90 with an improvement ≥0.04. At least 80% of each edge set must remain usable. Weak, flat, unrelated or already aligned references keep the sensor framing. This alignment affects training correspondences only; the RAW render still uses the actual sensor pixels.
+
+Before the profile-based proposal, the public CC0 EOS R100 / RF-S 18–45 mm sample had a measured framing scale of 0.968. Held-out edge agreement rose from 0.7291 to 0.9194, and the unchanged colour gates accepted the fit (held-out RMS 0.10625 → 0.07704). The corpus test asserts acceptance after decoding the sensor RAW, and synthetic tests cover nonlinear camera tone, known crop/translation and unrelated references. The matrix, tone and hue/saturation table are estimated from the file; no third-party camera matrix or decoder calibration source is copied.
 
 This is a per-file camera-look estimate, **not measured spectral calibration or Lightroom parity**. Camera local tone, picture styles, noise reduction and lens warps cannot all be reproduced by a global matrix/curve; same-aspect crops may evade the aspect check. Skin, mixed-light scenes and saturated highlights can still differ from a supplied JPEG. Broader Sony, Nikon and Canon model/lighting coverage, chart-based calibration, absolute WB and other manufacturers remain unverified. Rejected fits and other RAW formats retain their existing behaviour.
 
