@@ -270,6 +270,8 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        // a new library's welcome puts the keyboard on Import Photos… once for each library
+        self.welcome_focused = false;
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
@@ -374,6 +376,7 @@ impl LightcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.library_changed(&ctx);
+        panels::empty_library::follow(self);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         if self.ui.fullscreen {
@@ -400,6 +403,7 @@ impl LightcraftApp {
                 panels::notices::restore_prompt_pointer(self, &ctx);
             }
             (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
+            self.note_keyboard_owner(&ctx);
             self.end_frame(&ctx, t0);
             return;
         }
@@ -407,6 +411,7 @@ impl LightcraftApp {
         // right panels and left panel run to the bottom; the bottom bar sits between them).
         panels::topbar::show(self, ui);
         panels::library_problem::banner(self, ui);
+        panels::samples::banner(self, ui);
         panels::strip::show(self, ui);
         // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
         let chrome = theme::Tokens::get(&ctx).chrome;
@@ -444,7 +449,7 @@ impl LightcraftApp {
             panels::notices::restore_prompt_pointer(self, &ctx);
         }
         (self.next_widgets, self.next_widget_hits) = widgets::take_registries(&ctx);
-        self.text_focus = ctx.egui_wants_keyboard_input();
+        self.note_keyboard_owner(&ctx);
         self.end_frame(&ctx, t0);
     }
 }

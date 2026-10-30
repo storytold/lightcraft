@@ -294,6 +294,13 @@ pub struct Catalog {
     /// Lookups derived from the above (never saved), see [`index`].
     #[serde(skip)]
     index: index::Indexes,
+    /// How many photos are procedural samples (`Source::Demo`), and how many of those are in the
+    /// library (not in Recently Deleted): kept as ops change photos, and counted again by
+    /// [`Catalog::repair`] on load, so asking needs no scan of a large library.
+    #[serde(skip)]
+    demo_photos: usize,
+    #[serde(skip)]
+    demo_in_library: usize,
 }
 
 /// What of a photo an op changed: enough to tell which tallies of the library an edit leaves as they were (a
@@ -398,6 +405,21 @@ impl Catalog {
     }
     pub fn is_empty(&self) -> bool {
         self.photos.is_empty()
+    }
+    /// No photo was ever added (photo ids are never reused): a library as it was created. The
+    /// welcome shown by a new library (`empty_library::welcomes` in the UI) asks it.
+    pub fn never_held_photos(&self) -> bool {
+        self.next_photo <= 1
+    }
+    /// How many photos are procedural samples (`Source::Demo`), wherever they are (Recently
+    /// Deleted too).
+    pub fn sample_photos(&self) -> usize {
+        self.demo_photos
+    }
+    /// How many sample photos are in the library: not in Recently Deleted. The samples banner
+    /// (`panels::samples` in the UI) asks it each frame.
+    pub fn sample_photos_in_library(&self) -> usize {
+        self.demo_in_library
     }
     pub fn album(&self, id: AlbumId) -> Option<&Album> {
         self.albums.get(&id)
@@ -623,7 +645,7 @@ impl Catalog {
         }
         let broad = self.changes.broad;
         self.changes.torn = false;
-        let inv = match self.apply_inner(op) {
+        let inv = match self.apply_counted(op) {
             Ok(inv) => inv,
             Err(e) => {
                 let made = self.revision.saturating_add(1);
@@ -649,6 +671,30 @@ impl Catalog {
         };
         self.revision += 1;
         self.changes.seen = self.revision;
+        Ok(inv)
+    }
+
+    /// [`Catalog::apply_inner`], keeping the counts of sample photos: an op that changes one
+    /// photo (adds, removes, deletes, restores, re-sources it) changes them by what it did to it.
+    fn apply_counted(&mut self, op: Op) -> Result<Op> {
+        let id = match &op {
+            Op::AddPhoto { photo } => Some(photo.id),
+            Op::RemovePhoto { id } | Op::SetDeleted { id, .. } | Op::SetLocal { id, .. } | Op::Relink { id, .. } | Op::SetFile { id, .. } => {
+                Some(*id)
+            }
+            _ => None,
+        };
+        // (a sample, a sample in the library) for that photo
+        let state = |c: &Catalog| {
+            let p = id.and_then(|id| c.photos.get(&id));
+            let demo = p.is_some_and(|p| matches!(p.source, Source::Demo { .. }));
+            (usize::from(demo), usize::from(demo && p.is_some_and(|p| p.in_library())))
+        };
+        let before = state(self);
+        let inv = self.apply_inner(op)?;
+        let after = state(self);
+        self.demo_photos = (self.demo_photos + after.0).saturating_sub(before.0);
+        self.demo_in_library = (self.demo_in_library + after.1).saturating_sub(before.1);
         Ok(inv)
     }
 
@@ -987,12 +1033,12 @@ impl Catalog {
             Op::Batch { ops } => {
                 let mut inverses = Vec::with_capacity(ops.len());
                 for op in ops {
-                    match self.apply_inner(op) {
+                    match self.apply_counted(op) {
                         Ok(inv) => inverses.push(inv),
                         Err(e) => {
                             // roll back what was applied
                             for inv in inverses.into_iter().rev() {
-                                if self.apply_inner(inv).is_err() {
+                                if self.apply_counted(inv).is_err() {
                                     self.changes.torn = true;
                                 }
                             }
@@ -1057,6 +1103,8 @@ impl Catalog {
     /// missing, not a folder or inside itself moves to the top level. Returns what was changed
     /// (nothing, for a catalog this build wrote).
     pub fn repair(&mut self) -> Vec<String> {
+        let demo = || self.photos.values().filter(|p| matches!(p.source, Source::Demo { .. }));
+        (self.demo_photos, self.demo_in_library) = (demo().count(), demo().filter(|p| p.in_library()).count());
         let mut changed = Vec::new();
         for (id, p) in self.photos.iter_mut() {
             if p.id != *id {

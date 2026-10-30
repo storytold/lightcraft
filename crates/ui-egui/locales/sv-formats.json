@@ -305,5 +305,11 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "Lade till {n} exempelfoton, med album under ”{folder}” och nyckelord att prova",
+  "Removed {n} sample photos. Edit → Undo brings them back.": "Borttagna exempelfoton: {n}. Redigera → Ångra tar tillbaka dem.",
+  "Open the sample photo “{title}”": "Öppna exempelfotot ”{title}”",
+  "Or explore LightCraft with {n} sample photos": "Eller utforska LightCraft med {n} exempelfoton",
+  "Press {key} to compare before and after.": "Tryck på {key} för att jämföra före och efter.",
+  "Press {key} to see it beside the original.": "Tryck på {key} för att se den bredvid originalet."
 }

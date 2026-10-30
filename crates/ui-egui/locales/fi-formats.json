@@ -35,6 +35,7 @@
   "Added {n} keyword{}": "Lisättyjä avainsanoja: {n}{:.0}",
   "Added {n} photo{} to My Photos": "Omiin kuviin lisättyjä kuvia: {n}{:.0}",
   "Added {n} photo{} to “{}”": "Lisättyjä kuvia kohteeseen ”{1}”: {n}{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "Lisätty {n} esimerkkikuvaa, albumit kansiossa ”{folder}” ja avainsanat kokeiltavaksi",
   "Added {what} to {name}": "{what} lisätty kohteeseen {name}",
   "Added “{keyword}” to {n} photo{}": "Avainsana ”{keyword}” lisätty kuviin: {n}{:.0}",
   "Adding photos… {} of {}": "Lisätään kuvia… {} / {}",
@@ -305,5 +306,10 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Removed {n} sample photos. Edit → Undo brings them back.": "Poistetut esimerkkikuvat: {n}. Muokkaa → Kumoa palauttaa ne.",
+  "Open the sample photo “{title}”": "Avaa esimerkkikuva ”{title}”",
+  "Or explore LightCraft with {n} sample photos": "Tai tutustu LightCraftiin {n} esimerkkikuvalla",
+  "Press {key} to compare before and after.": "Paina {key} verrataksesi ennen ja jälkeen.",
+  "Press {key} to see it beside the original.": "Paina {key} nähdäksesi sen alkuperäisen vieressä."
 }

@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### The grid's title, count and empty messages are read by screen readers
+- VoiceOver and other screen readers now read the photo grid's heading (for example "All Photos") and its photo count ("0 of 24 photos"), and the messages an empty view shows: "No photos match the active filters" with its reason, "No photos in this folder", and the same for the compare, survey, detail, reference and people views and the right panel's "No photo selected".
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
@@ -156,6 +161,67 @@
   that tests it. On a synthetic library of 312,000 photos with 77 smart albums, 51 of them testing one shared album,
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
+
+### Sample photos, when you want them
+- Help ▸ Add Sample Photos adds 24 procedural sample photos with their keywords and their albums, to try LightCraft on.
+  The albums come in one folder, "Sample Photos" (named in the interface's language), apart from the ones you make, and
+  a message says how many photos came and where to look. It is one undo step, and it is refused while samples are
+  already in the library, Recently Deleted included.
+- Help ▸ Remove Sample Photos takes out every sample photo (virtual copies and those in Recently Deleted too), the albums
+  only they filled and the folders left empty, in one undo step. An album that also holds a photo of yours stays, with
+  that photo. `library.addSamples` (with an optional `folder` name) and `library.removeSamples` do the same for agents.
+
+### A new library asks how to begin
+- A new library made by the desktop app now starts empty instead of quietly filling with the 24 procedural demo
+  photos. Its first screen, "Welcome to LightCraft", offers Import Photos…, Import Lightroom Catalog… and Try Sample
+  Photos (which does what Help ▸ Add Sample Photos does). `--memory` still starts with the demo photos (`--no-demo` for
+  none), as do `lightcraft-cli --demo` and the web build.
+- While sample photos are in a library, a tinted banner under the top bar says so and offers Import Photos… and Remove
+  Sample Photos; once photos of your own are in, it offers Remove Sample Photos or Keep Them. Hide and Keep Them close it
+  until samples are added again. After a removal from the banner a message says how many photos went and that Edit →
+  Undo brings them back. Screen readers read out the banner's words, and every message (toast) as it appears.
+- A ghost button (the banner's Hide and Keep Them) shows an edge while it is pointed at or pressed.
+
+### The welcome has the window
+- While the library is empty, the welcome is the one thing asking for attention: the Tools panel steps aside (it comes
+  back as it was once photos of your own arrive, an editing tool such as Crop as the Edit panel, and the sample
+  photos open the Edit panel; opening it meanwhile keeps it open), and the bottom bar's rating, flags and Copy Edit Settings wait until there is a photo to use them on. The grid's
+  photo count, the bottom bar and Detail's empty filmstrip are not drawn, and the sidebar's empty Albums, By Date,
+  Folders and Keywords sections fold into one line ("Albums, dates, folders and keywords appear here as photos
+  arrive"). The welcome is centred below the grid's header and its Filter Bar.
+- The welcome's message reads as a short paragraph: its title in the brightest text, its words at most 540 points wide
+  and wrapped evenly, not one long line over a short one. The other empty states keep their one line, with the brighter title.
+- Under the welcome's buttons, a row of up to five sample photos (all of them unedited; three or four in a narrow
+  window), with "Or explore LightCraft with 24 sample photos" over them: click one to add the samples and open it in
+  Detail, ready to edit (with the Edit panel). Where the row doesn't fit, and in the web build, Try Sample
+  Photos is a button as before. A session whose library couldn't be opened offers no Try Sample Photos there (Help ▸ Add
+  Sample Photos still adds them).
+- The welcome's buttons are drawn by the button component: Import Photos… is primary, the others secondary.
+
+### The welcome reads for everyone
+- Screen readers now hear the empty library's welcome, not only its buttons: the title (as a heading), what it says,
+  the hint and the sample row's caption, and the right panel's note beside it.
+- A new library's welcome puts the keyboard on Import Photos…, so Enter or Space starts; the welcome's buttons show an
+  accent ring where the keyboard is. On the welcome's buttons, the sample photos and the samples banner, a focused
+  button no longer takes the keyboard from shortcuts such as Import Photos…'s own: it keeps only Enter, Space, Tab, Esc
+  and the arrows. Holding Alt as the window opens, to choose a library, takes the keyboard from the welcome's button.
+- Whether the row of sample photos fits the window is measured from the message instead of guessed, so a shorter window
+  than before still shows it.
+- The welcome also says that a folder can be looked through without importing it, under Local in the sidebar (the
+  desktop app).
+
+### Every way to the samples leads to the editor
+- However the sample photos come in while an empty library's welcome is showing (a thumbnail, the welcome's Try Sample
+  Photos button, Help ▸ Add Sample Photos, an agent), they open on a sample in Detail with the Edit panel, ready to
+  edit; a thumbnail opens the one clicked. A library that already has photos, or a Local folder or Recently Deleted on
+  screen, stays where it was.
+- The banner then walks the first edit through: "Drag any slider: the original never changes. Press Y to compare before
+  and after."; once a slider is dragged, "That's your first edit. Press Y to see it beside the original."; while a
+  Before / After layout shows it, "The original beside your edit: the file itself never changes."; then the usual
+  message. Y is the default key of Before/After Side by Side: the banner names whatever key it is bound to, and with
+  none bound it leaves the key out ("That's your first edit. View → Before/After Side by Side shows it beside the
+  original."). A rating or a keyword is not an edit; another unedited sample, or an undo back to the start, is invited
+  again.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

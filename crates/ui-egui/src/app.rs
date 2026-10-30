@@ -5,8 +5,9 @@ use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
     MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
     SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
-    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    TOAST_READ_SECONDS, TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import,
+    lightroom_import, menus, merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui,
+    widgets,
 };
 
 mod control;
@@ -39,6 +40,7 @@ impl LightcraftApp {
             native_shortcuts: Default::default(),
             recording_shortcut: None,
             text_focus: false,
+            plain_button_focus: false,
             headless_host: false,
             notices: vec![],
             updates_rt: Default::default(),
@@ -127,6 +129,14 @@ impl LightcraftApp {
             library_window_input: Default::default(),
             alt_asks_for_library: false,
             recent_checks: Default::default(),
+            samples_present: None,
+            welcome_seen: None,
+            welcome_samples: None,
+            welcome_drawn: false,
+            welcome_focused: false,
+            samples_landed: None,
+            samples_tour: Default::default(),
+            samples_tour_base: None,
             activity_expanded: false,
             model_setup: Default::default(),
         }
@@ -207,7 +217,21 @@ impl LightcraftApp {
         } else {
             params
         };
+        // the samples' folder named in the interface's language, unless the caller names it
+        let params = if id == "library.addSamples" && params.get("folder").is_none_or(Value::is_null) {
+            let mut p = if params.is_object() { params } else { serde_json::json!({}) };
+            p["folder"] = serde_json::json!(i18n::tr(lightcraft_engine::demo::SAMPLES_FOLDER));
+            p
+        } else {
+            params
+        };
+        // samples coming into an empty library, however they are asked for, land on one in Detail
+        // (the welcome showing: not a Local folder or Recently Deleted of an otherwise empty library)
+        let landing = id == "library.addSamples" && panels::empty_library::shown(&self.session);
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        if r.is_ok() && landing {
+            panels::empty_library::land_on_samples(self);
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -240,15 +264,23 @@ impl LightcraftApp {
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise
             // be invisible once the activity stack is gone. Never show success on error.
+            let added = r.as_ref().ok().filter(|_| id == "library.addSamples").map(|v| {
+                let n = v["added"].as_u64().unwrap_or(0);
+                let folder = v["folder"].as_str().unwrap_or_default();
+                i18n::tr_format!("Added {n} sample photos, with albums under “{folder}” and keywords to try", n = n, folder = folder)
+            });
             let completed = match id {
                 "library.compact" => Some(format!("✓ {}", i18n::tr("Optimize Library"))),
                 "library.clearPreviews" => Some(format!("✓ {}", i18n::tr("Discard Preview Cache"))),
                 "develop.autoSync" => Some(format!("{}: {}", i18n::tr("Auto Sync"), i18n::tr(if self.session.auto_sync { "On" } else { "Off" }))),
                 _ => None,
             };
-            if let Some(message) = completed {
+            // (where the samples' albums went is a message to read: it stays as long as one that
+            // says where to look)
+            let completed = completed.map(|m| (m, TOAST_SECONDS)).or(added.map(|m| (m, TOAST_READ_SECONDS)));
+            if let Some((message, secs)) = completed {
                 let now = self.tick_now();
-                self.ui.toast = Some((message, now + TOAST_SECONDS, None));
+                self.ui.toast = Some((message, now + secs, None));
             }
         }
         if r.is_ok() && id == "photo.label" {
@@ -567,6 +599,20 @@ impl LightcraftApp {
         self.sync_theme(ctx);
         self.logic_background(ctx);
         self.perf.logic_ms = monotonic_ms() - t0;
+    }
+
+    /// Who has the keyboard as the frame ends: a text field (`text_focus`: the native menu leaves it its letters and edit
+    /// keys) or a plain button (not a text field the person is typing in, but Esc there still only lets go).
+    /// The native menu reads `text_focus` in the next frame's `logic`, and egui draws no frame until the next
+    /// input when nothing asks for one: a change asks for it, so the menu's letters follow the focus now, not at
+    /// the key's release (Shift+Tab from a plain button into a field).
+    pub(crate) fn note_keyboard_owner(&mut self, ctx: &egui::Context) {
+        let before = self.text_focus;
+        self.plain_button_focus = widgets::plain_button_has_focus(ctx);
+        self.text_focus = ctx.egui_wants_keyboard_input() && !self.plain_button_focus;
+        if self.text_focus != before {
+            ctx.request_repaint();
+        }
     }
 
     /// Frame timings once layout is done (`t0`: when layout started).

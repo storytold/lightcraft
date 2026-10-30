@@ -6,10 +6,11 @@
 //! `$LIGHTCRAFT_LIBRARY`, else — with Settings ▸ General ▸ At launch set to *Ask me*, or Alt/Option
 //! held as the window appears — the one chosen in a list of the recent libraries, else the library
 //! last opened, else `~/Pictures/LightCraft Library`
-//! ([`lightcraft_ui_egui::panels::library_problem::launch_plan`]); a new library starts with the
-//! procedural demo photos unless `--no-demo` or files are given. Files and folders on the command
-//! line are imported (duplicates are skipped). `--memory` runs an in-memory session that writes
-//! nothing (demo photos unless files are given; used by the README showcase scripts). A library
+//! ([`lightcraft_ui_egui::panels::library_problem::launch_plan`]); a new library starts empty, and
+//! its first screen offers to import photos, a Lightroom catalog, or the procedural sample photos
+//! (`library.addSamples`). Files and folders on the command line are imported (duplicates are
+//! skipped). `--memory` runs an in-memory session that writes nothing (demo photos unless
+//! `--no-demo` or files are given; used by the README showcase scripts). A library
 //! that can't be opened is never replaced silently: the window says why and asks what to do
 //! (`lightcraft_ui_egui::panels::library_problem`).
 //!
@@ -82,7 +83,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
-            && m.update(&mut self.0, ctx)
+            && m.update(&mut self.0)
             && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
         {
             // Quit from the menu bar: save exactly what closing the window saves (settings and

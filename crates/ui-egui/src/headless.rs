@@ -400,6 +400,7 @@ impl Headless {
             || self.app.import.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
+            || self.app.welcome_samples.as_ref().is_some_and(|s| s.drawing())
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.app.pending_gestures.is_empty()

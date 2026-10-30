@@ -67,6 +67,9 @@ mod recheck;
 mod rename_person;
 mod rules_editor;
 mod sam_setup;
+mod samples;
+mod samples_banner;
+mod samples_landing;
 mod scroll;
 mod slider_reset;
 mod slideshow;
@@ -80,6 +83,8 @@ mod tool_overlay;
 mod unsaved;
 mod view_cost;
 mod wb_selector;
+mod welcome;
+mod welcome_access;
 mod zoom;
 mod zoom_keys;
 

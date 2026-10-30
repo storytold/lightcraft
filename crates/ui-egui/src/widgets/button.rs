@@ -166,7 +166,9 @@ pub fn look(t: &Tokens, kind: Kind, state: State) -> Look {
                 State::Hovered => Some(t.hover),
                 State::Pressed => Some(t.pressed),
             },
-            border: None,
+            // an edge while pointed at or pressed: the hover fill alone hardly shows on a tinted
+            // band (the samples banner)
+            border: matches!(state, State::Hovered | State::Pressed).then_some(t.button_border),
             content: t.text,
         },
     };

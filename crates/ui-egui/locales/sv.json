@@ -2429,5 +2429,21 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Add Sample Photos": "Lägg till exempelfoton",
+  "Sample Photos": "Exempelfoton",
+  "Remove Sample Photos": "Ta bort exempelfoton",
+  "Welcome to LightCraft": "Välkommen till LightCraft",
+  "Start with photos of your own, or look around with a set of sample photos first. Nothing is copied or moved unless you choose to.": "Börja med dina egna foton, eller titta dig omkring med några exempelfoton först. Inget kopieras eller flyttas om du inte väljer det.",
+  "Try Sample Photos": "Prova exempelfoton",
+  "These are sample photos, to try LightCraft on. Import your own whenever you're ready.": "Det här är exempelfoton för att prova LightCraft på. Importera dina egna när du är redo.",
+  "Your photos are in. The sample photos are still here too.": "Dina foton är importerade. Exempelfotona finns kvar här också.",
+  "Keep Them": "Behåll dem",
+  "Hide": "Dölj",
+  "Albums, dates, folders and keywords appear here as photos arrive": "Album, datum, mappar och nyckelord visas här när foton kommer in",
+  "or look through a folder without importing it, under Local in the sidebar": "eller titta igenom en mapp utan att importera den, under Lokalt i sidofältet",
+  "Drag any slider: the original never changes.": "Dra i valfritt reglage: originalet ändras aldrig.",
+  "That's your first edit.": "Det är din första redigering.",
+  "View → Before/After Side by Side shows it beside the original.": "Visa → Före/efter sida vid sida visar den bredvid originalet.",
+  "The original beside your edit: the file itself never changes.": "Originalet bredvid din redigering: själva filen ändras aldrig."
 }

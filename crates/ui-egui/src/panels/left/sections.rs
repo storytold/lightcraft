@@ -94,6 +94,20 @@ fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     ui.painter().galley(pos2(r.left() + 42.0, r.center().y - galley.size().y / 2.0), galley, t.text_dim);
 }
 
+/// Under the welcome, in place of the empty sections that fill as photos arrive (widget
+/// `sidebarEmpty:welcome`): one quiet line saying they will.
+pub(super) fn welcome_note(ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(SECTION_GAP + 6.0);
+    let width = (ui.available_width().min(visible_right(ui) - ui.cursor().left()) - 36.0).max(80.0);
+    let text = crate::i18n::tr("Albums, dates, folders and keywords appear here as photos arrive");
+    let galley = ui.painter().layout(text.to_string(), t.font(12.5), t.text_dim, width);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), galley.size().y), Sense::hover());
+    register(ui, "sidebarEmpty:welcome", r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    ui.painter().galley(pos2(r.left() + 18.0, r.top()), galley, t.text_dim);
+}
+
 /// Where a section was laid out this frame (screen y): from its header's top to the end of its rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlacedSection {
