@@ -932,7 +932,11 @@ fn an_auto_import_with_no_room_in_line_is_left_for_the_next_listing() {
     let listing = || lightcraft_engine::cmd::library::list_auto_import_folder(&watched).unwrap();
     let hold = h.app.session.activity.start("import", "Importing", Cancel::Yes);
     for _ in 0..MAX_WAITING {
-        h.app.session.activity.enqueue("import", "Importing", Request { command: "app:import".into(), params: json!({}) }).unwrap();
+        h.app
+            .session
+            .activity
+            .enqueue("import", "Importing", Request { command: "app:import".into(), params: json!({}), ..Default::default() })
+            .unwrap();
     }
     crate::import::auto_import_listed(&mut h.app, listing());
     crate::import::auto_import_listed(&mut h.app, listing());

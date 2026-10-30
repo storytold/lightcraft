@@ -2270,7 +2270,6 @@
   "Get Started": "Começar",
   "Choose one album to rename it": "Escolha um só álbum para renomeá-lo",
   "Choose one folder to rename it": "Escolha uma só pasta para renomeá-la",
-  "Choose one folder to synchronize it": "Escolha uma só pasta para sincronizá-la",
   "Choose one keyword to create a keyword inside it": "Escolha uma só palavra-chave para criar outra dentro dela",
   "Choose one keyword to edit it": "Escolha uma só palavra-chave para editá-la",
   "Choose one keyword to rename it": "Escolha uma só palavra-chave para renomeá-la",
@@ -2289,5 +2288,16 @@
   "Queued: it starts when the task ahead of it ends": "Na fila: começa quando a tarefa anterior terminar",
   "Another library was opened: nothing was done": "Outra biblioteca foi aberta: nada foi feito",
   "Photos of the folder changed while it was read: nothing was done": "As fotos da pasta mudaram durante a leitura: nada foi feito",
-  "Starts next": "Começa em seguida"
+  "Starts next": "Começa em seguida",
+  "A whole disk: synchronize it by itself": "Um disco inteiro: sincronize-o separadamente",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Atualizar a biblioteca com estas pastas e as pastas dentro delas, uma após a outra:",
+  "Waiting to be scanned": "Aguardando verificação",
+  "Up to date": "Atualizada",
+  "Nothing to do: the library is up to date with these folders": "Nada a fazer: a biblioteca está atualizada com estas pastas",
+  "Synchronizing the folder: see it under the bell": "Sincronizando a pasta: veja sob o sino",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Procura o que mudou no disco em cada uma destas pastas e depois atualiza a biblioteca com elas, uma após a outra",
+  "Synchronize Folders": "Sincronizar pastas",
+  "Can't be synchronized with the others: synchronize it by itself": "Não pode ser sincronizada com as outras: sincronize-a separadamente",
+  "Nothing to do with the choices ticked": "Nada a fazer com as opções marcadas",
+  "Nothing was synchronized": "Nada foi sincronizado"
 }

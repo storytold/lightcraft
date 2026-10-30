@@ -2348,7 +2348,6 @@
   "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
   "Choose one album to rename it": "Wybierz jeden album, aby zmienić jego nazwę",
   "Choose one folder to rename it": "Wybierz jeden folder, aby zmienić jego nazwę",
-  "Choose one folder to synchronize it": "Wybierz jeden folder, aby go zsynchronizować",
   "Choose one keyword to create a keyword inside it": "Wybierz jedno słowo kluczowe, aby utworzyć w nim kolejne",
   "Choose one keyword to edit it": "Wybierz jedno słowo kluczowe, aby je edytować",
   "Choose one keyword to rename it": "Wybierz jedno słowo kluczowe, aby zmienić jego nazwę",
@@ -2367,5 +2366,16 @@
   "Queued: it starts when the task ahead of it ends": "W kolejce: rozpocznie się po zakończeniu poprzedniego zadania",
   "Another library was opened: nothing was done": "Otwarto inną bibliotekę: nic nie zrobiono",
   "Photos of the folder changed while it was read: nothing was done": "Zdjęcia w folderze zmieniły się podczas odczytu: nic nie zrobiono",
-  "Starts next": "Rozpocznie się jako następne"
+  "Starts next": "Rozpocznie się jako następne",
+  "A whole disk: synchronize it by itself": "Cały dysk: zsynchronizuj go osobno",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Uzgodnij bibliotekę z tymi folderami i folderami w nich, jeden po drugim:",
+  "Waiting to be scanned": "Czeka na skanowanie",
+  "Up to date": "Aktualny",
+  "Nothing to do: the library is up to date with these folders": "Nic do zrobienia: biblioteka jest zgodna z tymi folderami",
+  "Synchronizing the folder: see it under the bell": "Synchronizacja folderu: zobacz pod dzwonkiem",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Wyszukuje zmiany na dysku w każdym z tych folderów, a potem uzgadnia z nimi bibliotekę, jeden po drugim",
+  "Synchronize Folders": "Synchronizuj foldery",
+  "Can't be synchronized with the others: synchronize it by itself": "Nie można go zsynchronizować z pozostałymi: zsynchronizuj go osobno",
+  "Nothing to do with the choices ticked": "Przy zaznaczonych opcjach nie ma nic do zrobienia",
+  "Nothing was synchronized": "Nic nie zostało zsynchronizowane"
 }

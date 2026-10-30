@@ -3609,7 +3609,6 @@
   "Get Started": "Commencer",
   "Choose one album to rename it": "Choisissez un seul album pour le renommer",
   "Choose one folder to rename it": "Choisissez un seul dossier pour le renommer",
-  "Choose one folder to synchronize it": "Choisissez un seul dossier pour le synchroniser",
   "Choose one keyword to create a keyword inside it": "Choisissez un seul mot-clé pour en créer un à l'intérieur",
   "Choose one keyword to edit it": "Choisissez un seul mot-clé pour le modifier",
   "Choose one keyword to rename it": "Choisissez un seul mot-clé pour le renommer",
@@ -3627,5 +3626,16 @@
   "Queued: it starts when the task ahead of it ends": "En file : démarre à la fin de la tâche précédente",
   "Another library was opened: nothing was done": "Une autre bibliothèque a été ouverte : rien n’a été fait",
   "Photos of the folder changed while it was read: nothing was done": "Les photos du dossier ont changé pendant la lecture : rien n’a été fait",
-  "Starts next": "Démarre ensuite"
+  "Starts next": "Démarre ensuite",
+  "A whole disk: synchronize it by itself": "Un disque entier : synchronisez-le à part",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Mettre la bibliothèque à jour avec ces dossiers et les dossiers qu'ils contiennent, l'un après l'autre :",
+  "Waiting to be scanned": "En attente d'analyse",
+  "Up to date": "À jour",
+  "Nothing to do: the library is up to date with these folders": "Rien à faire : la bibliothèque est à jour avec ces dossiers",
+  "Synchronizing the folder: see it under the bell": "Synchronisation du dossier : voir sous la cloche",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Cherche ce qui a changé sur le disque dans chacun de ces dossiers, puis met la bibliothèque à jour avec eux l'un après l'autre",
+  "Synchronize Folders": "Synchroniser les dossiers",
+  "Can't be synchronized with the others: synchronize it by itself": "Impossible de le synchroniser avec les autres : synchronisez-le à part",
+  "Nothing to do with the choices ticked": "Rien à faire avec les choix cochés",
+  "Nothing was synchronized": "Rien n'a été synchronisé"
 }

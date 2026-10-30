@@ -347,5 +347,12 @@
   "Queued: it starts after {n} more": "キューに追加: あと {n} 件の後に開始します",
   "Left alone: {n} (synchronize again to review them)": "そのまま: {n} 件（再度同期して確認してください）",
   "Starts after {n} more": "あと {n} 件の後に開始します",
-  "Remove from Queue: {label}": "キューから削除: {label}"
+  "Remove from Queue: {label}": "キューから削除: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "{n}個のフォルダを順番に同期中：ベルの下で確認できます",
+  "Too many tasks are waiting: only {n} more can wait in line": "待機中のタスクが多すぎます：あと{n}個まで待機できます",
+  "Synchronize {n} Folders…": "{n}個のフォルダを同期…",
+  "{n} new": "新規 {n}",
+  "{n} moved": "移動 {n}",
+  "{n} missing": "見つからない {n}",
+  "{n} with changed sidecars": "サイドカー変更 {n}"
 }

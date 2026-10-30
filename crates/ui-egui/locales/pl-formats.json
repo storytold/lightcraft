@@ -346,5 +346,12 @@
   "Queued: it starts after {n} more": "W kolejce: rozpocznie się po kolejnych zadaniach ({n})",
   "Left alone: {n} (synchronize again to review them)": "Pominięto: {n} (zsynchronizuj ponownie, aby je sprawdzić)",
   "Starts after {n} more": "Rozpocznie się po kolejnych zadaniach ({n})",
-  "Remove from Queue: {label}": "Usuń z kolejki: {label}"
+  "Remove from Queue: {label}": "Usuń z kolejki: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Synchronizacja folderów ({n}) jeden po drugim: zobacz pod dzwonkiem",
+  "Too many tasks are waiting: only {n} more can wait in line": "Czeka zbyt wiele zadań: w kolejce zmieści się jeszcze tylko {n}",
+  "Synchronize {n} Folders…": "Synchronizuj foldery ({n})…",
+  "{n} new": "nowe: {n}",
+  "{n} moved": "przeniesione: {n}",
+  "{n} missing": "brakujące: {n}",
+  "{n} with changed sidecars": "ze zmienionym plikiem XMP: {n}"
 }

@@ -2632,7 +2632,6 @@
   "Get Started": "Начать",
   "Choose one album to rename it": "Выберите только один альбом, чтобы переименовать его",
   "Choose one folder to rename it": "Выберите только одну папку, чтобы переименовать её",
-  "Choose one folder to synchronize it": "Выберите только одну папку, чтобы синхронизировать её",
   "Choose one keyword to create a keyword inside it": "Выберите только одно ключевое слово, чтобы создать ключевое слово внутри него",
   "Choose one keyword to edit it": "Выберите только одно ключевое слово, чтобы изменить его",
   "Choose one keyword to rename it": "Выберите только одно ключевое слово, чтобы переименовать его",
@@ -2650,5 +2649,16 @@
   "Queued: it starts when the task ahead of it ends": "В очереди: начнётся, когда закончится задача перед ней",
   "Another library was opened: nothing was done": "Открыта другая библиотека: ничего не сделано",
   "Photos of the folder changed while it was read: nothing was done": "Фотографии в папке изменились во время чтения: ничего не сделано",
-  "Starts next": "Начнётся следующей"
+  "Starts next": "Начнётся следующей",
+  "A whole disk: synchronize it by itself": "Целый диск: синхронизируйте его отдельно",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Привести библиотеку в соответствие с этими папками и вложенными в них, по очереди:",
+  "Waiting to be scanned": "Ожидает сканирования",
+  "Up to date": "Актуальна",
+  "Nothing to do: the library is up to date with these folders": "Делать нечего: библиотека соответствует этим папкам",
+  "Synchronizing the folder: see it under the bell": "Папка синхронизируется: смотрите под колокольчиком",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Находит, что изменилось на диске в каждой из этих папок, и по очереди приводит библиотеку в соответствие с ними",
+  "Synchronize Folders": "Синхронизировать папки",
+  "Can't be synchronized with the others: synchronize it by itself": "Нельзя синхронизировать вместе с остальными: синхронизируйте её отдельно",
+  "Nothing to do with the choices ticked": "С отмеченными вариантами делать нечего",
+  "Nothing was synchronized": "Ничего не синхронизировано"
 }

@@ -347,5 +347,12 @@
   "Queued: it starts after {n} more": "已加入佇列：再過 {n} 個後開始",
   "Left alone: {n} (synchronize again to review them)": "未處理：{n}（再次同步以檢視）",
   "Starts after {n} more": "再過 {n} 個後開始",
-  "Remove from Queue: {label}": "從佇列中移除：{label}"
+  "Remove from Queue: {label}": "從佇列中移除：{label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "正在依序同步 {n} 個資料夾：可在鈴鐺下查看",
+  "Too many tasks are waiting: only {n} more can wait in line": "等待中的工作過多：佇列中只能再加入 {n} 個",
+  "Synchronize {n} Folders…": "同步 {n} 個資料夾…",
+  "{n} new": "新增 {n}",
+  "{n} moved": "已移動 {n}",
+  "{n} missing": "遺失 {n}",
+  "{n} with changed sidecars": "附屬檔案已變更 {n}"
 }

@@ -2711,7 +2711,6 @@
   "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
   "Choose one album to rename it": "Chọn một album để đổi tên",
   "Choose one folder to rename it": "Chọn một thư mục để đổi tên",
-  "Choose one folder to synchronize it": "Chọn một thư mục để đồng bộ",
   "Choose one keyword to create a keyword inside it": "Chọn một từ khóa để tạo từ khóa bên trong nó",
   "Choose one keyword to edit it": "Chọn một từ khóa để sửa",
   "Choose one keyword to rename it": "Chọn một từ khóa để đổi tên",
@@ -2729,5 +2728,16 @@
   "Queued: it starts when the task ahead of it ends": "Trong hàng đợi: bắt đầu khi tác vụ trước nó kết thúc",
   "Another library was opened: nothing was done": "Đã mở thư viện khác: không có gì được thực hiện",
   "Photos of the folder changed while it was read: nothing was done": "Ảnh trong thư mục đã thay đổi trong lúc đọc: không có gì được thực hiện",
-  "Starts next": "Bắt đầu tiếp theo"
+  "Starts next": "Bắt đầu tiếp theo",
+  "A whole disk: synchronize it by itself": "Cả một ổ đĩa: hãy đồng bộ riêng",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Cập nhật thư viện theo các thư mục này và các thư mục bên trong chúng, lần lượt từng thư mục:",
+  "Waiting to be scanned": "Đang chờ được quét",
+  "Up to date": "Đã cập nhật",
+  "Nothing to do: the library is up to date with these folders": "Không có gì để làm: thư viện đã đồng bộ với các thư mục này",
+  "Synchronizing the folder: see it under the bell": "Đang đồng bộ thư mục: xem dưới biểu tượng chuông",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Tìm xem mỗi thư mục này trên đĩa đã thay đổi gì, rồi cập nhật thư viện theo chúng lần lượt từng thư mục",
+  "Synchronize Folders": "Đồng bộ thư mục",
+  "Can't be synchronized with the others: synchronize it by itself": "Không thể đồng bộ cùng các thư mục khác: hãy đồng bộ riêng",
+  "Nothing to do with the choices ticked": "Không có gì để làm với các lựa chọn đã đánh dấu",
+  "Nothing was synchronized": "Không có gì được đồng bộ"
 }

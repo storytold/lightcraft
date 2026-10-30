@@ -358,7 +358,15 @@ pub(crate) fn folders_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, paths: &[
             ui.close();
         }
     });
-    single_only(ui, "Synchronize Folder…", "Choose one folder to synchronize it");
+    let sync = item(ui, "folders:synchronize", crate::i18n::tr_format!("Synchronize {n} Folders…", n = n), true).on_hover_text(crate::i18n::tr(
+        "Find what changed in each of these folders on disk, then bring the library up to date with them one after another",
+    ));
+    if sync.clicked() {
+        if let Err(e) = crate::sync::open_many(app, paths) {
+            app.toast(ui.ctx(), e);
+        }
+        ui.close();
+    }
     single_only(ui, "Rename Folder…", "Choose one folder to rename it");
     ui.separator();
     // a whole disk goes by itself, after its own question

@@ -2426,7 +2426,6 @@
   "Get Started": "Empezar",
   "Choose one album to rename it": "Elige un solo álbum para cambiarle el nombre",
   "Choose one folder to rename it": "Elige una sola carpeta para cambiarle el nombre",
-  "Choose one folder to synchronize it": "Elige una sola carpeta para sincronizarla",
   "Choose one keyword to create a keyword inside it": "Elige una sola palabra clave para crear otra dentro de ella",
   "Choose one keyword to edit it": "Elige una sola palabra clave para editarla",
   "Choose one keyword to rename it": "Elige una sola palabra clave para cambiarle el nombre",
@@ -2445,5 +2444,16 @@
   "Queued: it starts when the task ahead of it ends": "En cola: empieza cuando termine la tarea anterior",
   "Another library was opened: nothing was done": "Se abrió otra biblioteca: no se hizo nada",
   "Photos of the folder changed while it was read: nothing was done": "Las fotos de la carpeta cambiaron mientras se leía: no se hizo nada",
-  "Starts next": "Empieza la siguiente"
+  "Starts next": "Empieza la siguiente",
+  "A whole disk: synchronize it by itself": "Un disco entero: sincronízalo por separado",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Poner la biblioteca al día con estas carpetas y las carpetas que contienen, una tras otra:",
+  "Waiting to be scanned": "En espera de exploración",
+  "Up to date": "Al día",
+  "Nothing to do: the library is up to date with these folders": "Nada que hacer: la biblioteca está al día con estas carpetas",
+  "Synchronizing the folder: see it under the bell": "Sincronizando la carpeta: puedes verlo bajo la campana",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Busca qué cambió en el disco en cada una de estas carpetas y después pone la biblioteca al día con ellas, una tras otra",
+  "Synchronize Folders": "Sincronizar carpetas",
+  "Can't be synchronized with the others: synchronize it by itself": "No se puede sincronizar con las demás: sincronízala por separado",
+  "Nothing to do with the choices ticked": "Nada que hacer con las opciones marcadas",
+  "Nothing was synchronized": "No se sincronizó nada"
 }

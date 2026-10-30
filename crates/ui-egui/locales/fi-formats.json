@@ -343,5 +343,12 @@
   "Queued: it starts after {n} more": "Jonossa: alkaa {n} muun jälkeen",
   "Left alone: {n} (synchronize again to review them)": "Jätetty ennalleen: {n} (synkronoi uudelleen tarkistaaksesi)",
   "Starts after {n} more": "Alkaa {n} muun jälkeen",
-  "Remove from Queue: {label}": "Poista jonosta: {label}"
+  "Remove from Queue: {label}": "Poista jonosta: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Synkronoidaan {n} kansiota yksi kerrallaan: katso ne kellon alta",
+  "Too many tasks are waiting: only {n} more can wait in line": "Liian monta tehtävää odottaa: jonoon mahtuu vielä vain {n}",
+  "Synchronize {n} Folders…": "Synkronoi {n} kansiota…",
+  "{n} new": "uusia: {n}",
+  "{n} moved": "siirretty: {n}",
+  "{n} missing": "puuttuu: {n}",
+  "{n} with changed sidecars": "muuttuneita sivutiedostoja: {n}"
 }

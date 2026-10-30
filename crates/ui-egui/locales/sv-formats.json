@@ -346,5 +346,12 @@
   "Queued: it starts after {n} more": "I kö: startar efter {n} till",
   "Left alone: {n} (synchronize again to review them)": "Lämnade orörda: {n} (synkronisera igen för att granska dem)",
   "Starts after {n} more": "Startar efter {n} till",
-  "Remove from Queue: {label}": "Ta bort från kön: {label}"
+  "Remove from Queue: {label}": "Ta bort från kön: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Synkroniserar {n} mappar en i taget: se dem under klockan",
+  "Too many tasks are waiting: only {n} more can wait in line": "För många uppgifter väntar: bara {n} till får plats i kön",
+  "Synchronize {n} Folders…": "Synkronisera {n} mappar…",
+  "{n} new": "nya: {n}",
+  "{n} moved": "flyttade: {n}",
+  "{n} missing": "{n} saknas",
+  "{n} with changed sidecars": "med ändrade sidofiler: {n}"
 }

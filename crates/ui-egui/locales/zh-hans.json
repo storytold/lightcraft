@@ -2425,7 +2425,6 @@
   "Get Started": "开始使用",
   "Choose one album to rename it": "请只选择一个相册以重命名",
   "Choose one folder to rename it": "请只选择一个文件夹以重命名",
-  "Choose one folder to synchronize it": "请只选择一个文件夹以同步",
   "Choose one keyword to create a keyword inside it": "请只选择一个关键字以在其中创建关键字",
   "Choose one keyword to edit it": "请只选择一个关键字以编辑",
   "Choose one keyword to rename it": "请只选择一个关键字以重命名",
@@ -2444,5 +2443,16 @@
   "Queued: it starts when the task ahead of it ends": "已加入队列：前一个任务结束后开始",
   "Another library was opened: nothing was done": "已打开另一个图库：未执行任何操作",
   "Photos of the folder changed while it was read: nothing was done": "读取期间文件夹中的照片发生了变化：未执行任何操作",
-  "Starts next": "接下来开始"
+  "Starts next": "接下来开始",
+  "A whole disk: synchronize it by itself": "整个磁盘：请单独同步",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "依次使图库与这些文件夹及其中的文件夹保持一致：",
+  "Waiting to be scanned": "等待扫描",
+  "Up to date": "已是最新",
+  "Nothing to do: the library is up to date with these folders": "无需操作：图库与这些文件夹一致",
+  "Synchronizing the folder: see it under the bell": "正在同步文件夹：可在铃铛下查看",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "查找磁盘上这些文件夹各自的更改，然后依次使图库与它们保持一致",
+  "Synchronize Folders": "同步文件夹",
+  "Can't be synchronized with the others: synchronize it by itself": "无法与其他文件夹一起同步：请单独同步",
+  "Nothing to do with the choices ticked": "按所勾选的选项无需操作",
+  "Nothing was synchronized": "没有同步任何内容"
 }

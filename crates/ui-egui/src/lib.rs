@@ -403,6 +403,8 @@ pub struct LightcraftApp {
     pub sync_run: Option<sync::SyncRun>,
     /// A Synchronize Folder that waited in line, scanning its folder again before it runs.
     pub sync_queued: Option<sync::SyncRescan>,
+    /// The scans of the Synchronize N Folders dialog, one folder after another.
+    pub sync_scans: Option<sync::ManyScan>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.

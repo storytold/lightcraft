@@ -347,5 +347,12 @@
   "Queued: it starts after {n} more": "In der Warteschlange: startet nach {n} weiteren",
   "Left alone: {n} (synchronize again to review them)": "Unangetastet: {n} (zum Prüfen erneut synchronisieren)",
   "Starts after {n} more": "Startet nach {n} weiteren",
-  "Remove from Queue: {label}": "Aus der Warteschlange entfernen: {label}"
+  "Remove from Queue: {label}": "Aus der Warteschlange entfernen: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "{n} Ordner werden nacheinander synchronisiert: siehe unter der Glocke",
+  "Too many tasks are waiting: only {n} more can wait in line": "Zu viele Aufgaben warten: nur noch {n} passen in die Warteschlange",
+  "Synchronize {n} Folders…": "{n} Ordner synchronisieren…",
+  "{n} new": "{n} neu",
+  "{n} moved": "{n} verschoben",
+  "{n} missing": "{n} fehlend",
+  "{n} with changed sidecars": "{n} mit geänderter Begleitdatei"
 }

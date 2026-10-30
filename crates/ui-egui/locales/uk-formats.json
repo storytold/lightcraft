@@ -347,5 +347,12 @@
   "Queued: it starts after {n} more": "У черзі: почнеться після ще {n}",
   "Left alone: {n} (synchronize again to review them)": "Залишено без змін: {n} (синхронізуйте знову, щоб переглянути)",
   "Starts after {n} more": "Почнеться після ще {n}",
-  "Remove from Queue: {label}": "Прибрати з черги: {label}"
+  "Remove from Queue: {label}": "Прибрати з черги: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Теки ({n}) синхронізуються по черзі: дивіться під дзвоником",
+  "Too many tasks are waiting: only {n} more can wait in line": "Забагато завдань у черзі: поміститься ще лише {n}",
+  "Synchronize {n} Folders…": "Синхронізувати теки ({n})…",
+  "{n} new": "нових: {n}",
+  "{n} moved": "переміщених: {n}",
+  "{n} missing": "відсутніх: {n}",
+  "{n} with changed sidecars": "зі зміненим файлом XMP: {n}"
 }

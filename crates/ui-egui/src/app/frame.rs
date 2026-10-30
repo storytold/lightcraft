@@ -79,6 +79,7 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
+        sync::poll_many(self, ctx);
         sync::poll_rescan(self, ctx);
         sync::poll_run(self, ctx);
         // Import commits batches and must not run twice in one host frame. The first layout pass

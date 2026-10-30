@@ -349,5 +349,12 @@
   "Queued: it starts after {n} more": "რიგშია: დაიწყება კიდევ {n}-ის შემდეგ",
   "Left alone: {n} (synchronize again to review them)": "უცვლელი დარჩა: {n} (გადასახედად თავიდან დაასინქრონეთ)",
   "Starts after {n} more": "დაიწყება კიდევ {n}-ის შემდეგ",
-  "Remove from Queue: {label}": "რიგიდან ამოღება: {label}"
+  "Remove from Queue: {label}": "რიგიდან ამოღება: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "{n} საქაღალდის სინქრონიზაცია სათითაოდ: იხილეთ ზარის ქვეშ",
+  "Too many tasks are waiting: only {n} more can wait in line": "ძალიან ბევრი დავალება ელოდება: რიგში მხოლოდ კიდევ {n} ჩაეტევა",
+  "Synchronize {n} Folders…": "{n} საქაღალდის სინქრონიზაცია…",
+  "{n} new": "ახალი: {n}",
+  "{n} moved": "გადატანილი: {n}",
+  "{n} missing": "დაკარგული: {n}",
+  "{n} with changed sidecars": "შეცვლილი თანმხლები ფაილით: {n}"
 }

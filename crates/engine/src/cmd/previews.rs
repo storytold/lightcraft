@@ -259,7 +259,7 @@ fn request_for(command: &str, p: &Value, ids: &[lightcraft_catalog::PhotoId]) ->
         params.remove(key);
     }
     params.insert("ids".into(), ids.iter().map(|id| id.0).collect());
-    Request { command: command.into(), params: Value::Object(params) }
+    Request { command: command.into(), params: Value::Object(params), ..Default::default() }
 }
 
 /// The refusal of a build while another runs, unless the call asks to `queue`.

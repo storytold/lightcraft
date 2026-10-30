@@ -2397,7 +2397,6 @@
   "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
   "Choose one album to rename it": "Pilih satu album untuk mengganti namanya",
   "Choose one folder to rename it": "Pilih satu folder untuk mengganti namanya",
-  "Choose one folder to synchronize it": "Pilih satu folder untuk menyinkronkannya",
   "Choose one keyword to create a keyword inside it": "Pilih satu kata kunci untuk membuat kata kunci di dalamnya",
   "Choose one keyword to edit it": "Pilih satu kata kunci untuk mengeditnya",
   "Choose one keyword to rename it": "Pilih satu kata kunci untuk mengganti namanya",
@@ -2415,5 +2414,16 @@
   "Queued: it starts when the task ahead of it ends": "Dalam antrean: dimulai saat tugas di depannya selesai",
   "Another library was opened: nothing was done": "Pustaka lain dibuka: tidak ada yang dilakukan",
   "Photos of the folder changed while it was read: nothing was done": "Foto di folder berubah saat dibaca: tidak ada yang dilakukan",
-  "Starts next": "Dimulai berikutnya"
+  "Starts next": "Dimulai berikutnya",
+  "A whole disk: synchronize it by itself": "Seluruh disk: sinkronkan sendiri",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Perbarui pustaka sesuai folder-folder ini dan folder di dalamnya, satu per satu:",
+  "Waiting to be scanned": "Menunggu dipindai",
+  "Up to date": "Sudah terbaru",
+  "Nothing to do: the library is up to date with these folders": "Tidak ada yang perlu dilakukan: pustaka sudah sesuai dengan folder-folder ini",
+  "Synchronizing the folder: see it under the bell": "Menyinkronkan folder: lihat di bawah lonceng",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Cari apa yang berubah di setiap folder ini pada disk, lalu perbarui pustaka sesuai folder tersebut satu per satu",
+  "Synchronize Folders": "Sinkronkan folder",
+  "Can't be synchronized with the others: synchronize it by itself": "Tidak bisa disinkronkan bersama yang lain: sinkronkan sendiri",
+  "Nothing to do with the choices ticked": "Tidak ada yang perlu dilakukan dengan pilihan yang dicentang",
+  "Nothing was synchronized": "Tidak ada yang disinkronkan"
 }

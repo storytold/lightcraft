@@ -347,5 +347,12 @@
   "Queued: it starts after {n} more": "En file : démarre après {n} autre(s) tâche(s)",
   "Left alone: {n} (synchronize again to review them)": "Laissés tels quels : {n} (synchronisez à nouveau pour les examiner)",
   "Starts after {n} more": "Démarre après {n} autre(s) tâche(s)",
-  "Remove from Queue: {label}": "Retirer de la file : {label}"
+  "Remove from Queue: {label}": "Retirer de la file : {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Synchronisation de {n} dossiers l'un après l'autre : voir sous la cloche",
+  "Too many tasks are waiting: only {n} more can wait in line": "Trop de tâches en attente : places restantes dans la file : {n}",
+  "Synchronize {n} Folders…": "Synchroniser {n} dossiers…",
+  "{n} new": "nouvelles : {n}",
+  "{n} moved": "déplacées : {n}",
+  "{n} missing": "manquantes : {n}",
+  "{n} with changed sidecars": "fichier annexe modifié : {n}"
 }

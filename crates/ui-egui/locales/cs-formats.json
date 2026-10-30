@@ -346,5 +346,12 @@
   "Queued: it starts after {n} more": "Ve frontě: začne po dalších úlohách: {n}",
   "Left alone: {n} (synchronize again to review them)": "Ponecháno: {n} (pro kontrolu synchronizujte znovu)",
   "Starts after {n} more": "Začne po dalších úlohách: {n}",
-  "Remove from Queue: {label}": "Odebrat z fronty: {label}"
+  "Remove from Queue: {label}": "Odebrat z fronty: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Synchronizace složek ({n}) jedné po druhé: najdete je pod zvonkem",
+  "Too many tasks are waiting: only {n} more can wait in line": "Čeká příliš mnoho úloh: do fronty se vejde už jen {n}",
+  "Synchronize {n} Folders…": "Synchronizovat složky ({n})…",
+  "{n} new": "nové: {n}",
+  "{n} moved": "přesunuté: {n}",
+  "{n} missing": "chybějící: {n}",
+  "{n} with changed sidecars": "se změněným přidruženým souborem: {n}"
 }

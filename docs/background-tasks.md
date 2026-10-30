@@ -69,7 +69,10 @@ Jobs that must not run side by side share a lane (`activity::Lane`). There are t
   (`LightcraftApp::start_waiting`, every frame), and the engine leaves them alone (`Activity::take_ready_if`). Auto
   Import lists its folder only when nothing runs, rescans or waits in this lane; files it finds after something
   started meanwhile wait in line, quietly. A drop while a scan runs or an import's review waits behind a dialog is
-  still refused.
+  still refused. Synchronize N Folders (several Folders rows) scans its folders one after another under one
+  "Looking for changes" row, then puts one Synchronize per folder with something to do in this line, in the
+  sidebar's order, each removing, relinking or reading sidecars of only the photos its scan found; a waiting row names its folder
+  (`Request::subject`, the row's detail).
 
 A call that sets `queue: true` while its lane is busy does not fail:
 `Activity::enqueue` keeps what it was asked (`Request`: the command and its parameters, with the photos written out)

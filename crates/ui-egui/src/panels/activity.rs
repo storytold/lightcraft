@@ -120,7 +120,7 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
 
 /// What ✕ on `task`'s row is called, for screen readers and its tooltip.
 pub(crate) fn cross_name(task: &TaskInfo) -> String {
-    if task.waiting { tr_format!("Remove from Queue: {label}", label = tr(&task.label)) } else { tr("Cancel").to_string() }
+    if task.waiting { tr_format!("Remove from Queue: {label}", label = waiting_name(task)) } else { tr("Cancel").to_string() }
 }
 
 /// One task: name and ✕, the bar, the detail line (a waiting one: name and ✕, when it starts). True when ✕ was clicked.
@@ -146,8 +146,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
             }
         });
         let line = if task.waiting {
-            // (counted as the Queued toast counts: the waiting tasks ahead of it, after the running one)
-            if task.place <= 1 { tr("Starts next").to_string() } else { tr_format!("Starts after {n} more", n = task.place - 1) }
+            waiting_line(task)
         } else {
             bar(ui, task, width);
             detail_line(task)
@@ -167,4 +166,16 @@ pub(crate) fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) -> egui::Respo
     let response = crate::progress::Progress::new(fraction).width(width).dimmed(task.cancelling).show(ui);
     crate::widgets::screen_reader_name(ui.ctx(), response.id, tr(&task.label));
     response
+}
+
+/// A waiting task as the ✕ announces it: its label, and what it is about if it says ("Synchronizing folder: Trip").
+fn waiting_name(task: &TaskInfo) -> String {
+    if task.detail.is_empty() { tr(&task.label).to_string() } else { format!("{}: {}", tr(&task.label), task.detail) }
+}
+
+/// The line under a waiting task's name: what it is about if it says, then when it starts ("photos/Garden · Starts next").
+/// (Counted as the Queued toast counts: the waiting tasks ahead of it, after the running one.)
+pub(crate) fn waiting_line(task: &TaskInfo) -> String {
+    let when = if task.place <= 1 { tr("Starts next").to_string() } else { tr_format!("Starts after {n} more", n = task.place - 1) };
+    if task.detail.is_empty() { when } else { format!("{} · {when}", task.detail) }
 }

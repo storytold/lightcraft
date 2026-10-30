@@ -347,5 +347,12 @@
   "Queued: it starts after {n} more": "Na fila: começa depois de mais {n}",
   "Left alone: {n} (synchronize again to review them)": "Deixados como estavam: {n} (sincronize de novo para revisá-los)",
   "Starts after {n} more": "Começa depois de mais {n}",
-  "Remove from Queue: {label}": "Remover da fila: {label}"
+  "Remove from Queue: {label}": "Remover da fila: {label}",
+  "Synchronizing {n} folders one after another: see them under the bell": "Sincronizando {n} pastas uma após a outra: veja sob o sino",
+  "Too many tasks are waiting: only {n} more can wait in line": "Tarefas demais aguardando: vagas restantes na fila: {n}",
+  "Synchronize {n} Folders…": "Sincronizar {n} pastas…",
+  "{n} new": "novas: {n}",
+  "{n} moved": "movidas: {n}",
+  "{n} missing": "ausentes: {n}",
+  "{n} with changed sidecars": "com arquivo auxiliar alterado: {n}"
 }

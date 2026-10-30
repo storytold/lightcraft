@@ -208,7 +208,7 @@ fn a_build_that_can_not_start_does_not_hold_up_the_line() {
     let mut s = Session::with_demo();
     let ids = build_ids(&s, 1);
     let h = hold(&mut s);
-    let bad = crate::activity::Request { command: "library.buildPreviews".into(), params: json!({"size": "huge"}) };
+    let bad = crate::activity::Request { command: "library.buildPreviews".into(), params: json!({"size": "huge"}), ..Default::default() };
     s.activity.enqueue("previews", "Building previews", bad).unwrap();
     s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
     release(h);

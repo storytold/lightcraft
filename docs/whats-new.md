@@ -146,6 +146,16 @@
 
 ## 2026-10-29
 
+### Synchronize several folders at once
+- Choose several folders in the Folders list (Cmd/Ctrl+click, Shift+click) and right-click: Synchronize N Folders…
+  opens one dialog. It looks at the folders one after another and says, for each, what changed (new, moved, missing,
+  with changed sidecars) or that it is up to date; the choices below count them all.
+- Synchronize then brings the library up to date with each folder in turn, in the order the sidebar lists them, under
+  the bell. Each one removes or relinks only the photos its scan found, and a folder that is up to date, isn't there (moved,
+  renamed, or on a disk that isn't connected) or is a whole disk is passed over, and the dialog says why.
+- A folder inside another chosen one is taken in with it, not done twice. Cancel leaves nothing behind under the bell;
+  the rows waiting in line name their folder.
+
 ### A person's page opens in seconds in a large library
 - Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
   runs on every processor core, and each comparison of two faces uses the processor's vector instructions. In a
@@ -335,7 +345,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-26
 

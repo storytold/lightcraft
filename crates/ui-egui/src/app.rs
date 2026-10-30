@@ -117,6 +117,7 @@ impl LightcraftApp {
             sync_owns_changes: false,
             sync_run: None,
             sync_queued: None,
+            sync_scans: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,

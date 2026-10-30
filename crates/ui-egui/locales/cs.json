@@ -2472,7 +2472,6 @@
   "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
   "Choose one album to rename it": "Pro přejmenování vyberte jedno album",
   "Choose one folder to rename it": "Pro přejmenování vyberte jednu složku",
-  "Choose one folder to synchronize it": "Pro synchronizaci vyberte jednu složku",
   "Choose one keyword to create a keyword inside it": "Vyberte jedno klíčové slovo, abyste v něm vytvořili další",
   "Choose one keyword to edit it": "Pro úpravu vyberte jedno klíčové slovo",
   "Choose one keyword to rename it": "Pro přejmenování vyberte jedno klíčové slovo",
@@ -2490,5 +2489,16 @@
   "Queued: it starts when the task ahead of it ends": "Ve frontě: začne, až skončí úloha před ní",
   "Another library was opened: nothing was done": "Byla otevřena jiná knihovna: nic se neprovedlo",
   "Photos of the folder changed while it was read: nothing was done": "Fotografie ve složce se během čtení změnily: nic se neprovedlo",
-  "Starts next": "Začne jako další"
+  "Starts next": "Začne jako další",
+  "A whole disk: synchronize it by itself": "Celý disk: synchronizujte ho samostatně",
+  "Bring the library up to date with these folders and the folders inside them, one after another:": "Uvést knihovnu do souladu s těmito složkami a složkami v nich, jednu po druhé:",
+  "Waiting to be scanned": "Čeká na prohledání",
+  "Up to date": "Aktuální",
+  "Nothing to do: the library is up to date with these folders": "Není co dělat: knihovna odpovídá těmto složkám",
+  "Synchronizing the folder: see it under the bell": "Synchronizace složky: najdete ji pod zvonkem",
+  "Find what changed in each of these folders on disk, then bring the library up to date with them one after another": "Najde, co se v každé z těchto složek na disku změnilo, a pak s nimi knihovnu postupně sladí",
+  "Synchronize Folders": "Synchronizovat složky",
+  "Can't be synchronized with the others: synchronize it by itself": "Nelze synchronizovat s ostatními: synchronizujte ji samostatně",
+  "Nothing to do with the choices ticked": "Se zaškrtnutými volbami není co dělat",
+  "Nothing was synchronized": "Nic nebylo synchronizováno"
 }

@@ -398,6 +398,7 @@ impl Headless {
             || self.app.sync.is_some()
             || self.app.sync_run.is_some()
             || self.app.sync_queued.is_some()
+            || self.app.sync_scans.is_some()
             || self.app.import.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
