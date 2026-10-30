@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
+use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -285,12 +286,6 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
     *value = default_value(field, op);
 }
 
-/// How wide `ui.small_button(text)` is: its text and the button's padding.
-fn small_button_width(ui: &egui::Ui, text: &str) -> f32 {
-    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
-    galley.size().x + 2.0 * ui.spacing().button_padding.x
-}
-
 /// A rule's problem, shown under it in the caution colour (`ruleProblem:<salt>` for tests and
 /// agents).
 fn problem_note(ui: &mut egui::Ui, problem: Option<&Problem>, salt: &str) {
@@ -319,7 +314,7 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
             Rule::Group { group } => {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this group")).clicked() {
+                        if crate::button::Button::icon_only(Icon::Minus, "Remove this group").ghost().small().show(ui).clicked() {
                             remove = Some(i);
                         }
                         ui.vertical(|ui| edit(ui, group, &rsalt, depth + 1, &here, env));
@@ -349,16 +344,20 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     // − and + at the end of the row, after the value however long it is: a
                     // right-to-left layout put them over the value when the row had no room left
                     // (#2353), and the dialog widens to the row instead
-                    let buttons = small_button_width(ui, "−") + ui.spacing().item_spacing.x + small_button_width(ui, "+");
+                    let del = crate::button::Button::icon_only(Icon::Minus, "Remove this rule")
+                        .ghost()
+                        .small()
+                        .widget(format!("button:ruleRemove-{rsalt}"));
+                    let add = crate::button::Button::icon_only(Icon::Plus, "Add a rule (⌥-click: a group)")
+                        .ghost()
+                        .small()
+                        .widget(format!("button:ruleAdd-{rsalt}"));
+                    let buttons = del.desired_size(ui).x + ui.spacing().item_spacing.x + add.desired_size(ui).x;
                     ui.add_space((ui.available_width() - buttons).max(0.0));
-                    let del = ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this rule"));
-                    register(ui, format!("button:ruleRemove-{rsalt}"), del.rect);
-                    if del.clicked() {
+                    if del.show(ui).clicked() {
                         remove = Some(i);
                     }
-                    let add = ui.small_button("+").on_hover_text(crate::i18n::tr("Add a rule (⌥-click: a group)"));
-                    register(ui, format!("button:ruleAdd-{rsalt}"), add.rect);
-                    if add.clicked() {
+                    if add.show(ui).clicked() {
                         let group = ui.input(|i| i.modifiers.alt) && depth < 3;
                         insert = Some((
                             i + 1,
@@ -378,12 +377,11 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
     }
     if rs.rules.is_empty() || depth == 0 {
         ui.horizontal(|ui| {
-            let add = ui.small_button(crate::i18n::tr("+ Rule"));
-            register(ui, format!("button:ruleAddEnd-{salt}"), add.rect);
+            let add = crate::button::Button::new("+ Rule").small().widget(format!("button:ruleAddEnd-{salt}")).show(ui);
             if add.clicked() {
                 rs.rules.push(new_rule());
             }
-            if depth < 3 && ui.small_button(crate::i18n::tr("+ Group")).clicked() {
+            if depth < 3 && crate::button::Button::new("+ Group").small().show(ui).clicked() {
                 rs.rules.push(Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } });
             }
         });

@@ -652,7 +652,7 @@ fn system_info_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             ui.end_row();
         }
     });
-    if ui.button(crate::i18n::tr("Copy to Clipboard")).clicked() {
+    if crate::button::Button::new("Copy to Clipboard").show(ui).clicked() {
         let text: String = rows.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
         ui.ctx().copy_text(text);
     }
@@ -845,7 +845,7 @@ fn label_names_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
         ui.spacing_mut().item_spacing.x = 4.0;
         for set in sets["sets"].as_array().into_iter().flatten() {
             let name = set["name"].as_str().unwrap_or_default();
-            if crate::widgets::text_button(ui, &format!("labelSet-{name}"), name, false).clicked() {
+            if crate::button::Button::new(name).verbatim().small().widget(format!("button:labelSet-{name}")).show(ui).clicked() {
                 *names = set["names"].as_array().into_iter().flatten().map(|n| n.as_str().unwrap_or_default().to_string()).collect();
             }
         }
@@ -1014,8 +1014,11 @@ fn merge_keywords_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, c
         .cloned()
         .collect();
     ui.horizontal_wrapped(|ui| {
+        // a keyword wider than the dialog wraps its label inside it
+        let row = ui.available_width();
         for k in options {
-            if ui.add(egui::Button::new(egui::RichText::new(&k).color(t.text_label)).corner_radius(10.0)).clicked() {
+            let chip = crate::button::Button::new(&k).verbatim().small().max_width(row).widget(format!("mergeSuggest:{k}"));
+            if chip.show(ui).clicked() {
                 *into = k;
             }
         }
@@ -1311,7 +1314,7 @@ fn export_watermark(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut Expor
             field(ui, "Graphic", |ui| {
                 trailing_button_row(ui, |ui| {
                     if app.services.pick_files.is_some()
-                        && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
+                        && crate::button::Button::new("Choose…").small().widget("button:exportWmChoose").show(ui).clicked()
                         && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
                     {
                         wm.image = f;
@@ -1439,7 +1442,7 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
         field(ui, "Folder", |ui| {
             trailing_button_row(ui, |ui| {
                 if app.services.pick_folder.is_some()
-                    && crate::widgets::text_button(ui, "exportChooseFolder", crate::i18n::tr("Choose…"), false).clicked()
+                    && crate::button::Button::new("Choose…").small().widget("button:exportChooseFolder").show(ui).clicked()
                     && let Some(pick) = app.services.pick_folder.as_mut()
                     && let Some(d) = pick()
                 {
@@ -1498,7 +1501,7 @@ fn export_save_preset_row(
     field(ui, "Save preset", |ui| {
         trailing_button_row(ui, |ui| {
             let named = !preset_name.trim().is_empty();
-            if crate::widgets::text_button(ui, "exportSavePreset", crate::i18n::tr("Save"), false).clicked() && named {
+            if crate::button::Button::new("Save").small().widget("button:exportSavePreset").show(ui).clicked() && named {
                 let params = export_dialog_params(opts, full_size, resize, limit_kb);
                 match app.run("export.savePreset", json!({"name": preset_name.trim(), "params": params})) {
                     Ok(_) => {

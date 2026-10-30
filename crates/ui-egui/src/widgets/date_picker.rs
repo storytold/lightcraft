@@ -266,9 +266,11 @@ impl<'a> DatePicker<'a> {
                 ui.separator();
             }
             ui.horizontal(|ui| {
-                let prev = crate::widgets::arrow_button(ui, "", Icon::ChevronLeft, true);
-                prev.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Previous page")));
-                register(ui, format!("datePickerPrev:{id}"), prev.rect);
+                let prev = crate::button::Button::icon_only(Icon::ChevronLeft, "Previous page")
+                    .ghost()
+                    .small()
+                    .widget(format!("datePickerPrev:{id}"))
+                    .show(ui);
                 let title = match view.precision {
                     Precision::Day => crate::i18n::date_group_label(&format!("{:04}-{:02}", view.year, view.month), false),
                     Precision::Month => format!("{:04}", view.year),
@@ -279,9 +281,11 @@ impl<'a> DatePicker<'a> {
                 };
                 ui.label(RichText::new(title).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let next = crate::widgets::arrow_button(ui, "", Icon::ChevronRight, false);
-                    next.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Next page")));
-                    register(ui, format!("datePickerNext:{id}"), next.rect);
+                    let next = crate::button::Button::icon_only(Icon::ChevronRight, "Next page")
+                        .ghost()
+                        .small()
+                        .widget(format!("datePickerNext:{id}"))
+                        .show(ui);
                     if next.clicked() {
                         view = step(view, true);
                     }

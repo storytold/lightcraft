@@ -148,14 +148,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_space(PAD - 4.0);
-        let back = crate::widgets::arrow_button(ui, crate::i18n::tr("People"), crate::icons::Icon::ChevronLeft, true);
-        register(ui, "person:back", back.rect);
+        let back = crate::button::Button::new("People").icon(crate::icons::Icon::ChevronLeft).ghost().small().widget("person:back").show(ui);
         if back.clicked() {
             let _ = app.run("view.people", json!({}));
         }
         ui.label(RichText::new(&shown_name).font(t.semibold(15.0)).color(t.text));
-        let rename = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui, "person:rename", rename.rect);
+        let rename = crate::button::Button::new("Rename Person…").small().widget("person:rename").show(ui);
         if rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
@@ -163,8 +161,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(PAD - 4.0);
-            let photos = ui.button(crate::i18n::tr("Show photos")).on_hover_text(crate::i18n::tr("Their photos in the grid"));
-            register(ui, "person:photos", photos.rect);
+            let photos = crate::button::Button::new("Show photos").small().tooltip("Their photos in the grid").widget("person:photos").show(ui);
             if photos.clicked() {
                 let _ = app.run("library.filter", json!({"person": shown_name}));
                 let _ = app.run("view.photoGrid", json!({}));
@@ -239,8 +236,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         if !recognising {
             let r = Rect::from_min_size(pos2(area.left() + PAD + 330.0, area.top() + more_top + 8.0), vec2(120.0, 24.0));
             let label = if step == super::faces::Setup::TurnOn { "Turn on" } else { "Open Settings" };
-            let b = ui.put(r, egui::Button::new(label));
-            register(ui, "faces:setup", b.rect);
+            let b = crate::button::Button::new(label).small().widget("faces:setup").show_at(ui, r);
             if b.clicked() {
                 if step == super::faces::Setup::TurnOn {
                     super::faces::take_step(app, ui.ctx(), step);

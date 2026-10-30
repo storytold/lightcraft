@@ -11,6 +11,7 @@ use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -143,13 +144,11 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             submit = Some(chosen.clone());
         }
         let label = if n == 1 { "Name face".to_string() } else { format!("Name {n} faces") };
-        let b = ui.add_enabled(!chosen.is_empty(), egui::Button::new(label));
-        register(ui, "unnamed:name", b.rect);
+        let b = Button::new(&label).enabled(!chosen.is_empty()).widget("unnamed:name").show(ui);
         if b.clicked() {
             submit = Some(chosen);
         }
-        let c = ui.button(crate::i18n::tr("Clear"));
-        register(ui, "unnamed:clear", c.rect);
+        let c = Button::new("Clear").widget("unnamed:clear").show(ui);
         clear = c.clicked() || field.cancelled();
     });
     // the people already named, matching what is typed (a click names the faces)
@@ -161,8 +160,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.add_space(super::people::PAD - 4.0);
                 for p in matching {
-                    let b = ui.add(egui::Button::new(RichText::new(p.as_str()).color(t.text_label)).frame(false));
-                    register(ui, format!("unnamed:pick:{p}"), b.rect);
+                    let b = Button::new(p.as_str()).verbatim().ghost().small().widget(format!("unnamed:pick:{p}")).show(ui);
                     if b.clicked() {
                         submit = Some(p.clone());
                     }
@@ -202,17 +200,15 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
     };
     p.text(pos2(at.x, at.y + 24.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
     if !list.ready && list.faces.is_empty() {
-        let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 22.0));
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
-        register(ui, "unnamed:openSettings", b.rect);
+        let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 24.0));
+        let b = Button::new("Open Settings").small().widget("unnamed:openSettings").show_at(ui, r);
         if b.clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
         }
     } else if !list.faces.is_empty() {
-        let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
+        let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 24.0));
         let all = app.ui.unnamed_selected.len() == list.faces.len();
-        let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
-        register(ui, "unnamed:selectAll", b.rect);
+        let b = Button::new(if all { "Select none" } else { "Select all" }).small().widget("unnamed:selectAll").show_at(ui, r);
         if b.clicked() {
             app.ui.unnamed_selected.clear();
             if !all {

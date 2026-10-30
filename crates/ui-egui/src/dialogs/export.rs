@@ -155,13 +155,11 @@ pub(super) fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<Str
         }
     });
     ui.horizontal(|ui| {
-        let all = ui.small_button(crate::i18n::tr("All"));
-        crate::widgets::register(ui, format!("{tag}:all"), all.rect);
+        let all = crate::button::Button::new("All").small().widget(format!("{tag}:all")).show(ui);
         if all.clicked() {
             *groups = SettingsGroup::ALL.iter().map(key_of).collect();
         }
-        let none = ui.small_button(crate::i18n::tr("None"));
-        crate::widgets::register(ui, format!("{tag}:none"), none.rect);
+        let none = crate::button::Button::new("None").small().widget(format!("{tag}:none")).show(ui);
         if none.clicked() {
             groups.clear();
         }

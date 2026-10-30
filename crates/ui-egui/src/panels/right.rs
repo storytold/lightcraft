@@ -6,6 +6,7 @@ use lightcraft_catalog::PhotoId;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;

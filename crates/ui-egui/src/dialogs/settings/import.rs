@@ -1,6 +1,6 @@
 use super::general::{cameras, preset_combo};
 use super::widgets::{button_width, check, choices, heading, hint, path_label, row};
-use super::{LightcraftApp, RichText, Tokens, json, register};
+use super::{Button, LightcraftApp, RichText, Tokens, json, register};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
@@ -151,15 +151,14 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                 None => drop(ui.label(RichText::new(crate::i18n::tr("Off")).color(t.text))),
             }
             let can = app.services.pick_folder.is_some();
-            let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
-            register(ui, "button:settingsAutoFolder", r.rect);
+            let r = Button::new("Choose…").small().enabled(can).widget("button:settingsAutoFolder").show(ui);
             if r.clicked()
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
                 && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
             {
                 app.toast(ui.ctx(), e);
             }
-            if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
+            if d.auto_folder.is_some() && Button::new("Turn Off").small().show(ui).clicked() {
                 let _ = app.run("library.autoImport", json!({"folder": null}));
             }
         });

@@ -8,6 +8,8 @@
 use egui::RichText;
 
 use crate::LightcraftApp;
+use crate::button::Button;
+use crate::icons::Icon;
 use crate::shortcuts::{self, Bindable};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -31,8 +33,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let r = ui.checkbox(&mut show_all, crate::i18n::tr("Show commands without a shortcut"));
         register(ui, "check:shortcuts.showAll", r.rect);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = ui.add_enabled(!app.ui.settings.keymap.is_empty(), egui::Button::new(crate::i18n::tr("Reset All")));
-            register(ui, "button:shortcutsResetAll", r.rect);
+            let r = Button::new("Reset All").enabled(!app.ui.settings.keymap.is_empty()).widget("button:shortcutsResetAll").show(ui);
             if r.clicked() {
                 let _ = app.run("app.resetShortcuts", serde_json::json!({}));
                 app.recording_shortcut = None;
@@ -115,16 +116,20 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let r = ui.add_enabled(sc.is_some(), egui::Button::new("×").small()).on_hover_text(crate::i18n::tr("Remove shortcut"));
-        register(ui, format!("button:shortcutClear-{}", b.id), r.rect);
+        let r = Button::icon_only(Icon::Close, "Remove shortcut")
+            .ghost()
+            .small()
+            .enabled(sc.is_some())
+            .widget(format!("button:shortcutClear-{}", b.id))
+            .show(ui);
         if r.clicked() {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "shortcut": null}));
         }
-        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default {
+        let restore = match b.default {
             Some(d) => crate::i18n::tr_format!("Restore {}", menu_text(d, mac)),
             None => crate::i18n::tr("Restore (no shortcut)").to_string(),
-        });
-        register(ui, format!("button:shortcutReset-{}", b.id), r.rect);
+        };
+        let r = Button::icon_only(Icon::Rotate, &restore).ghost().small().enabled(changed).widget(format!("button:shortcutReset-{}", b.id)).show(ui);
         if r.clicked() {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "reset": true}));
         }

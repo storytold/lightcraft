@@ -1,6 +1,8 @@
 use super::curve::set_tat;
 use super::sliders::{control, sub_title};
-use super::{BAND_COLORS, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, hex, json, paint, register, text_button, vec2};
+use super::{
+    BAND_COLORS, Button, Color32, DevelopSettings, Icon, LightcraftApp, Sense, Stroke, Tokens, hex, json, paint, register, text_button, vec2,
+};
 
 // ------------------------------------------------------------------------------ colour mixer
 
@@ -50,10 +52,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
     if crate::is_bw(d) {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
-            if crate::widgets::text_button(ui, "bwAuto", crate::i18n::tr("Auto"), false)
-                .on_hover_text(crate::i18n::tr("Set the mix from the photo's colours"))
-                .clicked()
-            {
+            if Button::new("Auto").small().widget("button:bwAuto").tooltip("Set the mix from the photo's colours").show(ui).clicked() {
                 let _ = app.run("develop.autoBwMix", json!({}));
             }
         });
@@ -137,7 +136,7 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
                 app.ui.point_color_visualize = v;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "pointColorDelete", crate::i18n::tr("Delete"), false).clicked() {
+                if Button::new("Delete").small().widget("button:pointColorDelete").show(ui).clicked() {
                     let _ = app.run("pointColor.delete", json!({"index": sel}));
                 }
             });

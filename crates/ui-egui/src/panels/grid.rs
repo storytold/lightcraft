@@ -1027,9 +1027,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
             // Counted once per view (cached); the ids are only gathered on a click.
             if local_n > 0 {
                 let label = crate::i18n::tr_format!("Add {local_n} to My Photos", local_n = local_n);
-                let button =
-                    ui.add(egui::Button::new(egui::RichText::new(label).font(t.semibold(11.5)).color(t.text)).wrap().min_size(vec2(37.0, 24.0)));
-                register(ui, "button:addToLibrary", button.rect);
+                let button = crate::button::Button::new(&label).small().max_width(ui.available_width()).widget("button:addToLibrary").show(ui);
                 if button.clicked() {
                     let local: Vec<u64> = ids.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.local)).map(|id| id.0).collect();
                     let n = local.len();

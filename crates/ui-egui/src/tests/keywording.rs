@@ -455,6 +455,43 @@ fn grouped_suggestions_name_the_keyword_alone() {
     assert!(ids.iter().all(|id| keywords_of(&h, *id).iter().any(|k| k == "Places|Portugal|Lisbon")));
 }
 
+// Given a suggested keyword whose path is wider than the panel,
+// When the suggestions are shown, Then the chip wraps its label inside the panel instead of
+// drawing one long line the panel clips.
+#[test]
+fn a_suggestion_wider_than_the_panel_wraps_inside_it() {
+    let (mut h, ids) = two_selected();
+    let long = format!("Places|{}", "Alfama Miradouro da Senhora do Monte ".repeat(6).trim_end());
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[0]], "addKeywords": [long]}}));
+    let chip = rect(&h, &format!("kwSuggest:{long}"));
+    let field = rect(&h, "field:keyword");
+    assert!(chip.right() <= field.right() + 1.0, "the chip {chip:?} stays inside the panel (the keyword field is {field:?})");
+    assert!(chip.height() > 30.0, "its label wrapped onto more lines, {chip:?}");
+}
+
+// Given the grouped box in another language and a suggested keyword named like a catalog message,
+// When the suggestion is hovered, Then its tooltip is not the message's translation.
+#[test]
+fn a_suggestions_tooltip_is_never_looked_up_in_the_catalog() {
+    let (mut h, ids) = two_selected();
+    let translated = crate::i18n::Locale::De.tr("Exposure");
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[0]], "addKeywords": ["Exposure"]}}));
+    h.app.ui.settings.keyword_chips = crate::state::KeywordChips::Grouped;
+    h.settle(SETTLE);
+    assert!(has(&h, "kwSuggest:Exposure"), "the keyword is suggested");
+    ask(&mut h, "ui.set", json!({"language": "de"}));
+    let count = |h: &Headless, text: &str| h.painted_text().iter().filter(|t| *t == text).count();
+    let before = count(&h, "Exposure");
+    ask(&mut h, "ui.hoverWidget", json!({"id": "kwSuggest:Exposure"}));
+    let shown_once_more = h.step_until(Duration::from_secs(5), |h| count(h, "Exposure") > before);
+    let shown = h.painted_text();
+    ask(&mut h, "ui.set", json!({"language": "en"}));
+    assert!(shown_once_more, "the tooltip is the keyword itself: {shown:?}");
+    if translated != "Exposure" {
+        assert!(!shown.iter().any(|t| t == translated), "not its translation: {shown:?}");
+    }
+}
+
 /// Two photos selected (beach + Weddings, beach), and a third photo of the library, not selected,
 /// with Places|Portugal|Lisbon and Places|Portugal|Porto.
 fn with_places() -> (Headless, Vec<u64>) {
@@ -893,4 +930,22 @@ fn open_dialogs_count_once_per_library_change() {
         h.step();
     }
     assert_eq!(h.app.caches.dialog_count_scans, before + 3, "another dialog counts its own photos, once");
+}
+
+// Given the Merge Keywords dialog and a suggested keyword whose path is wider than the dialog,
+// When the suggestions are shown, Then the chip wraps its label inside the dialog instead of
+// running past its edge.
+#[test]
+fn a_merge_suggestion_wider_than_the_dialog_wraps_inside_it() {
+    let (mut h, ids) = two_selected();
+    let long = format!("Places|{}", "Alfama Miradouro da Senhora do Monte ".repeat(6).trim_end());
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[0]], "addKeywords": [long]}}));
+    h.app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec!["Weddings".into()], into: String::new() });
+    for _ in 0..4 {
+        h.step();
+    }
+    let chip = rect(&h, &format!("mergeSuggest:{long}"));
+    let window = rect(&h, "dialog:window");
+    assert!(chip.right() <= window.right() + 1.0, "the chip {chip:?} stays inside the dialog {window:?}");
+    assert!(chip.height() > 30.0, "its label wrapped onto more lines, {chip:?}");
 }

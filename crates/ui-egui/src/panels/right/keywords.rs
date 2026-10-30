@@ -187,9 +187,11 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 for (i, k) in suggestions.into_iter().enumerate() {
                     let whole = k.replace('|', " › ");
                     let name = names.get(i).unwrap_or(&whole);
-                    let r = ui.add(egui::Button::new(egui::RichText::new(format!("+ {name}")).color(t.text_label)).corner_radius(10.0));
+                    let label = format!("+ {name}");
+                    let r = crate::button::Button::new(&label).verbatim().small().max_width(ui.available_width()).widget(format!("kwSuggest:{k}"));
+                    let r = r.show(ui);
+                    // the keyword's own path, never looked up in the catalog
                     let r = if grouped { r.on_hover_text(&whole) } else { r };
-                    register(ui, format!("kwSuggest:{k}"), r.rect);
                     if r.clicked() {
                         let _ = app.run("photo.setMeta", json!({"addKeywords": [k]}));
                     }

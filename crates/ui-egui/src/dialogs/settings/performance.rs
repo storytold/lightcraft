@@ -1,7 +1,7 @@
 use super::widgets::{check, choices, heading, hint, row};
 #[cfg(not(target_arch = "wasm32"))]
 use super::widgets::{label_width, path_label};
-use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register};
+use super::{Button, CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register};
 
 // --------------------------------------------------------------------------------- Performance
 
@@ -54,8 +54,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             RichText::new(used.map(|b| format!("{:.1} MB", b as f64 / 1048576.0)).unwrap_or_else(|| crate::i18n::tr("memory only").to_string()))
                 .color(t.text),
         );
-        let r = ui.button(crate::i18n::tr("Clear Cache"));
-        register(ui, "button:settingsClearCache", r.rect);
+        let r = Button::new("Clear Cache").small().widget("button:settingsClearCache").show(ui);
         if r.clicked() {
             let _ = app.run("library.clearPreviews", json!({}));
         }
@@ -151,16 +150,14 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W);
         if app.services.pick_folder.is_some() {
-            let r = ui.button(crate::i18n::tr("Choose Folder…"));
-            register(ui, "button:settingsSmartChoose", r.rect);
+            let r = Button::new("Choose Folder…").widget("button:settingsSmartChoose").show(ui);
             if r.clicked()
                 && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
                 result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
             }
         }
-        let r = ui.add_enabled(custom, egui::Button::new(crate::i18n::tr("Use Library Folder")));
-        register(ui, "button:settingsSmartReset", r.rect);
+        let r = Button::new("Use Library Folder").enabled(custom).widget("button:settingsSmartReset").show(ui);
         if r.clicked() {
             result = Some(app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing})));
         }

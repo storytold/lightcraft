@@ -252,13 +252,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // save / clear
     ui.add_space(14.0);
     let filtering = app.session.filter != Default::default();
-    let save = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Save as Smart Album…")).font(t.font(12.5))));
-    register(ui, "button:filterSave", save.rect);
+    let save = crate::button::Button::new("Save as Smart Album…").small().enabled(filtering).widget("button:filterSave").show(ui);
     if save.clicked() {
         let _ = app.run("dialog.newSmartAlbum", json!({}));
     }
-    let clear = ui.add_enabled(filtering, egui::Button::new(egui::RichText::new(crate::i18n::tr("Clear")).font(t.font(12.5))));
-    register(ui, "button:filterClear", clear.rect);
+    let clear = crate::button::Button::new("Clear").small().enabled(filtering).widget("button:filterClear").show(ui);
     if clear.clicked() {
         app.ui.search.clear();
         let _ = app.run("library.clearFilter", json!({}));

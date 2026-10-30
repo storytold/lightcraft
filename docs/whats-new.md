@@ -157,6 +157,11 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### One look for action buttons
+- Buttons in Settings, the dialogs, the panels, the denoise and face-model setup, the notices and the shortcut list now
+  share one look and three heights (24, 30 and 36 points), instead of whatever each panel used. The ×, ↺, − and +
+  buttons are drawn icons with a name for screen readers; their automation ids are unchanged.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

@@ -2,8 +2,9 @@
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
 //! are only in memory or while tasks that would be cut short are running (issue #345).
 
-use egui::{Align2, RichText, vec2};
+use egui::{Align2, RichText};
 
+use crate::button::Button;
 use crate::theme::Tokens;
 use crate::widgets::WidgetHit;
 use crate::{LightcraftApp, QuitPrompt};
@@ -495,11 +496,10 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 for (i, (bid, label, _)) in buttons.iter().enumerate() {
-                    let r = ui.add(egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
                     let widget = format!("button:{bid}");
-                    // The real response id is the AccessKit node a screen reader targets. A hover
-                    // probe's id would make every Focus/Click action fail to match the button.
-                    crate::widgets::register_response(widget.clone(), r.rect, &r);
+                    // `Button` registers its real response: its id is the AccessKit node a screen
+                    // reader targets, which a hover probe's id would never match.
+                    let r = Button::new(label).widget(widget.clone()).show(ui);
                     if i == focus {
                         r.request_focus();
                     }

@@ -142,7 +142,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let text = name.unwrap_or_else(|| crate::i18n::tr("(not in the library)").to_string());
             ui.label(egui::RichText::new(text).color(t.text));
             if let Some(a) = active.filter(|a| a.0 != bid)
-                && crate::widgets::text_button(ui, "slideshowUseSelected", "Use selected photo", false).clicked()
+                && crate::button::Button::new("Use selected photo").small().widget("button:slideshowUseSelected").show(ui).clicked()
             {
                 set(app, json!({"backgroundImage": a.0}));
             }
@@ -152,7 +152,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, "Select a photo, then turn this on to fill the slide behind every photo with it.");
     }
     ui.add_space(4.0);
-    if crate::widgets::text_button(ui, "slideshowResetLayout", "Reset layout", false).clicked() {
+    if crate::button::Button::new("Reset layout").small().widget("button:slideshowResetLayout").show(ui).clicked() {
         reset(app);
     }
 }

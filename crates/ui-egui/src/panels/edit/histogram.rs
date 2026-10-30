@@ -304,8 +304,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
                 let _ = app.run("view.softProof", json!({"paperInk": paper}));
             }
         }
-        let r = ui.button(crate::i18n::tr("Create Proof Copy"));
-        register(ui, "button:createProofCopy", r.rect);
+        let r = crate::button::Button::new("Create Proof Copy").widget("button:createProofCopy").show(ui);
         if r.clicked() {
             let target = app.ui.proof_profile.as_ref().map_or_else(|| app.ui.proof.space.label().to_string(), |(_, n)| n.clone());
             let name = crate::i18n::tr_format!("Proof Copy ({})", target);

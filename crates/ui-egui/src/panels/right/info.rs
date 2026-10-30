@@ -1,4 +1,4 @@
-use super::{Icon, LightcraftApp, PhotoId, Sense, Tokens, divider, header, json, padded, register, text_button, vec2};
+use super::{Button, Icon, LightcraftApp, PhotoId, Sense, Tokens, divider, header, json, padded, register, text_button, vec2};
 
 pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
@@ -160,23 +160,19 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
-                    .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
-                    .clicked()
-                {
+                if Button::new("Show on Map").small().widget("button:showOnMap").tooltip("Open the place in OpenStreetMap").show(ui).clicked() {
                     let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
                     if let Err(e) = crate::links::open(app, &url) {
                         app.toast(ui.ctx(), e);
                     }
                 }
             });
-            if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(format!(
-                    "{}\n{}",
-                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
-                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
-                ))
-                .clicked()
+            let fill_tip = format!(
+                "{}\n{}",
+                crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+                crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+            );
+            if Button::new("Fill Location").small().widget("button:fillLocation").tooltip(&fill_tip).show(ui).clicked()
                 && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
             {
                 app.toast_error(ui.ctx(), e);
@@ -214,9 +210,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         ui.add_space(10.0);
-        if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
-            .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))
-            .clicked()
+        if Button::new("All Metadata…").small().widget("button:allMetadata").tooltip("Every EXIF, GPS and XMP field in the file").show(ui).clicked()
         {
             let _ = app.run("dialog.allMetadata", json!({}));
         }

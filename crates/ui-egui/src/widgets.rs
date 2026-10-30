@@ -31,25 +31,6 @@ fn list_style(style: &mut egui::Style) {
     style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
 }
 
-/// A native button with a vector arrow beside its text; egui reserves the icon's space.
-pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon, leading: bool) -> Response {
-    // 0.37 atoms take a local `IdSalt` (not a root `Id`); the button reports the custom atom's
-    // rect under the same salt.
-    let id = egui::IdSalt::new(("lc-arrow", ui.next_auto_id()));
-    let mut atoms = text.into_atoms();
-    let arrow = egui::Atom::custom(id, vec2(16.0, 16.0));
-    if leading {
-        atoms.push_left(arrow);
-    } else {
-        atoms.push_right(arrow);
-    }
-    let r = egui::Button::new(atoms).atom_ui(ui);
-    if let Some(rect) = r.rect(id) {
-        paint(ui.painter(), rect, icon, ui.style().interact(&r.response).fg_stroke.color);
-    }
-    r.response
-}
-
 /// Keep egui's submenu interaction and layout, using our vector chevron instead of a font glyph.
 pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
     if !egui::containers::menu::is_in_menu(ui) {
@@ -230,7 +211,7 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(preview_only_explanation(reason)).size(11.5).color(t.text_label));
             ui.add_space(6.0);
-            reload = text_button(ui, &format!("reloadPreviewOnly:{key}"), "Reload from Disk", false).clicked();
+            reload = crate::button::Button::new("Reload from Disk").small().widget(format!("button:reloadPreviewOnly:{key}")).show(ui).clicked();
         })
         .response;
     let r = r.on_hover_text(crate::i18n::tr_format!("Decoder: {reason}", reason = reason));
@@ -886,9 +867,10 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
     resp
 }
 
-/// A small bordered text button (Auto, B&W, HDR…).
+/// A small bordered text button with an active state: the toggle and choice vocabulary (Auto, B&W,
+/// HDR, a segmented choice, a tab). An action that just does something is a [`crate::button::Button`].
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
-    let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
+    let label = crate::i18n::tr(label);
     let t = Tokens::get(ui.ctx());
     let font = t.semibold(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
@@ -1120,7 +1102,8 @@ mod access_tests {
         for _ in 0..3 {
             let out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let _ = slider(ui, spec, 0.5, true, None);
-                let _ = text_button(ui, "auto", "Auto", false);
+                let _ = crate::button::Button::new("Auto").small().widget("button:auto").show(ui);
+                let _ = text_button(ui, "bw", "B&W", true);
                 let _ = icon_button(ui, "trash", Icon::Trash, vec2(24.0, 24.0), false, true, "Delete mask");
             });
             let mut out = out;
@@ -1145,6 +1128,7 @@ mod access_tests {
         assert!(ranges.contains(&(Some(spec.min), Some(spec.max))), "the slider's range: {ranges:?}");
         assert!(has("Button", "Auto"), "{found:?}");
         assert!(has("Button", "Delete mask"), "{found:?}");
+        assert!(has("Button", "B&W"), "{found:?}");
     }
 }
 

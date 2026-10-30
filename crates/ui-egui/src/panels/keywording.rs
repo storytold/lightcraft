@@ -295,16 +295,18 @@ fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], sel
             Line::More(n) => {
                 ui.add_space(6.0);
                 let label = crate::i18n::tr_format!("+{n} more", n = n);
-                let r = ui.add(egui::Button::new(egui::RichText::new(label).color(t.text_label)).corner_radius(10.0));
-                register(ui, "keywordChipsMore", r.rect);
-                if r.on_hover_text(crate::i18n::tr("Show every keyword of the selected photos")).clicked() {
+                let r = crate::button::Button::new(&label)
+                    .small()
+                    .tooltip("Show every keyword of the selected photos")
+                    .widget("keywordChipsMore")
+                    .show(ui);
+                if r.clicked() {
                     app.ui.keyword_chips_all = Some(selection);
                 }
             }
             Line::Fewer => {
                 ui.add_space(6.0);
-                let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Show fewer")).color(t.text_label)).corner_radius(10.0));
-                register(ui, "keywordChipsFewer", r.rect);
+                let r = crate::button::Button::new("Show fewer").small().widget("keywordChipsFewer").show(ui);
                 if r.clicked() {
                     app.ui.keyword_chips_all = None;
                 }

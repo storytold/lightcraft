@@ -249,10 +249,8 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         });
         crate::widgets::name_combo(&sort.response, crate::i18n::tr("Sort"));
-        let reverse =
-            crate::widgets::arrow_button(ui, "", if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, false);
-        reverse.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Reverse the order")));
-        if reverse.on_hover_text(crate::i18n::tr("Reverse the order")).clicked() {
+        let direction = if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown };
+        if crate::button::Button::icon_only(direction, "Reverse the order").ghost().small().show(ui).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
@@ -293,18 +291,11 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn table(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
     egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
         for k in SortKey::ALL {
-            let text = RichText::new(crate::i18n::tr(k.label().1)).strong();
-            let header = if v.key == k {
-                crate::widgets::arrow_button(
-                    ui,
-                    text,
-                    if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown },
-                    false,
-                )
-            } else {
-                ui.button(text)
-            };
-            if header.on_hover_text(crate::i18n::tr(k.label().0)).clicked() {
+            let mut header = crate::button::Button::new(k.label().1).ghost().small().bold().tooltip(k.label().0);
+            if v.key == k {
+                header = header.trailing_icon(if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown });
+            }
+            if header.show(ui).clicked() {
                 if v.key == k {
                     v.ascending = !v.ascending;
                 } else {

@@ -285,7 +285,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
                 .width((ui.available_width() - button_w).max(120.0))
                 .show(ui);
             if choose
-                && crate::widgets::text_button(ui, "lightroomLibraryChoose", tr("Choose…"), false).clicked()
+                && crate::button::Button::new("Choose…").small().widget("button:lightroomLibraryChoose").show(ui).clicked()
                 && let Some(pick) = app.services.pick_folder.as_mut()
                 && let Some(d) = pick()
             {

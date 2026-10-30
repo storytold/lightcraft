@@ -15,6 +15,7 @@ use lightcraft_engine::print_color::{ManagedSpace, PrintColorSettings, PrintInte
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::theme::Tokens;
 use crate::widgets::{register, text_button};
 
@@ -205,10 +206,10 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
             .hint(crate::i18n::tr("Template name"))
             .width(140.0)
             .show(ui);
-        if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
+        if Button::new("Save").small().widget("button:printSaveTemplate").show(ui).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
-        if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
+        if app.services.pick_print_templates.is_some() && Button::new("Import…").small().widget("button:printTemplateImport").show(ui).clicked() {
             let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
             for path in paths {
                 if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path})) {
@@ -222,10 +223,12 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(name).color(t.text_label));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, &format!("printTemplateDelete-{i}"), "Delete", false).clicked() {
+                if Button::new("Delete").small().widget(format!("button:printTemplateDelete-{i}")).show(ui).clicked() {
                     run(app, &ctx, "print.template.delete", json!({"name": name}));
                 }
-                if app.services.save_print_template.is_some() && text_button(ui, &format!("printTemplateExport-{i}"), "Export…", false).clicked() {
+                if app.services.save_print_template.is_some()
+                    && Button::new("Export…").small().widget(format!("button:printTemplateExport-{i}")).show(ui).clicked()
+                {
                     let stem = lightcraft_engine::slide_template::file_stem(name).unwrap_or_else(|| "Print Template".into());
                     let file = format!("{stem}.{}", lightcraft_engine::print::template::FILE_EXT);
                     if let Some(path) = app.services.save_print_template.as_mut().and_then(|save| save(&file))
@@ -234,7 +237,7 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
                         app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
                     }
                 }
-                if text_button(ui, &format!("printTemplateApply-{i}"), "Apply", false).clicked() {
+                if Button::new("Apply").small().widget(format!("button:printTemplateApply-{i}")).show(ui).clicked() {
                     run(app, &ctx, "print.template.apply", json!({"name": name}));
                     pu.page = 0;
                     pu.selected = None;
@@ -341,7 +344,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
                 for (i, (w, h)) in CELL_SIZES.iter().enumerate() {
-                    if text_button(ui, &format!("printAddCell-{i}"), &format!("{} × {}", trim(*w), trim(*h)), false).clicked() {
+                    if Button::new(&format!("{} × {}", trim(*w), trim(*h))).small().widget(format!("button:printAddCell-{i}")).show(ui).clicked() {
                         add_cell(app, &ctx, pu, *w, *h);
                     }
                 }
@@ -357,21 +360,21 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             });
             pu.new_cell = Some((w, h));
             ui.horizontal(|ui| {
-                if text_button(ui, "printAddCustom", "Add Cell", false).clicked() {
+                if Button::new("Add Cell").small().widget("button:printAddCustom").show(ui).clicked() {
                     add_cell(app, &ctx, pu, w, h);
                 }
-                if l.style == Style::PicturePackage && text_button(ui, "printAutoLayout", "Auto Layout", false).clicked() {
+                if l.style == Style::PicturePackage && Button::new("Auto Layout").small().widget("button:printAutoLayout").show(ui).clicked() {
                     run(app, &ctx, "print.layout.autoLayout", json!({}));
                     pu.page = 0;
                 }
             });
             ui.horizontal(|ui| {
-                if text_button(ui, "printNewPage", "New Page", false).clicked()
+                if Button::new("New Page").small().widget("button:printNewPage").show(ui).clicked()
                     && let Some(r) = run(app, &ctx, "print.layout.newPage", json!({}))
                 {
                     pu.page = r["page"].as_u64().unwrap_or(0) as usize;
                 }
-                if text_button(ui, "printClear", "Clear Layout", false).clicked() {
+                if Button::new("Clear Layout").small().widget("button:printClear").show(ui).clicked() {
                     run(app, &ctx, "print.layout.clear", json!({}));
                     pu.page = 0;
                     pu.selected = None;
@@ -678,13 +681,17 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
 
     // footer: page navigation and the selected cell
     ui.horizontal(|ui| {
-        if text_button(ui, "printPagePrev", "◀", false).clicked() && pu.page > 0 {
+        if Button::icon_only(crate::icons::Icon::ChevronLeft, "Previous page").ghost().small().widget("button:printPagePrev").show(ui).clicked()
+            && pu.page > 0
+        {
             pu.page -= 1;
             pu.selected = None;
         }
         let label = ui.label(egui::RichText::new(format!("{} {} / {}", crate::i18n::tr("Page"), pu.page + 1, pages)).color(t.text));
         register(ui, "print:pageLabel", label.rect);
-        if text_button(ui, "printPageNext", "▶", false).clicked() && pu.page + 1 < pages {
+        if Button::icon_only(crate::icons::Icon::ChevronRight, "Next page").ghost().small().widget("button:printPageNext").show(ui).clicked()
+            && pu.page + 1 < pages
+        {
             pu.page += 1;
             pu.selected = None;
         }
@@ -813,20 +820,20 @@ fn inspector(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi,
         }
         for (i, (how, label)) in [("toBack", "Back"), ("backward", "Backward"), ("forward", "Forward"), ("toFront", "Front")].into_iter().enumerate()
         {
-            if text_button(ui, &format!("printStack-{i}"), label, false).clicked() {
+            if Button::new(label).small().widget(format!("button:printStack-{i}")).show(ui).clicked() {
                 run(app, &ctx, "print.cell.stack", json!({"id": id, "order": how}));
             }
         }
         if st.layout.style == Style::CustomPackage {
-            if text_button(ui, "printCellPhoto", "Use Active Photo", false).clicked() {
+            if Button::new("Use Active Photo").small().widget("button:printCellPhoto").show(ui).clicked() {
                 let active = app.session.active().map(|p| p.0);
                 run(app, &ctx, "print.cell.photo", json!({"id": id, "photo": active}));
             }
-            if cell.photo.is_some() && text_button(ui, "printCellPhotoClear", "Clear Photo", false).clicked() {
+            if cell.photo.is_some() && Button::new("Clear Photo").small().widget("button:printCellPhotoClear").show(ui).clicked() {
                 run(app, &ctx, "print.cell.photo", json!({"id": id, "photo": null}));
             }
         }
-        if text_button(ui, "printCellDelete", "Delete", false).clicked() {
+        if Button::new("Delete").small().widget("button:printCellDelete").show(ui).clicked() {
             run(app, &ctx, "print.cell.delete", json!({"id": id}));
             pu.selected = None;
         }

@@ -7,7 +7,7 @@
 //! every face is cut from the same kind of box (the detector's, once the scan has looked at it), so faces are shown
 //! equally close. Only the rows on screen ask for a face render (the engine caches them, memory and disk).
 
-use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::Person;
 use serde_json::json;
 
@@ -70,12 +70,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the person page last left (a face opened from it, or its back button): one click returns to it
     if let Some(last) = app.ui.last_person.clone().filter(|n| people.iter().any(|p| &p.name == n)) {
         let label = fit(ui.painter(), &last, t.font(13.0), 224.0);
-        let width = ui.painter().layout_no_wrap(label.clone(), t.font(13.0), Color32::WHITE).size().x + 44.0;
-        let r = Rect::from_min_size(pos2(title.right() + 14.0, head.center().y - 12.0), vec2(width, 24.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        let b = crate::widgets::arrow_button(&mut child, RichText::new(label).font(t.font(13.0)), crate::icons::Icon::ChevronRight, false);
-        register(ui, "people:last", b.rect);
-        if b.on_hover_text(crate::i18n::tr("Back to this person")).clicked() {
+        let button = crate::button::Button::new(&label)
+            .verbatim()
+            .trailing_icon(crate::icons::Icon::ChevronRight)
+            .small()
+            .tooltip(crate::i18n::tr("Back to this person"))
+            .widget("people:last");
+        let r = Rect::from_min_size(pos2(title.right() + 14.0, head.center().y - 12.0), button.desired_size(ui));
+        if button.show_at(ui, r).clicked() {
             let _ = app.run("view.person", json!({"name": last}));
         }
     }

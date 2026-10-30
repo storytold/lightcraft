@@ -51,14 +51,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .width(ui.available_width() - 82.0)
             .show(ui);
         // + creates a keyword (inside the picked one), − deletes the picked one
-        let plus = ui.button("+").on_hover_text(crate::i18n::tr("Create Keyword Tag"));
-        register(ui, "keywordList:create", plus.rect);
+        let plus = crate::button::Button::icon_only(Icon::Plus, "Create Keyword Tag").ghost().small().widget("keywordList:create").show(ui);
         if plus.clicked() {
             app.ui.dialog = Some(create_dialog(app));
         }
         let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
-        let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
-        register(ui, "keywordList:delete", minus.rect);
+        let minus = crate::button::Button::icon_only(Icon::Minus, "Delete Keyword")
+            .ghost()
+            .small()
+            .enabled(picked.is_some())
+            .widget("keywordList:delete")
+            .show(ui);
         if minus.clicked()
             && let Some(k) = picked
         {

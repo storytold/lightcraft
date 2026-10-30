@@ -209,12 +209,19 @@ impl<'a> AlbumPicker<'a> {
         let AlbumPicker { id, value, entries, width, empty_text } = self;
         let chosen = value.filter(|v| entries.iter().any(|e| e.id == *v && !e.folder));
         let text = chosen.map_or_else(|| empty_text.unwrap_or_else(|| crate::i18n::tr("Choose an album…").to_string()), |c| path_label(entries, c));
-        // the name, and a drop-down arrow painted at the right (the UI font has no arrow glyph)
-        let mut button =
-            ui.add_sized(vec2(width, ui.spacing().interact_size.y), egui::Button::new(text.as_str()).truncate().right_text(" ")).on_hover_text(text);
-        let arrow_color = crate::theme::Tokens::get(ui.ctx()).icon;
-        disclosure(ui.painter(), egui::pos2(button.rect.right() - 10.0, button.rect.center().y), true, arrow_color);
-        register(ui, format!("albumPicker:{id}"), button.rect);
+        // the name, and a drop-down chevron after it
+        let mut button = crate::button::Button::new(&text)
+            .verbatim()
+            .small()
+            .align_start()
+            .trailing_icon(Icon::ChevronDown)
+            .min_width(width)
+            .max_width(width)
+            .truncate()
+            .widget(format!("albumPicker:{id}"))
+            .show(ui)
+            // (the album's own name, as written: a tooltip of the Button would translate it)
+            .on_hover_text(&text);
         let key = egui::Id::unique(("albumPicker", id.as_str()));
         if button.clicked() {
             // open on the chosen album's folders, with the search empty and ready for typing

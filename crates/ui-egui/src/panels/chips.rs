@@ -139,7 +139,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     child.spacing_mut().item_spacing.x = 8.0;
     let hidden = &chips[shown..];
     if !hidden.is_empty() {
-        let more = crate::widgets::text_button(&mut child, "chipsMore", &crate::i18n::tr_format!("+{} more", hidden.len()), false);
+        let more = crate::button::Button::new(&crate::i18n::tr_format!("+{} more", hidden.len())).small().widget("button:chipsMore").show(&mut child);
         egui::Popup::menu(&more).show(|ui| {
             for c in hidden {
                 if ui
@@ -155,7 +155,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
             }
         });
     }
-    if crate::widgets::text_button(&mut child, "chipsClearAll", crate::i18n::tr("Clear all"), false).clicked() {
+    if crate::button::Button::new("Clear all").small().widget("button:chipsClearAll").show(&mut child).clicked() {
         app.ui.search.clear();
         let _ = app.run("library.clearFilter", json!({}));
     }

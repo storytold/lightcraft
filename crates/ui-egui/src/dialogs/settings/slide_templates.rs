@@ -117,11 +117,11 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
     if pending(&ctx) == Some(Pending::Delete(tpl.id.clone())) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::i18n::tr_format!("Delete “{name}”?", name = name)).color(t.caution));
-            if crate::widgets::text_button(ui, "slideshowTemplateDeleteConfirm", "Delete", false).clicked() {
+            if crate::button::Button::new("Delete").small().widget("button:slideshowTemplateDeleteConfirm").show(ui).clicked() {
                 set_pending(&ctx, None);
                 act(app, &ctx, "slideshow.templates.delete", json!({"id": tpl.id}), |_| String::new());
             }
-            if crate::widgets::text_button(ui, "slideshowTemplateDeleteCancel", "Cancel", false).clicked() {
+            if crate::button::Button::new("Cancel").small().widget("button:slideshowTemplateDeleteCancel").show(ui).clicked() {
                 set_pending(&ctx, None);
             }
         });
@@ -231,7 +231,7 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let mem = egui::Id::unique("settingsSlideshowTemplateNewName");
         let mut name: String = ui.data(|d| d.get_temp(mem)).unwrap_or_default();
         let r = TextField::singleline("field:slideshowTemplateName", &mut name).hint(crate::i18n::tr("New template name")).width(180.0).show(ui);
-        let save = crate::widgets::text_button(ui, "slideshowTemplateSave", "Save as Template", false).clicked()
+        let save = crate::button::Button::new("Save as Template").small().widget("button:slideshowTemplateSave").show(ui).clicked()
             || (r.ending == Some(crate::text_field::Ending::Return) && !name.trim().is_empty());
         if save {
             let n = name.trim().to_string();
@@ -244,7 +244,8 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         }
         ui.data_mut(|d| d.insert_temp(mem, name));
-        if app.services.pick_slideshow_templates.is_some() && crate::widgets::text_button(ui, "slideshowTemplateImport", "Import…", false).clicked()
+        if app.services.pick_slideshow_templates.is_some()
+            && crate::button::Button::new("Import…").small().widget("button:slideshowTemplateImport").show(ui).clicked()
         {
             let paths = app.services.pick_slideshow_templates.as_mut().map(|pick| pick()).unwrap_or_default();
             for path in paths {

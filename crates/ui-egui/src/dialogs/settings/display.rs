@@ -1,6 +1,6 @@
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
+use super::{Button, GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
 
 // ---------------------------------------------------------------------------------- Interface
 
@@ -22,17 +22,15 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_display_profile.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Profile…")));
-        register(ui, "button:settingsDisplayProfile", r.rect);
+        let r = Button::new("Choose Profile…").enabled(can).widget("button:settingsDisplayProfile").show(ui);
         if r.clicked()
             && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
         {
             app.ui.settings.display_profile = path;
         }
         // with no profile chosen, previews follow the screen's own profile where the host knows it
-        let none = if app.services.screen_profile.is_some() { crate::i18n::tr("Use Screen Profile") } else { crate::i18n::tr("Use sRGB") };
-        let r = ui.add_enabled(!app.ui.settings.display_profile.is_empty(), egui::Button::new(none));
-        register(ui, "button:settingsDisplayProfileNone", r.rect);
+        let none = if app.services.screen_profile.is_some() { "Use Screen Profile" } else { "Use sRGB" };
+        let r = Button::new(none).enabled(!app.ui.settings.display_profile.is_empty()).widget("button:settingsDisplayProfileNone").show(ui);
         if r.clicked() {
             app.ui.settings.display_profile.clear();
         }

@@ -174,11 +174,11 @@ pub fn empty_state(ui: &mut egui::Ui, rect: Rect, title: &str, body: &str, actio
             let w = widths.iter().copied().fold(0.0, f32::max).min(wrap);
             Rect::from_min_size(pos2(rect.center().x - w / 2.0, buttons_top + i as f32 * (BUTTON_H + GAP)), vec2(w, BUTTON_H))
         };
-        let label = egui::RichText::new(crate::i18n::tr(a.label)).font(t.semibold(13.0));
-        let button =
-            if i == 0 { egui::Button::new(label.color(egui::Color32::WHITE)).fill(t.accent) } else { egui::Button::new(label.color(t.text)) };
-        let resp = ui.put(r, button);
-        crate::widgets::register(ui, a.widget, resp.rect);
+        let mut button = crate::button::Button::new(a.label).widget(a.widget).max_width(r.width()).truncate().tooltip(a.label);
+        if i == 0 {
+            button = button.primary();
+        }
+        let resp = button.show_at(ui, r);
         if resp.clicked() {
             clicked = Some(a.command);
         }

@@ -16,10 +16,11 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Align2, RichText, vec2};
+use egui::{Align2, RichText};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::state::{AppSettings, LaunchLibrary};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -1046,8 +1047,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui, format!("button:{id}"), r.rect);
+                    let r = Button::new(label).enabled(enabled).widget(format!("button:{id}")).show(ui);
                     if r.clicked() {
                         choice = Some(c);
                     }
@@ -1165,8 +1165,7 @@ fn show_chooser(app: &mut LightcraftApp, ctx: &egui::Context, problem: &LibraryP
             }
             let selected = chooser.selected.and_then(|i| chooser.libraries.get(i));
             let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                register(ui, format!("button:{id}"), r.rect);
+                let r = Button::new(label).enabled(enabled).widget(format!("button:{id}")).show(ui);
                 if r.clicked() {
                     choice = Some(c);
                 }
@@ -1271,10 +1270,8 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .color(t.canvas),
                 );
                 register(ui, "indicator:temporarySession", r.rect);
-                let b = ui.add(
-                    egui::Button::new(RichText::new(crate::i18n::tr("Open Library…")).color(t.canvas)).fill(egui::Color32::from_black_alpha(40)),
-                );
-                register(ui, "button:libraryReopen", b.rect);
+                // Secondary keeps its own fill and border, so it reads on the amber banner
+                let b = Button::new("Open Library…").small().widget("button:libraryReopen").show(ui);
                 reopen = b.clicked();
             });
         });

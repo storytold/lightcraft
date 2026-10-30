@@ -11,6 +11,7 @@ use lightcraft_raster::Histogram;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::icons::{Icon, paint};
 use crate::render::Slot;
 use crate::state::RightPanel;
@@ -69,7 +70,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
+            if Button::new("Auto").small().widget("button:auto").show(ui).clicked() {
                 let _ = app.run("develop.auto", json!({}));
                 app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
             }
@@ -85,8 +86,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
-                    .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                if Button::new("Reset")
+                    .small()
+                    .widget("button:reset")
+                    .tooltip(&reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                    .show(ui)
                     .clicked()
                 {
                     reset_clicked = true;
@@ -112,7 +116,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
+                    if Button::new("Turn Off").small().widget("button:autoSyncOff").show(ui).clicked() {
                         let _ = app.run("develop.autoSync", json!({"on": false}));
                     }
                 });

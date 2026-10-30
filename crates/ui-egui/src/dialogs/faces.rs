@@ -12,6 +12,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::panels::settings::{check, heading, hint};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -155,8 +156,7 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(message).font(t.font(12.5)).color(t.text_dim));
-            let r = ui.button(button);
-            register(ui, "faces:setup", r.rect);
+            let r = Button::new(button).small().widget("faces:setup").show(ui);
             if r.clicked() {
                 take_step(app, ui.ctx(), step);
             }
@@ -290,8 +290,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let can = app.services.pick_model_file.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Add a model file…")));
-        register(ui, "faces:addModel", r.rect);
+        let r = Button::new("Add a model file…").enabled(can).widget("faces:addModel").show(ui);
         if r.clicked() {
             let _ = app.run("dialog.faceModel", json!({}));
         }
@@ -387,15 +386,13 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(crate::i18n::tr("Remove"));
-                    register(ui, format!("faces:remove:{id}"), r.rect);
+                    let r = Button::new("Remove").widget(format!("faces:remove:{id}")).show(ui);
                     if r.clicked() {
                         let _ = app.run("faces.models.remove", json!({"id": id}));
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {
-                        let r = ui.button("Use");
-                        register(ui, format!("faces:use:{id}"), r.rect);
+                        let r = Button::new("Use").widget(format!("faces:use:{id}")).show(ui);
                         if r.clicked() {
                             let _ = app.run("faces.models.select", json!({"id": id}));
                             app.caches.faces_epoch += 1;
@@ -404,8 +401,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                 } else {
                     match dl_state {
                         Some("running") => {
-                            let r = ui.button(crate::i18n::tr("Cancel"));
-                            register(ui, format!("faces:cancelDownload:{id}"), r.rect);
+                            let r = Button::new("Cancel").widget(format!("faces:cancelDownload:{id}")).show(ui);
                             if r.clicked() {
                                 let _ = app.run("faces.models.downloadCancel", json!({"id": id}));
                                 app.caches.faces_dl_watch.retain(|w| w != &id);
@@ -415,10 +411,10 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         Some("done") => {}
                         _ => {
                             if let Some(url) = m["source"].as_str() {
-                                let r = ui.button(crate::i18n::tr("Open page")).on_hover_text(crate::i18n::tr(
-                                    "Opens the model's own page in your browser, to read about it or get the file yourself.",
-                                ));
-                                register(ui, format!("faces:get:{id}"), r.rect);
+                                let r = Button::new("Open page")
+                                    .tooltip("Opens the model's own page in your browser, to read about it or get the file yourself.")
+                                    .widget(format!("faces:get:{id}"))
+                                    .show(ui);
                                 if r.clicked() {
                                     open_page(app, url);
                                 }
@@ -430,8 +426,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                                     mb(m["sizeBytes"].as_u64()),
                                     if detector { "" } else { ", starts using it" }
                                 );
-                                let r = ui.button(label).on_hover_text(tip);
-                                register(ui, format!("faces:download:{id}"), r.rect);
+                                let r = Button::new(label).tooltip(&tip).widget(format!("faces:download:{id}")).show(ui);
                                 if r.clicked() {
                                     open_download_dialog(app, m);
                                 }
@@ -676,14 +671,21 @@ pub fn name_editor(
                     Some(s) => format!("{name}   {:.0}%", (s * 100.0).max(0.0)),
                     None => name.clone(),
                 };
-                let b = ui.add(egui::Button::new(RichText::new(label).color(t.text_label)).frame(false).min_size(egui::vec2(220.0, 0.0)));
-                register(ui, format!("faceName:pick:{name}"), b.rect);
+                let b = crate::button::Button::new(&label)
+                    .verbatim()
+                    .ghost()
+                    .small()
+                    .align_start()
+                    .min_width(220.0)
+                    .widget(format!("faceName:pick:{name}"))
+                    .show(ui);
                 if b.clicked() {
                     outcome = Editor::Submit(name);
                 }
             }
             if let Some(label) = setup.short() {
-                let b = ui.add(egui::Button::new(RichText::new(label).font(t.font(12.0)).color(t.accent)).frame(false));
+                // a link, as before: accent text without a frame
+                let b = ui.add(egui::Link::new(RichText::new(crate::i18n::tr(label)).font(t.font(12.0)).color(t.accent)));
                 register(ui, "faces:setup", b.rect);
                 if b.clicked() {
                     outcome = Editor::Setup;

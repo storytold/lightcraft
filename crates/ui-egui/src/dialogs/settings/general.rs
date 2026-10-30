@@ -1,5 +1,5 @@
 use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use super::{Button, LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 // ------------------------------------------------------------------------------------- General
 
@@ -22,13 +22,11 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
-        register(ui, "button:settingsOpenLibrary", r.rect);
+        let r = Button::new("Open Library…").enabled(can).widget("button:settingsOpenLibrary").show(ui);
         if r.clicked() {
             let _ = app.run("app.openLibrary", json!({}));
         }
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("New Library…")));
-        register(ui, "button:settingsNewLibrary", r.rect);
+        let r = Button::new("New Library…").enabled(can).widget("button:settingsNewLibrary").show(ui);
         if r.clicked() {
             let _ = app.run("app.newLibrary", json!({}));
         }

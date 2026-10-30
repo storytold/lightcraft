@@ -1,6 +1,6 @@
 use super::display::duration_slider;
 use super::widgets::{check, choices, heading, hint, row};
-use super::{LightcraftApp, Tokens, Value, json, register};
+use super::{Button, LightcraftApp, Tokens, Value, json, register};
 
 /// The Slideshow tab: the slide preview, then the settings, in one column the width of the page
 /// (the page scrolls; a column beside the preview would be wider than the window). Without
@@ -33,8 +33,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ("slideshowExportJpeg", "Export JPEG…", "jpeg"),
             ("slideshowExportVideo", "Export Video…", "video"),
         ] {
-            let r = ui.add_enabled(!running, egui::Button::new(crate::i18n::tr(label)));
-            register(ui, format!("button:{id}"), r.rect);
+            let r = Button::new(label).enabled(!running).widget(format!("button:{id}")).show(ui);
             if r.clicked() {
                 let _ = app.run("dialog.slideshowExport", json!({"format": format}));
             }

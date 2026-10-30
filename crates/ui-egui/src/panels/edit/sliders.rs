@@ -260,18 +260,9 @@ pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize
                     ("▶", Icon::ChevronRight, small),
                     ("▶▶", Icon::ChevronDoubleRight, big),
                 ] {
-                    let r = crate::widgets::arrow_button(ui, "", icon, false);
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::Role::Button,
-                            ui.is_enabled(),
-                            crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)),
-                        )
-                    });
-                    crate::widgets::register(ui, format!("button:quick-{ctl}-{txt}"), r.rect);
-                    if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)))
-                        .clicked()
-                    {
+                    let name = crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label));
+                    let r = crate::button::Button::icon_only(icon, &name).ghost().small().widget(format!("button:quick-{ctl}-{txt}")).show(ui);
+                    if r.clicked() {
                         let _ = app.run("develop.quickAdjust", json!({"control": ctl, "delta": d}));
                     }
                 }
