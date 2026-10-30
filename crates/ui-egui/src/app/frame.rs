@@ -140,6 +140,17 @@ impl LightcraftApp {
                 self.toast(ctx, crate::i18n::tr("Wrote the XMP sidecars that were waiting"));
             }
             self.ui.sidecars_waiting = waiting;
+            // and a row in the activity stack while they wait (one row all along: the re-checks every 10 s neither
+            // drop nor remake it), so a sidecar missing next to a file has somewhere to look
+            if waiting == 0 {
+                self.sidecars_row = None;
+            } else {
+                let session = &self.session;
+                let row = self.sidecars_row.get_or_insert_with(|| {
+                    session.activity.start("xmpWaiting", "Waiting to write XMP sidecars", lightcraft_engine::activity::Cancel::No)
+                });
+                row.progress(0, waiting as u64);
+            }
         }
         // Settings → Import: open the import review when a camera or card is connected
         #[cfg(not(target_arch = "wasm32"))]

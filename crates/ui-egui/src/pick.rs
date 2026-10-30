@@ -155,6 +155,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         if let Err(e) = app.run(&p.command, params) {
             app.toast_error(ctx, e);
         }
+        // the command can start work (a library switch's cache row) after the activity stack was drawn this frame, and the
+        // stack asks for no frame of its own when it is empty or holds only waiting rows: ask for the frame that shows it
+        ctx.request_repaint();
     }
 }
 
@@ -231,6 +234,26 @@ mod tests {
         asked.lock().unwrap()[0].1.send(vec![photo.clone()]).unwrap();
         assert_eq!(import_sources(&mut h), Some(vec![photo]));
         assert!(h.app.pending_picks.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Given a dialog that was answered, running its command asks for another frame: what the command started
+    /// (an activity row) was registered after the stack was drawn.
+    #[test]
+    fn an_answered_dialog_asks_for_the_next_frame() {
+        let dir = std::env::temp_dir().join(format!("lc-pick-repaint-{}", std::process::id()));
+        let photo = photo_in(&dir);
+        let (mut h, asked) = app_with_picker();
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        asked.lock().unwrap()[0].1.send(vec![photo]).unwrap();
+        let ctx = egui::Context::default();
+        // a fresh context asks for its first frames itself: run until it wants no more
+        for _ in 0..8 {
+            ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        }
+        assert!(!ctx.has_requested_repaint(), "a settled context wants no frame");
+        poll(&mut h.app, &ctx);
+        assert!(ctx.has_requested_repaint(), "the answered command's rows need a frame to be drawn");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
