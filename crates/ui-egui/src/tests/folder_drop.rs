@@ -346,3 +346,79 @@ fn a_question_left_open_while_another_library_opens_moves_nothing() {
     assert!(trip.join("beach.png").is_file() && !home.join("beach.png").exists(), "nothing moved");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Answer New Folder on Disk… with `name` inside `parent` (the dialog's own confirm).
+fn make_folder(h: &mut Headless, parent: &Path, name: &str) {
+    h.app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+        title: "New Folder in “trip”".into(),
+        hint: "Folder name (created on disk)".into(),
+        value: name.into(),
+        command: "folder.create".into(),
+        params: json!({"parent": parent.to_string_lossy()}),
+        key: "name".into(),
+    });
+    h.step();
+    let r = h.request("ui.dialog.confirm", json!({}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        h.step();
+    }
+}
+
+/// The photo count of every Folders row for `dir`.
+fn row_counts(h: &mut Headless, dir: &Path) -> Vec<usize> {
+    fn count(nodes: &[lightcraft_catalog::FolderNode], dir: &str, out: &mut Vec<usize>) {
+        for n in nodes {
+            if folder_key(Path::new(&n.path)) == dir {
+                out.push(n.count);
+            }
+            count(&n.children, dir, out);
+        }
+    }
+    let rows = h.app.caches.folder_tree(&h.app.session.catalog);
+    let mut counts = Vec::new();
+    count(&rows, &folder_key(dir), &mut counts);
+    counts
+}
+
+#[test]
+fn a_folder_made_in_the_sidebar_has_its_row_at_once_and_takes_dropped_photos() {
+    let (root, trip, _home) = folders("made");
+    let mut h = app(&[(trip.join("beach.png"), false)]);
+    let made = root.join("fresh");
+    // Given New Folder on Disk… answered with a name
+    make_folder(&mut h, &root, "fresh");
+    // Then the folder exists and its row is in Folders, with no photo in it, brought into view
+    assert!(made.is_dir());
+    assert!(folder_row(&h, &made).is_some(), "{:?}", h.app.widgets.iter().filter(|(w, _)| w.starts_with("source:")).collect::<Vec<_>>());
+    assert_eq!(row_counts(&mut h, &made), vec![0]);
+    assert!(h.app.ui.reveal_folder.is_none(), "the request to show it was taken up");
+    // and photos dragged from the grid onto it move there
+    let beach = id_of(&h, "beach.png");
+    let target = folder_row(&h, &made).expect("the new row stays");
+    drop_beach(&mut h, beach, target);
+    h.step();
+    click(&mut h, "button:dialogOk");
+    assert!(made.join("beach.png").is_file() && !trip.join("beach.png").exists(), "moved on disk");
+    assert_eq!(row_counts(&mut h, &made), vec![1], "one row, one photo");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn making_a_folder_keeps_the_photos_selected_to_move_into_it() {
+    let (root, trip, home) = folders("made-selection");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let made = root.join("fresh");
+    let (beach, garden) = (id_of(&h, "beach.png"), id_of(&h, "garden.png"));
+    let (a, b) = (lightcraft_catalog::PhotoId(beach), lightcraft_catalog::PhotoId(garden));
+    h.app.session.selection = lightcraft_engine::Selection { ids: vec![a, b], active: Some(b) };
+    make_folder(&mut h, &root, "fresh");
+    // Then the view and the selection are as they were: Move Selected Photos Here has something to move
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
+    assert_eq!(h.app.session.selection.ids.len(), 2);
+    let r = h.app.run("photo.moveToFolder", json!({"folder": made.to_string_lossy()})).unwrap();
+    assert_eq!(r["moved"], 2, "{r}");
+    assert!(made.join("beach.png").is_file() && made.join("garden.png").is_file());
+    assert_eq!(row_counts(&mut h, &made), vec![2], "one row, both photos");
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -216,8 +216,8 @@ pub struct UiState {
     /// A keyword just made from the sidebar: Keywords opens down to it, once.
     #[serde(skip)]
     pub reveal_keyword: Option<String>,
-    /// A folder Photo ▸ Show in Folders went to (its Folders row's path): the sidebar's Folders
-    /// section opens down to it and scrolls to it, once.
+    /// A folder Photo ▸ Show in Folders went to, or one just made with New Folder on Disk… (its
+    /// Folders row's path): the sidebar's Folders section opens down to it and scrolls to it, once.
     #[serde(skip)]
     pub reveal_folder: Option<String>,
     /// An album or folder row being dragged in the sidebar (dropped on a folder to move it there).

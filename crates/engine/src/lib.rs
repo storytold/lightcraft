@@ -1143,7 +1143,7 @@ impl Session {
             // what the view shows now is what the next edit is followed from, and what it holds until it is
             // refreshed (taken before stacks are arranged, so a photo folded into a stack is held with it)
             self.base = (!whole || holds).then(|| (view, self.catalog.revision, visible.clone()));
-            if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
+            if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_is_listed() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
                 // an empty grid under the name of a folder that is gone from the sidebar
                 self.source = LibrarySource::All;
@@ -1242,11 +1242,13 @@ impl Session {
         whole
     }
 
-    /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
-    /// shows.
-    fn folder_holds_photos(&self) -> bool {
-        let f = Filter { library_folder: self.library_folder.clone(), ..Default::default() };
-        self.library_folder.is_some() && !self.catalog.query(&f, &Sort::default()).is_empty()
+    /// Whether the folder a `LibraryFolder` source shows is still in the folder list: the library
+    /// holds a photo imported from it, or it was made through LightCraft (and so stays listed
+    /// empty).
+    fn folder_is_listed(&self) -> bool {
+        let Some(folder) = self.library_folder.as_deref() else { return false };
+        let f = Filter { library_folder: Some(folder.to_string()), ..Default::default() };
+        self.catalog.holds_made_folder(folder) || !self.catalog.query(&f, &Sort::default()).is_empty()
     }
 
     /// Photos in the current source (folder, album, …) before the filter bar and search narrow

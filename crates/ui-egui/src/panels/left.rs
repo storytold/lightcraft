@@ -30,7 +30,7 @@ pub(crate) use local::{fs_cached, fs_cached_running, same_folder};
 use local::{local_now, local_rows};
 #[cfg(test)]
 pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
-use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
+use rows::{LIBFOLDER_OPEN_ABOVE, LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
 pub(crate) use rows::{content_width, indent_step, step_for};
 pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
@@ -139,6 +139,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if let Some(path) = app.ui.reveal_folder.take() {
                 app.ui.sidebar.reveal(SidebarSection::Folders);
                 ui.data_mut(|d| d.remove::<Option<String>>(egui::Id::unique(LIBFOLDER_REVEALED)));
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique(LIBFOLDER_OPEN_ABOVE), path.clone()));
                 // …and the sidebar scrolls to it
                 ui.data_mut(|d| d.insert_temp(egui::Id::unique(SCROLL_TO_ROW), format!("libfolder:{path}").to_lowercase()));
             }
