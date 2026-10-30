@@ -263,38 +263,52 @@ fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
 
-/// The most `resync` spends re-validating the suffixes of one line whose whole bytes are not valid
-/// UTF-8 (a real fragment ends at any byte): one line of a modest malformed log that holds a start
-/// of a record in every few bytes used to re-validate the whole remaining suffix at every attempt
-/// (CWE-407). Past the budget the rest of the line stays a torn tail, which the damaged path keeps
-/// and reports, same state as before, minus the CPU.
-const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
+/// The error for a log record holding an op this version doesn't know.
+fn newer_record(seq: u64) -> CatalogError {
+    newer(format!("{LOG} record {seq} holds a change this version doesn't know"))
+}
 
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
-/// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
-/// The record's CRC must match, so damage is never mistaken for it.
-fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
+/// the fragment's length and decoded line, if its sequence continues the log (`seq <= last + 1`).
+/// The record's CRC must match; an unknown op stays `Line::Newer`, never torn data.
+fn resync(line: &[u8], last: u64) -> Option<(usize, Line)> {
     const START: &[u8] = b"{\"seq\":";
-    // One record per line, so a line of valid UTF-8 holds a valid suffix at every record start and
-    // one validation covers every candidate; only a line that is not wholly valid re-checks, and
-    // then up to the budget rather than the suffix length times the candidate count.
-    let whole = std::str::from_utf8(line).ok();
-    let mut spent = 0usize;
-    (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let text = match &whole {
-            Some(t) => &t[i..],
-            None => {
-                if spent >= RESYNC_BUDGET_BYTES {
-                    return None;
+    let end = line.iter().rposition(|b| *b != b'\r')?.checked_add(1)?;
+    let line = line.get(..end)?;
+    if line.last() != Some(&b'}') {
+        return None;
+    }
+    // Find the final object's opening brace in one backwards pass. A nested smart-album
+    // rule value can also start with START, so the last marker alone is not enough.
+    let mut depth = 0usize;
+    let mut quoted = false;
+    for (at, byte) in line.iter().enumerate().rev() {
+        if *byte == b'"' && line.get(..at)?.iter().rev().take_while(|b| **b == b'\\').count().is_multiple_of(2) {
+            quoted = !quoted;
+        } else if !quoted {
+            match byte {
+                b'}' => depth = depth.saturating_add(1),
+                b'{' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        let record = line.get(at..)?;
+                        if at == 0 || !record.starts_with(START) {
+                            return None;
+                        }
+                        let rec = decode_line(std::str::from_utf8(record).ok()?);
+                        let seq = match &rec {
+                            Line::Record(seq, _) | Line::Newer(seq) => *seq,
+                            Line::Bad => return None,
+                        };
+                        return (seq <= last.saturating_add(1)).then_some((at, rec));
+                    }
                 }
-                spent = spent.saturating_add(line.len() - i);
-                std::str::from_utf8(&line[i..]).ok()?
+                _ => {}
             }
-        };
-        let rec = decode_record(text.trim_end_matches('\r'))?;
-        (rec.0 <= last.saturating_add(1)).then_some((i, rec))
-    })
+        }
+    }
+    None
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
@@ -400,28 +414,27 @@ impl Journal {
                 good_end = next;
                 continue;
             }
-            let mut record = line.and_then(decode_record);
-            if record.is_none()
+            let mut record = line.map_or(Line::Bad, decode_line);
+            if matches!(record, Line::Bad)
                 && let Some((at, r)) = resync(&log[pos..line_end], j.seq)
             {
                 // the torn start of a failed append, then the retried records (older builds
-                // appended them right after the fragment)
-                log::warn!("catalog log: skipped a partial record ({at} bytes) left by a failed write");
-                report.torn_fragments += 1;
-                record = Some(r);
-            }
-            if record.is_none()
-                && let Some(Line::Newer(seq)) = line.map(decode_line)
-            {
-                return Err(newer(format!("{LOG} record {seq} holds a change this version doesn't know")));
+                // appended them right after the fragment); an unknown recovered op is refused
+                // below, before any repair is logged
+                if matches!(r, Line::Record(..)) {
+                    log::warn!("catalog log: skipped a partial record ({at} bytes) left by a failed write");
+                    report.torn_fragments += 1;
+                }
+                record = r;
             }
             match record {
-                Some((seq, op)) if seq <= j.seq => {
+                Line::Newer(seq) => return Err(newer_record(seq)),
+                Line::Record(seq, op) if seq <= j.seq => {
                     // already in the snapshot
                     let _ = op;
                     report.stale += 1;
                 }
-                Some((seq, op)) if j.seq.checked_add(1) == Some(seq) => {
+                Line::Record(seq, op) if j.seq.checked_add(1) == Some(seq) => {
                     if catalog.apply(op).is_err() {
                         report.failed += 1;
                     } else {
@@ -433,11 +446,17 @@ impl Journal {
                     // bad record (or a gap): torn tail if nothing good follows, else damage
                     let mut rest_has_good = false;
                     for l in log[next..].split(|b| *b == b'\n') {
-                        match std::str::from_utf8(l).map(|l| decode_line(l.trim_end_matches('\r'))) {
-                            Ok(Line::Record(..)) => rest_has_good = true,
+                        let line = std::str::from_utf8(l).map_or(Line::Bad, |l| decode_line(l.trim_end_matches('\r')));
+                        // a later line can also be a failed append's fragment and its retried record
+                        let line = match line {
+                            Line::Bad => resync(l, u64::MAX).map_or(Line::Bad, |(_, r)| r),
+                            line => line,
+                        };
+                        match line {
+                            Line::Record(..) => rest_has_good = true,
                             // refused before anything is modified
-                            Ok(Line::Newer(seq)) => return Err(newer(format!("{LOG} record {seq} holds a change this version doesn't know"))),
-                            Ok(Line::Bad) | Err(_) => {}
+                            Line::Newer(seq) => return Err(newer_record(seq)),
+                            Line::Bad => {}
                         }
                     }
                     if rest_has_good {
@@ -743,8 +762,8 @@ mod tests_resync {
 
     /// A torn first line may end at any byte and a failed append's retried records may follow its
     /// own start `{"seq":` more than once: `resync` finds the CRC-valid record after a fragment of
-    /// many record starts. UTF-8 is validated once for a valid line, and for a line that isn't
-    /// wholly valid only up to the budget instead of the suffix length per candidate (CWE-407).
+    /// many record starts, in one backwards pass over the line rather than a validation of the
+    /// suffix at every candidate start (CWE-407).
     #[test]
     fn resync_finds_the_retried_record_after_a_fragment_of_many_starts() {
         let op = Op::Batch { ops: vec![] };
@@ -755,9 +774,9 @@ mod tests_resync {
         }
         let fragment = line.len();
         line.extend_from_slice(record.as_bytes());
-        assert_eq!(resync(&line, 4).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+        assert_eq!(resync(&line, 4).map(|(at, rec)| (at, matches!(rec, Line::Record(5, _)))), Some((fragment, true)));
         // a retry is still recognised past `last`: the fragment logs nothing valid, but the CRC
         // matches, so the double `Some` is only reached with `last >= 4`
-        assert_eq!(resync(&line, 100).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+        assert_eq!(resync(&line, 100).map(|(at, rec)| (at, matches!(rec, Line::Record(5, _)))), Some((fragment, true)));
     }
 }

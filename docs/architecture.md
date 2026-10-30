@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check; linear journal suffix recovery, #2124 / #2153) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -29,6 +29,17 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
 - **Persistence** (`crates/catalog/src/journal.rs`): an append-only journal of human-readable
   operations plus periodic snapshots, compacted in the background; torn appends and crashes are
   tested (`tests_torn_append.rs`, `tests_journal.rs`). A lock file guards against two writers.
+  Recovery of a failed append's fragment scans backwards through the final JSON object, then
+  validates that record's CRC and sequence: it must be stale or the next expected operation.
+  The scan is linear in the damaged line length, including escaped strings and nested smart-album
+  values; repeated record markers do not cause repeated suffix parses. CRLF lines are accepted,
+  and a complete final record without a newline is kept and given a newline before later appends.
+  A CRC-valid stale-or-next suffix whose operation this build does not understand refuses the open
+  as a newer-version library before logging a fragment repair or changing any catalog files;
+  its snapshot and complete log, including the fragment, are left untouched.
+  A bad CRC or sequence gap still stops replay; if good records follow (a later fragment and its
+  retried record count as one), the original log is preserved as damaged rather than replaying past the gap. Out-of-range snapshot counters are
+  refused as corrupt, and counter increments are checked for overflow. The catalog format is unchanged.
 - **Edits** are a `develop::Settings` value (every slider is a control spec with id, range and
   default), normalized to image coordinates so previews and exports match. Process versions
   (`docs/process-versions.md`) keep old edits rendering the same after a retune.
@@ -88,5 +99,6 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
+| 2026-10-21 | patch | Failed-append suffix recovery is linear in the damaged line length (#2124, #2153): stale fragments, line endings, unknown ops and damage handling; catalog format unchanged |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

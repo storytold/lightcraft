@@ -168,6 +168,15 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### A library with a damaged save opens quickly
+- A library whose journal holds a long line left by a failed save no longer stalls while it opens: recovering the
+  changes after it now takes time in proportion to the line's length, not its square (issue #2124).
+- If that partial entry sits just before a complete change from a newer LightCraft, this build refuses to open the
+  library and asks you to update, rather than dropping that change as an incomplete save. The catalog snapshot and
+  journal are left unchanged, including when the final entry has no newline.
+- A change retried after a failed save is no longer lost when an earlier line of the journal is damaged: the journal is
+  kept as a `.damaged` copy, as for other damage.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
