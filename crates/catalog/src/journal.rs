@@ -47,6 +47,8 @@
 //! snapshot in all, where compacting every 2000 records rewrote it once per 2000 photos. (That
 //! holds up to a snapshot of four times [`SnapshotPolicy::log_cap_bytes`], 1 GB; beyond it the log
 //! reaches the cap first, and the snapshot is rewritten once per 256 MB of log.)
+//! Over a store whose append rewrites the whole file ([`Store::appends_in_place`] false: the
+//! browser's) the journal compacts by the log's length alone ([`SnapshotPolicy::whole_file_appends`]).
 //!
 //! Closing a library compacts its log too, unless the snapshot is large and the log still short
 //! ([`Journal::wants_snapshot_on_close`]): quitting after a few changes doesn't rewrite a large
