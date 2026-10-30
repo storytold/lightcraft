@@ -1910,7 +1910,6 @@
   "Skipped: files that can't be read": "已跳过：无法读取的文件",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "此文件夹不存在：它已被移动或重命名，或其磁盘未连接。",
   "Relink photos whose file was renamed or moved": "重新链接文件被重命名或移动的照片",
-  "A folder is already being synchronized": "已有文件夹正在同步",
   "Synchronizing…": "正在同步…",
   "Relinked": "已重新链接",
   "Removed": "已移除",
@@ -1919,8 +1918,6 @@
   "Stopped": "已停止",
   "Stopped by an error (see the log)": "因错误而停止（见日志）",
   "Not saved": "未保存",
-  "A folder is being synchronized": "正在同步文件夹",
-  "Wait for the import to finish": "请等待导入完成",
   "Appearance": "外观",
   "Appearance Mode": "外观模式",
   "Sync with System": "与系统同步",
@@ -2200,5 +2197,9 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Queued: it starts when the task ahead of it ends": "已加入队列：前一个任务结束后开始",
+  "Another library was opened: nothing was done": "已打开另一个图库：未执行任何操作",
+  "Photos of the folder changed while it was read: nothing was done": "读取期间文件夹中的照片发生了变化：未执行任何操作",
+  "Starts next": "接下来开始"
 }

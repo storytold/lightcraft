@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Queued: it starts after {n} more": "已加入佇列：再過 {n} 個後開始",
+  "Left alone: {n} (synchronize again to review them)": "未處理：{n}（再次同步以檢視）",
+  "Starts after {n} more": "再過 {n} 個後開始",
+  "Remove from Queue: {label}": "從佇列中移除：{label}"
 }

@@ -2098,7 +2098,6 @@
   "Skipped: files that can't be read": "Omitidos: archivos que no se pueden leer",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Esta carpeta no está: se movió o se le cambió el nombre, o su disco no está conectado.",
   "Relink photos whose file was renamed or moved": "Volver a vincular fotos cuyo archivo se renombró o movió",
-  "A folder is already being synchronized": "Ya se está sincronizando una carpeta",
   "Synchronizing…": "Sincronizando…",
   "Relinked": "Revinculadas",
   "Removed": "Quitadas",
@@ -2107,8 +2106,6 @@
   "Stopped": "Detenido",
   "Stopped by an error (see the log)": "Detenido por un error (ver el registro)",
   "Not saved": "Sin guardar",
-  "A folder is being synchronized": "Se está sincronizando una carpeta",
-  "Wait for the import to finish": "Esperar a que termine la importación",
   "Appearance": "Apariencia",
   "Appearance Mode": "Modo de apariencia",
   "Sync with System": "Sincronizar con el sistema",
@@ -2358,5 +2355,9 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Queued: it starts when the task ahead of it ends": "En cola: empieza cuando termine la tarea anterior",
+  "Another library was opened: nothing was done": "Se abrió otra biblioteca: no se hizo nada",
+  "Photos of the folder changed while it was read: nothing was done": "Las fotos de la carpeta cambiaron mientras se leía: no se hizo nada",
+  "Starts next": "Empieza la siguiente"
 }
