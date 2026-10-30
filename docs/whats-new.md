@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Pressing at the search box's edge no longer moves the window
+- On macOS the top bar is the window's title bar, and the search box's padding around its text still belonged to
+  it: a press there, where a text selection often starts, dragged the whole window instead. The whole box is now
+  the search field's. A click anywhere in it puts the cursor in the field, and only the bar's empty space moves the
+  window (#2807).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

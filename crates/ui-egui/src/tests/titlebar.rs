@@ -191,3 +191,36 @@ fn a_panel_floating_over_the_bar_keeps_the_window_from_moving() {
     play(&mut h);
     assert!(!hover(&mut h, empty), "the floating panel covers the empty bar there");
 }
+
+// Scenario: the search box's padding, around the text, is the field's too: pressing there (where
+// a selection often starts) never moves the window, and a click there puts the cursor in the
+// field (#2807)
+#[test]
+fn the_search_box_edges_keep_the_window_from_moving() {
+    let mut h = integrated();
+    let r = widget(&h, "field:search");
+    let hover = |h: &mut Headless, p: egui::Pos2| {
+        h.events.push(egui::Event::PointerMoved(p));
+        play(h);
+        craft_window::title_bar::window_movable(&h.view.ctx)
+    };
+    // the painted box is 28 high, centred on the field, and 10 wider on each side
+    let left_edge = egui::pos2(r.left() - 5.0, r.center().y);
+    let top_edge = egui::pos2(r.center().x, r.center().y - 12.0);
+    assert!(r.top() > top_edge.y, "the top edge point is outside the text field: {r:?}");
+    assert!(!hover(&mut h, left_edge), "the box's left padding");
+    assert!(!hover(&mut h, top_edge), "the box's top padding");
+    assert!(!hover(&mut h, r.center()), "the text field");
+    // above the box, the bar is empty again
+    assert!(hover(&mut h, egui::pos2(r.center().x, r.center().y - 18.0)), "the empty bar above the box moves the window");
+    h.request("ui.click", json!({"x": left_edge.x, "y": left_edge.y}), T);
+    play(&mut h);
+    let field = crate::text_field::id("field:search");
+    assert!(h.view.ctx.memory(|m| m.has_focus(field)), "a click on the box's edge focuses the field");
+    assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
+    // the box takes no keyboard focus: Shift+Tab from the field goes past it
+    h.request("ui.key", json!({"key": "Tab", "shift": true}), T);
+    play(&mut h);
+    let focused = h.view.ctx.memory(|m| m.focused());
+    assert!(focused.is_some_and(|f| f != field && f != field.with("box")), "{focused:?}");
+}

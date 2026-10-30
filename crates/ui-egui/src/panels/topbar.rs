@@ -89,6 +89,12 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect
     if std::mem::take(&mut app.ui.focus_search) {
         ui.memory_mut(|m| m.request_focus(id));
     }
+    // The whole painted box is the field's, not the title bar's: the text field below fills only
+    // its middle, so without this a press on its padding (where a selection often starts) landed
+    // on the empty bar and, on macOS, moved the window (#2807). A click there focuses the field.
+    // `Sense::CLICK` and not `Sense::click()`: not focusable, so Tab still stops once, on the field,
+    // and screen readers get no second node beside it.
+    let bx = ui.interact(sr, id.with("box"), Sense::CLICK).on_hover_cursor(egui::CursorIcon::Text);
     let focused = ui.memory(|m| m.has_focus(id));
     ui.painter().rect(
         sr,
@@ -115,6 +121,10 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect
         .text_color(t.text)
         .show(&mut child)
         .response;
+    // after the field: it gives up the focus on a click outside its own rect
+    if bx.clicked() {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
     if resp.changed() {
         let q = app.ui.search.clone();
         let _ = app.run("library.filter", json!({"text": q}));
