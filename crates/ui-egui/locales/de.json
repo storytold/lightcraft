@@ -1638,7 +1638,8 @@
   "Watermark": "Wasserzeichen",
   "Wednesday": "Mittwoch",
   "What's New": "Neuigkeiten",
-  "When rated or hovered": "Bei Bewertung oder unter dem Mauszeiger",
+  "Stars on hover": "Sterne beim Überfahren",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Sterne beim Überfahren: Flaggen und Farbmarkierungen sind immer sichtbar; die Sterne und das Bearbeitet-Zeichen erscheinen, solange ein Foto überfahren oder ausgewählt ist.",
   "White Balance": "Weißabgleich",
   "White Balance Selector": "Weißabgleich-Pipette",
   "White Balance Selector (W)": "Weißabgleich-Pipette (W)",
@@ -3440,5 +3441,10 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "Stack — click to expand": "Stapel — Klicken zum Aufklappen",
+  "Stack — click to collapse": "Stapel — Klicken zum Zuklappen",
+  "Virtual copy": "Virtuelle Kopie",
+  "Right-click ▸ Locate Missing File… to find it again.": "Rechtsklick → Fehlende Datei suchen…, um sie wiederzufinden.",
+  "Right-click ▸ Reload from Disk to try again.": "Rechtsklick → Vom Datenträger neu laden, um es erneut zu versuchen."
 }

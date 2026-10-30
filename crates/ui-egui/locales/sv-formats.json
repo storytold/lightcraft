@@ -22,7 +22,6 @@
   "+{} more": "+{} till",
   ", {failed} file{} not readable": ", {failed} fil{} kunde inte läsas",
   ", {} label": ", {} etikett",
-  ", {} star{}": ", {} stjärna{}",
   "1 task is still running: {names}. Quitting stops it.": "1 uppgift körs fortfarande: {names}. Om du avslutar stoppas den.",
   "; {kept} already had a location": "; {kept} hade redan en plats",
   "; {n} gained synonyms": "; {n} fick synonymer",
@@ -305,5 +304,6 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  ", rating {} of 5": ", betyg: {} av 5"
 }

@@ -198,7 +198,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} photo{} similaire(s) · Affichage → Effacer les filtres pour tout voir",
   "Moved; {} photo(s) relinked": "Déplacé ; {} photo(s) de nouveau associée(s)",
   "{} label (click more labels to show any of them)": "Étiquette {} (cliquez sur « autres étiquettes » pour afficher celles de votre choix)",
-  ", {} star{}": ", {} étoile{}",
   ", {} label": ", étiquette {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Téléchargement depuis {host}. Une fois le téléchargement terminé et vérifié, LightCraft l’installe, {after}.",
   "{:.1} MB": "{:.1} Mo",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  ", rating {} of 5": ", note : {} sur 5"
 }

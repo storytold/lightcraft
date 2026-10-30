@@ -198,7 +198,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Ähnliche Fotos: {n}{:.0} · Ansicht → Filter löschen zeigt alle Fotos",
   "Moved; {} photo(s) relinked": "Verschoben; {} Foto(s) neu verknüpft",
   "{} label (click more labels to show any of them)": "Farbmarkierung {} (weitere Farbmarkierungen auswählen, um alle passenden Fotos zu zeigen)",
-  ", {} star{}": ", Sterne: {}{:.0}",
   ", {} label": ", Farbmarkierung: {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Lädt von {host} herunter. Sobald es angekommen und geprüft ist, installiert LightCraft es und {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  ", rating {} of 5": ", Bewertung: {} von 5"
 }

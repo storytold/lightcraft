@@ -14,7 +14,6 @@
   "+{} more": "+{} ещё",
   ", {failed} file{} not readable": ", не читается файлов: {failed}{:.0}",
   ", {} label": ", метка: {}",
-  ", {} star{}": ", звёзд: {}{:.0}",
   "; {kept} already had a location": "; уже имели местоположение: {kept}",
   "; {outside} outside its time range": "; вне временного диапазона трека: {outside}",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}: PR: {}, коммитов: {}, строк: +{} / −{} (Δ {}), бинарных файлов: +{} / −{}, {} – {}",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  ", rating {} of 5": ", оценка: {} из 5"
 }

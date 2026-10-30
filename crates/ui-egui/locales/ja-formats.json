@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "似た写真{n}枚{:.0}・すべて表示するには「表示 → フィルターを解除」",
   "Moved; {} photo(s) relinked": "移動しました。{}枚の写真の参照先を更新しました",
   "{} label (click more labels to show any of them)": "{}ラベル（ほかのラベルもクリックすると、いずれかに一致する写真を表示）",
-  ", {} star{}": "、星{}つ{:.0}",
   ", {} label": "、{}ラベル",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "{host} からダウンロードします。届いて確認が済むと、LightCraft がインストールし、{after}。",
   "{:.1} MB": "{:.1} MB",
@@ -305,5 +304,6 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  ", rating {} of 5": "、評価: 5段階中{}"
 }

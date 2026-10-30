@@ -1335,7 +1335,8 @@
   "Watermark": "Водяной знак",
   "Wednesday": "Среда",
   "What's New": "Что нового",
-  "When rated or hovered": "При оценке или наведении",
+  "Stars on hover": "Звёзды при наведении",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Звёзды при наведении: флаги и цветные метки видны всегда; звёзды и значок правки появляются, пока фото под курсором или выбрано.",
   "White Balance": "Баланс белого",
   "White Balance Selector": "Пипетка баланса белого",
   "White Balance Selector (W)": "Пипетка баланса белого (W)",
@@ -2349,5 +2350,10 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Stack — click to expand": "Стопка — щёлкните, чтобы развернуть",
+  "Stack — click to collapse": "Стопка — щёлкните, чтобы свернуть",
+  "Virtual copy": "Виртуальная копия",
+  "Right-click ▸ Locate Missing File… to find it again.": "Щёлкните правой кнопкой → Указать отсутствующий файл…, чтобы найти его снова.",
+  "Right-click ▸ Reload from Disk to try again.": "Щёлкните правой кнопкой → Перезагрузить с диска, чтобы повторить попытку."
 }

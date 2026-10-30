@@ -22,7 +22,6 @@
   "+{} more": "+{} nữa",
   ", {failed} file{} not readable": ", {failed} tệp{:.0} không đọc được",
   ", {} label": ", nhãn {}",
-  ", {} star{}": ", {} sao{:.0}",
   "1 task is still running: {names}. Quitting stops it.": "Còn 1 tác vụ đang chạy: {names}. Thoát sẽ dừng tác vụ.",
   "; {kept} already had a location": "; {kept} đã có vị trí",
   "; {n} gained synonyms": "; {n} có thêm từ đồng nghĩa",
@@ -305,5 +304,6 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  ", rating {} of 5": ", xếp hạng: {} trên 5"
 }
