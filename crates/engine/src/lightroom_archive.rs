@@ -87,6 +87,7 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<Stored, String> {
             }
             let matched = entry.path.clone();
             problems.extend(prune_existing(&managed, Some(&matched)));
+            lightcraft_catalog::safe_file::sync_dir(directory);
             return Ok(Stored::new(matched, problems));
         }
     }
@@ -134,7 +135,10 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<Stored, String> {
         let _ = remove_managed_file(&temporary);
         return Err(error.to_string());
     }
-    Ok(Stored::new(destination, clean_up_after_publish(&temporary, &quarantined)))
+    let problems = clean_up_after_publish(&temporary, &quarantined);
+    // the archive's name (and the retired ones' removal) survives a power loss or an unplugged drive
+    lightcraft_catalog::safe_file::sync_dir(directory);
+    Ok(Stored::new(destination, problems))
 }
 
 /// Remove the temporary and the quarantined old archives once the new archive is published, and
@@ -759,6 +763,29 @@ mod tests {
             assert!(problem.starts_with(&format!("could not retire {} (left as {})", old(slot).display(), held(slot).display())), "{problems:?}");
         }
         assert!(!held(1).exists());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// The folder is synced once the archive has its name (and old ones are retired), so a power
+    /// loss can't leave the archive the import reports without that name; also when a matching
+    /// archive is reused and old ones are retired.
+    #[test]
+    fn the_archive_folder_is_synced_after_publishing_and_after_reuse() {
+        let path = tempdir();
+        let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+        let syncs = lightcraft_catalog::safe_file::syncs_on_this_thread;
+        // what writing the temporary alone syncs (the file and its folder)
+        let scratch = path.join(".scratch.tmp");
+        let before = syncs();
+        write_archive(&scratch, &rich_data()).unwrap();
+        let writing = syncs() - before;
+        fs::remove_file(scratch).unwrap();
+        let before = syncs();
+        let first = store(&path, &rich_data()).unwrap().path;
+        assert_eq!(syncs() - before, writing + 1, "published: the folder is synced after the name is given");
+        let before = syncs();
+        assert_eq!(store(&path, &rich_data()).unwrap().path, first);
+        assert_eq!(syncs() - before, writing + 1, "reused: the folder is synced after the cleanup");
         fs::remove_dir_all(path).unwrap();
     }
 
