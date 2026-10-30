@@ -5,6 +5,7 @@ use lightcraft_catalog::{Album, AlbumId, ColorLabel, CopyrightStatus, Filter, Fl
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, ok, str_param};
+use crate::filter_state::SourceOwned;
 use crate::{LibrarySource, Result, Selection, Session};
 
 mod filters;
@@ -34,5 +35,5 @@ mod rated_out_tests;
 mod enable_filters_tests;
 
 #[cfg(test)]
-#[path = "library/tests_source_album_filter.rs"]
-mod source_album_filter_tests;
+#[path = "library/tests_filter_reconcile.rs"]
+mod filter_reconcile_tests;

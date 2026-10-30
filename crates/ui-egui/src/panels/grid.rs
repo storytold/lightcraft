@@ -288,7 +288,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (generation, ids) = app.session.visible_shared();
     // header: source title + count
     let sel_n = app.session.selection.ids.len();
-    let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
+    let chips = lightcraft_engine::filter_chips(app.session.filter(), &app.session.catalog);
     let total = app.session.source_total();
     let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
     let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
@@ -329,7 +329,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 _ => "Remove a filter above, or choose Clear all".to_string(),
             };
             super::empty_message(ui, ui.max_rect(), "No photos match the active filters", &body);
-        } else if app.session.filter != Default::default() {
+        } else if *app.session.filter() != Default::default() {
             super::empty_message(
                 ui,
                 ui.max_rect(),

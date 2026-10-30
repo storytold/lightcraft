@@ -59,7 +59,7 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
     match smart {
         Some(base) => {
             // overlay the fields the filter bar changed
-            let cur = serde_json::to_value(&s.filter).unwrap_or_default();
+            let cur = serde_json::to_value(s.filter()).unwrap_or_default();
             let def = serde_json::to_value(Filter::default()).unwrap_or_default();
             let mut patch = serde_json::Map::new();
             if let (Some(c), Some(d)) = (cur.as_object(), def.as_object()) {
@@ -74,7 +74,7 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
             merge_filter(&base, &Value::Object(patch), "").unwrap_or(base)
         }
         None => {
-            let mut f = s.source.to_filter(&s.filter, &s.catalog);
+            let mut f = s.source.to_filter(s.filter(), &s.catalog);
             f.deleted = false;
             if s.source == LibrarySource::LibraryFolder {
                 f.library_folder = s.library_folder.clone();

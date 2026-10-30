@@ -39,6 +39,7 @@ mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
 pub mod files;
+pub mod filter_state;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
@@ -231,9 +232,9 @@ pub struct Session {
     pub auto_sync: bool,
     pub catalog: Catalog,
     pub source: LibrarySource,
-    pub filter: Filter,
-    /// The filter `library.toggleFilters` put aside (Library > Enable Filters off); not persisted.
-    pub(crate) shelved_filter: Option<Filter>,
+    /// The filter bar's filter and the one `library.toggleFilters` put aside (Library > Enable Filters off); not
+    /// persisted. Written only through its methods, which keep it clear of what the source shown owns.
+    pub(crate) filters: filter_state::FilterState,
     pub sort: Sort,
     pub selection: Selection,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
@@ -450,8 +451,7 @@ impl Session {
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,
-            filter: Filter::default(),
-            shelved_filter: None,
+            filters: Default::default(),
             sort: Sort::default(),
             selection: Selection::default(),
             visible: Vec::new().into(),
@@ -1058,15 +1058,29 @@ impl Session {
 
     // ---------------------------------------------------------------- library view
 
+    /// The filter bar's filter. It changes through the commands (`library.filter`, `filter.applyPreset`,
+    /// `library.clearFilter`, `library.toggleFilters`, `library.source`…), never beside them.
+    pub fn filter(&self) -> &Filter {
+        self.filters.current()
+    }
+
+    /// Show `f` as the filter bar's filter, over the source shown: what that source owns is left out
+    /// ([`LibrarySource::reconcile`]) and returned. Setting a filter forgets the one Enable Filters put aside.
+    pub fn set_filter(&mut self, f: Filter) -> Vec<filter_state::SourceOwned> {
+        self.filters.set(self.source, f)
+    }
+
     /// Library > Enable Filters is off: a filter is put aside (`library.toggleFilters`).
     pub fn filters_off(&self) -> bool {
-        self.shelved_filter.is_some()
+        self.filters.is_off()
     }
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
-        let mut key =
-            (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+        let mut key = (
+            self.catalog.revision,
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filters.current(), self.sort, self.browse, self.library_folder),
+        );
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -1092,14 +1106,14 @@ impl Session {
             // Use this same value to evaluate relative rules and stamp the result.
             let now = current_now.unwrap_or_else(|| (self.clock)());
             lightcraft_catalog::rules::set_now(Some(now.clone()));
-            let f = self.view_filter(self.source, &self.filter);
+            let f = self.view_filter(self.source, self.filters.current());
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
             // a view that is only a question, else in the album or folder shown. Taking a photo out of an album
             // or the library takes it out of the view at once, held or not.
             // (only a view that asks something can lose a photo to an edit: the others are queried as ever, at no
             // cost for the hold)
-            let holds = self.hold_view && (asks || self.filter != Filter::default());
+            let holds = self.hold_view && (asks || *self.filters.current() != Filter::default());
             let within = holds.then(|| {
                 if asks {
                     self.view_filter(LibrarySource::All, &Filter::default())
@@ -1113,7 +1127,7 @@ impl Session {
             // Views whose order or photos are not the query's alone are worked out whole each time: an album in
             // its own order, Recently Added (how far back it reaches moves with every import), Missing Photos.
             let own_order = matches!(self.source, LibrarySource::Album(a) if self.sort.key == lightcraft_catalog::SortKey::CaptureDate
-                && self.filter == Filter::default()
+                && *self.filters.current() == Filter::default()
                 && self.catalog.album(a).is_some_and(|al| !al.is_smart()));
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
@@ -1155,7 +1169,7 @@ impl Session {
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
                 && !al.is_smart()
-                && self.filter == Filter::default()
+                && *self.filters.current() == Filter::default()
             {
                 // each photo's place looked up, not searched for (a big album sorted in O(n log n))
                 let mut place: std::collections::HashMap<PhotoId, usize> = std::collections::HashMap::with_capacity(al.photos.len());
@@ -1255,7 +1269,7 @@ impl Session {
         if self.source == LibrarySource::Missing {
             return None;
         }
-        if self.filter == Filter::default() && !self.hold_view {
+        if *self.filters.current() == Filter::default() && !self.hold_view {
             // nothing narrows the source: what the view lists is all of it, and is counted already (not a view
             // that holds photos that stopped matching: those are not of the source any more)
             let _ = self.visible();

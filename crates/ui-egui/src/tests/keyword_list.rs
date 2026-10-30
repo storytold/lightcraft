@@ -101,7 +101,7 @@ fn the_arrow_shows_the_photos_with_the_keyword() {
     let (mut h, _) = keywords_panel();
     ask(&mut h, "ui.hoverWidget", json!({"id": "keywordRow:mountains"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordShow:mountains"}));
-    assert_eq!(h.app.session.filter.keyword.as_deref(), Some("mountains"));
+    assert_eq!(h.app.session.filter().keyword.as_deref(), Some("mountains"));
 }
 
 fn find(h: &mut Headless, text: &str) {

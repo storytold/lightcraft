@@ -1536,7 +1536,7 @@ fn folders_section_lists_where_photos_were_imported_from_and_fills_the_grid() {
     assert_eq!(h.app.session.visible().len(), 2, "only the photos imported from that folder");
     assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder);
     assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip"));
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "a source, not a filter");
+    assert_eq!(*h.app.session.filter(), lightcraft_catalog::Filter::default(), "a source, not a filter");
     click(&mut h, "source:all");
     assert_eq!(h.app.session.visible().len(), 3, "All Photos shows everything again");
     // the section folds like the others
@@ -2131,7 +2131,7 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     let r = h.request("ui.clickWidget", json!({"id": row}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "{key}");
+    assert_eq!(*h.app.session.filter(), lightcraft_catalog::Filter::default(), "{key}");
 }
 
 /// Issue #501: use the actual context-menu button on the populated demo folder.

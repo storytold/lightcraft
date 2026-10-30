@@ -14,7 +14,7 @@
 //! * A labelled folder keeps its label when it is renamed or moved on disk, and so do the folders
 //!   inside it; undo puts the labels back where they were.
 
-use lightcraft_catalog::{Op, Photo, Source};
+use lightcraft_catalog::{Filter, Op, Photo, Source};
 use serde_json::json;
 
 use crate::{LibrarySource, Session, filter_chips};
@@ -77,7 +77,7 @@ fn choosing_a_folder_shows_its_photos_and_a_chip_that_clears_it() {
     assert_eq!(s.visible().len(), 3);
     let r = s.execute("library.filter", &json!({"libraryFolder": "/pics/trip"})).unwrap();
     assert_eq!(r["count"], 2);
-    let chips = filter_chips(&s.filter, &s.catalog);
+    let chips = filter_chips(s.filter(), &s.catalog);
     assert_eq!(chips.len(), 1);
     assert_eq!(chips[0].label, "Folder: pics/trip", "two names, so two folders called trip are told apart");
     s.execute("library.filter", &chips[0].clear).unwrap();
@@ -151,11 +151,11 @@ fn removing_the_folder_that_is_chosen_clears_the_choice_but_a_parent_stays() {
     let mut s = session();
     s.execute("library.filter", &json!({"libraryFolder": "/pics/trip"})).unwrap();
     s.execute("library.removeFolder", &json!({"path": "/pics/trip"})).unwrap();
-    assert_eq!(s.filter.library_folder, None, "no empty grid under a chip for a folder that is gone");
+    assert_eq!(s.filter().library_folder, None, "no empty grid under a chip for a folder that is gone");
     let mut s = session();
     s.execute("library.filter", &json!({"libraryFolder": "/pics"})).unwrap();
     s.execute("library.removeFolder", &json!({"path": "/pics/trip"})).unwrap();
-    assert_eq!(s.filter.library_folder.as_deref(), Some("/pics"));
+    assert_eq!(s.filter().library_folder.as_deref(), Some("/pics"));
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn a_folder_that_spans_several_disks_is_removed_only_when_asked_for_by_name() {
 fn the_folder_filter_takes_only_a_text_path() {
     let mut s = session();
     assert!(s.execute("library.filter", &json!({"libraryFolder": 5})).is_err());
-    assert_eq!(s.filter.library_folder, None, "refused, nothing changed");
+    assert_eq!(s.filter().library_folder, None, "refused, nothing changed");
     s.execute("library.filter", &json!({"libraryFolder": "   "})).unwrap();
     assert_eq!(s.visible().len(), 3, "a blank path is no choice");
     s.execute("library.filter", &json!({"libraryFolder": "."})).unwrap();
@@ -227,10 +227,10 @@ fn a_renamed_folder_stays_the_chosen_one_and_undo_follows_it_back() {
     s.execute("library.filter", &json!({"libraryFolder": trip})).unwrap();
     assert_eq!(s.visible().len(), 2);
     s.execute("folder.rename", &json!({"path": trip, "name": "holiday"})).unwrap();
-    same_folder(s.filter.library_folder.as_deref(), &renamed, "the choice follows the folder");
+    same_folder(s.filter().library_folder.as_deref(), &renamed, "the choice follows the folder");
     assert_eq!(s.visible().len(), 2, "and still shows its photos");
     s.execute("edit.undo", &json!({})).unwrap();
-    same_folder(s.filter.library_folder.as_deref(), &trip, "the choice is the same folder");
+    same_folder(s.filter().library_folder.as_deref(), &trip, "the choice is the same folder");
     assert_eq!(s.visible().len(), 2);
 }
 
@@ -244,31 +244,31 @@ fn a_moved_folder_keeps_a_chosen_subfolder_chosen() {
     add(&mut s, &format!("{day1}/b.jpg"));
     s.execute("library.filter", &json!({"libraryFolder": day1})).unwrap();
     s.execute("folder.move", &json!({"path": dir.path("trip"), "into": dir.path("archive")})).unwrap();
-    same_folder(s.filter.library_folder.as_deref(), &moved, "the subfolder follows its parent");
+    same_folder(s.filter().library_folder.as_deref(), &moved, "the subfolder follows its parent");
     assert_eq!(s.visible().len(), 1);
     s.execute("edit.undo", &json!({})).unwrap();
-    same_folder(s.filter.library_folder.as_deref(), &day1, "the choice is the same folder");
+    same_folder(s.filter().library_folder.as_deref(), &day1, "the choice is the same folder");
 }
 
 #[test]
 fn following_a_folder_reads_both_spellings_the_same_way() {
     // the choice was typed with a `..` in it; the folder that moved was not
     let mut s = Session::new();
-    s.filter.library_folder = Some("/a/x/../b/sub".into());
+    s.set_filter(Filter { library_folder: Some("/a/x/../b/sub".into()), ..Default::default() });
     crate::cmd::browse::follow_folder(&mut s, "/a/b", "/a/c");
-    same_folder(s.filter.library_folder.as_deref(), "/a/c/sub", "a subfolder stays a subfolder, never widens to its parent");
-    s.filter.library_folder = Some("/elsewhere/b".into());
+    same_folder(s.filter().library_folder.as_deref(), "/a/c/sub", "a subfolder stays a subfolder, never widens to its parent");
+    s.set_filter(Filter { library_folder: Some("/elsewhere/b".into()), ..Default::default() });
     crate::cmd::browse::follow_folder(&mut s, "/a/b", "/a/c");
-    assert_eq!(s.filter.library_folder.as_deref(), Some("/elsewhere/b"), "other folders are left alone");
+    assert_eq!(s.filter().library_folder.as_deref(), Some("/elsewhere/b"), "other folders are left alone");
 }
 
 #[test]
 fn following_a_folder_keeps_the_case_of_the_subfolder_names() {
     // Windows compares folders in lower case; the name the user sees must not change with it
     let mut s = Session::new();
-    s.filter.library_folder = Some("/A/Trip/Day1".into());
+    s.set_filter(Filter { library_folder: Some("/A/Trip/Day1".into()), ..Default::default() });
     crate::cmd::browse::follow_folder(&mut s, "/A/Trip", "/B");
-    assert_eq!(s.filter.library_folder.as_deref(), Some(std::path::Path::new("/B").join("Day1").to_str().unwrap()));
+    assert_eq!(s.filter().library_folder.as_deref(), Some(std::path::Path::new("/B").join("Day1").to_str().unwrap()));
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn choosing_a_folder_replaces_the_source_the_way_an_album_does() {
     let r = source_folder(&mut s, "/pics/trip");
     assert_eq!(r["count"], 2, "the folder's photos, whatever was shown before");
     assert_eq!((s.source, s.library_folder.as_deref()), (LibrarySource::LibraryFolder, Some("/pics/trip")));
-    assert!(filter_chips(&s.filter, &s.catalog).is_empty(), "a source is not a filter chip");
+    assert!(filter_chips(s.filter(), &s.catalog).is_empty(), "a source is not a filter chip");
     let state = s.execute("library.state", &json!({})).unwrap();
     assert_eq!((state["sourceLabel"].as_str(), state["libraryFolder"].as_str()), (Some("pics/trip"), Some("/pics/trip")), "agents see which folder");
     // the filter bar narrows it further, as it does an album
@@ -371,7 +371,7 @@ fn a_folder_source_and_a_folder_filter_never_disagree() {
     let mut s = session();
     s.execute("library.filter", &json!({"libraryFolder": "/pics/home"})).unwrap();
     source_folder(&mut s, "/pics/trip");
-    assert_eq!(s.filter.library_folder, None, "choosing a folder drops a folder filter left over");
+    assert_eq!(s.filter().library_folder, None, "choosing a folder drops a folder filter left over");
     assert!(s.execute("library.filter", &json!({"libraryFolder": "/pics/home"})).is_err(), "one folder at a time");
     assert_eq!(s.visible().len(), 2);
     s.execute("library.filter", &json!({"libraryFolder": null, "rating": 0})).unwrap();
@@ -482,7 +482,7 @@ fn the_state_names_a_folder_only_while_it_is_shown() {
 fn a_blank_folder_filter_is_no_filter() {
     let mut s = session();
     s.execute("library.filter", &json!({"libraryFolder": "  "})).unwrap();
-    assert_eq!(s.filter, lightcraft_catalog::Filter::default(), "no hidden 'filters active' state");
+    assert_eq!(*s.filter(), lightcraft_catalog::Filter::default(), "no hidden 'filters active' state");
 }
 
 /// The label `library.folders` reports for the row at `path`.

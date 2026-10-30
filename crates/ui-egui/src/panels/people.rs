@@ -63,7 +63,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let thumb = app.ui.thumb_size;
-    let people = app.caches.people(&app.session.catalog, &app.session.filter);
+    let people = app.caches.people(&app.session.catalog, app.session.filter());
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
     let title =
         ui.painter().text(pos2(head.left() + PAD, head.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Named People"), t.semibold(15.0), t.text);
@@ -83,7 +83,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // until face recognition is set up: what it takes, and a button that does the next step
     super::faces::setup_banner(app, ui);
     // the filters narrowing the list (a date, a keyword…), removable here
-    let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
+    let chips = lightcraft_engine::filter_chips(app.session.filter(), &app.session.catalog);
     super::chips::show(app, ui, &chips);
     // what is selected below, and the box to name it with
     super::unnamed::naming_bar(app, ui);
@@ -98,7 +98,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         return;
     }
     let ppp = ui.ctx().pixels_per_point();
-    let active = app.session.filter.person.clone();
+    let active = app.session.filter().person.clone();
     let (edge, tile) = (card_edge(thumb), tile_edge(thumb));
     egui::ScrollArea::vertical().auto_shrink(false).show_viewport(ui, |ui, viewport| {
         let width = ui.available_width();

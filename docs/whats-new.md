@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### The filter never holds what the source shown already supplies
+- The filter bar has no chip for an album, and a library folder or Picks already decide what they show, so a copy of
+  one of them left in the filter narrowed the next source with nothing on screen to explain why. Now every way of
+  changing the filter (the bar, a saved preset, View ▸ Enable Filters, showing a source) leaves them out. A preset that
+  holds an album, the library folder shown or Picks' flag applies the rest and leaves them out (a script is told
+  which); setting one of them in the filter by hand is refused, and the flag buttons are off while Picks is shown.
+- Renaming or moving a Local folder you browsed earlier no longer narrows All Photos to it, and no longer replaces the
+  filter View ▸ Enable Filters put aside: the browsed folder follows the rename, and the filter is left as it was.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

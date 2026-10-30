@@ -7,7 +7,7 @@ use super::selection::{
 };
 use super::{
     Album, AlbumId, ColorLabel, CommandSpec, CopyrightStatus, Filter, Flag, GroupBy, LibrarySource, Op, PhotoId, Result, Selection, Sort, SortKey,
-    Value, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, json, ok, str_param,
+    SourceOwned, Value, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, json, ok, str_param,
 };
 
 /// Seeds stay exactly representable as a JSON double, so web and agent clients read back what they wrote.
@@ -52,9 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         if s.catalog.album(a).is_none_or(|a| a.folder) {
                             return Err(bad("library.source", "no such album"));
                         }
-                        // one album at a time: `to_filter` makes the album shown replace the filter's, and the
-                        // filter bar has no album chip, so a left-over one would narrow the next source unseen
-                        s.filter.album = None;
+                        // (the filter never holds an album: the filter bar has no chip for one)
                         LibrarySource::Album(a)
                     }
                     "libraryFolder" => {
@@ -72,12 +70,12 @@ pub fn specs() -> Vec<CommandSpec> {
                             return Err(bad("library.source", format!("{path} holds other disks as well: choose a disk or a folder on one")));
                         }
                         s.library_folder = Some(path.to_string());
-                        // one folder at a time: a folder filter left over would be ignored
-                        s.filter.library_folder = None;
+                        // one folder at a time: `source_shown` below takes a folder filter out
                         LibrarySource::LibraryFolder
                     }
                     other => return Err(bad("library.source", format!("unknown source `{other}`"))),
                 };
+                s.filters.source_shown(s.source);
                 s.keep_active_in_view();
                 Ok(json!({"count": s.visible().len()}))
             }
@@ -87,17 +85,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?} — the source shown owns some fields: an album is never part of the filter (show one with library.source), nor is a library folder while one is shown, nor a flag while Picks is shown; setting one is refused and changes nothing",
             always,
             |s, p| {
-                let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
+                let mut v = serde_json::to_value(s.filter()).unwrap_or_default();
                 lightcraft_develop::presets::deep_merge(&mut v, p);
                 let f: Filter = serde_json::from_value(v).map_err(|e| bad("library.filter", e.to_string()))?;
                 let mut f = f;
                 // a blank folder is no folder: no hidden "filters active" state
                 f.library_folder = f.library_folder.filter(|d| !d.trim().is_empty());
-                if f.library_folder.is_some() && s.source == LibrarySource::LibraryFolder {
-                    return Err(bad("library.filter", "a folder is already shown (library.source): show another source first"));
+                // only what this call sets is refused: a field the source owns that is left in the filter (a source set
+                // without `source_shown`) must not block every other change, and `set` below takes it out
+                let sets = |o: &&SourceOwned| p.get(o.name()).is_some_and(|v| !v.is_null());
+                if let Some(field) = s.source.owned_fields_set_in(&f).iter().find(sets) {
+                    return Err(bad("library.filter", field.refusal()));
                 }
                 // checked like a smart album's rules when this call sets them: an unknown field or a value
                 // that can't match is an error, not an empty grid. Rules that stopped checking since
@@ -109,8 +110,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(problems) = f.rule_set.as_ref().filter(|_| sets_rules).map(|rs| rs.check(&s.catalog)).filter(|p| !p.is_empty()) {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
                 }
-                s.filter = f;
-                s.shelved_filter = None;
+                s.set_filter(f);
                 Ok(json!({"count": s.visible().len()}))
             }
         ),
@@ -151,18 +151,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad(C, format!("{path} holds whole disks: pass `disk: true` to remove everything on them")));
                 }
                 mark_deleted(s, &ids, "Remove Folder from Library")?;
-                if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
-                    s.filter.library_folder = None;
-                }
-                // a filter put aside by Enable Filters must not bring the removed folder back
-                if let Some(f) = s.shelved_filter.as_mut()
-                    && f.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path))
-                {
-                    f.library_folder = None;
-                }
-                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
-                    s.shelved_filter = None;
-                }
+                // the filter and the one put aside by Enable Filters must not bring the removed folder back
+                s.filters.follow(|f| {
+                    if f.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
+                        f.library_folder = None;
+                    }
+                });
+                s.filters.drop_aside_if_empty();
                 // the folder being shown is gone: back to everything, as for a deleted album
                 if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
                     s.library_folder = None;
@@ -203,8 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{}", always, |s, _| {
-            s.filter = Default::default();
-            s.shelved_filter = None;
+            s.filters.clear();
             Ok(json!({"count": s.visible().len()}))
         }),
         // Classic: Library > Enable Filters (Cmd+L) switches the filter off and on again as it was
@@ -213,19 +207,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Enable Filters",
             ["View"],
             Some("Cmd+L"),
-            "{} — with a filter set, puts it aside and shows everything; with one put aside, brings it back as it was (stars, flag, text… together). Setting or clearing a filter while it is off forgets the one put aside → {enabled, count}",
+            "{} — with a filter set, puts it aside and shows everything; with one put aside, brings it back as it was (stars, flag, text… together), except its library folder while a library folder is shown now and its flag while Picks is shown now. Setting or clearing a filter while it is off forgets the one put aside → {enabled, count}",
             always,
             |s, _| {
-                if s.filter != Filter::default() {
-                    s.shelved_filter = Some(std::mem::take(&mut s.filter));
-                } else if let Some(mut f) = s.shelved_filter.take() {
-                    // one folder at a time: the folder shown now wins over the one the filter had
-                    if s.source == LibrarySource::LibraryFolder {
-                        f.library_folder = None;
-                    }
-                    s.filter = f;
-                }
-                Ok(json!({"enabled": s.shelved_filter.is_none(), "count": s.visible().len()}))
+                let enabled = s.filters.toggle(s.source);
+                Ok(json!({"enabled": enabled, "count": s.visible().len()}))
             }
         ),
         cmd!(

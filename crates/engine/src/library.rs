@@ -558,6 +558,8 @@ impl Session {
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
             self.selection.active = self.selection.active.filter(|id| self.catalog.photo(*id).is_some());
         }
+        // the filter stays across libraries: what the source restored here owns leaves it, as when that source is shown
+        self.filters.source_shown(self.source);
         // not on Missing Photos: working that view out checks every original (minutes on a
         // sleeping NAS), and the app checks them in the background once it runs
         if self.selection.active.is_none()

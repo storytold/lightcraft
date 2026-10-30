@@ -220,7 +220,7 @@ impl LightcraftApp {
         }
         if r.is_ok() && id == "library.toggleFilters" {
             // the search field shows the text filter: empty while the filters are off, back with them
-            self.ui.search = self.session.filter.text.clone();
+            self.ui.search = self.session.filter().text.clone();
         }
         if r.is_ok() && id == "library.clearFilter" {
             // the search field shows the text filter: cleared from anywhere (the loupe's pill, the
