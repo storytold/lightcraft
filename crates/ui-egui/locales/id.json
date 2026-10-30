@@ -2339,5 +2339,9 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Show Parent Folder": "Tampilkan folder induk",
+  "Hide This Parent": "Sembunyikan folder induk ini",
+  "Hides this row. Nothing on disk or in the library changes": "Menyembunyikan baris ini. Tidak ada yang berubah di disk atau di pustaka",
+  "This folder stays listed while the grid shows its photos": "Folder ini tetap tercantum selama grid menampilkan fotonya"
 }

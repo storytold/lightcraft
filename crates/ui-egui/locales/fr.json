@@ -2390,5 +2390,9 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Show Parent Folder": "Afficher le dossier parent",
+  "Hide This Parent": "Masquer ce dossier parent",
+  "Hides this row. Nothing on disk or in the library changes": "Masque cette ligne. Rien ne change sur le disque ni dans la bibliothèque",
+  "This folder stays listed while the grid shows its photos": "Ce dossier reste affiché tant que la grille montre ses photos"
 }

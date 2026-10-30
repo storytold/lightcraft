@@ -180,6 +180,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.sidebarSection", "Show Sidebar Section", None, ""),
     ("view.sidebarMoveSection", "Move Sidebar Section", None, ""),
     ("view.sidebarReset", "Reset Sidebar Sections", None, ""),
+    ("view.folderParent", "Show Parent Folder", None, ""),
     ("view.slideshow", "Slideshow", Some("Cmd+Alt+Enter"), "View"),
     ("view.slideshowOptions", "Slideshow Options…", None, "View"),
     ("dialog.slideshowExport", "Export Slideshow…", None, "View"),

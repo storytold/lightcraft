@@ -2429,5 +2429,9 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Show Parent Folder": "Visa överordnad mapp",
+  "Hide This Parent": "Dölj den här överordnade mappen",
+  "Hides this row. Nothing on disk or in the library changes": "Döljer den här raden. Inget ändras på disken eller i biblioteket",
+  "This folder stays listed while the grid shows its photos": "Den här mappen står kvar i listan medan rutnätet visar dess foton"
 }

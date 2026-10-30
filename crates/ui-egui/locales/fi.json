@@ -2327,5 +2327,9 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Show Parent Folder": "Näytä yläkansio",
+  "Hide This Parent": "Piilota tämä yläkansio",
+  "Hides this row. Nothing on disk or in the library changes": "Piilottaa tämän rivin. Levyllä tai kirjastossa ei muutu mitään",
+  "This folder stays listed while the grid shows its photos": "Tämä kansio pysyy luettelossa, kun ruudukko näyttää sen kuvat"
 }

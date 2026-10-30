@@ -14,8 +14,8 @@ pub use settings::{
 };
 pub use view::{
     BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FOCUS_KEYWORDS_PASSES, InfoOverlay, KeywordingView, LEFT_WIDTH, LayoutImage,
-    LightsOut, LoupeInfo, LoupeInfoField, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP,
-    ToolOverlay, ViewMode, Zoom,
+    LightsOut, LoupeInfo, LoupeInfoField, MAX_FOLDER_PARENTS, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN,
+    THUMB_SIZE_STEP, ToolOverlay, ViewMode, Zoom,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,6 +120,10 @@ pub struct UiState {
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
+    /// Folders (as [`lightcraft_catalog::query::folder_key`] spells them) that only lead from a
+    /// disk to the library's first folder and were asked for with Show Parent Folder: the
+    /// sidebar's Folders lists them, where it otherwise passes them over.
+    pub folder_parents: std::collections::BTreeSet<String>,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
@@ -405,6 +409,7 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             sidebar: Default::default(),
+            folder_parents: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,
@@ -566,6 +571,16 @@ impl UiState {
             self.open_flyouts.push(id.to_string());
         }
     }
+    /// Spell every entry of [`UiState::folder_parents`] as `folder_key` does, the one name Show and
+    /// Hide look folders up by (a file or a `ui.set` that spells a folder another way, with
+    /// backslashes, a capital drive letter or a trailing separator, still finds its row, and two
+    /// spellings are one entry), and keep the list within [`MAX_FOLDER_PARENTS`].
+    pub fn normalize_folder_parents(&mut self) {
+        self.folder_parents = std::mem::take(&mut self.folder_parents).iter().map(|p| lightcraft_catalog::query::folder_key(p)).collect();
+        while self.folder_parents.len() > MAX_FOLDER_PARENTS {
+            self.folder_parents.pop_last();
+        }
+    }
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
@@ -573,6 +588,7 @@ impl UiState {
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        self.normalize_folder_parents();
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {

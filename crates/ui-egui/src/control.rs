@@ -399,6 +399,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                         }
                     }
                     u.collapsed_sidebar.clear();
+                    u.normalize_folder_parents();
                     u.toast = app.ui.toast.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();

@@ -2157,5 +2157,9 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Show Parent Folder": "顯示上層資料夾",
+  "Hide This Parent": "隱藏此上層資料夾",
+  "Hides this row. Nothing on disk or in the library changes": "隱藏此列。磁碟和圖庫中不會有任何變更",
+  "This folder stays listed while the grid shows its photos": "格狀檢視顯示此資料夾的照片時，它會保留在清單中"
 }

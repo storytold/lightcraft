@@ -3440,5 +3440,9 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "Show Parent Folder": "Übergeordneten Ordner anzeigen",
+  "Hide This Parent": "Diesen übergeordneten Ordner ausblenden",
+  "Hides this row. Nothing on disk or in the library changes": "Blendet diese Zeile aus. Auf dem Datenträger und in der Bibliothek ändert sich nichts",
+  "This folder stays listed while the grid shows its photos": "Dieser Ordner bleibt aufgelistet, solange das Raster seine Fotos zeigt"
 }

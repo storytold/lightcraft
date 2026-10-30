@@ -2349,5 +2349,9 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Show Parent Folder": "Показать родительскую папку",
+  "Hide This Parent": "Скрыть эту родительскую папку",
+  "Hides this row. Nothing on disk or in the library changes": "Скрывает эту строку. На диске и в библиотеке ничего не меняется",
+  "This folder stays listed while the grid shows its photos": "Эта папка остаётся в списке, пока сетка показывает её фотографии"
 }

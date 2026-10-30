@@ -2283,5 +2283,9 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Show Parent Folder": "Pokaż folder nadrzędny",
+  "Hide This Parent": "Ukryj ten folder nadrzędny",
+  "Hides this row. Nothing on disk or in the library changes": "Ukrywa ten wiersz. Nic nie zmienia się na dysku ani w bibliotece",
+  "This folder stays listed while the grid shows its photos": "Ten folder pozostaje na liście, dopóki siatka pokazuje jego zdjęcia"
 }

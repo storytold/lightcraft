@@ -358,6 +358,10 @@ impl PanelWidth {
     }
 }
 
+/// The most folders [`UiState::folder_parents`] keeps: far more than anyone asks for by hand, and
+/// a bound on what a settings file can make the sidebar look up for every row.
+pub const MAX_FOLDER_PARENTS: usize = 256;
+
 /// The left sidebar (sources, albums, folders).
 pub const LEFT_WIDTH: PanelWidth = PanelWidth { min: 200.0, default: 268.0, max: 480.0 };
 

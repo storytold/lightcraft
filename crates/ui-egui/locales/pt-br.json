@@ -2202,5 +2202,9 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Show Parent Folder": "Mostrar pasta superior",
+  "Hide This Parent": "Ocultar esta pasta superior",
+  "Hides this row. Nothing on disk or in the library changes": "Oculta esta linha. Nada muda no disco nem na biblioteca",
+  "This folder stays listed while the grid shows its photos": "Esta pasta continua listada enquanto a grade mostra as fotos dela"
 }

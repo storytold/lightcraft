@@ -2734,5 +2734,9 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Show Parent Folder": "მშობელი საქაღალდის ჩვენება",
+  "Hide This Parent": "ამ მშობელი საქაღალდის დამალვა",
+  "Hides this row. Nothing on disk or in the library changes": "მალავს ამ მწკრივს. დისკზე და ბიბლიოთეკაში არაფერი იცვლება",
+  "This folder stays listed while the grid shows its photos": "ეს საქაღალდე სიაში რჩება, სანამ ბადე მის ფოტოებს აჩვენებს"
 }

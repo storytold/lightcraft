@@ -2200,5 +2200,9 @@
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "Show Parent Folder": "显示上级文件夹",
+  "Hide This Parent": "隐藏此上级文件夹",
+  "Hides this row. Nothing on disk or in the library changes": "隐藏此行。磁盘和资料库中不会有任何更改",
+  "This folder stays listed while the grid shows its photos": "网格显示此文件夹的照片时，它会保留在列表中"
 }

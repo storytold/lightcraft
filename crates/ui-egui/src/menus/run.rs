@@ -288,6 +288,69 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.sidebar = Default::default();
             Ok(json!({"sidebar": app.ui.sidebar}))
         }
+        "view.folderParent" => {
+            // {path, show?}: list (or pass over again) a folder that only leads from its disk to
+            // the library's first folder there; with no `show`, the one or the other
+            let Some(path) = p.get("path").and_then(Value::as_str) else {
+                return Some(Err(format!("{id}: `path` is needed (a folder above the library's folders, see library.folders)")));
+            };
+            let show = match bool_param(id, p, "show") {
+                Ok(show) => show,
+                Err(e) => return Some(Err(e)),
+            };
+            let key = lightcraft_catalog::query::folder_key(path);
+            use crate::panels::left::{FolderPlace, folder_place};
+            let tree = app.caches.folder_tree(&app.session.catalog);
+            // a folder asked for earlier can always be taken off again, also once it no longer
+            // only leads on (photos or a second folder came into it, it was labelled or renamed);
+            // not while its row is listed because a folder above it that was asked for too is: that
+            // row stays, so naming it hidden would be untrue (the row menu offers no Hide there)
+            let placed = folder_place(app, &tree, &key);
+            if show != Some(true) && app.ui.folder_parents.contains(&key) {
+                if let Some((_, FolderPlace::Below(above))) = &placed
+                    && app.ui.folder_parents.contains(&lightcraft_catalog::query::folder_key(above))
+                {
+                    return Some(Err(format!("{id}: `{path}` is listed because `{above}` above it is: show or hide that folder instead")));
+                }
+                app.ui.folder_parents.remove(&key);
+                // named as showing it names it: the row's own spelling while the folder has one
+                let named = placed.map_or(key, |(node, _)| node.path.clone());
+                return Some(Ok(json!({"path": named, "show": false})));
+            }
+            let node = match placed {
+                Some((node, FolderPlace::Leading)) => node.path.clone(),
+                Some((_, FolderPlace::Below(above))) => {
+                    return Some(Err(format!("{id}: `{path}` is listed because `{above}` above it is: show or hide that folder instead")));
+                }
+                Some((_, FolderPlace::Listed)) => {
+                    return Some(Err(format!(
+                        "{id}: `{path}` is always listed in Folders: only a folder that holds no photo itself and leads from its disk to one folder can be shown or hidden"
+                    )));
+                }
+                None => return Some(Err(format!("{id}: `{path}` holds no photo of the library, so Folders has no place for it"))),
+            };
+            let show = show.unwrap_or(true);
+            if show && !app.ui.folder_parents.contains(&key) {
+                if app.ui.folder_parents.len() >= crate::state::MAX_FOLDER_PARENTS {
+                    // folders that stopped leading on take no room from the ones that do
+                    let stale: Vec<String> = app
+                        .ui
+                        .folder_parents
+                        .iter()
+                        .filter(|k| !matches!(folder_place(app, &tree, k), Some((_, FolderPlace::Leading | FolderPlace::Below(_)))))
+                        .cloned()
+                        .collect();
+                    for k in stale {
+                        app.ui.folder_parents.remove(&k);
+                    }
+                }
+                if app.ui.folder_parents.len() >= crate::state::MAX_FOLDER_PARENTS {
+                    return Some(Err(format!("{id}: {} parent folders are shown already; hide one first", crate::state::MAX_FOLDER_PARENTS)));
+                }
+                app.ui.folder_parents.insert(key);
+            }
+            Ok(json!({"path": node, "show": show}))
+        }
         "view.appearance" => appearance_command(app, p),
         "view.theme" => theme_command(app, p),
         "library.selectOnlyActive" => {

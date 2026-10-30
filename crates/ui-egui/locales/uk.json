@@ -2354,5 +2354,9 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Show Parent Folder": "Показати батьківську теку",
+  "Hide This Parent": "Сховати цю батьківську теку",
+  "Hides this row. Nothing on disk or in the library changes": "Ховає цей рядок. На диску й у бібліотеці нічого не змінюється",
+  "This folder stays listed while the grid shows its photos": "Ця тека лишається у списку, доки сітка показує її фотографії"
 }
