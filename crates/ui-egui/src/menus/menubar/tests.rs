@@ -823,3 +823,20 @@ fn no_two_menu_commands_share_a_label() {
     }
     assert!(clashes.is_empty(), "{clashes:#?}");
 }
+
+/// Edit lists Select Only Active Photo with the other Select rows and Paste Settings from Previous
+/// with the other Paste rows, not after Settings…, near the end of the menu.
+#[test]
+fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
+    let a = app();
+    let bar = menu_bar(&a);
+    let nodes = &bar.iter().find(|(title, _)| title == "Edit").unwrap().1;
+    let pos = |id: &str| {
+        nodes.iter().position(|n| matches!(n, MenuNode::Item { id: i, .. } if i == id)).unwrap_or_else(|| panic!("{id} is a top-level Edit row"))
+    };
+    assert_eq!(pos("library.selectOnlyActive"), pos("library.selectNone") + 1, "Select Only Active Photo follows Deselect All");
+    assert_eq!(pos("develop.pastePrevious"), pos("dialog.pasteSettings") + 1, "Paste Settings from Previous follows Paste Selected Settings…");
+    assert!(pos("app.settings") > pos("library.selectOnlyActive"), "Settings… stays after them");
+    let after = &nodes[pos("app.settings") + 1..];
+    assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
+}

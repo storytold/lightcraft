@@ -563,9 +563,20 @@ Questions, ideas or a bug you'd like to talk through first? Bring them to [Disco
 | arm64 (Snapdragon and other ARM PCs) | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
 | x86 (32-bit) | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\LightCraft` by
-default; upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
+Installers and executables are code-signed. The installer asks who to install for and where (for your account only, in
+`%LOCALAPPDATA%\Programs\ArtCraft\LightCraft`, by default; "Everyone on this computer" uses
+`C:\Program Files\ArtCraft\LightCraft` (`Program Files (x86)` for the 32-bit build); upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
 option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`.
+A silent install is per-user by default. `INSTALLFOLDER` chooses the folder, not who it is installed for;
+add `ALLUSERS=1`, from an elevated terminal or deployment tool, for an all-users install.
+
+**Update or uninstall asks for an old `.msi`, or stops with error 1612 or 1714?** Windows removes the installed version
+with its own cached copy of that version's installer; if the copy is gone, it asks for the original file and stops
+(an update then ends with error 1603). Download the release MSI of the version and build you have installed from
+[all releases](https://github.com/storytold/lightcraft/releases) and run
+`msiexec /fv "<path to that .msi>" /qb+ /norestart`, approving the permission prompt if Windows shows one. That restores
+the cached copy; then retry the update or uninstall. Opening the MSI, or choosing Repair or Uninstall on it, may still
+fail. Error 1603 has other causes too; if this doesn't help, open an issue with the error message.
 
 ### macOS
 

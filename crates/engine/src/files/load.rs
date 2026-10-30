@@ -1,7 +1,7 @@
 use super::colour::bin_factor;
 use super::preview::{fit_box, load_embedded_preview};
 use super::probe::preview_reason;
-use super::*;
+use super::{Arc, CameraColourModel, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint};
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
 ///

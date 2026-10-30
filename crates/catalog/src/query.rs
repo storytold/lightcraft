@@ -20,7 +20,7 @@ pub enum RatingOp {
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
-    /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
+    /// location or format. Tokens like `rating:3`, `rating:>=3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
     pub text: String,
     pub rating: u8,
     pub rating_op: RatingOp,
@@ -179,23 +179,25 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
     // a token that starts with a quote is a phrase, even with a colon in it
     if let Some((field, quoted)) = t.split_once(':').filter(|_| !t.starts_with('"')) {
         let val = unquote(quoted);
-        let num = |s: &str| -> Option<(char, f64)> {
-            let (op, rest) = match s.chars().next()? {
-                c @ ('>' | '<' | '=') => (c, &s[1..]),
-                _ => ('=', s),
-            };
-            rest.parse().ok().map(|v| (op, v))
+        // `>=` / `<=` before `>` / `<`: otherwise `rating:>=3` reads `=3` as the number and matches nothing
+        let num = |s: &str| -> Option<(&str, f64)> {
+            let op = [">=", "<=", ">", "<", "="].into_iter().find(|op| s.starts_with(op)).unwrap_or("");
+            s.get(op.len()..)?.parse().ok().map(|v| (op, v))
         };
         let cmp = |x: f64, s: &str| match num(s) {
-            Some(('>', v)) => x > v,
-            Some(('<', v)) => x < v,
+            Some((">", v)) => x > v,
+            Some(("<", v)) => x < v,
+            Some((">=", v)) => x >= v,
+            Some(("<=", v)) => x <= v,
             Some((_, v)) => (x - v).abs() < 1e-9,
             None => false,
         };
         // Fields stored as `f32` compare at f32 precision: 2.8f32 widened to f64 is not 2.8.
         let cmp32 = |x: f32, s: &str| match num(s) {
-            Some(('>', v)) => x > v as f32,
-            Some(('<', v)) => x < v as f32,
+            Some((">", v)) => x > v as f32,
+            Some(("<", v)) => x < v as f32,
+            Some((">=", v)) => x >= v as f32,
+            Some(("<=", v)) => x <= v as f32,
             Some((_, v)) => x == v as f32,
             None => false,
         };

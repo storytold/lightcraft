@@ -121,9 +121,20 @@ fn resizable_side_stores_panel_state_under_the_parent_salted_key() {
     let ctx = egui::Context::default();
     let raw = raw(egui::vec2(1000.0, 700.0));
     frame(&ctx, raw, |ui| {
-        crate::panels::resizable_side(ui, true, "side-test", egui::Frame::NONE, 260.0, crate::state::LEFT_WIDTH, 300.0, |ui| {
-            ui.label("side");
-        });
+        crate::panels::resizable_side(
+            ui,
+            crate::panels::SidePanel {
+                left: true,
+                id: "side-test",
+                frame: egui::Frame::NONE,
+                width: 260.0,
+                limits: crate::state::LEFT_WIDTH,
+                reserve: 300.0,
+            },
+            |ui| {
+                ui.label("side");
+            },
+        );
     });
     let modern = ctx.viewport_id().root_ui_id().with("side-test");
     assert!(

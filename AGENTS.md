@@ -51,7 +51,7 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 - **Last-resort guard:** a panic hook plus `catch_unwind` around command dispatch and import/export turns an escaped
   panic into an error dialog and keeps the document. It's a safety net, not a licence; keep `panic = "unwind"` on native.
 - **Prove it:** every crash fix lands with a small synthetic regression test that panicked before the fix.
-- Enforced by clippy: root `clippy.toml` allows unwrap/expect/panic/indexing in tests only, and every production crate
+- Enforced by clippy: root `clippy.toml` allows unwrap/expect/panic in tests only; indexing is not denied. Every production crate
   root (`lib.rs`, each binary's `main.rs`) carries `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
   clippy::unimplemented, clippy::todo, clippy::unreachable)]`. Not `[workspace.lints]`: those would also hit
   integration tests, examples and benches. New crates start with the attribute.
@@ -156,3 +156,8 @@ evaluates it (`.github/workflows/nix.yml`), so the build may lag behind the work
   GitHub profiles). Never hand-edit `contributors.json`.
 - Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
   re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+
+## CI workflows
+- Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
+- Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
+- Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
