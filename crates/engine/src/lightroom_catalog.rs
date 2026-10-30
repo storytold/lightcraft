@@ -1339,12 +1339,19 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             _ => Flag::None,
         };
         p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
-        // a capture time the catalog can't hold would fail the whole batch at `SetCaptured`
+        // A capture time the catalog can't hold would fail the whole batch at `SetCaptured`, and an
+        // impossible date (2026-02-30) would roll over to another day in date grouping.
         let captured = text(&src.image, "captureTime");
-        if lightcraft_catalog::stacks::iso_seconds(captured).is_some() {
+        if lightcraft_catalog::dates::normalize_iso(captured).is_some() {
             p.captured = Some(captured.into());
         } else if !captured.is_empty() {
             warnings.push(format!("image {}: capture time “{captured}” is not a date; imported without it", src.source_id));
+        }
+        // a new record (a virtual copy, a duplicate) doesn't inherit a time an earlier import stored unchecked
+        if s.catalog.photo(p.id).is_none()
+            && let Some(inherited) = p.captured.take_if(|c| lightcraft_catalog::dates::normalize_iso(c).is_none())
+        {
+            warnings.push(format!("image {}: inherited capture time “{inherited}” is not a date; imported without it", src.source_id));
         }
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
@@ -1399,9 +1406,15 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Op::SetLabel { id: p.id, label: p.label },
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
             ]);
-            // a record an earlier import gave a time that isn't a date keeps it rather than fail the batch
-            if p.captured.as_deref().is_none_or(|c| lightcraft_catalog::stacks::iso_seconds(c).is_some()) {
+            // A record an earlier import gave a time that isn't a date keeps it: `SetCaptured` refuses
+            // such a time, so setting it would fail the batch, and replacing it would leave an undo
+            // that can't put it back.
+            let settable = |c: Option<&str>| c.is_none_or(|c| lightcraft_catalog::stacks::iso_seconds(c).is_some());
+            let stored = s.catalog.photo(p.id).and_then(|old| old.captured.clone());
+            if settable(stored.as_deref()) && settable(p.captured.as_deref()) {
                 ops.push(Op::SetCaptured { id: p.id, captured: p.captured.clone() });
+            } else if let (Some(stored), true) = (&stored, p.captured != stored) {
+                warnings.push(format!("image {}: the library's capture time “{stored}” is not a date, so Lightroom's was not applied (undoing the import could not restore it)", src.source_id));
             }
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {

@@ -553,6 +553,63 @@ fn a_capture_time_that_is_not_a_date_is_left_out() {
     assert_eq!(s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"));
 }
 
+/// An impossible date (2026-02-30) is not a capture time either: stored, it would roll over to
+/// another day in date grouping.
+#[test]
+fn an_impossible_capture_date_is_left_out() {
+    let mut data = sample();
+    data.photos[1].image.insert("captureTime".into(), json!("2026-02-30T10:00:00"));
+    let mut s = crate::Session::new();
+    let r = apply(&mut s, data, false).unwrap();
+    let id = PhotoId(r["mapping"]["1"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(id).unwrap().captured, None);
+    assert_eq!(r["warnings"], json!(["image 1: capture time “2026-02-30T10:00:00” is not a date; imported without it"]));
+}
+
+/// A record an earlier version stored with a time that isn't a date: Lightroom's time doesn't
+/// replace it (undo could not put it back, `SetCaptured` refuses it), and a new virtual copy of it
+/// doesn't inherit it.
+#[test]
+fn a_stored_capture_time_that_is_not_a_date_stays_undoable_and_is_not_copied() {
+    let earlier = |captured: &str| {
+        let mut s = crate::Session::new();
+        let id = s.catalog.alloc_photo_id();
+        let mut old = Photo::new(id, Source::File { path: "/missing/test.ARW".into() }, "test.ARW", "ARW", 20, 10, "before");
+        old.captured = Some(captured.into());
+        s.commit("Earlier import", Op::AddPhoto { photo: Box::new(old) }).unwrap();
+        s.undo.clear();
+        (s, id)
+    };
+    // Lightroom has a time for the master
+    let (mut s, id) = earlier("broken");
+    let r = apply(&mut s, sample(), false).unwrap();
+    assert_eq!(r["mapping"]["1"], id.0, "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "image 1: the library's capture time “broken” is not a date, so Lightroom's was not applied (undoing the import could not restore it)"
+        ])
+    );
+    let copy = PhotoId(r["mapping"]["2"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(copy).unwrap().captured.as_deref(), Some("2024-01-16T12:34:56"), "the copy gets Lightroom's time");
+    s.undo_step().unwrap();
+    assert_eq!(s.catalog.len(), 1, "the import is undone in one step");
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+
+    // Lightroom has none: the master keeps its own, the new copy gets none
+    let (mut s, id) = earlier("broken");
+    let mut data = sample();
+    data.photos[1].image.remove("captureTime");
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("broken"));
+    let copy = PhotoId(r["mapping"]["2"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(copy).unwrap().captured, None);
+    assert_eq!(r["warnings"], json!(["image 2: inherited capture time “broken” is not a date; imported without it"]));
+    s.undo_step().unwrap();
+    assert_eq!(s.catalog.len(), 1);
+}
+
 /// Two collections with one id used to stage two albums with one id, failing the import: the first
 /// is kept, and the photos listed under the id go to it.
 #[test]
