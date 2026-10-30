@@ -5,6 +5,7 @@ use crate::{Selection, Session, command_specs};
 mod album_order;
 mod album_remove;
 mod albums_local;
+mod batch_sidebar;
 mod color;
 mod constrain_crop;
 mod crop_angle;
