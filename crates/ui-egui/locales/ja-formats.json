@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "These can't be moved to “{}”:": "「{0}」に移動できない写真:",
+  "{} is already in “{}”": "{0} はすでに「{1}」にあります",
+  "{} is missing or offline": "{0} が見つからないか、オフラインです",
+  "and {n} more": "ほか{n}枚",
+  "Move {n}, skip {m}": "{n}枚を移動、{m}枚をスキップ",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "{n}枚を「{1}」に移動し、{skipped}枚をスキップしました。編集 → 取り消す で元に戻せます。{0:.0}",
+  "{} can't be moved": "{0} は移動できません",
+  "{} has the same name as another photo being moved": "{0} は、移動する別の写真と名前が同じです"
 }

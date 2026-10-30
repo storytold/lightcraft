@@ -23,6 +23,41 @@ pub struct NameEdit {
     pub fresh: bool,
 }
 
+/// A photo that can't move into the folder it was dropped on (`photo.checkMove`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MoveProblem {
+    pub id: u64,
+    pub name: String,
+    pub kind: MoveProblemKind,
+}
+
+/// Why a photo can't move into the folder it was dropped on (`photo.checkMove`'s `kind`).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MoveProblemKind {
+    /// A file of that name is in the folder already.
+    Clash,
+    /// Another photo of the same move has the name: only one of them can go in.
+    Twin,
+    /// The photo's file is missing or offline.
+    Missing,
+    /// The photo can't move as it is: a Local photo (until it is added to the library), one with
+    /// no file, or a library photo of the same file as such a photo.
+    Unmovable,
+}
+
+impl MoveProblemKind {
+    /// The kind of a `photo.checkMove` problem. A kind this build doesn't know is unmovable: it is
+    /// still listed, and still left out of the move.
+    pub fn from_check(problem: &serde_json::Value) -> Self {
+        match problem["kind"].as_str() {
+            Some("clash") if problem["twin"] == true => Self::Twin,
+            Some("clash") => Self::Clash,
+            Some("missing") => Self::Missing,
+            _ => Self::Unmovable,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
@@ -303,7 +338,9 @@ pub enum Dialog {
         count: usize,
     },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
-    /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.
+    /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it. `problems`:
+    /// the photos found (`photo.checkMove`, when the photos were dropped) that can't go, and why;
+    /// the move leaves them out when the person chooses to (`movable`: how many photos then go).
     MovePhotos {
         ids: Vec<u64>,
         folder: String,
@@ -312,6 +349,10 @@ pub enum Dialog {
         /// The library the photos were dropped in (`Session::library_generation`): ids are
         /// numbered per library, so in another one they name other photos.
         library: u64,
+        #[serde(default)]
+        problems: Vec<MoveProblem>,
+        #[serde(default)]
+        movable: usize,
     },
     /// Confirm taking a folder's photos out of the library (`library.removeFolder`).
     RemoveFolder {

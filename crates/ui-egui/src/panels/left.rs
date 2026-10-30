@@ -23,7 +23,7 @@ pub use albums::{album_drag_feedback, auto_scroll_speed};
 use albums::{albums_rows, drag_auto_scroll};
 pub(crate) use dates::browse_all_photos;
 use dates::date_rows;
-pub(crate) use folders::{folder_row_of, move_photos, moved_text};
+pub(crate) use folders::{folder_row_of, move_photos_skipping, moved_skipping_text, moved_text};
 use folders::{folder_rows, reveal_chosen};
 use keywords::keyword_rows;
 pub(crate) use local::{fs_cached, fs_cached_running, same_folder};

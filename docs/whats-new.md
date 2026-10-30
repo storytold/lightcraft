@@ -50,6 +50,21 @@
   stay available in All Metadata; PSD edit copies keep their capture date. Original exports with Remove Location Info enabled
   are refused when a PSD or PSB embeds GPS, since LightCraft cannot strip metadata from a byte-for-byte original copy.
 
+### A refused move to another folder says what is wrong
+- When photos can't be moved into another folder, the message now names the photos and what to do (rename them,
+  reconnect the disk, or leave them out of the move), in plain words, instead of an "invalid parameters" error that
+  named an internal command. Moving the photos you chose with Move Selected Photos Here still stops as a whole when one
+  of them can't go, and then nothing is moved.
+- Agents get the same details: `photo.checkMove` lists, without moving anything, the photos that can go, the ones
+  already in the folder, and those that can't go: a name taken there, a file that is missing or offline, or a photo
+  that can't move as it is (a Local photo, until it is added to the library, or one with no file).
+  `photo.moveToFolder` takes `skip`, the ids of photos to leave where they are while the rest move (a Local photo
+  can be skipped too), and reports each skipped photo with the reason.
+- Dropping photos on a folder in the sidebar now checks the move first. The question names the photos that can't go
+  (up to five, then a count) and why: the name is taken in the folder, two photos being moved share a name, the file is
+  missing or offline, or the photo has no file. It says what to do and offers to move the rest, and it asks even when
+  you turned off the confirmation. Dropping a Local photo is still refused on the row, with its own reason.
+
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
   library open now, or create a new library for them, named after the catalog and placed next to the open library

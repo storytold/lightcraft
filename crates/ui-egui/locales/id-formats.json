@@ -305,5 +305,13 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "These can't be moved to “{}”:": "Tidak dapat dipindahkan ke “{0}”:",
+  "{} is already in “{}”": "{0} sudah ada di “{1}”",
+  "{} is missing or offline": "{0} hilang atau offline",
+  "and {n} more": "dan {n} lainnya",
+  "Move {n}, skip {m}": "Pindahkan {n}, lewati {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "{n} foto dipindahkan ke “{1}”{0:.0}, {skipped} dilewati. Pilih Edit → Urungkan untuk mengembalikannya.",
+  "{} can't be moved": "{0} tidak dapat dipindahkan",
+  "{} has the same name as another photo being moved": "{0} memiliki nama yang sama dengan foto lain yang dipindahkan"
 }

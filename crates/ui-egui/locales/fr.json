@@ -2390,5 +2390,8 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Rename a clashing photo, or choose another folder, to move it too.": "Renommez la photo en conflit ou choisissez un autre dossier pour pouvoir la déplacer.",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "Reconnectez le disque ou utilisez Fichier → Rechercher les photos manquantes…, puis réessayez.",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "Une photo sans fichier ne peut pas être déplacée. Une photo locale le peut après Ajouter à Mes photos."
 }

@@ -305,5 +305,13 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "These can't be moved to “{}”:": "Näitä ei voi siirtää kohteeseen ”{0}”:",
+  "{} is already in “{}”": "{0} on jo kohteessa ”{1}”",
+  "{} is missing or offline": "{0} puuttuu tai on offline-tilassa",
+  "and {n} more": "ja {n} lisää",
+  "Move {n}, skip {m}": "Siirrä {n}, ohita {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "Siirretty kuvia kohteeseen ”{1}”: {n}{0:.0}, ohitettu: {skipped}. Muokkaa → Kumoa siirtää ne takaisin.",
+  "{} can't be moved": "Kohdetta {0} ei voi siirtää",
+  "{} has the same name as another photo being moved": "{0} on samanniminen kuin toinen siirrettävä kuva"
 }

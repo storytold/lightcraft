@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "These can't be moved to “{}”:": "以下照片无法移到“{0}”：",
+  "{} is already in “{}”": "{0} 已在“{1}”中",
+  "{} is missing or offline": "{0} 丢失或处于离线状态",
+  "and {n} more": "另有 {n} 张",
+  "Move {n}, skip {m}": "移动 {n} 张，跳过 {m} 张",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "已将 {n} 张照片移到“{1}”{0:.0}，跳过 {skipped} 张。编辑 → 撤销 可移回。",
+  "{} can't be moved": "{0} 无法移动",
+  "{} has the same name as another photo being moved": "{0} 与另一张要移动的照片同名"
 }

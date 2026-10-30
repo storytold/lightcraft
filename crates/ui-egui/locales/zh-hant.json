@@ -2157,5 +2157,8 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Rename a clashing photo, or choose another folder, to move it too.": "請重新命名重名的照片，或選擇其他資料夾，才能移動。",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "請重新連接磁碟，或使用 檔案 → 尋找遺失的照片…，然後重試。",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "沒有檔案的照片無法移動。本機照片在使用「加入我的照片」後即可移動。"
 }

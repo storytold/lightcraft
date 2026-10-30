@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "These can't be moved to “{}”:": "„{0}“-ში ვერ გადაიტანება:",
+  "{} is already in “{}”": "{0} უკვე არის „{1}“-ში",
+  "{} is missing or offline": "{0} არ არის ან ოფლაინშია",
+  "and {n} more": "და კიდევ {n}",
+  "Move {n}, skip {m}": "გადატანა: {n}, გამოტოვება: {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "„{1}“-ში გადატანილია ფოტო: {n}{0:.0}, გამოტოვებულია: {skipped}. რედაქტირება → დაბრუნება დააბრუნებს მათ.",
+  "{} can't be moved": "{0} ვერ გადაიტანება",
+  "{} has the same name as another photo being moved": "{0}-ს იგივე სახელი აქვს, რაც გადასატან სხვა ფოტოს"
 }

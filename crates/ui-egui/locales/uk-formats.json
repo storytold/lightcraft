@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "These can't be moved to “{}”:": "Ці фото не можна перемістити до «{0}»:",
+  "{} is already in “{}”": "{0} уже в «{1}»",
+  "{} is missing or offline": "{0} відсутній або недоступний",
+  "and {n} more": "і ще {n}",
+  "Move {n}, skip {m}": "Перемістити {n}, пропустити {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}, пропущено: {skipped}. Редагування → Скасувати поверне їх.",
+  "{} can't be moved": "{0} не можна перемістити",
+  "{} has the same name as another photo being moved": "{0} має таку саму назву, як інше фото, що переміщується"
 }

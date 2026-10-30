@@ -22,10 +22,12 @@ use export::{
     LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
     group_checklist, watermark_preview,
 };
+#[cfg(test)]
+pub(crate) use frame::move_problem_line;
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
-    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
-    only_shows, return_confirms, trailing_button_row,
+    DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened,
+    move_problems_body, num, only_shows, return_confirms, trailing_button_row,
 };
 pub(crate) use rename::rename_preview;
 use rename::{RENAME_PREVIEW_ROWS, person_rename_plan};
@@ -346,6 +348,11 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
         Dialog::SaveEffect { .. } => "Create",
+        // nothing that can go: only Cancel; some can: Move those, skip the others
+        Dialog::MovePhotos { problems, movable, .. } if !problems.is_empty() && *movable == 0 => "",
+        Dialog::MovePhotos { problems, movable, .. } if !problems.is_empty() => {
+            return crate::i18n::tr_format!("Move {n}, skip {m}", n = movable, m = problems.len());
+        }
         Dialog::MovePhotos { .. } => "Move",
         // (not "Merge": that is photo merging, HDR / panorama, in some languages)
         Dialog::MoveKeyword { .. } => "Merge Keywords",
@@ -478,7 +485,13 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
         // a move says how it went, or why nothing moved
         Ok(r) if matches!(dlg, Dialog::MovePhotos { .. }) => {
             if let Dialog::MovePhotos { name, .. } = dlg {
-                let text = crate::panels::left::moved_text(r["moved"].as_u64().unwrap_or(0), name);
+                let (moved, skipped) = (r["moved"].as_u64().unwrap_or(0), r["skipped"].as_u64().unwrap_or(0));
+                // (nothing moved, as those that could go had reached the folder meanwhile: no undo step to point at)
+                let text = if moved > 0 && skipped > 0 {
+                    crate::panels::left::moved_skipping_text(moved, skipped, name)
+                } else {
+                    crate::panels::left::moved_text(moved, name)
+                };
                 app.toast(ctx, text);
             }
             closed = true;
@@ -1833,6 +1846,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
+        Dialog::MovePhotos { name, problems, .. } if !problems.is_empty() => move_problems_body(ui, name, problems, t),
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),

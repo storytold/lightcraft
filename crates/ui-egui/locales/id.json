@@ -2339,5 +2339,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Rename a clashing photo, or choose another folder, to move it too.": "Ganti nama foto yang bentrok atau pilih folder lain agar bisa dipindahkan.",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "Sambungkan kembali disk atau gunakan File → Cari foto hilang…, lalu coba lagi.",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "Foto tanpa file tidak dapat dipindahkan. Foto lokal bisa, setelah memakai Tambahkan ke Foto saya."
 }

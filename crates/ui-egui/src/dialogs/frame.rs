@@ -1,5 +1,6 @@
 use super::export::LABEL_W;
 use super::{BACKDROP_SHOWN, ControlSpec, Dialog, LightcraftApp, Tokens};
+use crate::state::MoveProblemKind;
 
 /// A click on the dimmed backdrop around the dialog: it closes the dialog like Esc. Pressed and
 /// released outside the window, so a slider dragged past its edge doesn't close it; a press while a
@@ -46,6 +47,42 @@ pub(super) const DIALOG_MIN_BODY: f32 = 80.0;
 
 /// A list that scrolls on its own never gets shorter than this to make its dialog fit.
 const DIALOG_MIN_LIST: f32 = 120.0;
+
+/// How many problem photos a question lists by name.
+const MOVE_PROBLEMS_SHOWN: usize = 5;
+
+/// What the Move Photos question says about one photo that can't go into the folder `name`.
+pub(crate) fn move_problem_line(p: &crate::state::MoveProblem, name: &str) -> String {
+    match p.kind {
+        MoveProblemKind::Clash => crate::i18n::tr_format!("{} is already in “{}”", p.name, name),
+        MoveProblemKind::Twin => crate::i18n::tr_format!("{} has the same name as another photo being moved", p.name),
+        MoveProblemKind::Missing => crate::i18n::tr_format!("{} is missing or offline", p.name),
+        MoveProblemKind::Unmovable => crate::i18n::tr_format!("{} can't be moved", p.name),
+    }
+}
+
+/// The Move Photos question when some photos can't go into the folder `name`: each one named with
+/// its problem, and what to do about it.
+pub(super) fn move_problems_body(ui: &mut egui::Ui, name: &str, problems: &[crate::state::MoveProblem], t: &Tokens) {
+    ui.label(crate::i18n::tr_format!("These can't be moved to “{}”:", name));
+    for p in problems.iter().take(MOVE_PROBLEMS_SHOWN) {
+        ui.label(egui::RichText::new(move_problem_line(p, name)).color(t.text_dim));
+    }
+    if problems.len() > MOVE_PROBLEMS_SHOWN {
+        ui.label(egui::RichText::new(crate::i18n::tr_format!("and {n} more", n = problems.len() - MOVE_PROBLEMS_SHOWN)).color(t.text_dim));
+    }
+    ui.add_space(4.0);
+    let any = |kinds: &[MoveProblemKind]| problems.iter().any(|p| kinds.contains(&p.kind));
+    if any(&[MoveProblemKind::Clash, MoveProblemKind::Twin]) {
+        ui.label(crate::i18n::tr("Rename a clashing photo, or choose another folder, to move it too."));
+    }
+    if any(&[MoveProblemKind::Missing]) {
+        ui.label(crate::i18n::tr("Reconnect the disk or use File → Find Missing Photos…, then try again."));
+    }
+    if any(&[MoveProblemKind::Unmovable]) {
+        ui.label(crate::i18n::tr("A photo with no file can't be moved. A Local photo can, once you use Add to My Photos."));
+    }
+}
 
 fn list_shrink_id() -> egui::Id {
     egui::Id::unique("dialog-list-shrink")

@@ -2327,5 +2327,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Rename a clashing photo, or choose another folder, to move it too.": "Nimeä samannimisen kuvan uudelleen tai valitse toinen kansio, jotta se voidaan siirtää.",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "Yhdistä levy uudelleen tai käytä toimintoa Tiedosto → Etsi puuttuvat kuvat… ja yritä uudelleen.",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "Kuvaa ilman tiedostoa ei voi siirtää. Paikallisen kuvan voi, kun käytät toimintoa Lisää Omiin kuviin."
 }

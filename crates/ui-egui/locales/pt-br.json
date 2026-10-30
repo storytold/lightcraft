@@ -2202,5 +2202,8 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Rename a clashing photo, or choose another folder, to move it too.": "Renomeie a foto com nome repetido ou escolha outra pasta para movê-la.",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "Reconecte o disco ou use Arquivo → Localizar fotos ausentes… e tente de novo.",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "Uma foto sem arquivo não pode ser movida. Uma foto local pode, depois de usar Adicionar às Minhas fotos."
 }

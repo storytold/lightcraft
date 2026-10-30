@@ -57,6 +57,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+mod move_check;
 pub mod open_path;
 pub mod originals;
 mod pdf;

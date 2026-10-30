@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "These can't be moved to “{}”:": "Do „{0}“ nelze přesunout:",
+  "{} is already in “{}”": "{0} už je ve složce „{1}“",
+  "{} is missing or offline": "{0} chybí nebo je offline",
+  "and {n} more": "a dalších: {n}",
+  "Move {n}, skip {m}": "Přesunout {n}, přeskočit {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}, přeskočeno: {skipped}. Úpravy → Zpět je vrátí.",
+  "{} can't be moved": "{0} nelze přesunout",
+  "{} has the same name as another photo being moved": "{0} má stejný název jako jiná přesouvaná fotografie"
 }

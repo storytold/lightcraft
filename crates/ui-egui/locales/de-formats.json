@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "These can't be moved to “{}”:": "Diese lassen sich nicht nach „{0}“ verschieben:",
+  "{} is already in “{}”": "{0} ist bereits in „{1}“",
+  "{} is missing or offline": "{0} fehlt oder ist offline",
+  "and {n} more": "und {n} weitere",
+  "Move {n}, skip {m}": "{n} verschieben, {m} überspringen",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben, {skipped} übersprungen. Bearbeiten → Rückgängig holt sie zurück.",
+  "{} can't be moved": "{0} lässt sich nicht verschieben",
+  "{} has the same name as another photo being moved": "{0} hat denselben Namen wie ein anderes Foto, das verschoben wird"
 }

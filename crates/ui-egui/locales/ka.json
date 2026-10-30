@@ -2734,5 +2734,8 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Rename a clashing photo, or choose another folder, to move it too.": "გადაარქვით სახელი დუბლირებულ ფოტოს ან აირჩიეთ სხვა საქაღალდე, რომ გადავიდეს.",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "ხელახლა შეაერთეთ დისკი ან გამოიყენეთ ფაილი → დაკარგული ფოტოების მოძებნა… და სცადეთ თავიდან.",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "ფაილის გარეშე ფოტო ვერ გადაიტანება. ლოკალური ფოტო გადაიტანება, თუ გამოიყენებთ: ჩემს ფოტოებში დამატება."
 }

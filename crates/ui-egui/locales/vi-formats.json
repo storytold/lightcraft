@@ -305,5 +305,13 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "These can't be moved to “{}”:": "Không thể chuyển các ảnh này vào “{0}”:",
+  "{} is already in “{}”": "{0} đã có trong “{1}”",
+  "{} is missing or offline": "{0} bị thiếu hoặc đang ngoại tuyến",
+  "and {n} more": "và {n} mục khác",
+  "Move {n}, skip {m}": "Chuyển {n}, bỏ qua {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "Đã chuyển vào “{1}” — ảnh: {n}{0:.0}, bỏ qua: {skipped}. Chỉnh sửa → Hoàn tác sẽ chuyển chúng lại.",
+  "{} can't be moved": "{0} không thể được chuyển",
+  "{} has the same name as another photo being moved": "{0} trùng tên với một ảnh khác đang được chuyển"
 }

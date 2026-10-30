@@ -305,5 +305,13 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "These can't be moved to “{}”:": "以下照片無法移到「{0}」：",
+  "{} is already in “{}”": "{0} 已在「{1}」中",
+  "{} is missing or offline": "{0} 遺失或處於離線狀態",
+  "and {n} more": "另有 {n} 張",
+  "Move {n}, skip {m}": "移動 {n} 張，略過 {m} 張",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "已將 {n} 張照片移到「{1}」{0:.0}，略過 {skipped} 張。編輯 → 復原 可移回。",
+  "{} can't be moved": "{0} 無法移動",
+  "{} has the same name as another photo being moved": "{0} 與另一張要移動的照片同名"
 }

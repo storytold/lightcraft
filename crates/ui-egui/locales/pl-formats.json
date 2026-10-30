@@ -305,5 +305,13 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "These can't be moved to “{}”:": "Nie można ich przenieść do „{0}”:",
+  "{} is already in “{}”": "{0} jest już w „{1}”",
+  "{} is missing or offline": "Brakuje {0} lub jest niedostępny",
+  "and {n} more": "i {n} więcej",
+  "Move {n}, skip {m}": "Przenieś: {n}, pomiń: {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}, pominięto: {skipped}. Edytuj → Cofnij przywróci je.",
+  "{} can't be moved": "{0} nie można przenieść",
+  "{} has the same name as another photo being moved": "{0} ma tę samą nazwę co inne przenoszone zdjęcie"
 }

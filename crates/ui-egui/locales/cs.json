@@ -2408,5 +2408,8 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Rename a clashing photo, or choose another folder, to move it too.": "Kolidující fotografii přejmenujte nebo zvolte jinou složku, a půjde přesunout.",
+  "Reconnect the disk or use File → Find Missing Photos…, then try again.": "Znovu připojte disk nebo použijte Soubor → Najít chybějící fotografie… a zkuste to znovu.",
+  "A photo with no file can't be moved. A Local photo can, once you use Add to My Photos.": "Fotografii bez souboru nelze přesunout. Místní fotografii lze, jakmile použijete Přidat do mých fotografií."
 }

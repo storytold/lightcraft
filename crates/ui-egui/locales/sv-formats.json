@@ -305,5 +305,13 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "These can't be moved to “{}”:": "Dessa kan inte flyttas till ”{0}”:",
+  "{} is already in “{}”": "{0} finns redan i ”{1}”",
+  "{} is missing or offline": "{0} saknas eller är offline",
+  "and {n} more": "och {n} till",
+  "Move {n}, skip {m}": "Flytta {n}, hoppa över {m}",
+  "Moved {n} photo{} to “{}”, skipped {skipped}. Edit → Undo moves them back.": "Flyttade till ”{1}”: {n}{0:.0}, överhoppade: {skipped}. Redigera → Ångra flyttar tillbaka dem.",
+  "{} can't be moved": "{0} kan inte flyttas",
+  "{} has the same name as another photo being moved": "{0} har samma namn som ett annat foto som flyttas"
 }
