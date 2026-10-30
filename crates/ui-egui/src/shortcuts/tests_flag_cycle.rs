@@ -53,7 +53,7 @@ fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 fn backtick_parses_and_formats_as_the_grave_key() {
     assert_eq!(super::parse("`"), Some((Modifiers::NONE, Key::Backtick)));
     assert_eq!(super::format(Modifiers::NONE, Key::Backtick).as_deref(), Some("`"));
-    assert_eq!(super::shortcut_of(&Default::default(), "photo.cycleFlag"), Some("`"));
+    assert_eq!(super::shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &Default::default(), "photo.cycleFlag"), Some("`"));
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn a_saved_assignment_of_the_key_wins_over_the_default() {
     let mut app = app().unwrap();
     app.ui.view = ViewMode::PhotoGrid;
     let ctx = egui::Context::default();
-    super::assign(&mut app.ui.settings.keymap, "photo.reject", Some("`")).unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "photo.reject", Some("`")).unwrap();
     tick(&mut app, &ctx);
     assert_eq!(flags(&app)[1], Flag::Reject);
 }

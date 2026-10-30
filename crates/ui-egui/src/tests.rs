@@ -41,6 +41,7 @@ mod histogram_drag;
 mod import_thumbnails;
 mod info_dialogs;
 mod keymap;
+mod keymap_profile;
 mod keyword_files;
 mod keyword_list;
 mod keyword_set;

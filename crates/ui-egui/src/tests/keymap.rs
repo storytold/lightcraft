@@ -72,7 +72,7 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     assert_eq!(h.app.recording_shortcut.as_deref(), Some("view.compare"));
     key(&mut h, "J", true);
     assert_eq!(h.app.recording_shortcut, None);
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
     assert_eq!(h.app.ui.view, ViewMode::Detail);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
     // Esc while recording cancels; the dialog stays open and nothing changes
@@ -80,7 +80,7 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     key(&mut h, "Escape", false);
     assert_eq!(h.app.recording_shortcut, None);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
     // the next Esc closes it; the new key works
     key(&mut h, "Escape", false);
     assert!(h.app.ui.dialog.is_none());
@@ -88,7 +88,7 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     assert_eq!(h.app.ui.view, ViewMode::Compare);
     // Reset All restores the declared keys
     h.app.run("app.resetShortcuts", json!({})).unwrap();
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+C"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.compare"), Some("Shift+C"));
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn restore_takes_back_a_declared_key_another_command_holds() {
     use crate::shortcuts::shortcut_of;
     let mut h = demo();
     h.app.ui.settings.keymap.insert("photo.increaseRating".into(), "P".into());
-    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), None);
+    assert_eq!(shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "photo.pick"), None);
     h.app.run("app.shortcuts", json!({})).unwrap();
     h.step();
     h.step();
@@ -119,8 +119,8 @@ fn restore_takes_back_a_declared_key_another_command_holds() {
     h.step();
     h.step();
     click(&mut h, "button:shortcutReset-photo.pick");
-    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), Some("P"));
-    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.increaseRating"), None);
+    assert_eq!(shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "photo.pick"), Some("P"));
+    assert_eq!(shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "photo.increaseRating"), None);
     assert!(h.app.ui.settings.keymap.is_empty(), "{:?}", h.app.ui.settings.keymap);
 }
 
@@ -155,7 +155,7 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     h.step();
     h.step();
     assert_eq!(h.app.recording_shortcut, None);
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
     // ⌘⌥C: the windowing layer sends a Copy event with the modifiers held
     record(&mut h, "survey", "view.survey");
     let m = egui::Modifiers { alt: true, ..egui::Modifiers::COMMAND };
@@ -163,7 +163,7 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     h.app.synthetic.push(egui::Event::Copy);
     h.step();
     h.step();
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
     // a saved modifier-only shortcut (from the bug) means no shortcut
     assert_eq!(crate::shortcuts::parse("Cmd+SuperLeft"), None);
 }
@@ -259,7 +259,7 @@ fn opening_numeric_release_keeps_keys_in_the_editor() {
         assert!(h.app.recording_shortcut.is_none() && h.app.ui.name_edit.is_none());
         assert!(h.app.native_shortcuts.is_empty() && h.app.synthetic.is_empty() && h.events.is_empty());
         assert!(!h.view.ctx.egui_wants_keyboard_input());
-        assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "photo.increaseRating"), Some("Enter"));
+        assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "photo.increaseRating"), Some("Enter"));
         let active = h.app.session.active().unwrap();
         let selection = h.app.session.selection.ids.clone();
         let (view, right, tool) = (h.app.ui.view, h.app.ui.right, h.app.ui.tool.clone());
@@ -355,9 +355,9 @@ fn open_library_and_visualize_hdr_keys_are_declared() {
     use crate::shortcuts::{Keymap, parse, shortcut_of};
 
     let keymap = Keymap::new();
-    assert_eq!(shortcut_of(&keymap, "app.openLibrary"), Some("Cmd+O"));
+    assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "app.openLibrary"), Some("Cmd+O"));
     assert!(parse("Cmd+O").is_some());
-    assert_eq!(shortcut_of(&keymap, "view.visualizeHdr"), None);
+    assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.visualizeHdr"), None);
 }
 
 /// Opening a library uses the same folder picker as File > Open Library. Cancelling it
@@ -528,13 +528,17 @@ fn lock_aspect_ratio_is_a_listed_row_on_a() {
     let b = bindable().iter().find(|b| b.id == "crop.lockAspect").expect("crop.lockAspect is mappable");
     assert_eq!(b.label, "Lock Aspect Ratio");
     assert_eq!(b.default, Some("A"));
-    assert_eq!(shortcut_of(&Keymap::new(), "crop.lockAspect"), Some("A"));
+    assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &Keymap::new(), "crop.lockAspect"), Some("A"));
     assert!(CONTEXTUAL.contains(&("view.visualizeSpots", "crop.lockAspect")), "A is disambiguated by context");
     // the editor lists it: the row is on screen and records keys for it
     let mut h = demo();
     record(&mut h, "lock", "crop.lockAspect");
     key(&mut h, "Escape", false);
-    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "crop.lockAspect"), Some("A"), "Esc cancels the recording: A stays");
+    assert_eq!(
+        shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "crop.lockAspect"),
+        Some("A"),
+        "Esc cancels the recording: A stays"
+    );
     key(&mut h, "Escape", false);
     assert!(h.app.ui.dialog.is_none());
 }
