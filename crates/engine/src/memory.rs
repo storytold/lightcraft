@@ -27,9 +27,17 @@ pub fn default_budget() -> usize {
     if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
     }
+    budget_for(total_ram())
+}
+
+/// The automatic budget for `total` bytes the process may use: a quarter of it, at most 1.5 GiB
+/// (1.5 GiB when unknown). No floor: under a small cgroup limit (128 MiB) a floor above the quarter
+/// would let the caches alone outgrow the limit, and the kernel kills the process.
+fn budget_for(total: Option<usize>) -> usize {
     let cap = 3usize << 29; // 1.5 GiB
-    match total_ram() {
-        Some(ram) => (ram / 4).clamp(256 << 20, cap),
+    match total {
+        // at least a byte: 0 means "not computed yet" to [`budget`]
+        Some(ram) => (ram / 4).clamp(1, cap),
         None => cap,
     }
 }
@@ -342,6 +350,18 @@ mod tests {
             return;
         };
         assert!(ram as u64 <= limit, "total_ram {ram} above the cgroup limit {limit}");
+    }
+
+    /// The budget stays a quarter of a small limit, not raised to a floor above it (#3072).
+    #[test]
+    fn the_budget_is_a_quarter_of_the_total_at_most_1_5_gib() {
+        const MIB: usize = 1 << 20;
+        assert_eq!(budget_for(Some(128 * MIB)), 32 * MIB, "a 128 MiB cgroup limit");
+        assert_eq!(budget_for(Some(512 * MIB)), 128 * MIB);
+        assert_eq!(budget_for(Some(4096 * MIB)), 1024 * MIB);
+        assert_eq!(budget_for(Some(64 * 1024 * MIB)), 1536 * MIB, "capped");
+        assert_eq!(budget_for(None), 1536 * MIB, "unknown");
+        assert_eq!(budget_for(Some(0)), 1, "never the 0 that means not computed");
     }
 
     /// Prints what the budget is sized from; run by hand inside and outside a limited scope.

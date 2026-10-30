@@ -44,8 +44,9 @@ pub struct CgroupMemory {
     /// The tightest limit (bytes) on this process's cgroup or any ancestor; `None` without one.
     pub limit: Option<u64>,
     /// Bytes the process can still be charged before it reaches a limit: the smallest
-    /// `limit − (usage − inactive file cache)` over the limited cgroups whose usage could be read
-    /// (saturating at 0).
+    /// `limit − (usage − inactive file cache)` over the limited cgroups (saturating at 0), with a
+    /// cgroup whose usage can't be read counting its whole limit. `None` without a limit, or when
+    /// usage wasn't asked for.
     pub headroom: Option<u64>,
 }
 
@@ -301,7 +302,9 @@ struct View<'m> {
 /// Every mount of the right version whose root holds the cgroup `path`, with `path` relative to
 /// it: a limit on an ancestor binds even when a closer mount (a bind mount of a subtree) shows
 /// the cgroup too, so each is read. When no mount's root holds `path` (a container without a
-/// cgroup namespace sees the host's path), the first mount's top alone.
+/// cgroup namespace sees the host's path), the first mount's top alone: what such a container
+/// mounts is its own cgroup, and a limit read there can only make the result tighter, where
+/// reading nothing would size the process from the machine's RAM.
 fn views<'m>(mounts: &'m [CgroupMount], v1: bool, path: &str) -> Vec<View<'m>> {
     let own = plain_components(path);
     let owned = |parts: &[&str]| parts.iter().map(|p| (*p).to_owned()).collect::<Vec<String>>();
@@ -360,11 +363,16 @@ fn memory_of(dirs: &[CgroupDir], usage: bool) -> CgroupMemory {
         if !usage {
             continue;
         }
-        if let Some(used) = read(&dir.path.join(usage_file)).as_deref().and_then(parse_usage) {
-            let stat = read(&dir.path.join("memory.stat")).unwrap_or_default();
-            let used = used.saturating_sub(stat_value(&stat, inactive_key).unwrap_or(0));
-            out.headroom = smaller(out.headroom, Some(limit.saturating_sub(used)));
-        }
+        // usage unreadable: the limit still caps the room (or `available` would fall back to the
+        // host's MemAvailable)
+        let room = match read(&dir.path.join(usage_file)).as_deref().and_then(parse_usage) {
+            Some(used) => {
+                let stat = read(&dir.path.join("memory.stat")).unwrap_or_default();
+                limit.saturating_sub(used.saturating_sub(stat_value(&stat, inactive_key).unwrap_or(0)))
+            }
+            None => limit,
+        };
+        out.headroom = smaller(out.headroom, Some(room));
     }
     out
 }
@@ -522,13 +530,19 @@ mod tests {
     }
 
     #[test]
-    fn usage_over_the_limit_leaves_no_headroom_and_unreadable_usage_none() {
+    fn usage_over_the_limit_leaves_no_headroom_and_unreadable_usage_the_limit() {
         let s = Scratch::new("v2-over");
         s.write("x/memory.max", "1000");
         s.write("x/memory.current", "5000");
         assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: Some(0) });
+        // without usage the limit still caps the headroom, so `available` doesn't fall back to
+        // the host's MemAvailable
         s.write("x/memory.current", "garbage");
-        assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: None });
+        assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: Some(1000) });
+        // and a child whose usage can't be read is not hidden by a parent whose usage can
+        s.write("memory.max", "5000");
+        s.write("memory.current", "100");
+        assert_eq!(cgroup_memory_at(&s.0, None, "0::/x"), CgroupMemory { limit: Some(1000), headroom: Some(1000) });
     }
 
     #[test]
@@ -538,7 +552,8 @@ mod tests {
         s.write("a/memory.current", &GIB.to_string());
         s.write("a/b/memory.max", &(2 * GIB).to_string());
         assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), false), CgroupMemory { limit: Some(2 * GIB), headroom: None });
-        assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), true), CgroupMemory { limit: Some(2 * GIB), headroom: Some(3 * GIB) });
+        // /a has 3 GiB of room; /b's usage can't be read, so its whole 2 GiB limit caps it
+        assert_eq!(memory_of(&cgroup_dirs(&s.0, None, "0::/a/b\n"), true), CgroupMemory { limit: Some(2 * GIB), headroom: Some(2 * GIB) });
     }
 
     #[test]
@@ -598,7 +613,7 @@ mod tests {
         s.write("a/memory.max", &(2 * GIB).to_string());
         let got = cgroup_memory_at(&s.0, None, "5:memory:/a\n0::/a\n");
         assert_eq!(got.limit, Some(2 * GIB));
-        assert_eq!(got.headroom, None, "no usage files");
+        assert_eq!(got.headroom, Some(2 * GIB), "no usage files: the limit caps it");
     }
 
     #[test]
