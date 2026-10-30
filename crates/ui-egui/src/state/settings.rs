@@ -162,7 +162,7 @@ pub struct AppSettings {
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
-    /// "Rendering…" while the photo it shows is not the finished render.
+    /// "Rendering…" after half a second while the photo it shows is not the finished render; off, only after 3 s.
     pub loupe_messages: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,

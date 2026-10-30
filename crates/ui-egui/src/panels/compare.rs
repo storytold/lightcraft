@@ -313,11 +313,8 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         let now = ui.input(|i| i.time);
         // (the wait belongs to the photo in the pane: one moved in starts its own)
         let rendering = ui.ctx().data_mut(|d| {
-            let (photo, wait) = d.get_temp_mut_or(egui::Id::unique(("compare-rendering", i)), (id, None));
-            if *photo != id {
-                (*photo, *wait) = (id, None);
-            }
-            super::detail::rendering_overdue(wait, keys, coming, now)
+            let state = d.get_temp_mut_or(egui::Id::unique(("compare-rendering", i)), (id, None));
+            super::detail::rendering_overdue_for(state, id, keys, coming, now, super::detail::RENDERING_AFTER_SECS)
         });
         let failed = (!rendering && mine(slot).is_none() && (!r.is_pending(slot) || r.retrying(slot))).then(|| r.failure_of(slot, id)).flatten();
         let over = display.intersect(img_area);

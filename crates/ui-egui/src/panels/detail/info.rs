@@ -258,17 +258,22 @@ fn pretty_date(iso: &str) -> String {
 
 /// How long a render may be on its way, with nothing new on screen, before the loupe says
 /// "Rendering…" (s): as long as the activity stack waits before it shows a task.
-pub(super) const RENDERING_AFTER_SECS: f64 = 0.5;
+pub(crate) const RENDERING_AFTER_SECS: f64 = 0.5;
+
+/// The same wait while View Options' Show message when loading or rendering photos is off: the
+/// person asked not to be told about ordinary renders, but a photo that is still the old picture
+/// after this long looks like a frozen app, so the loupe says so anyway (s).
+pub(crate) const SLOW_RENDERING_AFTER_SECS: f64 = 3.0;
 
 /// What [`rendering_overdue`] keeps between frames while a render is coming: the texture keys on
 /// screen, since when, and whether the pill is up.
 pub(crate) type RenderingWait = Option<([Option<u64>; 4], f64, bool)>;
 
-/// Whether the loupe says "Rendering…": a render has been `coming` for [`RENDERING_AFTER_SECS`] with
-/// no new texture `keys` on screen. The wait starts when the render starts coming (an idle app draws
-/// no frames, so the last one may be long ago), and once up the pill stays until nothing is coming:
-/// drafts slower than the wait don't make it blink.
-pub(crate) fn rendering_overdue(wait: &mut RenderingWait, keys: [Option<u64>; 4], coming: bool, now: f64) -> bool {
+/// Whether the loupe says "Rendering…": a render has been `coming` for `after` seconds (the
+/// constants above) with no new texture `keys` on screen. The wait starts when the render starts
+/// coming (an idle app draws no frames, so the last one may be long ago), and once up the pill stays
+/// until nothing is coming: drafts slower than the wait don't make it blink.
+pub(crate) fn rendering_overdue(wait: &mut RenderingWait, keys: [Option<u64>; 4], coming: bool, now: f64, after: f64) -> bool {
     if !coming {
         *wait = None;
         return false;
@@ -277,8 +282,24 @@ pub(crate) fn rendering_overdue(wait: &mut RenderingWait, keys: [Option<u64>; 4]
     if !*up && *seen != keys {
         (*seen, *since) = (keys, now);
     }
-    *up |= now - *since > RENDERING_AFTER_SECS;
+    *up |= now - *since > after;
     *up
+}
+
+/// [`rendering_overdue`] for a pane that shows one photo at a time: the wait belongs to the photo
+/// in `state`, so one moved in starts its own (the pill of the last photo doesn't carry over).
+pub(crate) fn rendering_overdue_for(
+    state: &mut (PhotoId, RenderingWait),
+    id: PhotoId,
+    keys: [Option<u64>; 4],
+    coming: bool,
+    now: f64,
+    after: f64,
+) -> bool {
+    if state.0 != id {
+        *state = (id, None);
+    }
+    rendering_overdue(&mut state.1, keys, coming, now, after)
 }
 
 /// A pill over the photo, 12 pt above the bottom of `over` or just above the Navigator when that

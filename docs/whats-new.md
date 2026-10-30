@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### A slow render says so even with the loading message off
+- With View Options' Show message when loading or rendering photos turned off, the loupe now still says "Rendering…"
+  once a render has been on its way for 3 seconds, so the old picture on screen doesn't look like a frozen app. A render
+  that finishes sooner stays quiet, as the setting asks. With the message on, nothing changes: it still appears after half
+  a second.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

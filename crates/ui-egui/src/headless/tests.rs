@@ -4839,7 +4839,7 @@ fn the_loupe_says_rendering_while_an_edit_renders() {
 }
 
 /// View Options' Show message when loading or rendering photos (on by default): turned off in
-/// the window, the loupe does not say "Rendering…" while an edit renders; `view.viewOptions
+/// the window, the loupe does not say "Rendering…" for the first moments of an edit's render (only one that stays slow says so: see the next test); `view.viewOptions
 /// {loupeMessages}` turns it back on for an agent (refusing a value that is not true or false).
 #[test]
 fn view_options_turn_the_rendering_message_off() {
@@ -4873,6 +4873,32 @@ fn view_options_turn_the_rendering_message_off() {
     assert_eq!(r["result"]["loupeMessages"], true, "{r}");
     assert_eq!(h.app.ui.dialog, None, "a value sets it without opening the window");
     assert!(h.step_until(SETTLE, pill), "the message shows again while the render is held");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
+}
+
+/// With the message off, a render that is still on its way after a long wait (several seconds, not the
+/// half second the message waits) says "Rendering…" anyway: the old photo on screen with no sign of work
+/// looks like a frozen app. A short wait stays quiet, as the setting asks.
+#[test]
+fn a_render_that_stays_slow_says_so_even_with_the_message_off() {
+    use crate::render::Slot;
+    use std::{cell::Cell, rc::Rc};
+    let pill = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "loupe:rendering");
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    h.settle(SETTLE);
+    h.app.ui.settings.loupe_messages = false;
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(super::RenderGate::new(open.clone())));
+    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), t);
+    for _ in 0..45 {
+        h.step();
+    }
+    assert!(h.app.renderer.is_pending(Slot::Main), "the edit's render is held");
+    assert!(!pill(&h), "a short wait stays quiet with the message off");
+    assert!(h.step_until(SETTLE, pill), "a long wait says so");
     open.set(true);
     assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
 }
