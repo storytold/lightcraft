@@ -47,9 +47,10 @@ fn path(op: &str, value: &str) -> serde_json::Value {
     json!({"field": "filePath", "op": op, "value": value})
 }
 
-/// Every album's count in `c`, each album counted alone (no pass, rules worked out per photo).
+/// Every album's count in `c`, each album counted alone (no pass, rules worked out per photo). Folders of albums are
+/// left out, as the whole count leaves them out.
 fn counted_alone(c: &Catalog) -> Vec<(AlbumId, usize)> {
-    let mut v: Vec<_> = c.albums().map(|a| (a.id, c.album_count(a.id))).collect();
+    let mut v: Vec<_> = c.albums().filter(|a| !a.folder).map(|a| (a.id, c.album_count(a.id))).collect();
     v.sort_unstable();
     v
 }

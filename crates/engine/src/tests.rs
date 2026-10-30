@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+mod album_folder_source;
 mod album_order;
 mod album_remove;
 mod albums_local;
