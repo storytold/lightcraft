@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Samsung panoramas without an end-of-image marker import
+- JPEGs whose image data runs straight into Samsung's SEF trailer, with no EOI marker, were refused as truncated.
+  When the file ends with a valid SEF trailer, the trailer now marks the end of the image, for the import probe and
+  the decode alike. A file that simply stops, or whose trailer is damaged, is still refused as truncated (#3350).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

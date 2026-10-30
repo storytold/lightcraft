@@ -17,6 +17,8 @@ pub(crate) struct Markers {
     pub sof: u8,
     /// Number of components in the first scan (< `components` for non-interleaved sequential files).
     pub first_scan_components: u8,
+    /// Offset of the first SOS marker.
+    pub scan_start: usize,
     /// Number of APP1 segments: capped before the allocating decoders walk them again.
     pub app1: u32,
     pub exif: Option<Vec<u8>>,
@@ -66,6 +68,7 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
             break;
         }
         if marker == 0xDA {
+            m.scan_start = p;
             m.first_scan_components = b.get(p + 4).copied().unwrap_or(0);
             break;
         }
@@ -142,7 +145,7 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     if !matches!(m.components, 1 | 3 | 4) {
         return Err(Error::Malformed(F, format!("{} colour components", m.components)));
     }
-    if m.first_scan_components == 0 || !reaches_eoi(bytes) {
+    if m.first_scan_components == 0 || !(reaches_eoi(bytes) || sef_trailer_start(bytes, m.scan_start).is_some()) {
         return Err(Error::Malformed(F, "truncated: the image data doesn't end with an end-of-image marker".into()));
     }
     let orientation = m.exif.as_deref().map(exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
@@ -177,6 +180,41 @@ fn reaches_eoi(b: &[u8]) -> bool {
     }
 }
 
+/// Where a valid Samsung SEF trailer begins, when the file ends with one and its data begins after
+/// the first scan started. Panoramas from some Samsung phones write the trailer straight after the
+/// entropy-coded data, with no EOI marker, so the trailer is where the image ends (#3350). The
+/// layout: data blocks, `SEFH`, version, count, one 12-byte entry per block (type, offset back from
+/// `SEFH`, length), the directory's length and `SEFT`. Every entry has to land inside the file and
+/// before the directory, so a damaged trailer vouches for nothing.
+fn sef_trailer_start(b: &[u8], scan_start: usize) -> Option<usize> {
+    let u32_at = |p: usize| b.get(p..p.checked_add(4)?).map(|v| u32::from_le_bytes([v[0], v[1], v[2], v[3]]) as usize);
+    let n = b.len();
+    let seft = n.checked_sub(4)?;
+    if b.get(seft..) != Some(b"SEFT") {
+        return None;
+    }
+    let dir_len = seft.checked_sub(4).and_then(u32_at)?;
+    let sefh = seft.checked_sub(4).and_then(|p| p.checked_sub(dir_len))?;
+    if b.get(sefh..sefh.saturating_add(4)) != Some(b"SEFH") {
+        return None;
+    }
+    let count = sefh.checked_add(8).and_then(u32_at)?;
+    if count == 0 || count.checked_mul(12).and_then(|d| d.checked_add(12)).is_none_or(|d| d > dir_len) {
+        return None;
+    }
+    let mut start = sefh;
+    for i in 0..count {
+        let entry = i.checked_mul(12).and_then(|o| o.checked_add(12)).and_then(|o| sefh.checked_add(o))?;
+        let (Some(offset), Some(len)) = (u32_at(entry.saturating_add(4)), u32_at(entry.saturating_add(8))) else { return None };
+        let data = sefh.checked_sub(offset)?;
+        if data.checked_add(len).is_none_or(|end| end > sefh) {
+            return None;
+        }
+        start = start.min(data);
+    }
+    (start > scan_start).then_some(start)
+}
+
 pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
@@ -187,6 +225,19 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
     // their quadratic/unbounded handling of APP1 metadata stays linear in file size.
     if m.app1 > MAX_APP1 {
         return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
+    // Samsung panoramas without an EOI, their SEF trailer right after the scan data (#3350): the
+    // scaling and CMYK decoder refuses them as truncated, so they are decoded up to the trailer
+    // with the marker put back. The marker parse above stops at the first scan, so `m` is the same.
+    if bytes.ends_with(b"SEFT")
+        && !reaches_eoi(bytes)
+        && let Some(start) = sef_trailer_start(bytes, m.scan_start)
+        && let Some(image) = bytes.get(..start)
+    {
+        let mut ended = Vec::with_capacity(start.saturating_add(2));
+        ended.extend_from_slice(image);
+        ended.extend_from_slice(&[0xFF, 0xD9]);
+        return decode_with_fallback(&ended, opts, fallback);
     }
     let scale_to = opts.max_size.filter(|&(mw, mh)| mw > 0 && mh > 0 && (m.width >= mw.saturating_mul(2) || m.height >= mh.saturating_mul(2)));
     // zune-jpeg handles the common cases fastest; jpeg-decoder covers DCT scaling, CMYK/YCCK,

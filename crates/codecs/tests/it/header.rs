@@ -364,3 +364,79 @@ fn mutated_files_agree_with_decode() {
     assert!(decodable > 1000, "{decodable}");
     assert!(disagreements.is_empty(), "{disagreements:#?}");
 }
+
+/// Samsung's SEF trailer: data blocks, then `SEFH`, version, count and one 12-byte entry per block
+/// (type, offset back from `SEFH`, length), then the directory's length and `SEFT`.
+fn sef_trailer(blocks: &[&[u8]]) -> Vec<u8> {
+    let mut data = Vec::new();
+    let mut entries = Vec::new();
+    for (i, block) in blocks.iter().enumerate() {
+        entries.push((data.len(), block.len(), 0x08E0 + i as u32));
+        data.extend_from_slice(block);
+    }
+    let mut dir = b"SEFH".to_vec();
+    dir.extend_from_slice(&101u32.to_le_bytes());
+    dir.extend_from_slice(&(blocks.len() as u32).to_le_bytes());
+    for (start, len, ty) in entries {
+        dir.extend_from_slice(&ty.to_le_bytes());
+        dir.extend_from_slice(&((data.len() - start) as u32).to_le_bytes());
+        dir.extend_from_slice(&(len as u32).to_le_bytes());
+    }
+    let mut b = data;
+    let dir_len = dir.len() as u32;
+    b.extend_from_slice(&dir);
+    b.extend_from_slice(&dir_len.to_le_bytes());
+    b.extend_from_slice(b"SEFT");
+    b
+}
+
+/// Panoramas from some Samsung phones end their image data without an EOI marker, running straight
+/// into the SEF trailer (#3350). The header reader accepts them as complete, like a decode does,
+/// while a file whose SEF trailer is damaged, or that simply stops, stays truncated.
+#[test]
+fn samsung_sef_trailer_without_eoi() {
+    let f = fixtures(160, 96);
+    let jpeg = f.iter().find(|x| x.0 == "jpeg 420 o6").map(|x| x.1.clone()).unwrap();
+    let no_eoi = &jpeg[..jpeg.len() - 2];
+    let mut pano = b"Panorama_Shot_Info".to_vec();
+    pano.extend_from_slice(&[7; 26]);
+    assert_eq!(pano.len(), 44);
+    let mut file = no_eoi.to_vec();
+    file.extend_from_slice(&sef_trailer(&[&pano]));
+    let header = read_header(&file).unwrap_or_else(|e| panic!("SEF trailer in place of the EOI: {e}"));
+    assert_eq!(header, read_header(&jpeg).unwrap());
+    assert_eq!(header, decoded(&file).unwrap());
+
+    let mut two = no_eoi.to_vec();
+    two.extend_from_slice(&sef_trailer(&[&pano, b"Image_UTC_Data0000000000000"]));
+    assert_eq!(read_header(&two).unwrap(), header, "two SEF blocks");
+
+    let mut after_eoi = jpeg.clone();
+    after_eoi.extend_from_slice(&sef_trailer(&[&pano]));
+    assert_eq!(read_header(&after_eoi).unwrap(), header, "the usual place for the trailer, after the EOI");
+
+    // damaged trailers don't vouch for the image data
+    let n = file.len();
+    let mut bad_magic = file.clone();
+    bad_magic[n - 1] = b'X';
+    assert!(read_header(&bad_magic).is_err(), "no SEFT");
+    let mut bad_len = file.clone();
+    bad_len[n - 8..n - 4].copy_from_slice(&5000u32.to_le_bytes());
+    assert!(read_header(&bad_len).is_err(), "directory length past the file start");
+    let mut bad_sefh = file.clone();
+    let sefh = n - 8 - 24;
+    assert_eq!(&file[sefh..sefh + 4], b"SEFH");
+    bad_sefh[sefh] = b'X';
+    assert!(read_header(&bad_sefh).is_err(), "no SEFH");
+    let mut bad_offset = file.clone();
+    bad_offset[sefh + 16..sefh + 20].copy_from_slice(&(n as u32).to_le_bytes());
+    assert!(read_header(&bad_offset).is_err(), "entry offset before the file start");
+    let mut bad_block_len = file.clone();
+    bad_block_len[sefh + 20..sefh + 24].copy_from_slice(&1000u32.to_le_bytes());
+    assert!(read_header(&bad_block_len).is_err(), "entry runs into the directory");
+    let mut whole_file = file.clone();
+    whole_file[sefh + 16..sefh + 20].copy_from_slice(&(sefh as u32).to_le_bytes());
+    whole_file[sefh + 20..sefh + 24].copy_from_slice(&(sefh as u32).to_le_bytes());
+    assert!(read_header(&whole_file).is_err(), "the entry claims the image data: no scan before the trailer");
+    assert!(read_header(&sef_trailer(&[&pano])).is_err());
+}
