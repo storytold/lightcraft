@@ -245,6 +245,7 @@
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "„{name}“ von {n} Fotos entfernt. Bearbeiten → Rückgängig stellt es wieder her.",
   "1 task is still running: {names}. Quitting stops it.": "1 Aufgabe läuft noch: {names}. Beenden bricht sie ab.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} Aufgaben laufen noch: {names}. Beenden bricht sie ab.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Laufen noch und lassen sich nicht abbrechen: {names}. Beenden wartet nicht auf sie.",
   "{what} merge cancelled": "{what}-Zusammenfügung abgebrochen",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Übersprungen: {n} lokale Fotos{0:.0} – Alben enthalten Bibliotheksfotos (zuerst zu „Meine Fotos“ hinzufügen)",
   "New Folder in “{name}”": "Neuer Ordner in „{name}“",

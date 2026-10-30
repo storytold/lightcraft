@@ -1928,6 +1928,7 @@
   "Unknown licence": "Licencia desconocida",
   "Use": "Usar",
   "Waiting to start…": "Esperando para empezar…",
+  "AI Denoise was stopped for this photo.": "La reducción de ruido con IA se detuvo para esta foto.",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Funciona con archivos RAW de cámaras con sensor estándar (Bayer). Los demás archivos conservan su reducción de ruido normal.",
   "cached picture": "imagen en caché",
   "cached pictures": "imágenes en caché",

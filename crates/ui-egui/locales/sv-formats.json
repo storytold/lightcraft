@@ -243,6 +243,7 @@
   "{n} raws can now be developed from their raw data": "{n} raw-filer kan nu framkallas från sina rådata",
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} likartade foto{} · Visa → Rensa filter för att se alla",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} uppgifter körs fortfarande: {names}. Om du avslutar stoppas de.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Körs fortfarande och kan inte stoppas: {names}. Om du avslutar nu väntar appen inte på dem.",
   "{n} {noun}": "{n} {noun}",
   "{pct} %": "{pct} %",
   "{photos} catalog records processed; {collections} collections.": "{photos} katalogposter bearbetade; {collections} samlingar.",

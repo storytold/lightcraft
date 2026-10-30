@@ -584,6 +584,9 @@ pub(crate) struct FacesState {
     pub task: Option<crate::activity::TaskGuard>,
     /// The most photos left at once since the scan last finished (the row's whole).
     pub peak: u64,
+    /// The row's ✕ was taken in: nothing more is lined up until recognition is switched off and on again (or another
+    /// library or model is opened). Photos already being embedded finish and are kept.
+    pub stopped: bool,
 }
 
 impl FacesState {
@@ -597,6 +600,10 @@ impl FacesState {
         self.checked = None;
         self.queue.clear();
         self.queue_stamp = None;
+        self.stopped = false;
+        // a row that was stopped belongs to the old library's scan
+        self.task = None;
+        self.peak = 0;
         self.in_flight.clear();
         self.retry_at = None;
         self.saved_at = None;

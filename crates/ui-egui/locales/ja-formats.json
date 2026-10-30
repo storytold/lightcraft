@@ -249,6 +249,7 @@
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "「{name}」を写真{n}枚から削除しました。「編集」→「取り消す」で元に戻せます。",
   "1 task is still running: {names}. Quitting stops it.": "1件のタスクが実行中です：{names}。終了すると停止します。",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n}件のタスクが実行中です：{names}。終了すると停止します。",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "実行中で停止できません：{names}。今終了しても完了を待ちません。",
   "{what} merge cancelled": "{what}合成をキャンセルしました",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "ローカル写真{n}枚をスキップしました{0:.0}：アルバムに入れられるのはライブラリの写真です（先にマイフォトに追加してください）",
   "New Folder in “{name}”": "「{name}」に新規フォルダ",

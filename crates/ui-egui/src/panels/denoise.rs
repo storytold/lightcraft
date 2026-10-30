@@ -215,6 +215,19 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
                 });
             }
         }
+        PhotoState::Stopped => {
+            if amount > 0.0 {
+                egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
+                    note(ui, "AI Denoise was stopped for this photo.", t.text_dim);
+                    ui.add_space(2.0);
+                    let r = ui.small_button(crate::i18n::tr("Make it now"));
+                    register(ui, "denoise:make", r.rect);
+                    if r.clicked() {
+                        let _ = app.run("denoise.queue", json!({"ids": [id.0]}));
+                    }
+                });
+            }
+        }
         PhotoState::Queued { ahead } => {
             egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
                 let text = if ahead == 0 {

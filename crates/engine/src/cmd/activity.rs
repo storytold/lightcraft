@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn cancel_all_and_errors() {
         let mut s = Session::new();
-        let (_a, _b) = (s.activity.start("export", "E", Cancel::Yes), s.activity.start("faces", "F", Cancel::No));
+        let (_a, _b) = (s.activity.start("export", "E", Cancel::Yes), s.activity.start("applePhotos", "F", Cancel::No));
         assert_eq!(s.execute("activity.cancel", &json!({"all": true})).unwrap()["cancelled"], 1);
         assert!(s.execute("activity.cancel", &json!({"id": 999})).is_err());
         assert!(s.execute("activity.cancel", &json!({})).is_err());

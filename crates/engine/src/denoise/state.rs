@@ -73,6 +73,8 @@ pub enum PhotoState {
     },
     /// Nothing has asked for it yet.
     Idle,
+    /// Its picture was stopped (the row's ✕): it is left alone until it is asked for.
+    Stopped,
 }
 
 #[derive(Clone)]
@@ -122,6 +124,11 @@ pub(crate) struct State {
     pub(super) made: u64,
     /// AI Denoise's row in the activity stack, while a photo is being made or waits its turn.
     pub(super) task: Option<crate::activity::TaskGuard>,
+    /// The row's ✕ was taken in: what was running or waiting was stopped (`Session::denoise_stop_if_asked`).
+    pub(super) stopping: bool,
+    /// Photos whose picture was stopped, with the key it was being made for: the automatic queue leaves them alone until
+    /// they are asked for (`denoise.queue`, the switch), their file or the model changes, or the cache is cleared.
+    pub(super) stopped: HashMap<PhotoId, String>,
 }
 
 impl Default for State {
@@ -142,6 +149,8 @@ impl Default for State {
             generation: 0,
             made: 0,
             task: None,
+            stopping: false,
+            stopped: HashMap::new(),
         }
     }
 }
@@ -163,6 +172,10 @@ impl State {
         }
         self.queue.clear();
         self.failed.clear();
+        self.stopped.clear();
+        // the row, stopped or not, belonged to the old library's work
+        self.task = None;
+        self.stopping = false;
         self.dirty = true;
         self.generation += 1;
     }

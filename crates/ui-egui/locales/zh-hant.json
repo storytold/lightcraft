@@ -1755,6 +1755,7 @@
   "Unknown licence": "Unknown licence",
   "Use": "Use",
   "Waiting to start…": "Waiting to start…",
+  "AI Denoise was stopped for this photo.": "已停止這張照片的 AI 降噪。",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.",
   "cached picture": "cached picture",
   "cached pictures": "cached pictures",

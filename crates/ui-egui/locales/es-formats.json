@@ -245,6 +245,7 @@
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "“{name}” quitada de {n} fotos. Editar → Deshacer la devuelve.",
   "1 task is still running: {names}. Quitting stops it.": "1 tarea sigue en curso: {names}. Salir la detiene.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} tareas siguen en curso: {names}. Salir las detiene.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Siguen en curso y no se pueden detener: {names}. Salir ahora no las espera.",
   "{what} merge cancelled": "Combinación {what} cancelada",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Fotos locales omitidas: {n}{0:.0} — los álbumes contienen fotos de la biblioteca (añádelas primero a Mis fotos)",
   "New Folder in “{name}”": "Nueva carpeta en «{name}»",

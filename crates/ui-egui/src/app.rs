@@ -45,6 +45,7 @@ impl LightcraftApp {
             quit_prompt: None,
             notice_input: Default::default(),
             quit_confirmed: false,
+            quit_tasks_answered: false,
             control_rx: None,
             pending_screenshots: vec![],
             pending_gestures: vec![],

@@ -1755,6 +1755,7 @@
   "Unknown licence": "ライセンス不明",
   "Use": "使用",
   "Waiting to start…": "開始を待っています…",
+  "AI Denoise was stopped for this photo.": "この写真のAIノイズ除去は停止されました。",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "標準的な（ベイヤー）センサーのカメラの raw ファイルで動作します。それ以外のファイルは通常のノイズ軽減のままです。",
   "cached picture": "キャッシュされた画像",
   "cached pictures": "キャッシュされた画像",

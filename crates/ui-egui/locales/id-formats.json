@@ -248,6 +248,7 @@
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "“{name}” dihapus dari {n} foto. Edit → Urungkan akan mengembalikannya.",
   "1 task is still running: {names}. Quitting stops it.": "1 tugas masih berjalan: {names}. Jika keluar sekarang, tugas ini akan dihentikan.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} tugas masih berjalan: {names}. Jika keluar sekarang, semua tugas ini akan dihentikan.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Masih berjalan dan tidak dapat dihentikan: {names}. Keluar sekarang tidak menunggu semuanya selesai.",
   "{what} merge cancelled": "Penggabungan {what} dibatalkan",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "{n} foto Lokal{:.0} dilewati: album hanya dapat berisi foto pustaka (tambahkan ke Foto saya terlebih dahulu)",
   "New Folder in “{name}”": "Folder baru di “{name}”",

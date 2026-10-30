@@ -129,6 +129,11 @@ impl Progress {
     pub(crate) fn cancel_now(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
+
+    /// Was the job asked to stop (it is still running until its next tile)?
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 /// The loaded model, loading it first when it is not (kept for the next photo).

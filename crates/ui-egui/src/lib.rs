@@ -124,7 +124,7 @@ pub struct Perf {
 pub enum QuitPrompt {
     /// Changes couldn't be written to disk (issue #103).
     Unsaved(String),
-    /// Tasks that quitting would cut short are running: an import, an export… (issue #345).
+    /// Tasks are running (quitting stops the ones with a ✕ and doesn't wait for the others): an import, an export… (issue #345).
     Tasks(String),
 }
 
@@ -173,6 +173,9 @@ pub struct LightcraftApp {
     pub(crate) notice_input: panels::notices::PromptInput,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// Quit Anyway was chosen in the running-tasks prompt: it is not asked again for this quit (the tasks that can't be
+    /// stopped are still running when the window's close request or Try Saving Again comes back through `may_close`).
+    pub(crate) quit_tasks_answered: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     /// Synthetic-input control requests waiting for a fresh layout and delivery (plan §4.5).

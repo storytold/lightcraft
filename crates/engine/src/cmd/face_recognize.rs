@@ -336,6 +336,9 @@ mod imp {
         s.faces.index.reset(&tag, dim, cache);
         s.faces.queue.clear();
         s.faces.queue_stamp = None;
+        s.faces.stopped = false;
+        s.faces.task = None;
+        s.faces.peak = 0;
         s.faces.in_flight.clear();
         s.faces.embedder = Some((tag, embedder.clone()));
         Ok(embedder)
@@ -611,8 +614,8 @@ mod imp {
     }
 
     /// The scan's row in the activity stack: there while `pending` photos are left, its whole the most that were left at
-    /// once since the scan last finished (which it returns; 0 when none are left). It can't be stopped from there: the
-    /// scan is switched off in Settings.
+    /// once since the scan last finished (which it returns; 0 when none are left). Its ✕ stops the scan: see
+    /// [`stop_if_asked`].
     fn track(s: &mut Session, pending: u64) -> u64 {
         if pending == 0 {
             s.faces.task = None;
@@ -620,9 +623,22 @@ mod imp {
             return 0;
         }
         s.faces.peak = s.faces.peak.max(pending);
-        let task = s.faces.task.get_or_insert_with(|| s.activity.start("faces", "Finding faces", crate::activity::Cancel::No));
+        let task = s.faces.task.get_or_insert_with(|| s.activity.start("faces", "Finding faces", crate::activity::Cancel::Yes));
         task.progress(s.faces.peak.saturating_sub(pending), s.faces.peak);
         s.faces.peak
+    }
+
+    /// The row's ✕ (`activity.cancel`) was taken in: the photos lined up are dropped and no more are lined up (until
+    /// recognition is switched off and on again, or another library or model is opened). The photos the workers are
+    /// embedding finish and are kept, so the index and the list of searched photos stay whole; the photos left are
+    /// searched at the next launch, or when recognition is switched back on.
+    fn stop_if_asked(s: &mut Session) {
+        if !s.faces.stopped && s.faces.task.as_ref().is_some_and(|t| t.is_cancelled()) {
+            s.faces.stopped = true;
+            s.faces.queue.clear();
+            // the list is made again from the catalog when the scan is asked for again
+            s.faces.queue_stamp = None;
+        }
     }
 
     /// `faces.pump`: cheap to call every frame. Takes in what the background worker has finished and, when it is idle,
@@ -638,6 +654,7 @@ mod imp {
         finish_downloads(s);
         let enabled = s.face_models_dir.clone().is_some_and(|d| enabled_cached(s, &d));
         if !enabled {
+            s.faces.stopped = false;
             track(s, 0);
             return Ok(json!({"active": false}));
         }
@@ -653,6 +670,7 @@ mod imp {
         };
         s.faces.retry_at = None;
         let (embedded, _) = collect(s);
+        stop_if_asked(s);
         if (s.faces.index.has_unsaved() || s.faces.scanned.has_unsaved()) && s.faces.saved_at.is_none_or(|t| t.elapsed() >= SAVE_EVERY) {
             if let Err(e) = s.faces.index.save() {
                 log::warn!("could not save the face embeddings: {e}");
@@ -662,7 +680,7 @@ mod imp {
             }
             s.faces.saved_at = Some(Instant::now());
         }
-        if s.faces.in_flight.is_empty() && s.faces.queue.is_empty() && s.faces.queue_stamp != Some(s.catalog.revision) {
+        if !s.faces.stopped && s.faces.in_flight.is_empty() && s.faces.queue.is_empty() && s.faces.queue_stamp != Some(s.catalog.revision) {
             // the queue is taken from the end, so it is made last first
             let mut queue = pending(s, &[], true);
             queue.reverse();

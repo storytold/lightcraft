@@ -587,7 +587,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         s.commit("AI Denoise", op)?;
     }
     if on {
-        s.denoise_enqueue(&[id], true, false);
+        s.denoise_ask(&[id], true, false);
     } else {
         s.denoise_cancel(Some(id), false);
     }
@@ -612,7 +612,7 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
             other => return Err(bad(C, format!("unknown scope `{other}`: use selected, visible or withAmount"))),
         },
     };
-    let queued = s.denoise_enqueue(&ids, false, bool_or(p, "retry", false));
+    let queued = s.denoise_ask(&ids, false, bool_or(p, "retry", false));
     let mut v = status_json(s, None);
     if let Some(o) = v.as_object_mut() {
         o.insert("added".into(), json!(queued));
@@ -673,7 +673,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "denoise.queue", "Denoise Photos", [], None, "{ids?: [photoId], scope?: selected | visible | withAmount, retry?: false} → {added, …status} — make the denoised pictures of raw photos that have none, in the background. `retry` tries photos that failed before", always, queue),
         cmd!(query "denoise.cancel", "Cancel Denoise", [], None, "{id?, all?} → {cancelled} — stop the photo being made and/or forget the ones waiting (all of them when `id` is omitted)", always, cancel),
-        cmd!(query "denoise.status", "Denoise Status", [], None, "{id?} → {enabled, model, runtime, productsDir, queued, running: {photo, done, total, seconds} | null, ready, made, auto, runOn, device: {kind: gpu | cpu | pending | none, adapter?, reason?, cardMs?, cpuMs?, fellBack?, remote?: {address, state: pending | unavailable | used | idle | slower | given up, device?, remoteMs?, localMs?, reason?, failures?, lastError?}}, cache: {files, bytes, limitBytes}, generation, photo?: {state: notApplicable | noModel | ready | queued | running | failed | idle, …}}", always, status),
+        cmd!(query "denoise.status", "Denoise Status", [], None, "{id?} → {enabled, model, runtime, productsDir, queued, running: {photo, done, total, seconds} | null, ready, made, auto, runOn, device: {kind: gpu | cpu | pending | none, adapter?, reason?, cardMs?, cpuMs?, fellBack?, remote?: {address, state: pending | unavailable | used | idle | slower | given up, device?, remoteMs?, localMs?, reason?, failures?, lastError?}}, cache: {files, bytes, limitBytes}, generation, photo?: {state: notApplicable | noModel | ready | queued | running | failed | idle | stopped, …}} — `stopped`: stopped by the AI Denoise row's ✕; the automatic queue leaves it alone until `denoise.queue` or the switch asks for it", always, status),
         cmd!(query "denoise.pump", "Denoise Pump", [], None, "{pace?: pause | light | normal | full} → {active, running, queued, ready, generation, downloading} — called every frame by the app: takes in finished work and keeps one photo going", always, pump),
         cmd!(query "denoise.clear", "Clear Denoise Cache", [], None, "{} → {deleted, bytes} — delete every cached denoised picture of this library (they are made again when wanted)", always, clear),
     ]

@@ -251,6 +251,7 @@
   "{n} selected photos · {pages} pages": "Valittuja kuvia: {n} · sivuja: {pages}",
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Samankaltaisia kuvia: {n}{:.0} · Näytä → Tyhjennä suodattimet näyttääksesi kaikki",
   "{n} tasks are still running: {names}. Quitting stops them.": "Käynnissä olevia tehtäviä: {n}: {names}. Lopettaminen pysäyttää ne.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Yhä käynnissä, eikä niitä voi pysäyttää: {names}. Lopettaminen nyt ei odota niitä.",
   "{n} {noun}": "{n} {noun}",
   "{pct} %": "{pct} %",
   "{photos} catalog records processed; {collections} collections.": "Käsiteltyjä katalogitietueita: {photos}; kokoelmia: {collections}.",

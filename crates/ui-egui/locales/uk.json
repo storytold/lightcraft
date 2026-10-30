@@ -1745,6 +1745,7 @@
   "Unknown licence": "Невідома ліцензія",
   "Use": "Використовувати",
   "Waiting to start…": "Очікування запуску…",
+  "AI Denoise was stopped for this photo.": "Усунення шуму ШІ для цього фото зупинено.",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Працює з файлами RAW від камер зі стандартним сенсором (Баєра). Інші файли зберігають звичайне зменшення шуму.",
   "cached picture": "Кешовані зображення",
   "cached pictures": "Кешовані зображення",

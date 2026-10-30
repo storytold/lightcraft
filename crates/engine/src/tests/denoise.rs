@@ -842,7 +842,7 @@ fn denoise_row_while_queue_is_busy() {
         // (what the pump left running or queued is what the row reflects until the next pump)
         if x.s.denoise_busy() {
             assert_eq!(rows.len(), 1, "{r}");
-            assert_eq!((rows[0].label.as_str(), rows[0].cancellable, rows[0].unit), ("AI Denoise", false, crate::activity::Unit::Percent), "{r}");
+            assert_eq!((rows[0].label.as_str(), rows[0].cancellable, rows[0].unit), ("AI Denoise", true, crate::activity::Unit::Percent), "{r}");
             if !r["running"].is_null() {
                 assert_eq!(rows[0].detail, "ramp.dng", "{r}");
             }
@@ -857,5 +857,213 @@ fn denoise_row_while_queue_is_busy() {
     }
     assert!(shown, "the photo never showed a row");
     assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
+fn the_denoise_row_stops_what_waits_and_it_is_not_taken_up_again_by_itself() {
+    let mut x = setup("stop-queued", true);
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    let rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "denoise").collect::<Vec<_>>();
+    // paused: the photo is lined up, the row is there, nothing runs
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    let row = rows(&x.s);
+    assert_eq!(row.len(), 1);
+    assert!(matches!(x.s.denoise_photo_state(id), PhotoState::Queued { .. }));
+    x.s.execute("activity.cancel", &json!({"id": row[0].id})).expect("a denoise row accepts a stop");
+    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    // nothing is lined up, nothing was made, the row is gone, and the photo is not marked as failed
+    assert!(rows(&x.s).is_empty());
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Stopped);
+    for _ in 0..10 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        (x.runs.load(Ordering::Relaxed), x.s.denoise_photo_state(id)),
+        (0, PhotoState::Stopped),
+        "a stopped photo is not started again by the automatic queue"
+    );
+    // asking for it again makes it
+    x.s.execute("denoise.queue", &json!({"scope": "withAmount"})).unwrap();
+    pump_until_ready(&mut x.s, 1);
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+/// A model that takes its time on every tile, so a job is still running when it is stopped.
+struct Slow {
+    runs: Arc<AtomicUsize>,
+}
+
+impl TileRunner for Slow {
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        Dim { runs: self.runs.clone() }.run(input)
+    }
+}
+
+impl Model for Slow {
+    fn runner(&self, _: RunOn, threads: usize) -> (&dyn TileRunner, usize) {
+        (self, threads)
+    }
+
+    fn self_test(&self, _: RunOn) -> Result<Value, String> {
+        Ok(json!({"ok": true}))
+    }
+}
+
+#[test]
+fn stopping_a_running_denoise_leaves_no_picture_and_no_failure() {
+    let mut x = setup("stop-running", true);
+    let runs = x.runs.clone();
+    x.s.denoise.loader = Arc::new(move |_, _| Ok(Arc::new(Slow { runs: runs.clone() }) as Arc<dyn Model>));
+    // the model the install loaded is forgotten, so the slow one is what runs
+    *x.s.denoise.active.as_ref().unwrap().model.lock().unwrap() = None;
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    let rows = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "denoise").collect::<Vec<_>>();
+    let mut started = false;
+    for _ in 0..200 {
+        let r = x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        if !r["running"].is_null() && x.runs.load(Ordering::Relaxed) >= 1 {
+            started = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(started, "the photo never started: {} runs, {}", x.runs.load(Ordering::Relaxed), x.s.execute("denoise.status", &json!({})).unwrap());
+    let row = rows(&x.s);
+    assert_eq!(row.len(), 1);
+    x.s.execute("activity.cancel", &json!({"id": row[0].id})).expect("a running denoise accepts a stop");
+    for _ in 0..200 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        if !x.s.denoise_busy() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!x.s.denoise_busy(), "the job stopped");
+    assert!(rows(&x.s).is_empty(), "the row ends with the job");
+    assert_eq!(x.s.denoise_made(), 0, "the picture was not finished");
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Stopped, "stopped is not failed, and nothing was made");
+    assert_eq!(x.s.denoise_cache_usage().0, 0, "no half-written picture is left in the cache");
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
+fn a_photo_asked_for_while_a_stopped_one_finishes_stopping_gets_a_row_with_a_stop_of_its_own() {
+    let mut x = setup("stop-then-ask", true);
+    let runs = x.runs.clone();
+    x.s.denoise.loader = Arc::new(move |_, _| Ok(Arc::new(Slow { runs: runs.clone() }) as Arc<dyn Model>));
+    *x.s.denoise.active.as_ref().unwrap().model.lock().unwrap() = None;
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    let row = |s: &Session| s.activity.list().into_iter().find(|t| t.kind == "denoise");
+    for _ in 0..200 {
+        x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        if x.runs.load(Ordering::Relaxed) >= 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    x.s.activity.cancel(row(&x.s).expect("a row").id).unwrap();
+    // asked for again before the stopped job has reported
+    x.s.execute("denoise.queue", &json!({"scope": "withAmount"})).unwrap();
+    let mut fresh = false;
+    for _ in 0..400 {
+        let r = x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        // a row that is not stopping while a job runs is the new job's: the old one's would still read "Stopping…"
+        fresh |= !r["running"].is_null() && row(&x.s).is_some_and(|t| t.cancellable && !t.cancelling);
+        if r["ready"].as_u64() >= Some(1) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(fresh, "the photo asked for after the stop never had a row with a ✕");
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Ready);
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
+fn a_photo_asked_for_after_a_stop_on_a_paused_queue_does_not_start_under_the_stopped_row() {
+    let mut x = setup("stop-paused", true);
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    let row = |s: &Session| s.activity.list().into_iter().find(|t| t.kind == "denoise");
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    x.s.activity.cancel(row(&x.s).expect("a row").id).unwrap();
+    // asked for again before the pump has taken the stop in; nothing runs yet
+    x.s.execute("denoise.queue", &json!({"scope": "withAmount"})).unwrap();
+    // the first pump that may start a job starts it: its row is a new one, not the one that was stopped
+    let r = x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    let t = row(&x.s).expect("the photo has a row");
+    assert!(!r["running"].is_null() && t.cancellable && !t.cancelling, "{r} {t:?}");
+    pump_until_ready(&mut x.s, 1);
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Ready);
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
+fn a_stopped_photo_says_so_and_is_asked_for_again_only_by_a_request() {
+    let mut x = setup("stopped-state", true);
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    let row = x.s.activity.list().into_iter().find(|t| t.kind == "denoise").expect("a row");
+    x.s.activity.cancel(row.id).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Stopped, "not idle: the interface must not wait for it");
+    assert_eq!(x.s.execute("denoise.status", &json!({"id": id.0})).unwrap()["photo"]["state"], "stopped");
+    x.s.execute("denoise.queue", &json!({"ids": [id.0]})).unwrap();
+    assert!(matches!(x.s.denoise_photo_state(id), PhotoState::Queued { .. }), "{:?}", x.s.denoise_photo_state(id));
+    pump_until_ready(&mut x.s, 1);
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
+fn a_photo_whose_picture_was_made_anyway_is_not_stopped_when_the_cache_evicts_it_later() {
+    stopped_then_made("stopped-then-made", |s| {
+        s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    });
+}
+
+#[test]
+fn a_picture_found_by_reindexing_is_not_stopped_when_the_cache_evicts_it_later() {
+    stopped_then_made("stopped-then-reindexed", Session::denoise_reindex);
+}
+
+/// A photo is stopped, then its picture appears (an export, another session) and `take_in` makes the session notice it;
+/// evicted again later, the photo is made again, not stopped.
+fn stopped_then_made(tag: &str, take_in: impl Fn(&mut Session)) {
+    let mut x = setup(tag, true);
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    pump_until_ready(&mut x.s, 1);
+    let used = x.dir.join("library").join("denoise");
+    let mine: PathBuf = std::fs::read_dir(&used).unwrap().flatten().map(|e| e.path()).find(|p| p.file_stem().is_some_and(|s| s.len() == 32)).unwrap();
+    let bytes = std::fs::read(&mine).unwrap();
+    // the picture goes (an eviction), the photo is lined up and then stopped
+    x.s.denoise_evict_to(10, None);
+    assert!(!mine.exists());
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    let row = x.s.activity.list().into_iter().find(|t| t.kind == "denoise").expect("a row");
+    x.s.activity.cancel(row.id).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Stopped);
+    // the picture is made anyway (an export, another session), and the photo takes it in
+    std::fs::write(&mine, bytes).unwrap();
+    take_in(&mut x.s);
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Ready);
+    // evicted again later: the photo is not stopped, it is made again because it still has its amount
+    x.s.denoise_evict_to(10, None);
+    assert_ne!(x.s.denoise_photo_state(id), PhotoState::Stopped);
+    pump_until_ready(&mut x.s, 1);
+    assert!(mine.exists());
     let _ = std::fs::remove_dir_all(&x.dir);
 }

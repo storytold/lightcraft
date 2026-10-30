@@ -2338,6 +2338,7 @@
   "volumes (Linux, case-sensitive APFS) `img_1.JPG` next to `IMG_1.JPG` is a different photo and the renamed one gets": "volymer (Linux, skiftlägeskänslig APFS) är `img_1.JPG` bredvid `IMG_1.JPG` ett annat foto och det omdöpta får",
   "Wait for the import to finish": "Vänta tills importen är klar",
   "Waiting to start…": "Väntar på att starta…",
+  "AI Denoise was stopped for this photo.": "AI-brusreducering stoppades för det här fotot.",
   "Warm Film": "Varm film",
   "Warm Glow": "Varm glöd",
   "Warm Print": "Varm utskrift",

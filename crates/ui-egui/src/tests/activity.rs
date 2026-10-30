@@ -91,7 +91,7 @@ fn more_than_three_rows_overflow_and_expand() {
 #[test]
 fn not_cancellable_rows_have_no_cross() {
     let mut h = demo();
-    let g = h.app.session.activity.start("faces", "Finding faces", Cancel::No);
+    let g = h.app.session.activity.start("applePhotos", "Adding to Apple Photos", Cancel::No);
     wait_visible(&mut h);
     assert!(has(&h, &format!("activity:row:{}", g.id())));
     assert!(!has(&h, &format!("activity:cancel:{}", g.id())));
@@ -186,8 +186,63 @@ fn cancelling_task_does_not_block_quit() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     h.app.session.activity.cancel(g.id()).unwrap();
-    let _f = h.app.session.activity.start("faces", "Finding faces", Cancel::No);
     assert!(crate::panels::notices::may_close(&mut h.app));
+}
+
+#[test]
+fn quit_names_a_running_job_that_cannot_be_stopped() {
+    let mut h = demo();
+    let _f = h.app.session.activity.start("applePhotos", "Adding to Apple Photos", Cancel::No);
+    assert!(!crate::panels::notices::may_close(&mut h.app), "quitting would leave the job running unannounced");
+    let Some(crate::QuitPrompt::Tasks(text)) = h.app.quit_prompt.clone() else { panic!("{:?}", h.app.quit_prompt) };
+    let unstoppable = crate::i18n::tr_format!(
+        "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.",
+        names = crate::i18n::tr("Adding to Apple Photos")
+    );
+    assert_eq!(text, unstoppable);
+}
+
+#[test]
+fn a_quick_read_only_check_does_not_make_quit_ask() {
+    let mut h = demo();
+    let _check = h.app.session.activity.start("findMissing", "Find Missing Photos", Cancel::Quick);
+    assert!(crate::panels::notices::may_close(&mut h.app), "nothing the user made is lost by quitting during a check");
+    assert!(h.app.quit_prompt.is_none());
+}
+
+#[test]
+fn quit_with_both_kinds_says_which_stop_and_which_are_not_waited_for_and_quit_anyway_does_not_ask_twice() {
+    let png = |img: &lightcraft_raster::Rgba8| {
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+    };
+    let write = |p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string());
+    let app = LightcraftApp::new(
+        lightcraft_engine::Session::with_demo(),
+        Services { png: Some(Box::new(png)), write_new: Some(Box::new(write)), ..Default::default() },
+    );
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(T);
+    let stoppable = h.app.session.activity.start("faces", "Finding faces", Cancel::Yes);
+    let _unstoppable = h.app.session.activity.start("applePhotos", "Adding to Apple Photos", Cancel::No);
+    wait_visible(&mut h);
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    let Some(crate::QuitPrompt::Tasks(text)) = h.app.quit_prompt.clone() else { panic!("{:?}", h.app.quit_prompt) };
+    let stops = crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = crate::i18n::tr("Finding faces"));
+    let unstoppable = crate::i18n::tr_format!(
+        "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.",
+        names = crate::i18n::tr("Adding to Apple Photos")
+    );
+    assert_eq!(text, format!("{stops}\n{unstoppable}"));
+    h.step();
+    if let Some(p) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+        let r = h.request("ui.screenshot", json!({"path": std::path::Path::new(&p).join("quit-prompt.png").to_string_lossy(), "headless": true}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    click(&mut h, "button:quitAnyway");
+    assert!(stoppable.is_cancelled(), "the one that can stop is asked to");
+    assert!(h.quit_requested(), "Quit Anyway ends the app");
+    // the window's close request is checked again (frame.rs); the job that can't be stopped must not bring the prompt back
+    assert!(crate::panels::notices::may_close(&mut h.app), "the job that can't be stopped brings the prompt back, so the app never quits");
 }
 
 /// A slow disk: every file takes `ms` to write (the UI must not wait for it).

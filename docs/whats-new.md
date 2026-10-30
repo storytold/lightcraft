@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### AI Denoise and Finding faces can be stopped, and Quit names every running job
+- The AI Denoise and Finding faces rows in the activity stack now have a ✕ (and accept `activity.cancel`). Stopping a
+  denoise ends the photo being made at its next tile and leaves no picture, so the cache keeps only whole ones; the photos
+  that were waiting are dropped. Stopping the face scan lets the photos being searched finish and lines up no more. In both
+  cases LightCraft leaves them alone afterward: a stopped photo says so in the Detail panel ("AI Denoise was stopped for this photo.") and is made again when you
+  ask for it (**Make it now**, or the Denoise switch), and the face scan starts again when you switch face recognition off and on in Settings, or at the next
+  launch.
+- Quitting while something runs now lists every running job, not only the ones with a ✕. The jobs that stop when you
+  quit are named as before; the ones that can't be stopped (Adding to Apple Photos, for one) are named
+  apart, with a note that quitting doesn't wait for them. Short read-only checks (Find Missing Photos, a library check)
+  don't make Quit ask.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

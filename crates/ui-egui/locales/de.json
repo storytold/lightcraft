@@ -1909,6 +1909,7 @@
   "Unknown licence": "Unbekannte Lizenz",
   "Use": "Verwenden",
   "Waiting to start…": "Wartet auf Start…",
+  "AI Denoise was stopped for this photo.": "KI-Entrauschen wurde für dieses Foto angehalten.",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Funktioniert mit RAW-Dateien von Kameras mit Standardsensor (Bayer). Andere Dateien behalten ihre normale Rauschreduzierung.",
   "cached picture": "zwischengespeichertes Bild",
   "cached pictures": "zwischengespeicherte Bilder",

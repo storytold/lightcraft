@@ -245,6 +245,7 @@
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "«{name}» убрано с фото: {n}. Правка → Отменить вернёт его.",
   "1 task is still running: {names}. Quitting stops it.": "Ещё выполняется задача: {names}. Выход прервёт её.",
   "{n} tasks are still running: {names}. Quitting stops them.": "Ещё выполняется задач: {n} — {names}. Выход прервёт их.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Ещё выполняются и не могут быть остановлены: {names}. Выход сейчас не будет их дожидаться.",
   "{what} merge cancelled": "{what}: слияние отменено",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальных фото: {n}{0:.0} — в альбомах только фото из библиотеки (сначала добавьте их в «Мои фото»)",
   "New Folder in “{name}”": "Новая папка в «{name}»",

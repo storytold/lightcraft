@@ -1428,6 +1428,7 @@
   "Unknown licence": "Неизвестная лицензия",
   "Use": "Использовать",
   "Waiting to start…": "Ожидание запуска…",
+  "AI Denoise was stopped for this photo.": "ИИ-шумоподавление для этого фото остановлено.",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Работает с RAW-файлами камер со стандартным (Байера) сенсором. Остальные файлы сохраняют обычное шумоподавление.",
   "cached picture": "изобр. в кэше",
   "cached pictures": "изобр. в кэше",

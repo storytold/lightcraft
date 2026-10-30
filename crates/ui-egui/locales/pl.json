@@ -1707,6 +1707,7 @@
   "Unknown licence": "Nieznana licencja",
   "Use": "Użyj",
   "Waiting to start…": "Oczekiwanie na uruchomienie…",
+  "AI Denoise was stopped for this photo.": "Odszumianie AI zostało zatrzymane dla tego zdjęcia.",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Działa na plikach RAW z aparatów z typową matrycą Bayera. Pozostałe pliki zachowują zwykłe odszumianie.",
   "cached picture": "Obrazy w pamięci podręcznej",
   "cached pictures": "Obrazy w pamięci podręcznej",

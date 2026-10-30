@@ -1,6 +1,6 @@
 //! Things the user must not miss (issue #103): settings files that were damaged or unreadable when
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
-//! are only in memory or while tasks that would be cut short are running (issue #345).
+//! are only in memory or while tasks are running (issue #345).
 
 use egui::{Align2, RichText, vec2};
 
@@ -40,13 +40,29 @@ pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
     Some(text)
 }
 
-/// The quit prompt's text while `count` cancellable tasks run (`names` lists them).
-fn tasks_message(count: usize, names: &str) -> String {
-    if count == 1 {
-        crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names)
-    } else {
-        crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = count, names = names)
+/// The quit prompt's text for the running tasks: the ones that stop when the app quits (`stops`) and the ones that can't
+/// be stopped and that quitting doesn't wait for (`unstoppable`), each a list of names.
+fn tasks_message(stops: &[String], unstoppable: &[String]) -> String {
+    let mut lines = Vec::new();
+    if let [one] = stops {
+        lines.push(crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = one));
+    } else if !stops.is_empty() {
+        lines.push(crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = stops.len(), names = stops.join(", ")));
     }
+    if !unstoppable.is_empty() {
+        lines.push(crate::i18n::tr_format!(
+            "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.",
+            names = unstoppable.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
+
+/// The quit goes through: the jobs that can stop are asked to, the ones that can't are what the prompt said it doesn't
+/// wait for. Not before: Cancel on a later prompt is back to work with everything still running.
+fn quit_now(app: &mut LightcraftApp) {
+    app.session.activity.cancel_all();
+    app.ui.quit = true;
 }
 
 /// The quit prompt's text when `n` changes couldn't be written to disk, for the reason `e`.
@@ -56,20 +72,32 @@ fn unsaved_message(n: usize, e: &str) -> String {
     crate::i18n::tr_format!("{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.", s, lost, n = n, e = e)
 }
 
-/// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
-/// can be cancelled (an import, an export…) are asked about first; then changes that couldn't be
-/// written are retried — the log, then a snapshot of everything in memory.
+/// The window may close now (`true`), or the quit prompt is shown (`false`). Every running task is asked about first (an
+/// import, an export… stop when the app quits; the ones with no ✕ are named as not waited for); then
+/// changes that couldn't be written are retried — the log, then a snapshot of everything in memory.
 pub fn may_close(app: &mut LightcraftApp) -> bool {
     if app.quit_confirmed {
         return true;
     }
-    // before the library is touched: a Cancel here keeps working with it
-    let running = app.session.activity.running_cancellable();
+    // before the library is touched: a Cancel here keeps working with it; asked once per quit (Quit Anyway is the answer)
+    let running = if app.quit_tasks_answered { Vec::new() } else { app.session.activity.running() };
     if !running.is_empty() {
-        let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
-        app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(running.len(), &names)));
+        let (stops, unstoppable): (Vec<_>, Vec<_>) = running.iter().partition(|t| t.cancellable);
+        let names =
+            |tasks: Vec<&lightcraft_engine::activity::TaskInfo>| tasks.iter().map(|t| crate::i18n::tr(&t.label).to_string()).collect::<Vec<_>>();
+        app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(&names(stops), &names(unstoppable))));
         return false;
     }
+    // the window closes: whoever answered the jobs prompt earlier (Quit Anyway) is still owed the stop it promised
+    let may = unsaved_may_close(app);
+    if may {
+        app.session.activity.cancel_all();
+    }
+    may
+}
+
+/// [`may_close`] for what is left once the running tasks were asked about: changes that couldn't be written.
+fn unsaved_may_close(app: &mut LightcraftApp) -> bool {
     if app.session.unsaved().is_none() {
         return true;
     }
@@ -535,10 +563,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         };
         app.quit_prompt = None;
         if buttons.get(i).is_some_and(|(_, _, choice)| *choice == Choice::QuitAnyway) {
-            app.session.activity.cancel_all();
-            // unsaved changes still get their own question
-            if may_close(app) {
-                app.ui.quit = true;
+            // the jobs are not asked about again for this quit: the ones with no ✕ are still running when the window's
+            // close request or Try Saving Again comes back through `may_close`
+            app.quit_tasks_answered = true;
+            // unsaved changes still get their own question; the jobs are asked to stop only once the quit goes through
+            if unsaved_may_close(app) {
+                quit_now(app);
             }
         }
         return;
@@ -562,15 +592,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.notice_input.reset_to(None);
                 clear_prompt_focus(ctx);
                 if may_close(app) {
-                    app.ui.quit = true;
+                    quit_now(app);
                 }
             }
             Some(Choice::QuitAnyway) => {
                 app.quit_prompt = None;
                 app.quit_confirmed = true;
-                app.ui.quit = true;
+                quit_now(app);
             }
-            Some(Choice::Cancel | Choice::Ok) | None => app.quit_prompt = None,
+            Some(Choice::Cancel | Choice::Ok) | None => {
+                app.quit_prompt = None;
+                // back to work: the next quit asks about the jobs again
+                app.quit_tasks_answered = false;
+            }
         }
         return;
     }

@@ -59,6 +59,7 @@ impl Session {
         }
         self.denoise.queue.clear();
         self.denoise.failed.clear();
+        self.denoise.stopped.clear();
         self.denoise.dirty = true;
     }
 
@@ -97,6 +98,8 @@ impl Session {
             }
         }
         for (id, spec) in now {
+            // a picture that exists is not "stopped", whoever made it (an export, another session)
+            self.denoise.stopped.remove(&id);
             if self.media.denoise.spec(id).is_none_or(|old| old.key != spec.key) {
                 self.media.denoise.set(id, spec);
                 self.media.forget(id);
@@ -127,6 +130,8 @@ impl Session {
             }
             None if spec.product.is_file() && product::is_current(&spec.product, &spec.key) => {
                 // made by an export, or by another session
+                // a picture that exists is not "stopped", whoever made it: if it is evicted later, the photo is made again
+                self.denoise.stopped.remove(&id);
                 self.media.denoise.set(id, spec);
                 self.media.forget(id);
                 self.denoise.generation += 1;
@@ -163,6 +168,7 @@ impl Session {
         let key = self.denoise_spec(p).map(|s| s.1);
         match self.denoise.failed.get(&id) {
             Some(f) if Some(&f.key) == key.as_ref() => PhotoState::Failed { why: f.why.clone(), unsupported: f.unsupported },
+            _ if self.denoise_was_stopped(id) => PhotoState::Stopped,
             _ => PhotoState::Idle,
         }
     }
@@ -180,7 +186,8 @@ impl Session {
             if !eligible(&p) || self.media.denoise.spec(*id).is_some() || self.denoise.queue.contains(id) {
                 continue;
             }
-            if self.denoise.running.as_ref().is_some_and(|r| r.photo == *id) || self.denoise.queue.len() >= MAX_QUEUE {
+            // a photo whose job was told to stop can be asked for again at once: its job is as good as gone
+            if self.denoise.running.as_ref().is_some_and(|r| r.photo == *id && !r.progress.is_cancelled()) || self.denoise.queue.len() >= MAX_QUEUE {
                 continue;
             }
             let Some((_, key)) = self.denoise_spec(&p) else { continue };
@@ -197,6 +204,45 @@ impl Session {
             added += 1;
         }
         added
+    }
+
+    /// [`Self::denoise_enqueue`] for what the user asked for (`denoise.queue`, the Denoise switch): a photo whose picture
+    /// was stopped is made after all.
+    pub(crate) fn denoise_ask(&mut self, ids: &[PhotoId], front: bool, retry: bool) -> usize {
+        // a ✕ not yet taken in comes first: it stops what was asked before this, not this
+        self.denoise_stop_if_asked();
+        for id in ids {
+            self.denoise.stopped.remove(id);
+        }
+        self.denoise_enqueue(ids, front, retry)
+    }
+
+    /// The row's ✕ (`activity.cancel`) was taken in: the running photo stops at its next tile (nothing of it is saved, so
+    /// the cache keeps only whole pictures), what waits is forgotten, and the photos are remembered so the automatic
+    /// queue does not start them again by itself. Done once per row.
+    fn denoise_stop_if_asked(&mut self) {
+        if self.denoise.stopping || !self.denoise.task.as_ref().is_some_and(|t| t.is_cancelled()) {
+            return;
+        }
+        self.denoise.stopping = true;
+        let ids: Vec<PhotoId> = self.denoise.running.iter().map(|r| r.photo).chain(self.denoise.queue.iter().copied()).collect();
+        for id in ids {
+            if let Some((_, key)) = self.catalog.photo(id).and_then(|p| self.denoise_spec(p)) {
+                self.denoise.stopped.insert(id, key);
+            }
+        }
+        self.denoise_cancel(None, true);
+        self.denoise.generation += 1;
+    }
+
+    /// Was photo `id`'s picture stopped, and is it still the one that was being made?
+    fn denoise_was_stopped(&self, id: PhotoId) -> bool {
+        // the usual answer, before a key is built
+        if !self.denoise.stopped.contains_key(&id) {
+            return false;
+        }
+        let key = self.catalog.photo(id).and_then(|p| self.denoise_spec(p)).map(|s| s.1);
+        self.denoise.stopped.get(&id).is_some_and(|k| Some(k) == key.as_ref())
     }
 
     /// Stop the job that is running, and with `all` forget everything that waits.
@@ -295,6 +341,7 @@ impl Session {
         match outcome {
             Outcome::Done => {
                 self.denoise.made += 1;
+                self.denoise.stopped.remove(&r.photo);
                 self.denoise_check_photo(r.photo);
                 self.denoise_evict(Some(&r.product));
             }
@@ -303,8 +350,19 @@ impl Session {
             }
             Outcome::Cancelled => {}
         }
+        // the row whose ✕ stopped this job ends with it: work that follows gets a row of its own
+        self.denoise_end_stopped_row();
         // the picture's state changed: the interface draws it again
         self.denoise.generation += 1;
+    }
+
+    /// Drop the row whose ✕ was taken in once the job it stopped is gone, so photos asked for after the stop show a fresh row
+    /// with a ✕ instead of "Stopping…".
+    fn denoise_end_stopped_row(&mut self) {
+        if self.denoise.stopping && self.denoise.running.is_none() {
+            self.denoise.task = None;
+            self.denoise.stopping = false;
+        }
     }
 
     /// Keep the cache within its limit: the pictures nobody asks for go first, the oldest first; `keep` (the one just
@@ -370,6 +428,7 @@ impl Session {
             }
         }
         self.denoise.failed.clear();
+        self.denoise.stopped.clear();
         self.denoise.touch();
         (files, bytes)
     }
@@ -378,6 +437,7 @@ impl Session {
     /// nothing is happening (no file is opened unless a photo with a Denoise amount lacks its picture).
     pub(crate) fn denoise_pump(&mut self, pace: Pace) {
         crate::cmd::denoise::finish_downloads(self);
+        self.denoise_stop_if_asked();
         self.denoise_refresh_active(false);
         // photos that changed (a replaced file has another key) must not keep the picture of what they were
         let stale = !self.media.denoise.is_empty()
@@ -386,6 +446,8 @@ impl Session {
             self.denoise_reindex();
         }
         self.denoise_poll();
+        // a job stopped by the row's ✕ is gone (or never ran): what starts below is not the row's to stop
+        self.denoise_end_stopped_row();
         if self.denoise.active.is_none() || self.denoise_products_dir().is_none() {
             return;
         }
@@ -395,7 +457,8 @@ impl Session {
             self.denoise_check_photo(*id);
         }
         if auto {
-            // the photo being edited goes first
+            // the photo being edited goes first; a photo whose picture was stopped waits until it is asked for
+            let wanted: Vec<PhotoId> = wanted.into_iter().filter(|id| !self.denoise_was_stopped(*id)).collect();
             let (open, others): (Vec<PhotoId>, Vec<PhotoId>) = wanted.into_iter().partition(|id| self.selection.active == Some(*id));
             self.denoise_enqueue(&others, false, false);
             self.denoise_enqueue(&open, true, false);
@@ -428,15 +491,18 @@ impl Session {
     }
 
     /// Keep AI Denoise's row in the activity stack up to date (each `denoise.pump`): there while a photo is being made or
-    /// waits its turn, with the running photo's tiles and its file name; gone when the queue is idle. It has no ✕: what is
-    /// made follows the photos' Denoise amounts and Settings ▸ AI Denoise.
+    /// waits its turn, with the running photo's tiles and its file name; gone when the queue is idle. Its ✕ stops the
+    /// running photo at its next tile and forgets what waits ([`Self::denoise_stop_if_asked`]); a stopped photo
+    /// leaves no picture behind, and is made again when asked for.
     pub(crate) fn denoise_track(&mut self) {
+        self.denoise_end_stopped_row();
         if !self.denoise_busy() {
             self.denoise.task = None;
+            self.denoise.stopping = false;
             return;
         }
         let task = self.denoise.task.get_or_insert_with(|| {
-            let t = self.activity.start("denoise", "AI Denoise", crate::activity::Cancel::No);
+            let t = self.activity.start("denoise", "AI Denoise", crate::activity::Cancel::Yes);
             t.set_unit(crate::activity::Unit::Percent);
             t
         });

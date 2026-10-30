@@ -31,8 +31,11 @@ struct Inner {
 
 /// How a task can be cancelled.
 pub enum Cancel {
-    /// Not at all (no ✕): the face scan, AI Denoise.
+    /// Not at all (no ✕): Adding to Apple Photos (Photos can't be stopped once asked), a move, Print to PDF.
     No,
+    /// Not at all (no ✕), and short and read-only (Find Missing Photos, a library check, the GPU check): quitting
+    /// loses nothing and doesn't wait for it, so Quit's prompt doesn't list it.
+    Quick,
     /// With a flag of its own ([`TaskGuard::cancel_flag`]).
     Yes,
     /// With the job's existing flag.
@@ -100,6 +103,8 @@ struct Entry {
     detail: Mutex<String>,
     cancel: Option<Arc<AtomicBool>>,
     cancellable: AtomicBool,
+    /// A short read-only check ([`Cancel::Quick`]): quitting loses nothing, so [`Activity::running`] leaves it out.
+    quick: bool,
     /// Held while a cancel is decided ([`Activity::cancel`], [`Activity::cancel_all`]) and while
     /// cancelling is switched ([`TaskGuard::set_cancellable`], [`TaskHandle::set_cancellable`]): a
     /// step that turns it off and then reads the cancel flag either sees a cancel that was
@@ -172,8 +177,9 @@ impl Activity {
     /// translates it).
     pub fn start(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
         let id = self.inner.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        let quick = matches!(cancel, Cancel::Quick);
         let cancel = match cancel {
-            Cancel::No => None,
+            Cancel::No | Cancel::Quick => None,
             Cancel::Yes => Some(Arc::new(AtomicBool::new(false))),
             Cancel::Flag(flag) => Some(flag),
         };
@@ -187,6 +193,7 @@ impl Activity {
             unit: AtomicU8::new(Unit::Count.to_u8()),
             detail: Mutex::new(String::new()),
             cancellable: AtomicBool::new(cancel.is_some()),
+            quick,
             cancel,
             gate: Mutex::new(()),
         });
@@ -213,9 +220,10 @@ impl Activity {
         tasks.iter().filter(|e| e.try_cancel()).count()
     }
 
-    /// Tasks that quitting would cut short: cancellable ones not already stopping.
-    pub fn running_cancellable(&self) -> Vec<TaskInfo> {
-        lock(&self.inner.tasks).iter().filter(|e| e.is_cancellable() && !e.is_cancelled()).map(|e| e.info()).collect()
+    /// Tasks running when the app quits, whether or not they can be stopped (`cancellable` tells which): every task
+    /// not already stopping, except the short read-only checks ([`Cancel::Quick`]).
+    pub fn running(&self) -> Vec<TaskInfo> {
+        lock(&self.inner.tasks).iter().filter(|e| !e.quick && !e.is_cancelled()).map(|e| e.info()).collect()
     }
 }
 
@@ -344,7 +352,7 @@ mod tests {
     fn cancel_errors_instead_of_panicking() {
         let a = Activity::default();
         assert!(a.cancel(42).is_err());
-        let g = a.start("faces", "Finding faces", Cancel::No);
+        let g = a.start("applePhotos", "Adding to Apple Photos", Cancel::No);
         assert!(a.cancel(g.id()).is_err());
         let h = a.start("lightroom", "Importing Lightroom catalog", Cancel::Yes);
         h.set_cancellable(false);
@@ -355,9 +363,31 @@ mod tests {
     #[test]
     fn cancel_all_counts_only_cancellable() {
         let a = Activity::default();
-        let (_x, _y, _z) = (a.start("export", "E", Cancel::Yes), a.start("import", "I", Cancel::Yes), a.start("faces", "F", Cancel::No));
+        let (_x, _y, _z) = (a.start("export", "E", Cancel::Yes), a.start("import", "I", Cancel::Yes), a.start("applePhotos", "F", Cancel::No));
         assert_eq!(a.cancel_all(), 2);
-        assert!(a.running_cancellable().is_empty());
+        assert_eq!(a.running().len(), 1, "only the one that can't be stopped is left");
+    }
+
+    #[test]
+    fn running_lists_every_task_not_already_stopping() {
+        let a = Activity::default();
+        let (x, _y, _z) = (a.start("export", "E", Cancel::Yes), a.start("import", "I", Cancel::Yes), a.start("applePhotos", "P", Cancel::No));
+        let by = |a: &Activity| a.running().iter().map(|t| (t.label.clone(), t.cancellable)).collect::<Vec<_>>();
+        assert_eq!(by(&a), vec![("E".into(), true), ("I".into(), true), ("P".into(), false)]);
+        a.cancel(x.id()).unwrap();
+        assert_eq!(by(&a), vec![("I".into(), true), ("P".into(), false)]);
+    }
+
+    #[test]
+    fn a_quick_check_has_no_stop_and_is_not_what_quitting_would_cut_short() {
+        let a = Activity::default();
+        let (_c, _p) = (a.start("findMissing", "Find Missing Photos", Cancel::Quick), a.start("applePhotos", "P", Cancel::No));
+        assert_eq!(
+            a.list().iter().map(|t| (t.label.clone(), t.cancellable)).collect::<Vec<_>>(),
+            vec![("Find Missing Photos".into(), false), ("P".into(), false)]
+        );
+        assert_eq!(a.running().iter().map(|t| t.label.clone()).collect::<Vec<_>>(), vec!["P".to_string()], "only the one quitting doesn't wait for");
+        assert_eq!(a.cancel_all(), 0);
     }
 
     #[test]

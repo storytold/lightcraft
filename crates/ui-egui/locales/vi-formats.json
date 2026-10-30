@@ -251,6 +251,7 @@
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} ảnh tương tự{:.0} · Xem → Xóa bộ lọc để thấy tất cả",
   "{n} tasks are still running: {names}. Quitting stops them.": "Còn {n} tác vụ đang chạy: {names}. Thoát sẽ dừng chúng.",
+  "Still running and can't be stopped: {names}. Quitting now doesn't wait for them.": "Vẫn đang chạy và không thể dừng: {names}. Thoát lúc này sẽ không chờ chúng.",
   "{n} {noun}": "{noun}: {n}",
   "{pct} %": "{pct} %",
   "{photos} catalog records processed; {collections} collections.": "{photos} catalog records processed; {collections} collections.",

@@ -106,6 +106,115 @@ fn quitting_with_unsaved_changes_asks_first() {
     assert!(h.app.quit_confirmed && crate::panels::notices::may_close(&mut h.app));
 }
 
+/// A job with no ✕ is running and changes couldn't be written: the jobs prompt is answered once, then Try Saving Again
+/// retries the save instead of asking about the job again, and a quit that follows is not asked about it either.
+#[test]
+fn try_saving_again_after_the_jobs_prompt_saves_and_quits_with_a_job_that_cannot_stop() {
+    let store = Unplugged::default();
+    let mut s = lightcraft_engine::Session::new();
+    let stores = LibraryStores { dir: "unplugged".into(), catalog: Box::new(store.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let _job = h.app.session.activity.start("applePhotos", "Adding to Apple Photos", lightcraft_engine::activity::Cancel::No);
+    store.fail.store(true, Ordering::SeqCst);
+    let r = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Kept"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))), "the job is asked about first");
+    h.step();
+    click(&mut h, "button:quitAnyway");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Unsaved(_))), "then the changes that couldn't be written");
+    h.step();
+    store.fail.store(false, Ordering::SeqCst);
+    click(&mut h, "button:quitRetry");
+    assert!(h.app.session.unsaved().is_none(), "the save was retried");
+    assert!(h.quit_requested() && h.app.quit_prompt.is_none(), "and the app quits without asking about the job again");
+    assert!(crate::panels::notices::may_close(&mut h.app), "the window's close request is not stopped by the job either");
+}
+
+/// Cancel on the unsaved prompt is back to work: the next quit asks about the jobs again.
+#[test]
+fn cancelling_the_unsaved_prompt_after_the_jobs_prompt_asks_about_jobs_again_next_time() {
+    let store = Unplugged::default();
+    let mut s = lightcraft_engine::Session::new();
+    let stores = LibraryStores { dir: "unplugged".into(), catalog: Box::new(store.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let _job = h.app.session.activity.start("applePhotos", "Adding to Apple Photos", lightcraft_engine::activity::Cancel::No);
+    store.fail.store(true, Ordering::SeqCst);
+    let _ = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Kept"}}), T);
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    h.step();
+    click(&mut h, "button:quitAnyway");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Unsaved(_))));
+    h.step();
+    click(&mut h, "button:quitCancel");
+    assert!(h.app.quit_prompt.is_none() && !h.app.ui.quit);
+    let next = h.app.session.activity.start("export", "Exporting", lightcraft_engine::activity::Cancel::Yes);
+    assert!(!crate::panels::notices::may_close(&mut h.app), "back to work: the next quit asks about the jobs again");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Tasks(_))));
+    drop(next);
+}
+
+/// Quit Anyway on the jobs prompt stops nothing yet when changes still couldn't be written: Cancel on the unsaved
+/// prompt is back to work, with the jobs that can stop (AI Denoise, Finding faces) still running; the ones that quit
+/// for real are asked to stop only when the app does quit.
+#[test]
+fn jobs_are_stopped_only_when_the_quit_goes_through_not_when_the_unsaved_prompt_is_cancelled() {
+    let store = Unplugged::default();
+    let mut s = lightcraft_engine::Session::new();
+    let stores = LibraryStores { dir: "unplugged".into(), catalog: Box::new(store.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let job = h.app.session.activity.start("faces", "Finding faces", lightcraft_engine::activity::Cancel::Yes);
+    store.fail.store(true, Ordering::SeqCst);
+    let _ = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Kept"}}), T);
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    h.step();
+    click(&mut h, "button:quitAnyway");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Unsaved(_))));
+    h.step();
+    click(&mut h, "button:quitCancel");
+    assert!(h.app.quit_prompt.is_none() && !h.app.ui.quit);
+    assert!(!job.is_cancelled(), "Cancel is back to work: the job was not stopped");
+    // asked again, and this time the quit goes through
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    h.step();
+    click(&mut h, "button:quitAnyway");
+    h.step();
+    click(&mut h, "button:quitAnyway");
+    assert!(h.quit_requested() && job.is_cancelled(), "the quit that goes through stops the job");
+}
+
+/// Quit Anyway on the jobs prompt, then the drive is back and the window is closed while the unsaved prompt is still up:
+/// the close request saves and goes through `may_close` alone, and the jobs that can stop are still asked to.
+#[test]
+fn a_close_request_that_saves_after_the_jobs_prompt_still_stops_the_jobs() {
+    let store = Unplugged::default();
+    let mut s = lightcraft_engine::Session::new();
+    let stores = LibraryStores { dir: "unplugged".into(), catalog: Box::new(store.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let job = h.app.session.activity.start("export", "Exporting", lightcraft_engine::activity::Cancel::Yes);
+    store.fail.store(true, Ordering::SeqCst);
+    let _ = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Kept"}}), T);
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    h.step();
+    click(&mut h, "button:quitAnyway");
+    assert!(matches!(h.app.quit_prompt, Some(crate::QuitPrompt::Unsaved(_))) && !job.is_cancelled());
+    store.fail.store(false, Ordering::SeqCst);
+    assert!(crate::panels::notices::may_close(&mut h.app), "the save works now, so the window may close");
+    assert!(job.is_cancelled(), "a quit that goes through asks the jobs that can stop to");
+}
+
 /// "Try Saving Again" can recreate the identical unsaved prompt. It is still a new prompt: its
 /// first frame is shielded and focus goes back to the safe Cancel, never the Retry button that was
 /// just used.
