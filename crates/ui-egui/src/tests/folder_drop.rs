@@ -271,6 +271,24 @@ fn a_folder_left_and_come_back_to_waits_again_before_opening() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn a_folder_opened_by_holding_a_drag_over_it_is_not_kept_in_the_settings() {
+    let (root, trip, home) = folders("spring-kept");
+    let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
+    let beach = id_of(&h, "beach.png");
+    let parent = folder_row(&h, &root).unwrap();
+    let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
+    press(&mut h, from);
+    glide(&mut h, from, parent.center());
+    for _ in 0..60 {
+        h.step();
+    }
+    assert!(folder_row(&h, &home).is_some(), "held: it opens");
+    release(&mut h, parent.center());
+    assert!(h.app.ui.sidebar_trees.is_empty(), "an automatic opening is for the session, not a choice kept");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Drag the beach photo from the grid onto `target` and let go.
 fn drop_beach(h: &mut Headless, beach: u64, target: Rect) {
     let from = widget(h, &format!("thumb:{beach}")).unwrap().center();

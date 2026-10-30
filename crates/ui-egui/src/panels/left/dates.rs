@@ -1,5 +1,5 @@
-use super::rows::{INDENT_STEP, Row, tree_open, tree_toggle};
-use super::{Icon, LibrarySource, LightcraftApp, json};
+use super::rows::{INDENT_STEP, Row, tree_toggle};
+use super::{Branch, Icon, LibrarySource, LightcraftApp, json};
 
 /// By Date: year → month → day; a click filters by that prefix, the triangle opens a level.
 pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -21,12 +21,12 @@ pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// One By Date row (`key`: `YYYY`, `YYYY-MM` or `YYYY-MM-DD`); returns whether it is open.
 fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, count: usize, indent: f32) -> bool {
-    let open_id = egui::Id::unique(("date-open", key.to_string()));
-    let mut open = tree_open(ui, open_id, false);
+    let branch = Branch::date(key);
+    let mut open = app.ui.sidebar_trees.is_open(&branch);
     let sel = app.session.filter.date.as_deref() == Some(key);
     let resp = Row::new(&format!("date:{key}"), Icon::Clock, label).count(Some(count)).selected(sel).indent(indent).show(app, ui);
     if key.len() < 10 {
-        tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));
+        tree_toggle(ui, &mut app.ui.sidebar_trees, &resp, indent, &branch, &mut open, format!("dateToggle:{key}"));
     }
     if resp.clicked() {
         let v = if sel { serde_json::Value::Null } else { json!(key) };

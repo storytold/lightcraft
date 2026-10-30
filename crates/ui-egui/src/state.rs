@@ -299,6 +299,10 @@ pub struct UiState {
     pub folded_sections: Vec<String>,
     /// The Keyword List's open levels (lower-case paths).
     pub keyword_list_open: Vec<String>,
+    /// The rows of the left sidebar's trees (Albums' folders, Local, By Date, Folders, Keywords)
+    /// that were opened or folded: they open as they were left. Read leniently.
+    #[serde(skip_serializing_if = "crate::tree_state::TreeState::is_empty")]
+    pub sidebar_trees: crate::tree_state::TreeState,
     /// The keyword picked in the Keyword List (− deletes it, Edit edits it).
     #[serde(skip)]
     pub keyword_list_selected: Option<String>,
@@ -471,6 +475,7 @@ impl Default for UiState {
             keyword_chips_all: None,
             folded_sections: Vec::new(),
             keyword_list_open: Vec::new(),
+            sidebar_trees: Default::default(),
             keyword_list_selected: None,
             dragging_keyword: None,
             info_overlay: InfoOverlay::Off,
