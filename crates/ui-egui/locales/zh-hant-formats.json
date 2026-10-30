@@ -305,5 +305,7 @@
   "Could not read {name}: {e}": "無法讀取 {name}：{e}",
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
-  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "規則 {n}/{m}：{what}。用方向鍵移動",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "群組 {n}/{m}：符合{mode}，內含 {count} 項。用方向鍵移動"
 }

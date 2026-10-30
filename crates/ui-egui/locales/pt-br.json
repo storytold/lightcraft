@@ -2202,5 +2202,8 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Drag to move, or use the arrow keys": "Arraste para mover ou use as setas",
+  "A group can't go inside itself": "Um grupo não pode ficar dentro de si mesmo",
+  "Groups can't nest any deeper": "Os grupos não podem ser aninhados mais fundo"
 }

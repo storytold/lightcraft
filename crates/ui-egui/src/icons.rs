@@ -56,6 +56,8 @@ pub enum Icon {
     SmartAlbum,
     Stack,
     Folder,
+    /// A drag handle: two columns of three dots.
+    Grip,
     /// Edit (a pencil).
     Pencil,
     Photos,
@@ -336,6 +338,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         More | Dots => {
             for x in [5.0, 10.0, 15.0] {
                 pen.dot(x, 10.0, 1.3);
+            }
+        }
+        Grip => {
+            for x in [7.0, 13.0] {
+                for y in [4.5, 10.0, 15.5] {
+                    pen.dot(x, y, 1.3);
+                }
             }
         }
         Tag => {

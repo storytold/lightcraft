@@ -2734,5 +2734,8 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Drag to move, or use the arrow keys": "გადასატანად გადაიტანეთ ან გამოიყენეთ ისრები",
+  "A group can't go inside itself": "ჯგუფს საკუთარ თავში ვერ ჩადებთ",
+  "Groups can't nest any deeper": "ჯგუფების უფრო ღრმად ჩადგმა შეუძლებელია"
 }

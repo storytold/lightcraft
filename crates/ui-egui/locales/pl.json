@@ -2283,5 +2283,8 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Drag to move, or use the arrow keys": "Przeciągnij, aby przenieść, lub użyj strzałek",
+  "A group can't go inside itself": "Grupa nie może znaleźć się wewnątrz samej siebie",
+  "Groups can't nest any deeper": "Grup nie można zagnieżdżać głębiej"
 }

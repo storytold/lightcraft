@@ -66,6 +66,7 @@ mod rating;
 mod recheck;
 mod rename_person;
 mod rules_editor;
+mod rules_reorder;
 mod sam_setup;
 mod scroll;
 mod slider_reset;

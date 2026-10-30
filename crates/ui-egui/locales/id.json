@@ -2339,5 +2339,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Drag to move, or use the arrow keys": "Seret untuk memindahkan, atau gunakan tombol panah",
+  "A group can't go inside itself": "Grup tidak dapat dimasukkan ke dalam dirinya sendiri",
+  "Groups can't nest any deeper": "Grup tidak dapat disarangkan lebih dalam"
 }

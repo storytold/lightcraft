@@ -305,5 +305,7 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Sääntö {n}/{m}: {what}. Siirrä nuolinäppäimillä",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Ryhmä {n}/{m}: täsmää {mode}, sisällä: {count}. Siirrä nuolinäppäimillä"
 }

@@ -39,6 +39,7 @@ pub use crate::dialogs::faces;
 pub use crate::dialogs::keymap;
 pub use crate::dialogs::rules_editor;
 pub use crate::dialogs::rules_editor::rules_move;
+pub use crate::dialogs::rules_editor::rules_reorder;
 pub use crate::dialogs::settings;
 pub use crate::dialogs::settings::slide_layout;
 pub use crate::dialogs::settings::slide_overlays;

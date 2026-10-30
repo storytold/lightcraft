@@ -305,5 +305,7 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Reguła {n} z {m}: {what}. Przenoś strzałkami",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupa {n} z {m}: dopasuj {mode}, w środku {count}. Przenoś strzałkami"
 }

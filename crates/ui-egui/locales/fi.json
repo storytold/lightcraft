@@ -2327,5 +2327,8 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Drag to move, or use the arrow keys": "Siirrä vetämällä tai käytä nuolinäppäimiä",
+  "A group can't go inside itself": "Ryhmää ei voi siirtää itsensä sisään",
+  "Groups can't nest any deeper": "Ryhmiä ei voi sisentää syvemmälle"
 }

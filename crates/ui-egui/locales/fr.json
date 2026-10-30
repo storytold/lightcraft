@@ -2390,5 +2390,8 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Drag to move, or use the arrow keys": "Faites glisser pour déplacer, ou utilisez les flèches",
+  "A group can't go inside itself": "Un groupe ne peut pas se placer dans lui-même",
+  "Groups can't nest any deeper": "Les groupes ne peuvent pas être imbriqués plus profondément"
 }

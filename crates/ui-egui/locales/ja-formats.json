@@ -305,5 +305,7 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "条件 {n}/{m}：{what}。矢印キーで移動",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "グループ {n}/{m}：一致条件 {mode}、中に {count} 件。矢印キーで移動"
 }

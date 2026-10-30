@@ -2354,5 +2354,8 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Drag to move, or use the arrow keys": "Перетягніть, щоб перемістити, або скористайтеся стрілками",
+  "A group can't go inside itself": "Групу не можна помістити саму в себе",
+  "Groups can't nest any deeper": "Групи не можна вкладати глибше"
 }

@@ -305,5 +305,7 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Quy tắc {n}/{m}: {what}. Di chuyển bằng phím mũi tên",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Nhóm {n}/{m}: khớp {mode}, bên trong: {count}. Di chuyển bằng phím mũi tên"
 }
