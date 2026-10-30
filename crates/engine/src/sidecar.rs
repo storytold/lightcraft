@@ -756,7 +756,50 @@ pub(crate) fn namings_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNamin
         .collect()
 }
 
+/// The files a photo's sidecar may already be in, as writing looks for them: the library's naming
+/// first, then the other, each as `.xmp` and `.XMP`; the shared stem sidecar only for the photo
+/// that owns it.
+fn write_candidates(orig: &str, p: &Photo, naming: SidecarNaming, owners: &StemOwners) -> Vec<PathBuf> {
+    let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
+    [naming, other]
+        .into_iter()
+        .filter(|n| *n != SidecarNaming::Stem || owners.naming(p, SidecarNaming::Stem) == SidecarNaming::Stem)
+        .flat_map(|n| {
+            let path = sidecar_path(orig, n);
+            [path.clone(), path.with_extension("XMP")]
+        })
+        .collect()
+}
+
+/// Where a sidecar is or would be written, and whether a file is there. An existing packet keeps
+/// its spelling/style so foreign properties survive a save. On a case-insensitive volume `a.xmp`
+/// also answers for `a.XMP`: the spelling the folder lists comes first, so the atomic write doesn't
+/// rename the packet.
+fn existing_or(candidates: Vec<PathBuf>, preferred: PathBuf) -> (PathBuf, bool) {
+    use crate::rename::MoveFs;
+    let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
+    let found = !existing.is_empty();
+    let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
+    (listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred), found)
+}
+
 impl Session {
+    /// Where the sidecar of each of photos `ids` is, or would be written, and whether a file is
+    /// there now. Nothing is written or repaired. Virtual copies and photos that are not files on
+    /// disk have no sidecar and are left out.
+    pub fn sidecar_paths(&self, ids: &[PhotoId]) -> Result<Vec<(PhotoId, PathBuf, bool)>> {
+        let owners = StemOwners::among(&self.catalog, ids);
+        let mut paths = Vec::new();
+        for id in ids {
+            let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
+            let Some(orig) = file_path(p).filter(|_| p.copy_of.is_none()) else { continue };
+            let naming = owners.naming(p, self.xmp.naming);
+            let (path, exists) = existing_or(write_candidates(orig, p, naming, &owners), sidecar_path(orig, naming));
+            paths.push((*id, path, exists));
+        }
+        Ok(paths)
+    }
+
     /// The sidecar naming for photo `id`: the library's, except under Stem naming when another
     /// catalogued file shares the stem (`IMG_0001.CR3` + `IMG_0001.JPG`) and owns the stem
     /// sidecar — a raw first, else the first by file name. The others use Full naming
@@ -791,27 +834,14 @@ impl Session {
         }
         let naming = owners.naming(p, self.xmp.naming);
         let preferred = sidecar_path(orig, naming);
-        let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
-        let candidates: Vec<PathBuf> = [naming, other]
-            .into_iter()
-            .filter(|n| *n != SidecarNaming::Stem || owners.naming(p, SidecarNaming::Stem) == SidecarNaming::Stem)
-            .flat_map(|n| {
-                let path = sidecar_path(orig, n);
-                [path.clone(), path.with_extension("XMP")]
-            })
-            .collect();
+        let candidates = write_candidates(orig, p, naming, owners);
         // A separated packet is still the photo's metadata. Repair it before a fresh write
         // occupies its destination; a failure preserves the queue and both existing packets.
         self.repair_sidecars_for_paths(&candidates, &crate::rename::RealFs)
             .map_err(|e| EngineError::Other(format!("{}: unfinished XMP repair: {e}", preferred.display())))?;
         // Keep an existing packet's spelling/style so foreign properties survive this save and
         // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
-        // On a case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder
-        // lists comes first, so the atomic write doesn't rename the packet.
-        use crate::rename::MoveFs;
-        let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
-        let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
-        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
+        let (path, _) = existing_or(candidates, preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));

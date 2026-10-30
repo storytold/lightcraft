@@ -62,6 +62,16 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
+fn sidecar_paths(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = s.targets(p)?;
+    let paths: Vec<Value> = s
+        .sidecar_paths(&ids)?
+        .into_iter()
+        .map(|(id, path, exists)| json!({"id": id.0, "path": path.display().to_string(), "exists": exists}))
+        .collect();
+    Ok(json!({"paths": paths}))
+}
+
 fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(a) = p.get("autoWrite").and_then(Value::as_bool) {
         s.xmp.auto_write = a;
@@ -99,6 +109,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             read
         ),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                query "photo.sidecarPaths",
+                "Sidecar Paths",
+                [],
+                None,
+                "{ids?} — where each photo's XMP sidecar is, or would be written (`ids`, else the selection): the library's naming, with `<file>.xmp` for a file whose stem sidecar a raw+JPEG partner owns, and the spelling of a sidecar already there (`.XMP`). Writes nothing and is not an undo step; virtual copies and photos that aren't files on disk are left out → {paths: [{id, path, exists}]} (`exists`: a sidecar file is there now)",
+                has_selection,
+                sidecar_paths
+            )
+        },
         cmd!(
             "library.xmpPreferences",
             "XMP Sidecar Preferences",

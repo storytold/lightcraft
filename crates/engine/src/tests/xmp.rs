@@ -1576,6 +1576,82 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// A sidecar carrying only `xmp:Rating`.
+fn rating_sidecar(rating: u8) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="{rating}"/></rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// `photo.sidecarPaths` names where each sidecar is or would be written, by the library's naming and the
+/// stem-owner rule, finds an existing one (also `.XMP`), and writes nothing.
+#[test]
+fn sidecar_paths_name_where_sidecars_go_and_write_nothing() {
+    let src = temp_dir("sidecar-paths");
+    write_png(&src.join("IMG_1.png"), 1);
+    let img = lightcraft_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
+    let jpg =
+        crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Jpeg, ..Default::default() }).unwrap();
+    std::fs::write(src.join("IMG_1.jpg"), jpg).unwrap();
+    write_png(&src.join("solo.png"), 2);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+    let (j, p, solo) = (id(&s, "IMG_1.jpg"), id(&s, "IMG_1.png"), id(&s, "solo.png"));
+    let before: Vec<String> = std::fs::read_dir(&src).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    let (undo, log) = (s.undo.len(), s.pending_log.len());
+    s.selection = crate::Selection::default();
+    let paths = |s: &mut Session, params: serde_json::Value| -> Vec<(u64, String, bool)> {
+        let r = s.execute("photo.sidecarPaths", &params).unwrap();
+        r["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["id"].as_u64().unwrap(), e["path"].as_str().unwrap().replace(&*src.to_string_lossy(), ""), e["exists"].as_bool().unwrap()))
+            .collect()
+    };
+
+    // the first by name owns the stem sidecar; the other gets `<file>.xmp`; nothing exists yet
+    let got = paths(&mut s, json!({"ids": [j.0, p.0, solo.0]}));
+    let sep = std::path::MAIN_SEPARATOR;
+    let want = |name: &str| format!("{sep}{name}");
+    assert_eq!(got, vec![(j.0, want("IMG_1.xmp"), false), (p.0, want("IMG_1.png.xmp"), false), (solo.0, want("solo.xmp"), false)]);
+
+    // an existing sidecar is found, in the spelling it has; no `ids` means the selection
+    std::fs::write(src.join("solo.XMP"), rating_sidecar(1)).unwrap();
+    s.execute("library.select", &json!({"ids": [solo.0]})).unwrap();
+    let got = paths(&mut s, json!({}));
+    assert_eq!(got.len(), 1);
+    assert!(got[0].2, "{got:?}");
+    assert!(got[0].1.eq_ignore_ascii_case(&want("solo.xmp")), "{got:?}");
+
+    // `full` naming
+    s.execute("library.xmpPreferences", &json!({"naming": "full"})).unwrap();
+    assert_eq!(paths(&mut s, json!({"ids": [solo.0]}))[0].1.to_lowercase(), want("solo.xmp"), "the existing sidecar is still the one found");
+    assert_eq!(paths(&mut s, json!({"ids": [p.0]})), vec![(p.0, want("IMG_1.png.xmp"), false)]);
+
+    // a query: no undo step, no log record, no file written (the one added above aside)
+    let after: Vec<String> = std::fs::read_dir(&src).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    assert_eq!(after.len(), before.len() + 1, "{after:?}");
+    assert_eq!((s.undo.len(), s.pending_log.len()), (undo, log));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// With nothing selected and no `ids` the call is refused, and an unknown id is an error.
+#[test]
+fn sidecar_paths_refuse_no_photos_and_unknown_ids() {
+    let src = temp_dir("sidecar-paths-errors");
+    write_png(&src.join("a.png"), 5);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.selection = crate::Selection::default();
+    let err = s.execute("photo.sidecarPaths", &json!({})).unwrap_err();
+    assert!(matches!(err, crate::EngineError::Disabled(..)), "{err:?}");
+    assert!(s.execute("photo.sidecarPaths", &json!({"ids": [999_999]})).is_err());
+    assert!(s.execute("photo.sidecarPaths", &json!({"ids": "3"})).is_err());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Lossy DNG export: demosaiced JPEG tiles at the resize long edge, smaller than lossless, colour tags kept.
 #[test]
 fn lossy_dng_export_scales_and_shrinks() {
