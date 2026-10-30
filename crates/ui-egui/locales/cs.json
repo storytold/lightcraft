@@ -2407,6 +2407,16 @@
   "Dropped Files": "Přetažené soubory",
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
+  "A folder is already being chosen for an import": "Již se vybírá složka pro import",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "No photo in this folder is in the library yet": "V této složce zatím není žádná fotografie z knihovny",
+  "Select the photos to move in the grid first": "Nejprve v mřížce vyberte fotografie, které chcete přesunout",
+  "This place is kept in Local already": "Toto místo už je v místních souborech ponecháno",
+  "Only a place at the top of Local can be removed from it": "Z místních souborů lze odebrat jen místo na jejich nejvyšší úrovni",
+  "Import to This Folder…": "Importovat do této složky…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Zkopíruje fotografie ze zvolené složky do této složky; v kontrole to můžeš změnit",
+  "Add to My Photos…": "Přidat do mých fotografií…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Prohlédne fotografie v této složce a pak je přidá do knihovny tam, kde jsou; žádný soubor se nemění",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Klíčová slova a předvolby se použijí jen u nových souborů, ne u fotografií, které už jsou v Místních souborech"
 }

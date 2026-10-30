@@ -34,7 +34,7 @@ pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summar
 pub(crate) use body::{DIALOG_SIZE, note_dialog_bottom};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
-pub use scan::{ScanTask, browse, open, poll_scan, running};
+pub use scan::{ScanTask, add_folder_picker_pending, browse, can_open, open, poll_scan, running};
 #[cfg(test)]
 pub(crate) use scan::{stall_scan, stall_scan_of};
 pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
@@ -74,6 +74,9 @@ pub struct ImportDialog {
     pub dng: bool,
     /// Per candidate: the library already has it in Recently Deleted ([`ImportDialog::set_trashed`]).
     pub trashed: Vec<bool>,
+    /// Per candidate: the library has it as a browsed (Local) photo, which adding in place brings
+    /// into the library ([`ImportDialog::set_browsed`]); copying or moving it is not offered.
+    pub browsed: Vec<bool>,
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
@@ -127,10 +130,29 @@ impl ImportDialog {
             }
         }
     }
+    /// Mark the candidates whose photo is only browsed (Local). Adding in place brings them into
+    /// the library, so they are checked then; the engine would not copy or move them.
+    pub fn set_browsed(&mut self, browsed: Vec<bool>) {
+        self.browsed = browsed;
+        for i in 0..self.candidates.len() {
+            if self.is_browsed(i)
+                && let Some(c) = self.checked.get_mut(i)
+            {
+                *c = true;
+            }
+        }
+    }
+    /// Candidate `i` is a file whose photo is browsed (Local), not yet in the library.
+    pub fn is_browsed(&self, i: usize) -> bool {
+        self.browsed.get(i).copied().unwrap_or(false)
+    }
     /// Candidate `i` can be checked: a readable file the library doesn't have, or one whose photo
-    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285).
+    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285) — or, when
+    /// adding in place, one whose photo is only browsed (Local).
     pub fn importable(&self, i: usize) -> bool {
-        self.candidates.get(i).is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i)))
+        self.candidates
+            .get(i)
+            .is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i) || (!self.copy && self.is_browsed(i))))
     }
     /// Candidate `i` is checked by Check All and the file type toggles: with "Leave them", a file in
     /// Recently Deleted is only checked by hand.
@@ -147,7 +169,7 @@ impl ImportDialog {
     }
     /// Any file of type `ty` is checked.
     pub fn type_checked(&self, ty: &str) -> bool {
-        self.candidates.iter().zip(&self.checked).any(|(c, on)| *on && file_type(c) == ty)
+        self.candidates.iter().zip(&self.checked).enumerate().any(|(i, (c, on))| *on && self.importable(i) && file_type(c) == ty)
     }
     /// Check (the importable ones) or uncheck every file of type `ty`: the raws only, say, and not
     /// the JPEGs kept beside them (issue #344).
@@ -221,6 +243,12 @@ impl ImportDialog {
             o => Ok(Some(o.to_string())),
         }
     }
+    /// Keywords or a preset are set while a checked browsed photo would join the library as it is:
+    /// the engine applies them to new files only, so the review says so.
+    fn options_skip_browsed(&self) -> bool {
+        let has_options = !self.keywords().is_empty() || !self.preset.is_empty() || !self.metadata_preset.is_empty();
+        has_options && !self.copy && self.browsed.iter().zip(&self.checked).any(|(b, on)| *b && *on)
+    }
     fn keywords(&self) -> Vec<String> {
         self.keywords.split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect()
     }
@@ -261,6 +289,54 @@ mod tests {
         d.candidates[5].duplicate = Some("path".into());
         d.candidates[5].existing = Some(8);
         assert_eq!(dup_counts(&d), (2, 1, 0));
+    }
+
+    /// A file whose photo is only browsed (Local) is offered when adding in place, which brings it
+    /// into the library, and not counted as skipped; copying or moving would not do that, so there
+    /// it stays "in the library" and out of reach.
+    #[test]
+    fn a_browsed_photo_is_importable_only_when_adding_in_place() {
+        let mut d = dialog();
+        d.candidates[5].duplicate = Some("path".into());
+        d.candidates[5].existing = Some(8);
+        d.checked[5] = false;
+        d.set_browsed(vec![false, false, false, false, false, true]);
+        assert!(d.importable(5) && d.checked[5], "adding in place offers it, checked");
+        assert_eq!(dup_counts(&d), (0, 1, 0), "it isn't skipped");
+        d.copy = true;
+        assert!(!d.importable(5), "copying leaves it where it is");
+        assert!(!d.selected_paths().contains(&"img5.jpg".to_string()));
+        assert_eq!(dup_counts(&d), (1, 1, 0));
+    }
+
+    /// The review warns that keywords and presets skip a browsed photo only when it matters.
+    #[test]
+    fn keywords_and_presets_are_flagged_only_when_a_browsed_photo_would_skip_them() {
+        let c = ImportCandidate { path: "a.png".into(), duplicate: Some("path".into()), existing: Some(3), ..Default::default() };
+        let mut d = ImportDialog::new(vec![c]);
+        d.set_browsed(vec![true]);
+        assert!(!d.options_skip_browsed(), "nothing set, nothing to skip");
+        d.keywords = "beach".into();
+        assert!(d.options_skip_browsed());
+        d.checked[0] = false;
+        assert!(!d.options_skip_browsed(), "unchecked: not imported anyway");
+        d.checked[0] = true;
+        d.copy = true;
+        assert!(!d.options_skip_browsed(), "copying doesn't offer it");
+    }
+
+    /// A file type's toggle is on only for files that can be imported now: a browsed photo checked
+    /// while copying is chosen doesn't count.
+    #[test]
+    fn a_file_type_toggle_ignores_browsed_photos_that_copying_cannot_import() {
+        let mut c = ImportCandidate { path: "a.png".into(), duplicate: Some("path".into()), existing: Some(3), ..Default::default() };
+        c.format = "PNG".into();
+        let mut d = ImportDialog::new(vec![c]);
+        d.copy = true;
+        d.set_browsed(vec![true]);
+        assert!(!d.type_checked("PNG"));
+        d.copy = false;
+        assert!(d.type_checked("PNG"));
     }
 
     /// A toggle per file type: the raws only, without the JPEGs beside them (issue #344).

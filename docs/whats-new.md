@@ -1,5 +1,29 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### A folder's menu has one order, in Folders and in Local
+- Right-clicking a folder in Folders or in Local opens a menu in the same order, in groups: what it does with the
+  library's photos (Import to This Folder… or Add to My Photos…, Synchronize Folder…, Locate Missing Files…), then
+  reorganizing the disk (New Folder on Disk…, Rename Folder…, Move Folder To…, Move Selected Photos Here), Set Color
+  Label, Show in Finder, and removal last. A disk's row and a Local place keep that order with the groups that apply to
+  them.
+- An item that can't apply right now is grayed out, and its tooltip says why, instead of disappearing: Move Selected
+  Photos Here until photos are selected, Synchronize Folder… in Local for a folder with no library photo, Keep in
+  Local on a place already kept, Remove from Local for a folder inside a place.
+- Show in Finder on a folder, and Keep in Local, now say why when they fail.
+- Rename Folder… in Local starts from the folder's own name on disk, as in Folders.
+
+### A folder's menu can bring photos in
+- Import to This Folder… (first in a Folders row's menu) asks for a folder and opens the Import review for its photos,
+  copying them into the folder you right-clicked, all into it rather than into dated subfolders. Copy is the default
+  because it leaves the originals alone; the review still lets you pick Move or another destination.
+- Add to My Photos… (first in a Local row's menu) opens the Import review for that folder, adding the photos where they
+  are. The photos you browsed there are offered checked, instead of listed as "In library" and out of reach, in this and
+  in any other review that adds in place.
+  When keywords or a preset are set, the review notes that they apply to new files only, not to those photos.
+- Both are grayed out while another scan or import is running.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

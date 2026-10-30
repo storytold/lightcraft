@@ -2353,6 +2353,7 @@
   "Dropped Files": "Fichiers déposés",
   "Import dropped files without review": "Importer les fichiers déposés sans vérification",
   "An import is running": "Une importation est en cours",
+  "A folder is already being chosen for an import": "Un dossier est déjà en cours de choix pour une importation",
   "An import is running. Drop photos when it has finished": "Une importation est en cours. Déposez les photos quand elle sera terminée",
   "Finish Lightroom catalog import before adding photos": "Terminez l'importation du catalogue Lightroom avant d'ajouter des photos",
   "The library is empty: the catalog's photos, collections and edits become its first.": "La bibliothèque est vide : les photos, collections et retouches du catalogue seront les premières.",
@@ -2390,5 +2391,14 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "No photo in this folder is in the library yet": "Aucune photo de ce dossier n’est encore dans la bibliothèque",
+  "Select the photos to move in the grid first": "Sélectionnez d’abord dans la grille les photos à déplacer",
+  "This place is kept in Local already": "Ce lieu est déjà conservé dans Local",
+  "Only a place at the top of Local can be removed from it": "Seul un lieu tout en haut de Local peut en être retiré",
+  "Import to This Folder…": "Importer dans ce dossier…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Copie les photos d'un dossier que vous choisissez dans ce dossier ; la révision permet de le changer",
+  "Add to My Photos…": "Ajouter à Mes photos…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Passe en revue les photos de ce dossier, puis les ajoute à la bibliothèque là où elles sont ; aucun fichier n'est touché",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Les mots-clés et les préréglages ne s'appliquent qu'aux nouveaux fichiers, pas aux photos déjà dans Local"
 }

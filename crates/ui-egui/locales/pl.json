@@ -2282,6 +2282,16 @@
   "Dropped Files": "Upuszczone pliki",
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
+  "A folder is already being chosen for an import": "Folder do importu jest już wybierany",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "No photo in this folder is in the library yet": "Żadne zdjęcie z tego folderu nie jest jeszcze w bibliotece",
+  "Select the photos to move in the grid first": "Najpierw zaznacz w siatce zdjęcia do przeniesienia",
+  "This place is kept in Local already": "To miejsce jest już zachowane w lokalnych",
+  "Only a place at the top of Local can be removed from it": "Z lokalnych można usunąć tylko miejsce z ich najwyższego poziomu",
+  "Import to This Folder…": "Importuj do tego folderu…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Kopiuje zdjęcia z wybranego folderu do tego folderu; w przeglądzie możesz to zmienić",
+  "Add to My Photos…": "Dodaj do Moich zdjęć…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Pokazuje zdjęcia z tego folderu do przejrzenia, po czym dodaje je do biblioteki tam, gdzie są; żaden plik nie jest ruszany",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Słowa kluczowe i ustawienia predefiniowane dotyczą tylko nowych plików, nie zdjęć, które już są w Lokalnych"
 }

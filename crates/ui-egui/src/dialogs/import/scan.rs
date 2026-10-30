@@ -8,6 +8,9 @@ pub struct ScanTask {
     rx: std::sync::mpsc::Receiver<ScanOutput>,
     /// Open the review with "copy into the library" checked (a camera / card).
     pub copy: bool,
+    /// Open the review copying into this folder, all into it with no subfolders (a folder's menu
+    /// ▸ Import to This Folder…); implies `copy`.
+    pub destination: Option<String>,
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
     pub album: Option<u64>,
     /// Browsing a folder (Local): the photos are read in place instead of opening the review.
@@ -73,7 +76,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: false, sources, guard });
     Ok(json!({"scanning": true}))
 }
 
@@ -135,7 +138,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: true, sources: Vec::new(), guard });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
@@ -209,7 +212,21 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         })
         .collect();
     d.set_trashed(trashed);
-    d.copy = task.copy;
+    let browsed = d
+        .candidates
+        .iter()
+        .map(|c| {
+            c.duplicate.as_deref() == Some("path")
+                && c.existing.is_some_and(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.local && !p.deleted))
+        })
+        .collect();
+    d.set_browsed(browsed);
+    d.copy = task.copy || task.destination.is_some();
+    if let Some(dest) = task.destination {
+        d.destination = dest;
+        // the files go into that folder itself, not into dated subfolders of it
+        d.organize = "flat".into();
+    }
     // only an album the review offers (it may have been deleted while the scan ran)
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;
@@ -250,7 +267,7 @@ pub(crate) fn stall_scan_of(app: &mut LightcraftApp, browse: bool) -> Box<dyn st
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel::<ScanOutput>();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse, sources: Vec::new(), guard });
     Box::new(tx)
 }
 
@@ -259,6 +276,19 @@ pub(crate) fn stall_scan_of(app: &mut LightcraftApp, browse: bool) -> Box<dyn st
 /// runs, and a browse that finishes replaces `app.import`.
 pub fn running(app: &LightcraftApp) -> bool {
     app.import.is_some() || app.scan.is_some() || app.review_pending.is_some()
+}
+
+/// Whether a folder's menu can start an import review now: not while a scan or an import runs (a
+/// Local folder being read counts), a finished scan's review waits for a dialog to close, or a
+/// Lightroom catalog import runs (as for File ▸ Import from Folder…).
+pub fn can_open(app: &LightcraftApp) -> bool {
+    app.scan.is_none() && app.import.is_none() && app.review_pending.is_none() && !crate::lightroom_import::is_running(app)
+}
+
+/// Whether a `file.addFolder` folder picker is up. "Import to This Folder…" asks for its folder through that
+/// command, and a second request while its picker is up is deduplicated, which would drop the new destination.
+pub fn add_folder_picker_pending(app: &LightcraftApp) -> bool {
+    app.pending_picks.iter().any(|p| p.command == "file.addFolder")
 }
 
 impl ScanTask {

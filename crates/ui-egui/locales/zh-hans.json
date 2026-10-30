@@ -2199,6 +2199,16 @@
   "Dropped Files": "拖入的文件",
   "Import dropped files without review": "不经检查直接导入拖入的文件",
   "An import is running": "正在导入",
+  "A folder is already being chosen for an import": "已在为导入选择文件夹",
   "An import is running. Drop photos when it has finished": "正在导入。导入完成后再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入"
+  "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
+  "No photo in this folder is in the library yet": "此文件夹中还没有照片在图库中",
+  "Select the photos to move in the grid first": "请先在网格视图中选择要移动的照片",
+  "This place is kept in Local already": "此位置已保留在本地",
+  "Only a place at the top of Local can be removed from it": "只有本地最上层的位置才能从本地移除",
+  "Import to This Folder…": "导入到此文件夹…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "将所选文件夹中的照片复制到此文件夹；可在审阅中更改",
+  "Add to My Photos…": "添加到我的照片…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "审阅此文件夹中的照片，然后就地添加到图库；不会改动任何文件",
+  "Keywords and presets apply to new files only, not to photos already in Local": "关键词和预设仅应用于新文件，不适用于已在“本地”中的照片"
 }

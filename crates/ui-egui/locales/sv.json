@@ -2422,6 +2422,7 @@
   "Mask Pins": "Masknålar",
   "Photo Counts": "Antal foton",
   "An import is running": "En import pågår",
+  "A folder is already being chosen for an import": "En mapp för en import väljs redan",
   "An import is running. Drop photos when it has finished": "En import pågår. Släpp fotona när den är klar",
   "Close the open dialog to drop files here": "Stäng den öppna dialogrutan för att släppa filer här",
   "Close the open dialog, then drop the files again": "Stäng den öppna dialogrutan och släpp sedan filerna igen",
@@ -2429,5 +2430,14 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "No photo in this folder is in the library yet": "Inget foto i den här mappen finns i biblioteket än",
+  "Select the photos to move in the grid first": "Markera först de foton som ska flyttas i rutnätet",
+  "This place is kept in Local already": "Den här platsen är redan behållen i Lokalt",
+  "Only a place at the top of Local can be removed from it": "Bara en plats högst upp i Lokalt kan tas bort därifrån",
+  "Import to This Folder…": "Importera till den här mappen…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Kopierar fotona i en mapp du väljer till den här mappen; i granskningen kan du ändra det",
+  "Add to My Photos…": "Lägg till i Mina foton…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Granskar fotona i den här mappen och lägger sedan till dem i biblioteket där de ligger; ingen fil rörs",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Nyckelord och förinställningar gäller bara nya filer, inte foton som redan finns i Lokalt"
 }

@@ -2353,6 +2353,16 @@
   "Dropped Files": "Перетягнуті файли",
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
+  "A folder is already being chosen for an import": "Тека для імпорту вже вибирається",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "No photo in this folder is in the library yet": "Жодного фото з цієї теки ще немає в бібліотеці",
+  "Select the photos to move in the grid first": "Спершу виберіть у сітці фото, які треба перемістити",
+  "This place is kept in Local already": "Це місце вже залишено в локальних",
+  "Only a place at the top of Local can be removed from it": "Вилучити з локальних можна лише місце верхнього рівня",
+  "Import to This Folder…": "Імпортувати в цю теку…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Копіює фото з обраної теки в цю теку; у перевірці це можна змінити",
+  "Add to My Photos…": "Додати до моїх фото…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Показує фото цієї теки для перевірки, потім додає їх до бібліотеки на місці; жоден файл не змінюється",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Ключові слова та пресети застосовуються лише до нових файлів, а не до фото, що вже є в «Локальних»"
 }

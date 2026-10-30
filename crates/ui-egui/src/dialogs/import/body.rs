@@ -35,7 +35,10 @@ pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
 pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
     let trashed = d.trashed.iter().filter(|t| **t).count();
     let in_source = d.candidates.iter().filter(|c| c.duplicate.as_deref() == Some("content") && c.existing.is_none()).count();
-    let dups = d.candidates.iter().filter(|c| c.duplicate.is_some()).count().saturating_sub(trashed).saturating_sub(in_source);
+    // (a browsed photo that adding in place brings in isn't skipped)
+    let browsed = if d.copy { 0 } else { d.browsed.iter().filter(|b| **b).count() };
+    let dups =
+        d.candidates.iter().filter(|c| c.duplicate.is_some()).count().saturating_sub(trashed).saturating_sub(in_source).saturating_sub(browsed);
     (dups, in_source, trashed)
 }
 
@@ -270,6 +273,14 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             );
         }
     }
+    if d.options_skip_browsed() {
+        let t = Tokens::get(ui.ctx());
+        ui.label(
+            egui::RichText::new(crate::i18n::tr("Keywords and presets apply to new files only, not to photos already in Local"))
+                .color(t.text_dim)
+                .small(),
+        );
+    }
     if d.trashed.iter().any(|t| *t) {
         field(ui, "In Recently Deleted", |ui| {
             let cur = match d.on_deleted.as_str() {
@@ -426,6 +437,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         // checked with "Leave them", the file goes without `onDeleted`: the engine restores it
         (Some(_), _) if in_trash && on => Some(if d.on_deleted == "fresh" { "Will be replaced" } else { "Will be restored" }),
         (Some(_), _) if in_trash => Some("In Recently Deleted"),
+        (Some(_), _) if d.is_browsed(i) && !d.copy => None,
         (Some(r), _) if r == "path" => Some("In library"),
         (Some(_), _) => Some("Duplicate"),
         (None, Some(_)) => Some("Unreadable"),

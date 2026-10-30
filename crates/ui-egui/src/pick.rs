@@ -235,6 +235,26 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_menu_import_waits_only_for_a_pending_add_folder_dialog() {
+        let (mut h, asked) = app_with_picker();
+        assert!(!crate::import::add_folder_picker_pending(&h.app));
+        // an unrelated dialog (Add Photos…) does not count
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        assert!(!crate::import::add_folder_picker_pending(&h.app), "an unrelated picker must not count");
+        // "Import to This Folder…" asks through file.addFolder: a second request while its picker is up is dropped
+        h.app.run("file.addFolder", json!({"destination": "/a"})).unwrap();
+        assert!(crate::import::add_folder_picker_pending(&h.app));
+        h.app.run("file.addFolder", json!({"destination": "/b"})).unwrap();
+        assert_eq!(asked.lock().unwrap().len(), 2, "the second Add Folder request opened no picker");
+        // "Add to My Photos…" gives its path and never asks, so a pending picker does not hold it back
+        assert!(crate::import::can_open(&h.app));
+        // the picker closes: the row can ask again
+        asked.lock().unwrap().iter().for_each(|a| a.1.send(vec![]).unwrap());
+        h.settle(SETTLE);
+        assert!(!crate::import::add_folder_picker_pending(&h.app));
+    }
+
+    #[test]
     fn a_cancelled_or_vanished_dialog_runs_nothing() {
         let (mut h, asked) = app_with_picker();
         h.app.run("file.addPhotos", json!({})).unwrap();

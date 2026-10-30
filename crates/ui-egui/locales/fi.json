@@ -2320,6 +2320,7 @@
   "Mask Pins": "Maskin nastat",
   "Photo Counts": "Kuvamäärät",
   "An import is running": "Tuonti on käynnissä",
+  "A folder is already being chosen for an import": "Tuontia varten valitaan jo kansiota",
   "An import is running. Drop photos when it has finished": "Tuonti on käynnissä. Pudota kuvat, kun se on valmis",
   "Close the open dialog to drop files here": "Sulje avoin valintaikkuna pudottaaksesi tiedostot tähän",
   "Close the open dialog, then drop the files again": "Sulje avoin valintaikkuna ja pudota tiedostot sitten uudelleen",
@@ -2327,5 +2328,14 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "No photo in this folder is in the library yet": "Tämän kansion kuvia ei ole vielä kirjastossa",
+  "Select the photos to move in the grid first": "Valitse ensin siirrettävät kuvat ruudukosta",
+  "This place is kept in Local already": "Tämä paikka on jo säilytetty Paikallisessa",
+  "Only a place at the top of Local can be removed from it": "Paikallisesta voi poistaa vain sen ylimmän tason paikan",
+  "Import to This Folder…": "Tuo tähän kansioon…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Kopioi valitsemasi kansion kuvat tähän kansioon; tarkistuksessa voit muuttaa tätä",
+  "Add to My Photos…": "Lisää Omiin kuviin…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Näyttää tämän kansion kuvat tarkistettavaksi ja lisää ne sitten kirjastoon paikoilleen; tiedostoihin ei kosketa",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Avainsanat ja esiasetukset koskevat vain uusia tiedostoja, eivät kuvia, jotka ovat jo Paikallisessa"
 }

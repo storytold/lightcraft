@@ -2332,6 +2332,7 @@
   "Mask Pins": "Pin masker",
   "Photo Counts": "Jumlah foto",
   "An import is running": "Impor sedang berjalan",
+  "A folder is already being chosen for an import": "Folder untuk impor sedang dipilih",
   "An import is running. Drop photos when it has finished": "Impor sedang berjalan. Jatuhkan foto setelah selesai",
   "Close the open dialog to drop files here": "Tutup dialog yang terbuka untuk menjatuhkan file di sini",
   "Close the open dialog, then drop the files again": "Tutup dialog yang terbuka, lalu jatuhkan file lagi",
@@ -2339,5 +2340,14 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "No photo in this folder is in the library yet": "Belum ada foto dari folder ini di pustaka",
+  "Select the photos to move in the grid first": "Pilih dulu foto yang akan dipindahkan di grid",
+  "This place is kept in Local already": "Tempat ini sudah disimpan di Lokal",
+  "Only a place at the top of Local can be removed from it": "Hanya tempat di tingkat teratas Lokal yang bisa dikeluarkan dari Lokal",
+  "Import to This Folder…": "Impor ke folder ini…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "Menyalin foto dari folder yang Anda pilih ke folder ini; di tinjauan Anda bisa mengubahnya",
+  "Add to My Photos…": "Tambahkan ke Foto saya…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "Meninjau foto di folder ini, lalu menambahkannya ke pustaka di tempatnya; tidak ada berkas yang disentuh",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Kata kunci dan prasetel hanya berlaku untuk berkas baru, bukan foto yang sudah ada di Lokal"
 }
