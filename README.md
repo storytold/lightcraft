@@ -398,7 +398,7 @@ Workspace builds, including the desktop, web and CLI applications, require Rust 
 
 ```sh
 git clone https://github.com/storytold/lightcraft && cd lightcraft
-cargo run --release -p lightcraft                       # opens your library (~/Pictures/LightCraft Library; a new one starts with demo photos)
+cargo run --release -p lightcraft                       # opens your library (~/Pictures/LightCraft Library; a new one asks how to begin)
 cargo run --release -p lightcraft -- ~/Pictures/trip    # import your photos (folders are scanned, duplicates skipped)
 cargo run --release -p lightcraft -- --memory           # a throwaway in-memory demo session (writes nothing)
 cargo run --release -p lightcraft -- --control 7980     # with the automation channel

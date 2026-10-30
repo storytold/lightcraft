@@ -36,7 +36,7 @@ pub(crate) use sections::PlacedSection;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;
-use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sections_menu};
+use sections::{SECTION_GAP, missing_count, pinned_header, section, section_drag, sections_menu, welcome_note};
 
 /// Draw the My Photos sidebar: title and open-library name, the scrollable sources, albums,
 /// folders and sections, with the section visibility menu on the title.
@@ -146,10 +146,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let local = local_now(app, ui);
             let shown: Vec<SidebarSection> = app.ui.sidebar.shown().collect();
             let mut placed: Vec<PlacedSection> = Vec::with_capacity(shown.len());
+            // under the welcome, the sections that fill as photos arrive say so in one line after
+            // the sections, not "No … yet" each (Local, with folders to look through, stays)
+            let welcome = super::empty_library::in_view(app);
+            let mut folded = false;
             for s in shown {
                 let at = match s {
                     SidebarSection::Albums => {
                         let rows = app.session.catalog.albums().filter(|a| a.parent.is_none()).count();
+                        if welcome && rows == 0 {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, rows, |app, ui| albums_rows(app, ui, reveal))
                     }
                     SidebarSection::Local => {
@@ -158,10 +166,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     SidebarSection::ByDate => {
                         let rows = app.caches.date_groups(&app.session.catalog).len();
+                        if welcome && rows == 0 {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, rows, date_rows)
                     }
                     SidebarSection::Folders => {
                         let tree = app.caches.folder_tree(&app.session.catalog);
+                        if welcome && tree.is_empty() {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
                             folder_rows(app, ui, &tree, 0.0);
@@ -169,10 +185,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     SidebarSection::Keywords => {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
+                        if welcome && tree.is_empty() {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
                     }
                 };
                 placed.push(at);
+            }
+            if folded {
+                welcome_note(ui);
             }
             ui.data_mut(|d| d.remove::<String>(egui::Id::unique(SCROLL_TO_ROW)));
             // room below the last section (a section dragged to the end is dropped here)

@@ -7,7 +7,7 @@ use super::selection::{
 };
 use super::{
     Album, AlbumId, ColorLabel, CommandSpec, CopyrightStatus, Filter, Flag, GroupBy, LibrarySource, Op, PhotoId, Result, Selection, Sort, SortKey,
-    Value, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, json, ok, str_param,
+    Value, always, bad, bool_or, cmd, has_active, has_library_selection, has_samples, has_selection, json, no_samples, ok, str_param,
 };
 
 /// Seeds stay exactly representable as a JSON double, so web and agent clients read back what they wrote.
@@ -670,6 +670,84 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.commit("Empty Recently Deleted", op)?;
                 s.selection = Selection::default();
                 Ok(json!({"deleted": ids.len()}))
+            }
+        ),
+        cmd!(
+            "library.addSamples",
+            "Add Sample Photos",
+            ["Help"],
+            None,
+            "{folder?: name of the folder their albums go in (default \"Sample Photos\"; the interface names it in its language)} → {added, albums, folder} — adds the procedural sample photos, their keywords and their albums (in one folder) to the library, to try LightCraft on (one undo step)",
+            no_samples,
+            |s, p| {
+                let folder = match p.get("folder") {
+                    None | Some(Value::Null) => crate::demo::SAMPLES_FOLDER.to_string(),
+                    Some(Value::String(name))
+                        if !name.trim().is_empty() && name.trim().chars().count() <= 200 && !name.trim().chars().any(char::is_control) =>
+                    {
+                        name.trim().to_string()
+                    }
+                    Some(_) => return Err(bad("library.addSamples", "`folder` must be a name of 1 to 200 characters, without control characters")),
+                };
+                let ops = crate::demo::ops_in_folder(s, &folder);
+                let added = ops.iter().filter(|o| matches!(o, Op::AddPhoto { .. })).count();
+                let albums = ops.iter().filter(|o| matches!(o, Op::AddAlbum { album } if !album.folder)).count();
+                let added_ids: std::collections::HashSet<PhotoId> = ops
+                    .iter()
+                    .filter_map(|o| match o {
+                        Op::AddPhoto { photo } => Some(photo.id),
+                        _ => None,
+                    })
+                    .collect();
+                s.commit("Add Sample Photos", Op::Batch { ops })?;
+                // (a selection the person made stays, and so does an active photo set without one)
+                if s.selection.ids.is_empty() && s.selection.active.is_none() {
+                    crate::demo::select_first_of(s, &added_ids);
+                }
+                Ok(json!({"added": added, "albums": albums, "folder": folder}))
+            }
+        ),
+        cmd!(
+            "library.removeSamples",
+            "Remove Sample Photos",
+            ["Help"],
+            None,
+            "{} → {removed, albums} — removes every sample photo and the albums only they filled; photos of your own and their albums stay (one undo step)",
+            has_samples,
+            |s, _| {
+                // an open drag ends first, as its own undo step (as `photo.deletePermanently`)
+                s.end_interaction()?;
+                let before = s.visible_cloned();
+                let (op, removed, albums) = crate::demo::remove_ops(&s.catalog);
+                // as `added` counts them: albums, not the folders that held them
+                let album_count = albums.iter().filter(|id| s.catalog.album(**id).is_some_and(|a| !a.folder)).count();
+                s.commit("Remove Sample Photos", op)?;
+                // an album that went can't stay on screen (as `album.delete`)
+                if matches!(s.source, LibrarySource::Album(a) if albums.contains(&a)) {
+                    s.source = LibrarySource::All;
+                }
+                // nor can a filter (or the one put aside) on it: the filter bar has no album chip, so it would narrow the view unseen
+                for f in std::iter::once(&mut s.filter).chain(s.shelved_filter.as_mut()) {
+                    if f.album.is_some_and(|a| albums.contains(&a)) {
+                        f.album = None;
+                    }
+                }
+                // (an empty filter is not left put aside, as in `library.removeFolder`)
+                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
+                    s.shelved_filter = None;
+                }
+                // the person's own photos that were selected stay selected (as `photo.deletePermanently`)
+                let active_before = s.selection.active;
+                select_after_deletion(s, &before);
+                if s.selection.active.is_none() {
+                    crate::demo::select_first(s);
+                }
+                // a mask or spot chosen on the photo that went doesn't point into the next one
+                if s.selection.active != active_before {
+                    s.active_mask = None;
+                    s.active_spot = None;
+                }
+                Ok(json!({"removed": removed, "albums": album_count}))
             }
         ),
         cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {

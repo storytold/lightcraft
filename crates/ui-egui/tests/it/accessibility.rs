@@ -249,3 +249,32 @@ fn tab_walks_the_right_panels_top_to_bottom() {
         }
     }
 }
+
+/// Given a filter that hides every photo of All Photos, when the grid is read by a screen reader,
+/// then the painted title is a heading and the count and the empty-state message are text nodes.
+#[test]
+fn the_grid_title_count_and_empty_message_are_read_when_a_filter_hides_every_photo() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.view = ViewMode::PhotoGrid;
+    app.run("library.filter", serde_json::json!({"text": "no photo is called this"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+        |ui, app: &mut LightcraftApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(10);
+    let nodes: Vec<(Role, String)> = h
+        .root()
+        .children_recursive()
+        .map(|n| n.accesskit_node())
+        .map(|n| (n.role(), n.label().or_else(|| n.value()).unwrap_or_default()))
+        .filter(|(_, text)| !text.is_empty())
+        .collect();
+    let has = |role: Role, text: &str| nodes.iter().any(|(r, t)| *r == role && t == text);
+    assert!(has(Role::Heading, "All Photos"), "the title is a heading: {nodes:?}");
+    assert!(has(Role::Label, "0 of 24 photos"), "the count is text: {nodes:?}");
+    assert!(has(Role::Label, "No photos match the active filters"), "the message is text: {nodes:?}");
+    assert!(has(Role::Label, "24 photos in All Photos are hidden by the filters above"), "the reason is text: {nodes:?}");
+}

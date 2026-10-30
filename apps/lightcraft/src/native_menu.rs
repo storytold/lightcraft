@@ -481,7 +481,7 @@ impl NativeMenu {
     /// accelerators with the app state. Returns whether Quit was chosen: the caller saves
     /// everything and exits the process itself (closing the viewport while AppKit terminates the
     /// app can crash in winit's teardown, PR #444).
-    pub fn update(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+    pub fn update(&mut self, app: &mut LightcraftApp) -> bool {
         lightcraft_ui_egui::i18n::set_language(app.ui.language);
         let mut quit = false;
         while let Ok(key) = self.rx.try_recv() {
@@ -544,7 +544,8 @@ impl NativeMenu {
         }
         walk(&bar.iter().flat_map(|(_, v)| v.clone()).collect::<Vec<_>>(), &mut self.items, &app.ui.settings.keymap);
 
-        let focus = ctx.egui_wants_keyboard_input();
+        // a text field has the keyboard (not a focused plain button, such as the welcome's Import)
+        let focus = app.text_focus;
         let capturing = app.recording_shortcut.is_some();
         if sync_needed(focus, capturing, self.text_focus, self.capturing, self.accelerators_pending) {
             self.text_focus = focus;

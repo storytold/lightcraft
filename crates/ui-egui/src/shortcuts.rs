@@ -349,8 +349,9 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
             [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
         });
     }
-    let chrome =
-        app.ui.docking.as_ref().is_some_and(|workspace| {
+    // a plain button (the welcome's) keeps what works it; the rest are shortcuts, as on dock chrome
+    let chrome = crate::widgets::plain_button_has_focus(ctx)
+        || app.ui.docking.as_ref().is_some_and(|workspace| {
             craft_ui::docking::DockArea::new(egui::Id::unique("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
         });
     if !chrome {
@@ -413,7 +414,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
-    let popup_open = popup_open || app.text_focus;
+    let popup_open = popup_open || app.text_focus || app.plain_button_focus;
     ctx.input(|i| {
         // Enter opens the active grid photo; widgets, popups and custom bindings keep the key.
         if grid

@@ -1148,6 +1148,37 @@ mod access_tests {
     }
 }
 
+/// The plain buttons drawn last pass and this one (the welcome's, its sample thumbnails): with the
+/// keyboard on one, only the keys that work it stay with it, and the rest reach shortcuts.
+#[derive(Clone, Default)]
+struct PlainButtons {
+    pass: u64,
+    ids: Vec<egui::Id>,
+    last: Vec<egui::Id>,
+}
+
+/// `id` is a plain button: focused, it keeps Enter, Space, Tab, Esc and the arrows, nothing else.
+pub(crate) fn plain_button(ctx: &egui::Context, id: egui::Id) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let b = d.get_temp_mut_or_default::<PlainButtons>(egui::Id::unique("plain-buttons"));
+        if b.pass != pass {
+            b.last = std::mem::take(&mut b.ids);
+            b.pass = pass;
+        }
+        b.ids.push(id);
+    });
+}
+
+/// The keyboard is on a plain button ([`plain_button`]) drawn this pass or the one before: ids from
+/// passes longer ago (the welcome gone) say nothing about a widget that has one now.
+pub(crate) fn plain_button_has_focus(ctx: &egui::Context) -> bool {
+    let Some(focused) = ctx.memory(|m| m.focused()) else { return false };
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<PlainButtons>(egui::Id::unique("plain-buttons")))
+        .is_some_and(|b| (b.pass.saturating_add(1) >= pass && b.ids.contains(&focused)) || (b.pass == pass && b.last.contains(&focused)))
+}
+
 /// Names a widget for screen readers (`name` replaces what egui gave it): for a plain egui field
 /// whose caption is a separate label beside it.
 pub(crate) fn screen_reader_name(ctx: &egui::Context, id: egui::Id, name: &str) {
