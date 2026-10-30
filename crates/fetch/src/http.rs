@@ -645,7 +645,9 @@ mod tests_connect {
         let r = std::thread::scope(|scope| {
             let cancel = &cancel;
             scope.spawn(move || {
-                lightcraft_testkit::recv_within(&has_begun, Duration::from_secs(30), "the resolver starts");
+                // as long as the lookup's own deadline, which a time scale below 1 doesn't shorten
+                let started = has_begun.recv_timeout(stretched(Duration::from_secs(30)));
+                assert!(started.is_ok(), "the resolver didn't start within the lookup's deadline: {started:?}");
                 std::thread::sleep(Duration::from_millis(100));
                 cancel.store(true, Ordering::Relaxed);
             });
