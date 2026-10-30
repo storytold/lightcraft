@@ -41,22 +41,44 @@ pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
     serde_json::to_value(a).ok().and_then(|v| v.get(key).and_then(|x| x.as_f64())).unwrap_or(0.0)
 }
 
-fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
-    match s {
-        MaskShape::Brush { .. } => ("Brush", Icon::Brush),
-        MaskShape::Linear { .. } => ("Linear Gradient", Icon::Linear),
-        MaskShape::Radial { .. } => ("Radial Gradient", Icon::Radial),
-        MaskShape::ColorRange { .. } => ("Color Range", Icon::Picker),
-        MaskShape::LuminanceRange { .. } => ("Luminance Range", Icon::Sliders),
-        MaskShape::DepthRange { .. } => ("Depth Range", Icon::Sliders),
-        MaskShape::Subject => ("Subject", Icon::Subject),
-        MaskShape::Sky => ("Sky", Icon::Sky),
-        MaskShape::Background => ("Background", Icon::Subject),
-        MaskShape::Object { .. } => ("Object", Icon::Subject),
-        MaskShape::Prompt { .. } => ("Describe", Icon::Subject),
-        MaskShape::People { .. } => ("People", Icon::Subject),
-        MaskShape::Landscape { .. } => ("Landscape", Icon::Sky),
+/// The icon of a mask kind, by its `mask.add` kind id: the one table the Create New Mask tiles and
+/// the mask list share.
+fn kind_icon(kind: &str) -> Icon {
+    match kind {
+        "brush" => Icon::Brush,
+        "linear" => Icon::Linear,
+        "radial" => Icon::Radial,
+        "colorRange" => Icon::Picker,
+        "luminanceRange" => Icon::Luminance,
+        "depthRange" => Icon::Depth,
+        "subject" => Icon::Subject,
+        "sky" => Icon::Sky,
+        "background" => Icon::Background,
+        "object" => Icon::Object,
+        "prompt" => Icon::Describe,
+        "people" => Icon::People,
+        "landscape" => Icon::Landscape,
+        _ => Icon::Mask,
     }
+}
+
+fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
+    let (kind, label) = match s {
+        MaskShape::Brush { .. } => ("brush", "Brush"),
+        MaskShape::Linear { .. } => ("linear", "Linear Gradient"),
+        MaskShape::Radial { .. } => ("radial", "Radial Gradient"),
+        MaskShape::ColorRange { .. } => ("colorRange", "Color Range"),
+        MaskShape::LuminanceRange { .. } => ("luminanceRange", "Luminance Range"),
+        MaskShape::DepthRange { .. } => ("depthRange", "Depth Range"),
+        MaskShape::Subject => ("subject", "Subject"),
+        MaskShape::Sky => ("sky", "Sky"),
+        MaskShape::Background => ("background", "Background"),
+        MaskShape::Object { .. } => ("object", "Object"),
+        MaskShape::Prompt { .. } => ("prompt", "Describe"),
+        MaskShape::People { .. } => ("people", "People"),
+        MaskShape::Landscape { .. } => ("landscape", "Landscape"),
+    };
+    (label, kind_icon(kind))
 }
 
 const TILE: f32 = 52.0;
@@ -93,34 +115,34 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
-        let tiles: [(&str, &str, Icon); 10] = [
-            ("object", "Object", Icon::Subject),
-            ("prompt", "Describe", Icon::Subject),
-            ("subject", "Subject", Icon::Subject),
-            ("sky", "Sky", Icon::Sky),
-            ("background", "Background", Icon::Subject),
-            ("brush", "Brush", Icon::Brush),
-            ("linear", "Linear", Icon::Linear),
-            ("radial", "Radial", Icon::Radial),
-            ("luminanceRange", "Luminance", Icon::Sliders),
-            ("colorRange", "Color", Icon::Picker),
+        let tiles: [(&str, &str); 10] = [
+            ("object", "Object"),
+            ("prompt", "Describe"),
+            ("subject", "Subject"),
+            ("sky", "Sky"),
+            ("background", "Background"),
+            ("brush", "Brush"),
+            ("linear", "Linear"),
+            ("radial", "Radial"),
+            ("luminanceRange", "Luminance"),
+            ("colorRange", "Color"),
         ];
         // four 52 pt tiles a row when they and their labels fit, else fewer (wider for a long label)
         let widest = |size: f32| {
             let font = t.font(size);
             tiles
                 .iter()
-                .map(|(_, l, _)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), font.clone(), t.text_dim).size().x)
+                .map(|(_, l)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), font.clone(), t.text_dim).size().x)
                 .fold(0.0, f32::max)
         };
         let (cols, tile, size) = tile_layout(ui.available_width(), widest);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
-            for (i, (kind, label, icon)) in tiles.iter().enumerate() {
+            for (i, (kind, label)) in tiles.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(label));
                 register(ui, format!("maskNew:{kind}"), r);
                 ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
-                paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
+                paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), kind_icon(kind), t.text_label);
                 // (cut short only in a panel too narrow for the label: the full name on hover)
                 let label = crate::i18n::tr(label);
                 let g = one_line(ui.painter(), label, t.font(size), t.text_dim, tile - 2.0 * TILE_PAD);
