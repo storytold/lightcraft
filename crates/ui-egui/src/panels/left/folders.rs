@@ -368,6 +368,26 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
 /// can be reached.
 const SPRING_OPEN_SECONDS: f64 = 0.7;
 
+/// Whether the photo's file is directly in the folder `folder`.
+fn is_in_folder(p: &lightcraft_catalog::Photo, folder: &str) -> bool {
+    match &p.source {
+        lightcraft_catalog::Source::File { path } => std::path::Path::new(path).parent().is_some_and(|d| same_folder(&d.to_string_lossy(), folder)),
+        _ => false,
+    }
+}
+
+/// How many files a drop of `photos` on `folder` moves (`photo.moveToFolder`): the photos already
+/// there stay, and virtual copies of one file move it once.
+fn files_moved(photos: &[&std::sync::Arc<lightcraft_catalog::Photo>], folder: &str) -> usize {
+    let mut paths = std::collections::HashSet::new();
+    for p in photos.iter().filter(|p| !is_in_folder(p, folder)) {
+        if let lightcraft_catalog::Source::File { path } = &p.source {
+            paths.insert(path.as_str());
+        }
+    }
+    paths.len()
+}
+
 /// A Folders row while photos are dragged from the grid: a release moves their files there on
 /// disk (`photo.moveToFolder`, one undo step). The row lights up and the dragged label says where
 /// they will go, as the same gesture onto an album only adds them to it. Held over a closed row,
@@ -386,30 +406,25 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         Some(crate::i18n::tr("This row covers more than one disk: drop on a folder inside it"))
     } else if photos.iter().any(|p| p.local) {
         Some(crate::i18n::tr("Local photos aren't in the library yet: Add to My Photos first, then move them"))
+    } else if photos.iter().any(|p| !matches!(p.source, lightcraft_catalog::Source::File { .. })) {
+        // `photo.moveToFolder` refuses a photo with no file
+        Some(crate::i18n::tr("Demo photos have no file on disk, so they can't be moved"))
     } else {
         None
     };
-    let here = |p: &lightcraft_catalog::Photo| match &p.source {
-        lightcraft_catalog::Source::File { path } => std::path::Path::new(path).parent().is_some_and(|d| same_folder(&d.to_string_lossy(), &n.path)),
-        _ => false,
-    };
-    let all_here = !photos.is_empty() && photos.iter().all(|p| here(p));
-    let count = photos.len();
+    let count = files_moved(&photos, &n.path);
+    let all_here = !photos.is_empty() && photos.iter().all(|p| is_in_folder(p, &n.path));
     let released = ui.input(|i| i.pointer.any_released());
-    let hint = match (&refused, all_here) {
-        (Some(_), _) => crate::i18n::tr("Can't be moved here").to_string(),
-        (None, true) => crate::i18n::tr_format!("Already in “{}”", name),
-        (None, false) => crate::i18n::tr_format!("Move {n} photo{} to “{}”", if count == 1 { "" } else { "s" }, name, n = count),
-    };
-    crate::panels::grid::drag_hint(ui.ctx(), hint);
     if let Some(why) = refused {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-        if released {
-            app.toast(ui.ctx(), why);
-            app.ui.dragging_photos = None;
-        }
+        crate::panels::grid::refuse_drop(app, ui.ctx(), crate::i18n::tr("Can't be moved here").to_string(), why, released);
         return;
     }
+    let hint = if all_here {
+        crate::i18n::tr_format!("Already in “{}”", name)
+    } else {
+        crate::i18n::tr_format!("Move {n} file{} to “{}”", if count == 1 { "" } else { "s" }, name, n = count)
+    };
+    crate::panels::grid::drag_hint(ui.ctx(), hint);
     if all_here {
         if released {
             app.ui.dragging_photos = None;
@@ -424,7 +439,7 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         // said not to; the menu's Move Selected Photos Here is asked for by name and goes at once
         if app.ui.settings.ask_before_move {
             let library = app.session.library_generation();
-            app.ui.dialog = Some(crate::state::Dialog::MovePhotos { ids, folder: n.path.clone(), name, dont_ask: false, library });
+            app.ui.dialog = Some(crate::state::Dialog::MovePhotos { ids, folder: n.path.clone(), name, files: count, dont_ask: false, library });
         } else {
             move_photos_here(app, ui.ctx(), Some(&ids), &n.path, &name);
         }
@@ -480,7 +495,7 @@ pub(crate) fn moved_text(n: u64, name: &str) -> String {
     if n == 0 {
         crate::i18n::tr_format!("Already in “{}”", name)
     } else {
-        crate::i18n::tr_format!("Moved {n} photo{} to “{}”. Edit → Undo moves them back.", if n == 1 { "" } else { "s" }, name, n = n)
+        crate::i18n::tr_format!("Moved {n} file{} to “{}”. Edit → Undo moves them back.", if n == 1 { "" } else { "s" }, name, n = n)
     }
 }
 

@@ -46,6 +46,7 @@
   "Can't be moved here": "Não podem ser movidas para cá",
   "This row covers more than one disk: drop on a folder inside it": "Esta linha abrange mais de um disco: solte em uma pasta dentro dela",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "As fotos locais ainda não estão na biblioteca: primeiro Adicionar às Minhas fotos, depois mova-as",
+  "Demo photos have no file on disk, so they can't be moved": "As fotos de demonstração não têm arquivo no disco, então não podem ser movidas",
   "Add to Selected Photos": "Adicionar às fotos selecionadas",
   "Add to Target Album": "Adicionar ao álbum de destino",
   "Add to this mask": "Adicionar a esta máscara",
@@ -2202,5 +2203,13 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Can't add to an album folder": "Não é possível adicionar a uma pasta de álbuns",
+  "An album folder holds albums, not photos: drop on an album inside it": "Uma pasta de álbuns contém álbuns, não fotos: solte em um álbum dentro dela",
+  "Can't add to a smart album": "Não é possível adicionar a um álbum inteligente",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "As regras de um álbum inteligente escolhem suas fotos: altere-as com Editar álbum inteligente…",
+  "Add keywords in the Keyword List": "Adicione palavras-chave na Lista de palavras-chave",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Para dar uma palavra-chave às fotos, use a Lista de palavras-chave (Janela → Palavras-chave, K): solte-as lá sobre ela",
+  "Already on these photos": "Já estão nestas fotos",
+  "Can't go inside itself": "Não pode ficar dentro de si mesma"
 }

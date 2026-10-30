@@ -44,6 +44,7 @@
   "Can't be moved here": "No se pueden mover aquí",
   "This row covers more than one disk: drop on a folder inside it": "Esta fila abarca más de un disco: suéltalas en una carpeta dentro de ella",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Las fotos locales aún no están en la biblioteca: primero Añadir a Mis fotos y luego muévelas",
+  "Demo photos have no file on disk, so they can't be moved": "Las fotos de demostración no tienen archivo en el disco, así que no se pueden mover",
   "Add to Selected Photos": "Añadir a las fotos seleccionadas",
   "Add to Target Album": "Añadir al álbum de destino",
   "Add to this mask": "Añadir a esta máscara",
@@ -2358,5 +2359,13 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Can't add to an album folder": "No se puede añadir a una carpeta de álbumes",
+  "An album folder holds albums, not photos: drop on an album inside it": "Una carpeta de álbumes contiene álbumes, no fotos: suéltalas en un álbum de dentro",
+  "Can't add to a smart album": "No se puede añadir a un álbum inteligente",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Las reglas de un álbum inteligente eligen sus fotos: cámbialas con Editar álbum inteligente…",
+  "Add keywords in the Keyword List": "Añade palabras clave en la Lista de palabras clave",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Para dar una palabra clave a las fotos, usa la Lista de palabras clave (Ventana → Palabras clave, K): suéltalas allí sobre ella",
+  "Already on these photos": "Ya las tienen estas fotos",
+  "Can't go inside itself": "No puede ir dentro de sí misma"
 }

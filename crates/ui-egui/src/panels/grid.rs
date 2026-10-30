@@ -1117,6 +1117,17 @@ pub fn drag_hint(ctx: &egui::Context, text: String) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("drag-photos-hint"), (frame, text)));
 }
 
+/// What a drop target that refuses the dragged photos does: the label says so, the cursor shows
+/// it, and a release there toasts `why` and ends the drag, changing nothing.
+pub fn refuse_drop(app: &mut LightcraftApp, ctx: &egui::Context, hint: String, why: &str, released: bool) {
+    drag_hint(ctx, hint);
+    ctx.set_cursor_icon(egui::CursorIcon::NotAllowed);
+    if released {
+        app.toast(ctx, why);
+        app.ui.dragging_photos = None;
+    }
+}
+
 pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(ids) = &app.ui.dragging_photos else { return };
     let (released, down, pos) = ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos()));
@@ -1127,7 +1138,10 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(pos) = pos else { return };
     let t = Tokens::get(ctx);
     let n = ids.len();
-    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    // (a row that refuses them has set the not-allowed cursor this frame: it stays)
+    if ctx.output(|o| o.cursor_icon) != egui::CursorIcon::NotAllowed {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     // a drop target under the pointer says where they would go (only this frame's)
     let frame = ctx.cumulative_frame_nr();
     let hint = ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique("drag-photos-hint"))).filter(|(f, _)| *f == frame).map(|(_, text)| text);

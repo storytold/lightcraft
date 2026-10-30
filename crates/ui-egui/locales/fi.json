@@ -2327,5 +2327,14 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Älyalbumin säännöt valitsevat sen kuvat: muuta niitä komennolla Muokkaa älyalbumia…",
+  "Add keywords in the Keyword List": "Lisää avainsanoja avainsanaluettelossa",
+  "Already on these photos": "Jo näissä kuvissa",
+  "An album folder holds albums, not photos: drop on an album inside it": "Albumikansio sisältää albumeja, ei kuvia: pudota kuvat sen sisällä olevalle albumille",
+  "Can't add to a smart album": "Älyalbumiin ei voi lisätä",
+  "Can't add to an album folder": "Albumikansioon ei voi lisätä",
+  "Can't go inside itself": "Ei voi siirtää itsensä sisään",
+  "Demo photos have no file on disk, so they can't be moved": "Demokuvilla ei ole tiedostoa levyllä, joten niitä ei voi siirtää",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Anna kuville avainsana avainsanaluettelossa (Ikkuna → Avainsanat, K): pudota ne siellä avainsanan päälle"
 }

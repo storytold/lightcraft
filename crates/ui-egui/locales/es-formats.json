@@ -295,15 +295,18 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "Combinación {what} añadida a {mp}: el tamaño completo, {full}, necesita más memoria de la que tiene este ordenador",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Combinación {what} añadida a {mp}, el tamaño máximo de una panorámica (tamaño completo: {full})",
   "Already in “{}”": "Ya está en “{}”",
-  "Move {n} photo{} to “{}”": "Mover {n} foto{0} a “{1}”",
-  "Move {n} photo{} to “{}”?": "¿Mover {n} foto{0} a “{1}”?",
+  "Move {n} file{} to “{}”": "Mover {n} archivo{0} a “{1}”",
+  "Move {n} file{} to “{}”?": "¿Mover {n} archivo{0} a “{1}”?",
   "Listing folders — folders: {folders}, files: {files}": "Listando carpetas — carpetas: {folders}, archivos: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "{n} archivo{0} movido{0} a “{1}”. Editar → Deshacer los devuelve.",
   "Drop to review {n} item{} for import": "Suelta para revisar {n} elemento{} antes de importar",
   "Drop to import {n} item{}": "Suelta para importar {n} elemento{}",
   "Drop to import {n} preset{}": "Suelta para importar {n} ajuste{0} preestablecido{0}",
   "Could not read {name}: {e}": "No se pudo leer {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} añadida{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "¿Dónde debe ir el catálogo de Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})",
+  "Add {n} photo{} to “{}”": "Añadir {n} foto{0} a “{1}”",
+  "{n} already there": "ya en el álbum: {n}",
+  "Add “{keyword}” to {n} photo{}": "Añadir “{keyword}” a {n} foto{}"
 }

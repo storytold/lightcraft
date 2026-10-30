@@ -295,15 +295,18 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "Fusion de {what} ajoutée en {mp} : la taille complète, {full}, demande plus de mémoire que n’en a cet ordinateur",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Fusion de {what} ajoutée en {mp}, la plus grande taille possible pour un panorama (taille complète : {full})",
   "Already in “{}”": "Déjà dans « {} »",
-  "Move {n} photo{} to “{}”": "Déplacer {n} photo{} vers « {} »",
-  "Move {n} photo{} to “{}”?": "Déplacer {n} photo{} vers « {} » ?",
+  "Move {n} file{} to “{}”": "Déplacer {n} fichier{} vers « {} »",
+  "Move {n} file{} to “{}”?": "Déplacer {n} fichier{} vers « {} » ?",
   "Listing folders — folders: {folders}, files: {files}": "Liste des dossiers — dossiers : {folders}, fichiers : {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{0} déplacée{0} vers « {1} ». Modifier → Annuler les remet en place.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "{n} fichier{0} déplacé{0} vers « {1} ». Modifier → Annuler les remet en place.",
   "Drop to review {n} item{} for import": "Déposez pour vérifier {n} élément{} avant l'import",
   "Drop to import {n} item{}": "Déposez pour importer {n} élément{}",
   "Drop to import {n} preset{}": "Déposez pour importer {n} préréglage{}",
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Add {n} photo{} to “{}”": "Ajouter {n} photo{} à « {} »",
+  "{n} already there": "{n} déjà présent(s)",
+  "Add “{keyword}” to {n} photo{}": "Ajouter « {keyword} » à {n} photo{}"
 }

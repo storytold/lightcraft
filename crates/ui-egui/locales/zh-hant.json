@@ -46,6 +46,7 @@
   "Can't be moved here": "無法移到這裡",
   "This row covers more than one disk: drop on a folder inside it": "此列涵蓋多個磁碟：請拖放到其中的資料夾",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "本機照片尚未在照片庫中：請先「加入我的照片」，再移動",
+  "Demo photos have no file on disk, so they can't be moved": "示範照片在磁碟上沒有檔案，因此無法移動",
   "Add to Selected Photos": "加入選取的照片",
   "Add to Target Album": "加入目標相簿",
   "Add to this mask": "加入此遮色片",
@@ -2157,5 +2158,13 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Can't add to an album folder": "無法加入相簿資料夾",
+  "An album folder holds albums, not photos: drop on an album inside it": "相簿資料夾裡放的是相簿，不是照片：請拖到其中的某個相簿上",
+  "Can't add to a smart album": "無法加入智慧型相簿",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "智慧型相簿的照片由其規則決定：請用「編輯智慧型相簿…」變更規則",
+  "Add keywords in the Keyword List": "請在關鍵字清單中加入關鍵字",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "要替照片加入關鍵字，請使用關鍵字清單（視窗 → 關鍵字，K），把照片拖到那裡的關鍵字上",
+  "Already on these photos": "這些照片已有",
+  "Can't go inside itself": "不能放入自身"
 }

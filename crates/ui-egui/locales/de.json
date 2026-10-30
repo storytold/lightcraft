@@ -59,6 +59,7 @@
   "Can't be moved here": "Hierher nicht verschiebbar",
   "This row covers more than one disk: drop on a folder inside it": "Diese Zeile umfasst mehr als ein Laufwerk: auf einem Ordner darin ablegen",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Lokale Fotos sind noch nicht in der Bibliothek: erst zu „Meine Fotos“ hinzufügen, dann verschieben",
+  "Demo photos have no file on disk, so they can't be moved": "Demofotos haben keine Datei auf dem Datenträger und lassen sich deshalb nicht verschieben",
   "Add to Selected Photos": "Zu ausgewählten Fotos hinzufügen",
   "Add to Target Album": "Zu Zielalbum hinzufügen",
   "Add to this mask": "Zu dieser Maske hinzufügen",
@@ -3440,5 +3441,13 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "Can't add to an album folder": "Nicht zu einem Albenordner hinzufügbar",
+  "An album folder holds albums, not photos: drop on an album inside it": "Ein Albenordner enthält Alben, keine Fotos: auf ein Album darin ablegen",
+  "Can't add to a smart album": "Nicht zu einem Smart-Album hinzufügbar",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Die Regeln eines Smart-Albums bestimmen seine Fotos: ändere sie mit Smart-Album bearbeiten…",
+  "Add keywords in the Keyword List": "Stichwörter in der Stichwortliste hinzufügen",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Stichwörter vergibst du in der Stichwortliste (Fenster → Stichwörter, K): Fotos dort auf ein Stichwort ziehen",
+  "Already on these photos": "Bereits bei diesen Fotos",
+  "Can't go inside itself": "Kann nicht in sich selbst liegen"
 }

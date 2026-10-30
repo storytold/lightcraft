@@ -295,9 +295,9 @@
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Spazio colore: Rec. 2020 {curve} (AVIF HDR)",
   "{n} selected photos · {pages} pages": "Foto selezionate: {n} · pagine: {pages}",
   "Already in “{}”": "Già in “{}”",
-  "Move {n} photo{} to “{}”": "Sposta foto in “{1}” ({n}){0:.0}",
-  "Move {n} photo{} to “{}”?": "Spostare le foto in “{1}” ({n})?{0:.0}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Foto spostate in “{1}”: {n}{0:.0}. Modifica → Annulla le riporta indietro.",
+  "Move {n} file{} to “{}”": "Sposta file in “{1}” ({n}){0:.0}",
+  "Move {n} file{} to “{}”?": "Spostare i file in “{1}” ({n})?{0:.0}",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "File spostati in “{1}”: {n}{0:.0}. Modifica → Annulla li riporta indietro.",
   "Listing folders — folders: {folders}, files: {files}": "Elenco delle cartelle — cartelle: {folders}, file: {files}",
   "Drop to review {n} item{} for import": "Rilascia per rivedere prima dell'importazione (elementi: {n}){:.0}",
   "Drop to import {n} item{}": "Rilascia per importare (elementi: {n}){:.0}",
@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "Impossibile leggere {name}: {e}",
   "Added {n} photo{}": "Foto aggiunte: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dove importare il catalogo Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Unisci alla libreria aperta “{library}” (foto: {count}{:.0})",
+  "Add {n} photo{} to “{}”": "Aggiungi {n} foto{0:.0} a “{1}”",
+  "{n} already there": "{n} già presenti",
+  "Add “{keyword}” to {n} photo{}": "Aggiungi “{keyword}” a {n} foto{:.0}"
 }

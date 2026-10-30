@@ -2283,5 +2283,14 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Can't add to an album folder": "Nie można dodać do folderu albumów",
+  "An album folder holds albums, not photos: drop on an album inside it": "Folder albumów zawiera albumy, nie zdjęcia: upuść na album w jego wnętrzu",
+  "Can't add to a smart album": "Nie można dodać do albumu inteligentnego",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "O zdjęciach albumu inteligentnego decydują jego reguły: zmienisz je przez Edytuj album inteligentny…",
+  "Add keywords in the Keyword List": "Dodawaj słowa kluczowe na Liście słów kluczowych",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Aby nadać zdjęciom słowo kluczowe, użyj Listy słów kluczowych (Okno → Słowa kluczowe, K): upuść je tam na to słowo",
+  "Already on these photos": "Już mają je te zdjęcia",
+  "Can't go inside itself": "Nie może trafić do siebie samego",
+  "Demo photos have no file on disk, so they can't be moved": "Zdjęcia demonstracyjne nie mają pliku na dysku, więc nie można ich przenieść"
 }

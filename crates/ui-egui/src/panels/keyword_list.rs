@@ -115,21 +115,28 @@ fn shown_under(ui: &egui::Ui, rect: Rect, pointer: Option<egui::Pos2>) -> bool {
     crate::docking::drop_target(ui, rect, pointer)
 }
 
+/// What the dragged keyword's label says this frame instead of its name (a row refusing it sets it).
+const KEYWORD_HINT: &str = "drag-keyword-hint";
+
 /// A keyword being dragged, each frame (after the panels, which take the drop): its name follows
 /// the pointer, and the drag ends with the button's release wherever it is (the list may be gone
-/// by then) or with Esc.
+/// by then). Esc ends it earlier in the frame (`LightcraftApp::end_drags`).
 pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(keyword) = app.ui.dragging_keyword.clone() else { return };
-    let (released, down, at, esc) =
-        ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
-    if released || !down || esc {
+    let (released, down, at) = ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos()));
+    if released || !down {
         app.ui.dragging_keyword = None;
         return;
     }
     let Some(at) = at else { return };
     let t = Tokens::get(ctx);
-    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    let name = keyword.rsplit('|').next().unwrap_or(&keyword).to_string();
+    // (a row that refuses it has set the not-allowed cursor this frame: it stays)
+    if ctx.output(|o| o.cursor_icon) != egui::CursorIcon::NotAllowed {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    let frame = ctx.cumulative_frame_nr();
+    let hint = ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::unique(KEYWORD_HINT))).filter(|(f, _)| *f == frame).map(|(_, text)| text);
+    let name = hint.unwrap_or_else(|| keyword.rsplit('|').next().unwrap_or(&keyword).to_string());
     egui::Area::new(egui::Id::unique("drag-keyword")).order(egui::Order::Tooltip).interactable(false).fixed_pos(at + vec2(14.0, 10.0)).show(
         ctx,
         |ui| {
@@ -312,9 +319,16 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
         return;
     }
     let t = Tokens::get(ui.ctx());
-    let outline = |ui: &egui::Ui| ui.painter().rect_stroke(rect.shrink2(vec2(16.0, 1.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
+    let outline = |ui: &egui::Ui| {
+        ui.painter().rect_stroke(rect.shrink2(vec2(16.0, 1.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
+    };
     if let Some(k) = app.ui.dragging_keyword.clone() {
         if lightcraft_catalog::keywords::is_under(path, &k) {
+            // never inside itself or what is inside it: the not-allowed cursor, and the dragged
+            // label says why; a release does nothing
+            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+            let frame = ui.ctx().cumulative_frame_nr();
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique(KEYWORD_HINT), (frame, crate::i18n::tr("Can't go inside itself").to_string())));
             return;
         }
         outline(ui);
@@ -322,30 +336,43 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
             drop_keyword(app, ui.ctx(), &k, Some(path));
         }
     } else if let Some(ids) = app.ui.dragging_photos.clone() {
-        outline(ui);
+        drop_photos_on_keyword(app, ui, &ids, path, &outline);
+    }
+}
+
+/// Photos dragged over the keyword row `path`: only the photos that don't have it get it. `outline`
+/// marks the row when a release would give it to some.
+fn drop_photos_on_keyword(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[u64], path: &str, outline: &dyn Fn(&egui::Ui)) {
+    let released = ui.input(|i| i.pointer.any_released());
+    let lacking = |id: &u64| {
+        app.session.catalog.photo(PhotoId(*id)).is_some_and(|p| !p.meta.keywords.iter().any(|k| same(&lightcraft_catalog::keywords::clean(k), path)))
+    };
+    let n = ids.iter().filter(|id| lacking(id)).count();
+    if n == 0 {
+        super::grid::drag_hint(ui.ctx(), crate::i18n::tr("Already on these photos").to_string());
         if released {
-            // only the photos that didn't have it get it
-            let lacking = |id: &u64| {
-                app.session
-                    .catalog
-                    .photo(PhotoId(*id))
-                    .is_some_and(|p| !p.meta.keywords.iter().any(|k| same(&lightcraft_catalog::keywords::clean(k), path)))
-            };
-            let n = ids.iter().filter(|id| lacking(id)).count();
             app.ui.dragging_photos = None;
-            match app.run("photo.setMeta", json!({"ids": ids, "addKeywords": [path]})) {
-                Ok(_) => app.toast(
-                    ui.ctx(),
-                    crate::i18n::tr_format!(
-                        "Added “{keyword}” to {n} photo{}",
-                        if n == 1 { "" } else { "s" },
-                        keyword = path.replace('|', " › "),
-                        n = n
-                    ),
-                ),
-                Err(e) => app.toast(ui.ctx(), e),
-            }
         }
+        return;
+    }
+    let keyword = path.replace('|', " › ");
+    super::grid::drag_hint(
+        ui.ctx(),
+        crate::i18n::tr_format!("Add “{keyword}” to {n} photo{}", if n == 1 { "" } else { "s" }, keyword = keyword, n = n),
+    );
+    outline(ui);
+    if released {
+        app.ui.dragging_photos = None;
+        give_keyword(app, ui.ctx(), ids, path, n);
+    }
+}
+
+/// Gives the keyword `path` to the dragged photos and toasts how many (`n`) lacked it.
+fn give_keyword(app: &mut LightcraftApp, ctx: &egui::Context, ids: &[u64], path: &str, n: usize) {
+    let keyword = path.replace('|', " › ");
+    match app.run("photo.setMeta", json!({"ids": ids, "addKeywords": [path]})) {
+        Ok(_) => app.toast(ctx, crate::i18n::tr_format!("Added “{keyword}” to {n} photo{}", if n == 1 { "" } else { "s" }, keyword = keyword, n = n)),
+        Err(e) => app.toast(ctx, e),
     }
 }
 

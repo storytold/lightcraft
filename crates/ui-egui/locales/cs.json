@@ -59,6 +59,7 @@
   "Can't be moved here": "Sem nelze přesunout",
   "This row covers more than one disk: drop on a folder inside it": "Tento řádek zahrnuje více disků: přetáhněte položky na některou ze složek v něm",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Místní fotografie zatím nejsou v knihovně: nejprve použijte Přidat do mých fotografií a pak je přesuňte",
+  "Demo photos have no file on disk, so they can't be moved": "Ukázkové fotografie nemají soubor na disku, proto je nelze přesunout",
   "Add to My Photos First": "Nejprve přidat do mých fotografií",
   "Add to Selected Photos": "Přidat k vybraným fotografiím",
   "Add to Target Album": "Přidat do cílového alba",
@@ -2408,5 +2409,13 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Can't add to an album folder": "Nelze přidat do složky alb",
+  "An album folder holds albums, not photos: drop on an album inside it": "Složka alb obsahuje alba, ne fotografie: pusťte je na album uvnitř",
+  "Can't add to a smart album": "Nelze přidat do inteligentního alba",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "O fotografiích inteligentního alba rozhodují jeho pravidla: změníte je přes Upravit inteligentní album…",
+  "Add keywords in the Keyword List": "Klíčová slova přidávejte v Seznamu klíčových slov",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Klíčové slovo fotografiím přidáte v Seznamu klíčových slov (Okno → Klíčová slova, K): pusťte je tam na klíčové slovo",
+  "Already on these photos": "Už je mají",
+  "Can't go inside itself": "Nemůže jít samo do sebe"
 }

@@ -295,15 +295,18 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}-Zusammenfügung mit {mp} hinzugefügt: die volle Größe, {full}, braucht mehr Arbeitsspeicher, als dieser Computer hat",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}-Zusammenfügung mit {mp} hinzugefügt, der größten möglichen Panoramagröße (volle Größe: {full})",
   "Already in “{}”": "Bereits in „{}“",
-  "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
-  "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
+  "Move {n} file{} to “{}”": "Nach „{1}“ verschieben (Dateien: {n}){0:.0}",
+  "Move {n} file{} to “{}”?": "Nach „{1}“ verschieben (Dateien: {n})?{0:.0}",
   "Listing folders — folders: {folders}, files: {files}": "Ordner werden aufgelistet – Ordner: {folders}, Dateien: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Nach „{1}“ verschoben (Dateien: {n}). Bearbeiten → Rückgängig holt sie zurück.{0:.0}",
   "Drop to review {n} item{} for import": "Ablegen, um vor dem Import zu prüfen (Objekte: {n}){:.0}",
   "Drop to import {n} item{}": "Ablegen zum Importieren (Objekte: {n}){:.0}",
   "Drop to import {n} preset{}": "Ablegen zum Importieren von Vorgaben: {n}{:.0}",
   "Could not read {name}: {e}": "{name} konnte nicht gelesen werden: {e}",
   "Added {n} photo{}": "{n} Foto{} hinzugefügt",
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
+  "Add {n} photo{} to “{}”": "{n} Foto{0} zu „{1}“ hinzufügen",
+  "{n} already there": "{n} bereits enthalten",
+  "Add “{keyword}” to {n} photo{}": "„{keyword}“ zu {n} Foto{} hinzufügen"
 }

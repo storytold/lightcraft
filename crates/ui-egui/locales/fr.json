@@ -44,6 +44,7 @@
   "Can't be moved here": "Impossible de les déplacer ici",
   "This row covers more than one disk: drop on a folder inside it": "Cette ligne couvre plusieurs disques : déposez-les sur un dossier qu’elle contient",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Les photos locales ne sont pas encore dans la bibliothèque : Ajouter à Mes photos d’abord, puis déplacez-les",
+  "Demo photos have no file on disk, so they can't be moved": "Les photos de démonstration n’ont pas de fichier sur le disque : on ne peut pas les déplacer",
   "Add to Selected Photos": "Ajouter aux photos sélectionnées",
   "Add to Target Album": "Ajouter à l'album cible",
   "Add to this mask": "Ajouter à ce masque",
@@ -2390,5 +2391,13 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Can't add to an album folder": "Impossible d’ajouter à un dossier d’albums",
+  "An album folder holds albums, not photos: drop on an album inside it": "Un dossier d’albums contient des albums, pas des photos : déposez-les sur un album à l’intérieur",
+  "Can't add to a smart album": "Impossible d’ajouter à un album intelligent",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Les règles d’un album intelligent choisissent ses photos : modifiez-les avec Modifier l'album intelligent…",
+  "Add keywords in the Keyword List": "Ajoutez des mots-clés dans la Liste des mots-clés",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Pour donner un mot-clé à des photos, utilisez la Liste des mots-clés (Fenêtre → Mots-clés, K) : déposez-les sur le mot-clé",
+  "Already on these photos": "Déjà sur ces photos",
+  "Can't go inside itself": "Ne peut pas aller dans lui-même"
 }

@@ -294,10 +294,10 @@
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Przestrzeń kolorów: Rec. 2020 {curve} (HDR AVIF)",
   "{n} selected photos · {pages} pages": "Zaznaczone zdjęcia: {n} · strony: {pages}",
   "Already in “{}”": "Już w „{}”",
-  "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
+  "Move {n} file{} to “{}”": "Przenieś do „{1}” — pliki: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "Przenieść do „{1}” — pliki: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Przeglądanie folderów — foldery: {folders}, pliki: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — pliki: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
   "Drop to review {n} item{} for import": "Upuść, aby przejrzeć przed importem (elementy: {n}){:.0}",
   "Drop to import {n} item{}": "Upuść, aby zaimportować (elementy: {n}){:.0}",
   "Drop to import {n} preset{}": "Upuść, aby zaimportować ustawienia wstępne: {n}{:.0}",
@@ -305,5 +305,8 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Add {n} photo{} to “{}”": "Dodaj do „{1}” — zdjęcia: {n}{0:.0}",
+  "{n} already there": "{n} już tam jest",
+  "Add “{keyword}” to {n} photo{}": "Dodaj „{keyword}” do zdjęć: {n}{:.0}"
 }

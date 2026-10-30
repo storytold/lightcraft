@@ -45,6 +45,7 @@
   "Can't be moved here": "ここには移動できません",
   "This row covers more than one disk: drop on a folder inside it": "この行は複数のディスクにまたがっています。中のフォルダにドロップしてください",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "ローカルの写真はまだライブラリにありません。先に「マイフォトに追加」してから移動してください",
+  "Demo photos have no file on disk, so they can't be moved": "デモの写真にはディスク上のファイルがないため、移動できません",
   "Add to Selected Photos": "選択した写真に追加",
   "Add to Target Album": "追加先アルバムに追加",
   "Add to this mask": "このマスクに追加",
@@ -2356,5 +2357,13 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Can't add to an album folder": "アルバムフォルダには追加できません",
+  "An album folder holds albums, not photos: drop on an album inside it": "アルバムフォルダに入れられるのはアルバムだけです：中のアルバムにドロップしてください",
+  "Can't add to a smart album": "スマートアルバムには追加できません",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "スマートアルバムの写真はルールで決まります：「スマートアルバムを編集…」で変更してください",
+  "Add keywords in the Keyword List": "キーワードはキーワードリストで追加します",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "写真にキーワードを付けるには、キーワードリスト（ウィンドウ → キーワード、K）で、そのキーワードにドロップしてください",
+  "Already on these photos": "すでにこの写真にあります",
+  "Can't go inside itself": "自分の中には入れられません"
 }

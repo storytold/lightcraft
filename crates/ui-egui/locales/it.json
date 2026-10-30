@@ -44,6 +44,7 @@
   "Can't be moved here": "Non si possono spostare qui",
   "This row covers more than one disk: drop on a folder inside it": "Questa riga comprende più di un disco: rilascia su una cartella al suo interno",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Le foto locali non sono ancora nella libreria: prima Aggiungi a Le mie foto, poi spostale",
+  "Demo photos have no file on disk, so they can't be moved": "Le foto dimostrative non hanno un file su disco, quindi non si possono spostare",
   "Add to Selected Photos": "Aggiungi alle foto selezionate",
   "Add to Target Album": "Aggiungi all'album di destinazione",
   "Add to this mask": "Aggiungi a questa maschera",
@@ -2361,5 +2362,13 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Can't add to an album folder": "Impossibile aggiungere a una cartella di album",
+  "An album folder holds albums, not photos: drop on an album inside it": "Una cartella di album contiene album, non foto: rilascia su un album al suo interno",
+  "Can't add to a smart album": "Impossibile aggiungere a un album smart",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Le regole di un album smart scelgono le sue foto: cambiale con Modifica album smart…",
+  "Add keywords in the Keyword List": "Aggiungi le parole chiave nell'Elenco parole chiave",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Per dare una parola chiave alle foto usa l'Elenco parole chiave (Finestra → Parole chiave, K): rilasciale lì sulla parola chiave",
+  "Already on these photos": "Già presente su queste foto",
+  "Can't go inside itself": "Non può andare dentro se stessa"
 }

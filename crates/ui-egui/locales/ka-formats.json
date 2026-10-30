@@ -295,15 +295,18 @@
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Color space: Rec. 2020 {curve} (HDR AVIF)",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "Already in “{}”": "Already in “{}”",
-  "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
-  "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
+  "Move {n} file{} to “{}”": "Move {n} file{} to “{}”",
+  "Move {n} file{} to “{}”?": "Move {n} file{} to “{}”?",
   "Listing folders — folders: {folders}, files: {files}": "საქაღალდეების ჩამოთვლა — საქაღალდეები: {folders}, ფაილები: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Moved {n} file{} to “{}”. Edit → Undo moves them back.",
   "Drop to review {n} item{} for import": "ჩააგდეთ იმპორტამდე გადასახედად (ელემენტები: {n}){:.0}",
   "Drop to import {n} item{}": "ჩააგდეთ იმპორტისთვის (ელემენტები: {n}){:.0}",
   "Drop to import {n} preset{}": "ჩააგდეთ პრესეტების იმპორტისთვის: {n}{:.0}",
   "Could not read {name}: {e}": "ვერ წაიკითხა {name}: {e}",
   "Added {n} photo{}": "დაემატა ფოტო: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "სად გადავიტანოთ Lightroom-ის კატალოგი „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "გაერთიანება ღია ბიბლიოთეკასთან „{library}“ (ფოტოები: {count}){:.0}",
+  "Add {n} photo{} to “{}”": "დაამატეთ ფოტო „{1}“-ში: {n}{0:.0}",
+  "{n} already there": "{n} უკვე არის",
+  "Add “{keyword}” to {n} photo{}": "დაამატეთ „{keyword}“ ფოტოებს: {n}{:.0}"
 }

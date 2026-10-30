@@ -295,15 +295,18 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}: об’єднання додано в розмірі {mp}: для повного розміру ({full}) бракує пам’яті цього комп’ютера",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}: об’єднання додано в розмірі {mp} — це найбільший розмір панорами (повний розмір: {full})",
   "Already in “{}”": "Уже в «{}»",
-  "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
+  "Move {n} file{} to “{}”": "Перемістити до «{1}» файлів: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "Перемістити до «{1}» файлів: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Перегляд тек — тек: {folders}, файлів: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено файлів: {n}{0:.0}. Редагування → Скасувати поверне їх.",
   "Drop to review {n} item{} for import": "Відпустіть для перегляду перед імпортом (елементів: {n}){:.0}",
   "Drop to import {n} item{}": "Відпустіть для імпорту (елементів: {n}){:.0}",
   "Drop to import {n} preset{}": "Відпустіть для імпорту наборів налаштувань: {n}{:.0}",
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Add {n} photo{} to “{}”": "Додати до «{1}» фото: {n}{0:.0}",
+  "{n} already there": "{n} уже там",
+  "Add “{keyword}” to {n} photo{}": "Додати «{keyword}» до фото: {n}{:.0}"
 }

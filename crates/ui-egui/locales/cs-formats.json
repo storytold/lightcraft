@@ -295,15 +295,18 @@
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Barevný prostor: Rec. 2020 {curve} (HDR AVIF)",
   "{n} selected photos · {pages} pages": "Vybrané fotografie: {n} · stránky: {pages}",
   "Already in “{}”": "Již v „{}“",
-  "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
+  "Move {n} file{} to “{}”": "Přesunout do „{1}“ soubory: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "Přesunout do „{1}“ soubory: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Procházení složek – složky: {folders}, soubory: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto souborů: {n}{0:.0}. Úpravy → Zpět je vrátí.",
   "Drop to review {n} item{} for import": "Pusťte pro kontrolu před importem (položek: {n}){:.0}",
   "Drop to import {n} item{}": "Pusťte pro import (položek: {n}){:.0}",
   "Drop to import {n} preset{}": "Pusťte pro import přednastavení: {n}{:.0}",
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Add {n} photo{} to “{}”": "Přidat do „{1}“ fotografie: {n}{0:.0}",
+  "{n} already there": "již tam je: {n}",
+  "Add “{keyword}” to {n} photo{}": "Přidat „{keyword}“ k fotografiím: {n}{:.0}"
 }

@@ -414,6 +414,9 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     let popup_open = egui::Popup::is_any_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
+    // a drag in progress: Esc gives it up (`LightcraftApp::end_drags`) and does nothing else, even when no
+    // button is down any more (a hidden pass can take the release before `end_drags` sees it)
+    let popup_open = popup_open || app.ui.drag_active();
     ctx.input(|i| {
         // Enter opens the active grid photo; widgets, popups and custom bindings keep the key.
         if grid

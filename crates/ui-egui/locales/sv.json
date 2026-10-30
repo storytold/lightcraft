@@ -2429,5 +2429,14 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Ett smart albums regler väljer dess foton: ändra dem med Redigera smart album…",
+  "Add keywords in the Keyword List": "Lägg till nyckelord i nyckelordslistan",
+  "Already on these photos": "Finns redan på de här fotona",
+  "An album folder holds albums, not photos: drop on an album inside it": "En albummapp innehåller album, inte foton: släpp på ett album i den",
+  "Can't add to a smart album": "Kan inte läggas till i ett smart album",
+  "Can't add to an album folder": "Kan inte läggas till i en albummapp",
+  "Can't go inside itself": "Kan inte läggas inuti sig själv",
+  "Demo photos have no file on disk, so they can't be moved": "Demofoton har ingen fil på disken och kan därför inte flyttas",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Ge foton ett nyckelord i nyckelordslistan (Fönster → Nyckelord, K): släpp dem på det där"
 }

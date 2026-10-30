@@ -58,10 +58,10 @@
   "LightCraft could not open its window: {e}\n\nThe log file has the details: {path}": "O LightCraft não conseguiu abrir sua janela: {e}\n\nO arquivo de log tem os detalhes: {path}",
   "Matches: {}": "Correspondências: {}",
   "Merging… {stage} {:.0}%": "Mesclando… {stage} {:.0}%",
-  "Move {n} photo{} to “{}”": "Mover {n} foto{0} para “{1}”",
-  "Move {n} photo{} to “{}”?": "Mover {n} foto{0} para “{1}”?",
+  "Move {n} file{} to “{}”": "Mover {n} arquivo{0} para “{1}”",
+  "Move {n} file{} to “{}”?": "Mover {n} arquivo{0} para “{1}”?",
   "Move {what} to Recently Deleted?": "Mover {what} para Excluídos recentemente?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} para “{1}”. Editar → Desfazer as traz de volta.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "{n} arquivo{0} movido{0} para “{1}”. Editar → Desfazer os traz de volta.",
   "Named ({named_n})": "Nomeadas ({named_n})",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Colar em {n} foto{} — somente os ajustes copiados são colados",
   "Preset: {name}": "Predefinição: {name}",
@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "Add {n} photo{} to “{}”": "Adicionar {n} foto{0} a “{1}”",
+  "{n} already there": "já no álbum: {n}",
+  "Add “{keyword}” to {n} photo{}": "Adicionar “{keyword}” a {n} foto{}"
 }

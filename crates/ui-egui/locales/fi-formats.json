@@ -126,10 +126,10 @@
   "Making the denoised picture… {}%": "Tehdään kohinanpoistettua kuvaa… {}%",
   "Matches: {}": "Täsmäävät: {}",
   "Merging… {stage} {:.0}%": "Yhdistetään… {stage} {:.0}%",
-  "Move {n} photo{} to “{}”": "Siirrä kuvia kohteeseen ”{1}”: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "Siirretäänkö kuvat kohteeseen ”{1}” ({n}){0:.0}?",
+  "Move {n} file{} to “{}”": "Siirrä tiedostoja kohteeseen ”{1}”: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "Siirretäänkö tiedostot kohteeseen ”{1}” ({n}){0:.0}?",
   "Move {what} to Recently Deleted?": "Siirretäänkö {what} Äskettäin poistettuihin?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Siirretty kuvia kohteeseen ”{1}”: {n}{0:.0}. Muokkaa → Kumoa siirtää ne takaisin.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Siirretty tiedostoja kohteeseen ”{1}”: {n}{0:.0}. Muokkaa → Kumoa siirtää ne takaisin.",
   "Moved {} photo(s)": "Siirretty kuvia: {}",
   "Moved; {} photo(s) relinked": "Siirretty; yhdistetty uudelleen kuvia: {}",
   "Named ({named_n})": "Nimetyt ({named_n})",
@@ -305,5 +305,8 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Add {n} photo{} to “{}”": "Lisää kuvia albumiin ”{1}”: {n}{0:.0}",
+  "Add “{keyword}” to {n} photo{}": "Lisää ”{keyword}” kuviin: {n}{:.0}",
+  "{n} already there": "jo albumissa: {n}"
 }

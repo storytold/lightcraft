@@ -29,6 +29,7 @@
   "Can't be moved here": "Сюда переместить нельзя",
   "This row covers more than one disk: drop on a folder inside it": "Эта строка охватывает несколько дисков: перетащите на папку внутри неё",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Локальных фото ещё нет в библиотеке: сначала «Добавить в «Мои фото»», затем перемещайте",
+  "Demo photos have no file on disk, so they can't be moved": "У демонстрационных фото нет файла на диске, поэтому их нельзя переместить",
   "Add to Selected Photos": "Добавить к выбранным фото",
   "Add to Target Album": "Добавить в целевой альбом",
   "Add to this mask": "Добавить к этой маске",
@@ -2349,5 +2350,13 @@
   "Import dropped files without review": "Импортировать перетащенные файлы без проверки",
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
-  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото"
+  "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Can't add to an album folder": "Нельзя добавить в папку альбомов",
+  "An album folder holds albums, not photos: drop on an album inside it": "В папке альбомов лежат альбомы, а не фото: бросьте на альбом внутри неё",
+  "Can't add to a smart album": "Нельзя добавить в смарт-альбом",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Фото смарт-альбома определяются его правилами: измените их через «Изменить смарт-альбом…»",
+  "Add keywords in the Keyword List": "Добавляйте ключевые слова в списке ключевых слов",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Чтобы задать фото ключевое слово, используйте список ключевых слов (Окно → Ключевые слова, K): бросьте фото там на нужное слово",
+  "Already on these photos": "Уже есть у этих фото",
+  "Can't go inside itself": "Нельзя поместить внутрь себя"
 }

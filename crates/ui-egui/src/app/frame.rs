@@ -376,6 +376,7 @@ impl LightcraftApp {
         self.library_changed(&ctx);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        self.end_drags(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
@@ -428,10 +429,13 @@ impl LightcraftApp {
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
-        panels::grid::drag_feedback(self, &ctx);
-        panels::left::album_drag_feedback(self, &ctx);
-        panels::left::section_drag_feedback(self, &ctx);
-        panels::keyword_list::drag_feedback(self, &ctx);
+        // (each ends its drag when the button is up, which an offscreen frame's pointer never is)
+        if !self.drawing_offscreen {
+            panels::grid::drag_feedback(self, &ctx);
+            panels::left::album_drag_feedback(self, &ctx);
+            panels::left::section_drag_feedback(self, &ctx);
+            panels::keyword_list::drag_feedback(self, &ctx);
+        }
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         // AppKit moves the window on a drag anywhere in the title-bar band unless the window isn't

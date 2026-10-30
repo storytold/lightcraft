@@ -41,10 +41,10 @@
   "LightCraft could not open its window: {e}\n\nThe log file has the details: {path}": "LightCraft tidak dapat membuka jendela: {e}\n\nDetailnya ada di file log: {path}",
   "Matches: {}": "Cocok: {}",
   "Merging… {stage} {:.0}%": "Menggabungkan… {stage} {:.0}%",
-  "Move {n} photo{} to “{}”": "Pindahkan {n} foto{0:.0} ke “{1}”",
-  "Move {n} photo{} to “{}”?": "Pindahkan {n} foto{0:.0} ke “{1}”?",
+  "Move {n} file{} to “{}”": "Pindahkan {n} file{0:.0} ke “{1}”",
+  "Move {n} file{} to “{}”?": "Pindahkan {n} file{0:.0} ke “{1}”?",
   "Move {what} to Recently Deleted?": "Pindahkan {what} ke Baru dihapus?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto dipindahkan ke “{1}”{0:.0}. Pilih Edit → Urungkan untuk mengembalikannya.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "{n} file dipindahkan ke “{1}”{0:.0}. Pilih Edit → Urungkan untuk mengembalikannya.",
   "Named ({named_n})": "Bernama ({named_n})",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Tempel ke {n} foto{:.0} — hanya menempelkan pengaturan yang disalin",
   "Preset: {name}": "Preset: {name}",
@@ -305,5 +305,8 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Add {n} photo{} to “{}”": "Tambahkan {n} foto{0:.0} ke “{1}”",
+  "Add “{keyword}” to {n} photo{}": "Tambahkan “{keyword}” ke {n} foto{:.0}",
+  "{n} already there": "{n} sudah ada"
 }
