@@ -388,11 +388,12 @@ impl Headless {
         }
     }
 
-    /// Is anything still in progress (renders, file-system checks the sidebar waits for, queued
-    /// input)?
+    /// Is anything still in progress (renders, file-system checks the sidebar waits for, a count
+    /// of the library, queued input)?
     pub fn busy(&self) -> bool {
         self.app.renderer.in_flight() > 0
             || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
+            || self.app.caches.library.busy()
             || self.app.merge.busy()
             || self.app.scan.is_some()
             || self.app.sync.is_some()

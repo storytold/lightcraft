@@ -28,27 +28,36 @@ fn app() -> LightcraftApp {
 
 /// The tallies as the panels would show them now.
 fn shown(a: &mut LightcraftApp) -> String {
-    let cat = &a.session.catalog;
+    let (cat, library) = (&a.session.catalog, a.session.library_generation());
     format!(
         "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
-        a.caches.folder_tree(cat),
-        a.caches.keyword_tree(cat),
-        a.caches.date_groups(cat),
+        a.caches.folder_tree(cat, library),
+        a.caches.keyword_tree(cat, library),
+        a.caches.date_groups(cat, library),
         a.caches.person_names(cat),
-        a.caches.counts(cat)
+        a.caches.counts(cat, library)
     )
 }
 
 /// The same tallies made from every photo.
 fn fresh(a: &LightcraftApp) -> String {
     let cat = &a.session.catalog;
+    let mut counts = lightcraft_catalog::library_tally::LibraryCounts::default();
+    for p in cat.photos() {
+        if p.in_library() {
+            counts.total += 1;
+            counts.picks += usize::from(p.flag == lightcraft_catalog::Flag::Pick);
+        } else if p.deleted && !p.local {
+            counts.deleted += 1;
+        }
+    }
     format!(
         "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
         cat.folder_tree(),
         cat.keyword_tree(),
         cat.date_groups(),
         cat.people().into_iter().map(|p| p.name).collect::<Vec<_>>(),
-        crate::Caches::default().counts(cat)
+        counts
     )
 }
 
@@ -62,7 +71,8 @@ fn a_tally_kept_through_an_edit_is_the_tally_made_from_every_photo() {
         (dice % sides as u64) as usize
     };
     assert_eq!(shown(&mut a), fresh(&a));
-    assert!(!a.caches.folder_tree(&a.session.catalog).is_empty() && !a.caches.date_groups(&a.session.catalog).is_empty());
+    let library = a.session.library_generation();
+    assert!(!a.caches.folder_tree(&a.session.catalog, library).is_empty() && !a.caches.date_groups(&a.session.catalog, library).is_empty());
     for step in 0..600 {
         let id = ids[roll(ids.len())];
         // (a photo in Recently Deleted can't be chosen: the edit is then not made, which is an edit too)
@@ -123,8 +133,8 @@ fn a_rating_or_a_slider_keeps_every_tally_and_a_keyword_keeps_the_folders_and_da
     let id = a.session.visible_cloned()[0].0;
     a.session.execute("library.select", &json!({"ids": [id]})).unwrap();
     let look = |a: &mut LightcraftApp| {
-        let cat = &a.session.catalog;
-        (a.caches.folder_tree(cat), a.caches.keyword_tree(cat), a.caches.date_groups(cat), a.caches.person_names(cat))
+        let (cat, library) = (&a.session.catalog, a.session.library_generation());
+        (a.caches.folder_tree(cat, library), a.caches.keyword_tree(cat, library), a.caches.date_groups(cat, library), a.caches.person_names(cat))
     };
     let was = look(&mut a);
     // a rating, then a slider: nothing is tallied again

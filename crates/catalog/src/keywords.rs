@@ -240,94 +240,96 @@ pub struct KeywordNode {
     pub children: Vec<KeywordNode>,
 }
 
+/// The levels keyword `k` names, top first (`travel`, `travel|italy`): each one's path in lower
+/// case and as `k` writes it, levels trimmed and empty ones dropped.
+pub(crate) fn levels_of(k: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let (mut path, mut lower) = (String::new(), String::new());
+    // Level paths hold their every prefix (`path` and `lower` both), so a photo's XMP keyword split
+    // far more levels than a list file accepts (`MAX_LEVELS`) made the stored prefixes quadratic in
+    // the level count: a keyword nests [MAX_LEVELS] levels here, as a list file would, and what lies
+    // below is left out (CWE-400).
+    for part in k.split(SEP).map(str::trim).filter(|s| !s.is_empty()).take(MAX_LEVELS) {
+        if !path.is_empty() {
+            path.push(SEP);
+            lower.push(SEP);
+        }
+        path.push_str(part);
+        lower.push_str(&part.to_lowercase());
+        out.push((lower.clone(), path.clone()));
+    }
+    out
+}
+
+/// [`Catalog::keyword_tree`] from the keyword list and the levels the library's photos carry:
+/// each one's lower-case path, how many photos carry it, and its path as the first of them
+/// writes it. A level is written as the keyword list writes it, else as that first photo does.
+pub(crate) fn keyword_tree_of<'l, 'c>(
+    listed: impl Iterator<Item = &'l ListedKeyword>,
+    counted: impl Iterator<Item = (&'c str, usize, &'c str)>,
+) -> Vec<KeywordNode> {
+    use std::collections::HashMap;
+    // lower-case path → (path as written, photos)
+    let mut levels: HashMap<String, (String, usize)> = HashMap::new();
+    for k in listed {
+        for (lower, path) in levels_of(&k.path) {
+            levels.entry(lower).or_insert((path, 0));
+        }
+    }
+    for (lower, n, path) in counted.filter(|(_, n, _)| *n > 0) {
+        levels.entry(lower.to_string()).or_insert_with(|| (path.to_string(), 0)).1 = n;
+    }
+    // built from the deepest level up, so no walk goes deeper than the loop (a keyword may name
+    // any number of levels); each level's children sorted by name in lower case
+    let mut order: Vec<(usize, String)> = levels.keys().map(|l| (l.matches(SEP).count(), l.clone())).collect();
+    order.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+    let mut kids: HashMap<String, Vec<(String, KeywordNode)>> = HashMap::new();
+    let mut roots: Vec<(String, KeywordNode)> = Vec::new();
+    for (_, lower) in order {
+        let Some((path, count)) = levels.remove(&lower) else { continue };
+        let mut children = kids.remove(&lower).unwrap_or_default();
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        let name = path.rsplit(SEP).next().unwrap_or(&path).to_string();
+        let node = KeywordNode { name, path, count, children: children.into_iter().map(|(_, n)| n).collect() };
+        match lower.rsplit_once(SEP) {
+            Some((parent, sort)) => kids.entry(parent.to_string()).or_default().push((sort.to_string(), node)),
+            None => roots.push((lower, node)),
+        }
+    }
+    roots.sort_by(|a, b| a.0.cmp(&b.0));
+    roots.into_iter().map(|(_, n)| n).collect()
+}
+
 impl Catalog {
     /// The keyword tree: every keyword level with photo counts, sorted by name (case-insensitive).
     pub fn keyword_tree(&self) -> Vec<KeywordNode> {
         use std::collections::HashMap;
-        // every keyword level (`travel`, `travel|italy`…), one per lower-case path: the name and
-        // path as first written, and the photos counted (once per photo, even when two of its
-        // keywords share a parent: `seen` is the last photo counted); `sort` is the name in lower case
-        struct Level {
-            name: String,
-            sort: String,
-            path: String,
-            count: usize,
-            seen: usize,
-        }
-        let mut levels: Vec<Level> = Vec::new();
-        let mut by_lower: HashMap<String, usize> = HashMap::new();
-        // each level's children (by index), and the top level
-        let mut kids: Vec<Vec<usize>> = Vec::new();
-        let mut roots: Vec<usize> = Vec::new();
-        // the keyword list first (no photos counted): a listed keyword is there without photos
-        let listed: Vec<String> = self.listed_keywords().map(|k| k.path.clone()).collect();
-        // each keyword as written → its levels (its own and those above it), worked out once: a
-        // large library repeats a few thousand keywords tens of thousands of times (issue #1011)
-        let mut chains: HashMap<&str, Vec<usize>> = HashMap::new();
-        let photos = self.photos().filter(|p| p.in_library()).map(|p| (true, p.meta.keywords.as_slice()));
-        for (photo, (counts, keywords)) in std::iter::once((false, listed.as_slice())).chain(photos).enumerate() {
-            for k in keywords {
-                let chain = chains.entry(k.as_str()).or_insert_with(|| {
-                    let mut chain: Vec<usize> = Vec::new();
-                    let mut path = String::new();
-                    let mut lower = String::new();
-                    // Level paths hold their every prefix (`path` and `lower` both), so a photo's XMP
-                    // keyword split far more levels than a list file accepts (`MAX_LEVELS`) made the
-                    // stored prefixes quadratic in the level count: a keyword nests [MAX_LEVELS]
-                    // levels here, as a list file would, and what lies below is left out (CWE-400).
-                    for (part_n, part) in (1..).zip(k.split(SEP).map(str::trim).filter(|s| !s.is_empty())) {
-                        if part_n > MAX_LEVELS {
-                            break;
+        // every keyword level (`travel`, `travel|italy`…) by lower-case path: the photos counted
+        // (once per photo, even when two of its keywords share a parent: the last is the last
+        // photo counted, from 1) and the path as the first photo writes it
+        let mut counted: HashMap<String, (usize, String, usize)> = HashMap::new();
+        // each keyword as written → its levels, worked out once: a large library repeats a few
+        // thousand keywords tens of thousands of times (issue #1011)
+        let mut chains: HashMap<&str, Vec<(String, String)>> = HashMap::new();
+        for (i, p) in self.photos().filter(|p| p.in_library()).enumerate() {
+            let photo = i + 1;
+            for k in &p.meta.keywords {
+                let chain = chains.entry(k.as_str()).or_insert_with(|| levels_of(k));
+                for (lower, path) in chain.iter() {
+                    match counted.get_mut(lower) {
+                        Some((n, _, last)) if *last != photo => {
+                            *n += 1;
+                            *last = photo;
                         }
-                        if !path.is_empty() {
-                            path.push(SEP);
-                            lower.push(SEP);
-                        }
-                        path.push_str(part);
-                        let sort = part.to_lowercase();
-                        lower.push_str(&sort);
-                        let i = match by_lower.get(&lower) {
-                            Some(&i) => i,
-                            None => {
-                                let i = levels.len();
-                                match chain.last().and_then(|&p| kids.get_mut(p)) {
-                                    Some(k) => k.push(i),
-                                    None => roots.push(i),
-                                }
-                                levels.push(Level { name: part.to_string(), sort, path: path.clone(), count: 0, seen: 0 });
-                                kids.push(Vec::new());
-                                by_lower.insert(lower.clone(), i);
-                                i
-                            }
-                        };
-                        chain.push(i);
-                    }
-                    chain
-                });
-                if counts {
-                    for &i in chain.iter() {
-                        let Some(l) = levels.get_mut(i) else { continue };
-                        // photo 0 is the keyword list, which counts nothing
-                        if l.seen != photo {
-                            l.seen = photo;
-                            l.count += 1;
+                        Some(_) => {}
+                        None => {
+                            counted.insert(lower.clone(), (1, path.clone(), photo));
                         }
                     }
                 }
             }
         }
-        fn build(mut list: Vec<usize>, levels: &[Level], kids: &mut [Vec<usize>]) -> Vec<KeywordNode> {
-            list.sort_by(|&a, &b| levels.get(a).map(|l| &l.sort).cmp(&levels.get(b).map(|l| &l.sort)));
-            list.into_iter()
-                .filter_map(|i| {
-                    let lv = levels.get(i)?;
-                    let below = kids.get_mut(i).map(std::mem::take).unwrap_or_default();
-                    let children = build(below, levels, kids);
-                    Some(KeywordNode { name: lv.name.clone(), path: lv.path.clone(), count: lv.count, children })
-                })
-                .collect()
-        }
-        build(roots, &levels, &mut kids)
+        keyword_tree_of(self.listed_keywords(), counted.iter().map(|(l, (n, p, _))| (l.as_str(), *n, p.as_str())))
     }
 
     /// `SetMeta` ops for every photo whose keywords `f` changes.

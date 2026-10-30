@@ -3,7 +3,7 @@ use super::{Icon, LibrarySource, LightcraftApp, json};
 
 /// By Date: year → month → day; a click filters by that prefix, the triangle opens a level.
 pub(super) fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let groups = app.caches.date_groups(&app.session.catalog);
+    let groups = app.caches.date_groups(&app.session.catalog, app.session.library_generation());
     for g in groups.iter() {
         if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
             for (m, n) in &g.months {
