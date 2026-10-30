@@ -501,7 +501,7 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
     // a slideshow: Space pauses / resumes
     if id == "view.zoomToggle" && app.ui.slideshow.is_some() {
         if let Ok(v) = app.run("slideshow.togglePause", json!({})) {
-            app.toast(ctx, crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
+            app.toast_on(ctx, "slideshow", crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
         }
         return;
     }
@@ -525,8 +525,9 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
 /// The toast naming a flag.
 fn flag_toast(app: &mut LightcraftApp, ctx: &egui::Context, flag: lightcraft_catalog::Flag) {
     use lightcraft_catalog::Flag;
-    app.toast(
+    app.toast_on(
         ctx,
+        "flag",
         crate::i18n::tr(match flag {
             Flag::Pick => "Flagged as Pick",
             Flag::Reject => "Flagged as Reject",
@@ -567,8 +568,8 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         "photo.pick" => flag_toast(app, ctx, lightcraft_catalog::Flag::Pick),
         "photo.reject" => flag_toast(app, ctx, lightcraft_catalog::Flag::Reject),
         "photo.unflag" => flag_toast(app, ctx, lightcraft_catalog::Flag::None),
-        "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
-        "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
+        "edit.undo" => app.toast_on(ctx, "history", crate::i18n::tr("Undo")),
+        "edit.redo" => app.toast_on(ctx, "history", crate::i18n::tr("Redo")),
         _ => {}
     }
 }
@@ -583,7 +584,7 @@ fn fire_rating_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> boo
         } else {
             crate::i18n::tr_format!("Rated {}", "★".repeat(n.parse().unwrap_or(0)))
         };
-        app.toast(ctx, label);
+        app.toast_on(ctx, "rating", label);
     } else if matches!(f, "photo.decreaseRating" | "photo.increaseRating") {
         cull(app, f, json!({}), false);
     } else if let Some(l) = f.strip_prefix("label:") {

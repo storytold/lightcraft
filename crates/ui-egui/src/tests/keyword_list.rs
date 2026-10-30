@@ -180,7 +180,7 @@ fn creating_a_keyword_that_exists_keeps_the_dialog() {
     ask(&mut h, "ui.text", json!({"text": "mountains"}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::KeywordTag { .. })), "still open");
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("already")), "{:?}", h.app.ui.toast);
+    assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("already")), "{:?}", h.app.ui.toasts);
 }
 
 /// A keyword's context menu: create a keyword inside it, edit it, make it where new keywords go
@@ -245,7 +245,7 @@ fn a_keyword_cant_be_dropped_inside_itself() {
     drag(&mut h, "keywordRow:Portugal", "keywordRow:Portugal|Lisbon");
     assert_eq!((keywords_of(&h, ids[0]), h.app.session.undo.len()), (vec!["Portugal|Lisbon".to_string()], undo));
     assert_eq!(h.app.ui.dialog, None);
-    assert_eq!(h.app.ui.toast, None, "not even tried: no error to show");
+    assert_eq!(h.app.ui.toast(), None, "not even tried: no error to show");
 }
 
 /// Dropping a keyword where one of that name is already (Italy has a Rome) asks before merging
@@ -425,7 +425,7 @@ fn dropping_photos_counts_those_that_get_the_keyword() {
     run(&mut h, "keyword.create", json!({"name": "Portugal"}));
     run(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "addKeywords": ["Portugal"]}));
     drag(&mut h, &format!("thumb:{}", ids[0]), "keywordRow:Portugal");
-    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    let toast = h.app.ui.toast().cloned().map(|t| t.0).unwrap_or_default();
     assert!(toast.contains("1 photo") && !toast.contains("2 photos"), "{toast}");
 }
 

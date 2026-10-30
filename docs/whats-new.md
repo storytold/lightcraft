@@ -21,6 +21,11 @@
 
 ## 2026-10-23
 
+### Messages no longer hide each other
+- The short messages at the bottom of the photo view used to replace one another: a label set right after an export
+  ended hid the export's message. Now a new message appears where they always did and the ones still showing move up
+  above it, up to three, each going at its own time (at the top during a slideshow, the newest on top).
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

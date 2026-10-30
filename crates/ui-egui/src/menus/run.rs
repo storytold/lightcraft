@@ -5,10 +5,10 @@ use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel,
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
         app.ui.right = RightPanel::None;
-        app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
+        app.toast_on(ctx, "panel", crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
         app.ui.right = p;
-        app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
+        app.toast_on(ctx, "panel", crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
         }
@@ -396,7 +396,7 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         "compare.makeSelect" => crate::panels::compare::make_select(app),
         "view.autoAdvance" => {
             app.ui.auto_advance = !app.ui.auto_advance;
-            app.toast(ctx, crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
+            app.toast_on(ctx, "autoAdvance", crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
             Ok(json!({"autoAdvance": app.ui.auto_advance}))
         }
         "view.back" => view_back_command(app, ctx),
@@ -803,7 +803,7 @@ fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 },
             };
             app.ui.tool_overlay = mode;
-            app.toast(ctx, tool_overlay_toast(mode));
+            app.toast_on(ctx, "toolOverlay", tool_overlay_toast(mode));
             Ok(json!({"mode": mode.name()}))
         }
         "view.visualizeSpots" => {
@@ -1852,7 +1852,7 @@ fn paths_or_pick(
     Ok(paths)
 }
 
-/// What an import of presets and profiles has to say: one toast for both halves (a second toast would replace the first).
+/// What an import of presets and profiles has to say: one toast for both halves, as they are one import.
 #[derive(Default)]
 struct ImportNews {
     parts: Vec<String>,

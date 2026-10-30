@@ -76,6 +76,7 @@ mod sync;
 mod tallies;
 mod temp_slider;
 mod titlebar;
+mod toasts;
 mod tool_overlay;
 mod unsaved;
 mod view_cost;

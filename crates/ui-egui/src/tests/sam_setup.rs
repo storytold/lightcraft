@@ -133,14 +133,14 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
     let rows = h.app.session.activity.list();
     assert_eq!(rows.len(), 1);
     assert_eq!((rows[0].kind, rows[0].cancellable), ("openModelFolder", false));
-    assert!(h.app.ui.toast.is_none(), "no result before releasing the worker");
+    assert!(h.app.ui.toast().is_none(), "no result before releasing the worker");
     assert_eq!(h.app.ui.dialog, pending);
     assert!(!h.app.session.segmenter.download_status().running);
 
     release.send(Err("opening folder failed: exit status: 23".into())).unwrap();
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
     assert!(h.app.session.activity.list().is_empty(), "completion retires the task before retry");
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("opening folder failed: exit status: 23"));
+    assert_eq!(h.app.ui.toast().map(|t| t.0.as_str()), Some("opening folder failed: exit status: 23"));
     assert_eq!(h.app.ui.dialog, pending);
     assert!(!h.app.session.segmenter.download_status().running);
 
@@ -148,11 +148,11 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
     assert_eq!(reply, json!({"path": dir.to_str().unwrap(), "background": true}));
     assert_eq!(entered.recv_timeout(T).unwrap(), dir.to_str().unwrap());
     assert_eq!(h.app.tasks.labels(), vec!["Show in File Manager"]);
-    let prior_error = h.app.ui.toast.clone();
+    let prior_error = h.app.ui.toast().cloned();
     release.send(Ok(())).unwrap();
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
     assert!(h.app.session.activity.list().is_empty());
-    assert!(h.app.ui.toast.is_none() || h.app.ui.toast == prior_error, "successful retry adds no error");
+    assert!(h.app.ui.toast().is_none() || h.app.ui.toast().cloned() == prior_error, "successful retry adds no error");
     assert_eq!(h.app.ui.dialog, pending);
     assert!(!h.app.session.segmenter.download_status().running);
     assert_eq!(h.app.session.segmenter.dir.as_ref(), Some(&dir));

@@ -18,6 +18,13 @@ pub use view::{
     ToolOverlay, ViewMode, Zoom,
 };
 
+/// A short message at the bottom of the photo view: its text, when it goes (app time, s), the colour label it is
+/// shown in, if any, and what it is about, if it says the state of something ([`UiState::push_toast_on`]).
+pub type Toast = (String, f64, Option<lightcraft_catalog::ColorLabel>, Option<&'static str>);
+
+/// The most toasts on screen at once: a newer one pushes the oldest out.
+pub const MAX_TOASTS: usize = 3;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
@@ -328,9 +335,9 @@ pub struct UiState {
     /// Reference view: the reference photo.
     #[serde(skip)]
     pub reference: Option<u64>,
-    /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
+    /// The toasts on screen, oldest first ([`UiState::push_toast`]; [`UiState::toast`] is the newest).
     #[serde(skip)]
-    pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    pub toasts: Vec<Toast>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -484,7 +491,7 @@ impl Default for UiState {
             local_browse_root: None,
             compare: None,
             reference: None,
-            toast: None,
+            toasts: Vec::new(),
             last_find_missing: None,
             last_find_missing_result: None,
             #[cfg(test)]
@@ -498,6 +505,70 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// The newest toast on screen.
+    pub fn toast(&self) -> Option<&Toast> {
+        self.toasts.last()
+    }
+
+    /// A toast already over at `now` (`until < now`) is not shown at all.
+    /// `now` is the app time of the push: toasts whose time is already over go first, so a gone one never costs a
+    /// showing one its place (notices arrive before the frame that expires them).
+    /// Show `text` until `until` (app time, s), in `label`'s colours if given, below the toasts already showing: one
+    /// no longer hides another. The same message again (same text and label) is not shown twice, unless two topics
+    /// say it: it moves to the newest place, keeps the topic it had, and stays until the later of its times. Past
+    /// [`MAX_TOASTS`] the oldest goes.
+    pub fn push_toast(&mut self, now: f64, text: impl Into<String>, until: f64, label: Option<lightcraft_catalog::ColorLabel>) {
+        self.expire_toasts(now);
+        if until < now {
+            return;
+        }
+        self.push(text.into(), until, label, None);
+    }
+
+    /// [`UiState::push_toast`] for a message that says the state of `topic` ("save", "flag", "panel"…): it replaces
+    /// the toasts still showing about that topic, which no longer hold ("Library saved" takes the place of the
+    /// warning that it couldn't be; Auto Sync Off of Auto Sync On); the same message again stays until the later of
+    /// its times.
+    pub fn push_toast_on(
+        &mut self,
+        now: f64,
+        topic: &'static str,
+        text: impl Into<String>,
+        until: f64,
+        label: Option<lightcraft_catalog::ColorLabel>,
+    ) {
+        self.expire_toasts(now);
+        if until < now {
+            return;
+        }
+        let text = text.into();
+        // (the same message again is not a new state: it stays until the later of its times, as `push` merges it)
+        self.toasts.retain(|t| t.3 != Some(topic) || (t.0 == text && t.2 == label));
+        self.push(text, until, label, Some(topic));
+    }
+
+    fn push(&mut self, text: String, until: f64, label: Option<lightcraft_catalog::ColorLabel>, topic: Option<&'static str>) {
+        // (a message about a topic and one about none are the same message: the merged one keeps the topic, so a
+        // later message on it still replaces it; two different topics stay two messages)
+        let same = |t: &Toast| t.0 == text && t.2 == label && (t.3 == topic || t.3.is_none() || topic.is_none());
+        let (until, topic) = match self.toasts.iter().position(same) {
+            Some(at) => {
+                let old = self.toasts.remove(at);
+                (old.1.max(until), topic.or(old.3))
+            }
+            None => (until, topic),
+        };
+        self.toasts.push((text, until, label, topic));
+        if self.toasts.len() > MAX_TOASTS {
+            self.toasts.drain(..self.toasts.len() - MAX_TOASTS);
+        }
+    }
+
+    /// Let go of the toasts whose time is over at `now`.
+    pub fn expire_toasts(&mut self, now: f64) {
+        self.toasts.retain(|t| t.1 >= now);
+    }
+
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {

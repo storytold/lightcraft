@@ -238,7 +238,7 @@ fn a_drop_while_a_dialog_is_open_leaves_the_dialog_and_imports_nothing() {
     assert!(matches!(h.app.ui.dialog, Some(Dialog::WhatsNew)), "the open dialog stays");
     assert!(h.app.scan.is_none() && h.app.import.is_none(), "no scan or import started");
     assert_eq!(photos(&h), 0);
-    assert!(h.app.ui.toast.is_some(), "the person is told why");
+    assert!(h.app.ui.toast().is_some(), "the person is told why");
 }
 
 /// A prompt owns the library and the top layer: a drop while it is up stays queued (it is not
@@ -659,7 +659,7 @@ fn a_model_drop_on_a_no_library_window_does_not_open_its_dialog_behind_it() {
             h.step();
         }
         assert!(h.app.ui.dialog.is_none(), "{tag}: no face model dialog behind the window");
-        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        let toast = h.app.ui.toast().map(|t| t.0.clone()).unwrap_or_default();
         assert!(toast.contains("drop the model again"), "{tag}: {toast}");
     }
 }
@@ -847,7 +847,7 @@ fn a_drop_while_an_import_runs_is_refused() {
     }
     assert!(h.app.ui.dialog.is_none(), "no review opened");
     assert!(h.app.scan.is_some() && h.app.import.is_none(), "the running scan was left alone and nothing else started");
-    assert!(h.app.ui.toast.is_some(), "the person is told why");
+    assert!(h.app.ui.toast().is_some(), "the person is told why");
     assert_eq!(photos(&h), 0);
 }
 
@@ -861,7 +861,7 @@ fn a_direct_drop_while_an_import_runs_is_refused_too() {
     let _scan = crate::import::stall_scan(&mut h.app);
     drop_files(&mut h, &[dir.path("more")], false);
     assert!(h.app.import.is_none(), "no second import");
-    assert!(h.app.ui.toast.is_some());
+    assert!(h.app.ui.toast().is_some());
 }
 
 /// A Local folder browse scan counts too: a review-first drop would be rejected by `open`, and a
@@ -882,7 +882,7 @@ fn a_drop_while_a_browse_scan_runs_is_refused_in_both_modes() {
         }
         assert!(h.app.ui.dialog.is_none() && h.app.import.is_none(), "direct={direct}: nothing started");
         assert!(h.app.scan.is_some(), "the browse was left alone");
-        assert!(h.app.ui.toast.is_some(), "the person is told why");
+        assert!(h.app.ui.toast().is_some(), "the person is told why");
     }
 }
 
@@ -898,7 +898,7 @@ fn hovering_photos_while_a_lightroom_import_is_pending_says_they_will_be_refused
     assert!(!said(&h, "review"), "{:?}", h.painted_text());
     drop_files(&mut h, &[dir.path("trip")], false);
     assert!(h.app.ui.dialog.is_none(), "no review opened");
-    assert!(h.app.ui.toast.is_some(), "the person is told why");
+    assert!(h.app.ui.toast().is_some(), "the person is told why");
     assert_eq!(photos(&h), 0);
 }
 
@@ -934,9 +934,9 @@ fn photos_dropped_with_no_library_open_wait_for_one() {
     assert!(h.app.ui.dialog.is_none() && h.app.import.is_none(), "no review, no import into the temporary session");
     assert_eq!(photos(&h), 0);
     // a preset belongs to a library: refused, not imported into the session the library replaces
-    h.app.ui.toast = None;
+    h.app.ui.toasts.clear();
     drop_files(&mut h, &[dir.path("warm.lcpreset")], false);
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = h.app.ui.toast().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("drop the presets again"), "{toast}");
 }
 
@@ -1003,7 +1003,7 @@ fn a_new_drop_outside_the_barrier_is_refused_while_an_older_drop_waits_for_a_dia
         assert!(matches!(h.app.ui.dialog, Some(Dialog::WhatsNew)), "the ordinary dialog survives B");
         assert!(h.app.scan.is_none() && h.app.import.is_none());
         assert_eq!(photos(&h), 0);
-        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Close the open dialog")), "B is refused immediately: {:?}", h.app.ui.toast);
+        assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("Close the open dialog")), "B is refused immediately: {:?}", h.app.ui.toasts);
         assert_eq!(h.app.dropped_files.len(), 1, "B cannot inherit A's protected provenance");
         h.app.ui.dialog = None;
         finish_mixed_drop_batch(&mut h, &[a], direct);
@@ -1029,7 +1029,7 @@ fn a_new_drop_outside_the_barrier_is_refused_while_an_older_drop_waits_for_an_im
         assert!(h.app.scan.is_some() && h.app.import.is_none(), "the original stalled import scan survives B");
         assert!(h.app.ui.dialog.is_none());
         assert_eq!(photos(&h), 0);
-        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("An import is running")), "B is refused immediately: {:?}", h.app.ui.toast);
+        assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("An import is running")), "B is refused immediately: {:?}", h.app.ui.toasts);
         assert_eq!(h.app.dropped_files.len(), 1, "B cannot inherit A's protected provenance");
         drop(stalled); // Channel-only fixture: no worker/process to stop.
         assert!(h.step_until(T, |h| h.app.scan.is_none()), "the original stalled scan ends");
@@ -1096,7 +1096,7 @@ fn public_drop_take_preserves_reentered_barrier_order_and_clears_protection() {
     h.app.ui.dialog = Some(Dialog::WhatsNew);
     drop_files(&mut h, &[a], false);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::WhatsNew)));
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Close the open dialog")), "consumed protection cannot shelter a later drop");
+    assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("Close the open dialog")), "consumed protection cannot shelter a later drop");
     assert!(h.app.dropped_files.is_empty());
     h.app.ui.dialog = None;
     for _ in 0..60 {

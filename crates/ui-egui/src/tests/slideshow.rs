@@ -284,7 +284,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
             crate::panels::library_problem::blocks_file_drops(&h.app),
             h.app.renderer.in_flight(),
             h.app.renderer.pending_slots(),
-            h.app.ui.toast,
+            h.app.ui.toasts,
         );
     };
     diagnose("before-click", &h);

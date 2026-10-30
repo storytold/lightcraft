@@ -248,7 +248,11 @@ impl LightcraftApp {
             };
             if let Some(message) = completed {
                 let now = self.tick_now();
-                self.ui.toast = Some((message, now + TOAST_SECONDS, None));
+                // (Auto Sync On / Off says a state: the new one takes the old one's place)
+                match id {
+                    "develop.autoSync" => self.ui.push_toast_on(now, "autoSync", message, now + TOAST_SECONDS, None),
+                    _ => self.ui.push_toast(now, message, now + TOAST_SECONDS, None),
+                }
             }
         }
         if r.is_ok() && id == "photo.label" {
@@ -262,7 +266,7 @@ impl LightcraftApp {
                 None => i18n::tr("Color label cleared").into(),
             };
             let now = self.tick_now();
-            self.ui.toast = Some((text, now + TOAST_SECONDS, label));
+            self.ui.push_toast_on(now, "label", text, now + TOAST_SECONDS, label);
         }
         match &r {
             Err(e) => {
@@ -397,7 +401,9 @@ impl LightcraftApp {
             (Some((n, e)), false) => {
                 self.ui.unsaved_seen = true;
                 let t = self.tick_now();
-                self.ui.toast = Some((
+                self.ui.push_toast_on(
+                    t,
+                    "save",
                     crate::i18n::tr_format!(
                         "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
                         if n == 1 { "" } else { "s" },
@@ -406,11 +412,12 @@ impl LightcraftApp {
                     ),
                     t + 6.0,
                     None,
-                ));
+                );
             }
             (None, true) => {
                 self.ui.unsaved_seen = false;
-                self.toast(ctx, crate::i18n::tr("Library saved"));
+                // (it takes the place of the warning that it couldn't be saved, if that still shows)
+                self.toast_on(ctx, "save", crate::i18n::tr("Library saved"));
             }
             (Some(_), true) => ctx.request_repaint_after(std::time::Duration::from_secs(2)), // retry
             (None, false) => {}
@@ -433,10 +440,17 @@ impl LightcraftApp {
         }
     }
 
+    /// A toast that says the state of `topic` ("flag", "panel", "slideshow"…): it replaces the ones still showing
+    /// about that topic, but the same message again stays until the later of its times ([`state::UiState::push_toast_on`]).
+    pub fn toast_on(&mut self, _ctx: &egui::Context, topic: &'static str, text: impl Into<String>) {
+        let t = self.tick_now();
+        self.ui.push_toast_on(t, topic, text, t + TOAST_SECONDS, None);
+    }
+
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
     pub fn toast_for(&mut self, _ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = self.tick_now();
-        self.ui.toast = Some((text.into(), t + secs, None));
+        self.ui.push_toast(t, text, t + secs, None);
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
@@ -523,7 +537,7 @@ impl LightcraftApp {
     /// A toast for an error the user has to read and act on (stays 6 s).
     pub fn toast_error(&mut self, _ctx: &egui::Context, text: impl Into<String>) {
         let t = self.tick_now();
-        self.ui.toast = Some((text.into(), t + 6.0, None));
+        self.ui.push_toast(t, text, t + 6.0, None);
     }
 
     /// The process is about to end (settings and library are saved by then): make sure nothing is
