@@ -1,5 +1,35 @@
 # What's new in LightCraft
 
+## 2026-10-25
+
+### Move Files to Trash (agents)
+- `photo.trashFiles {ids?, noTrash?: keep|delete}` takes the photos (the selection, or `ids`; in the library or in
+  Recently Deleted) out of the library for good and moves their files, with their XMP sidecars, to the system Trash.
+  `library.emptyRecentlyDeleted {files: "trash"}` does it for everything in Recently Deleted. There is no menu item
+  or question in the app yet: this is the command layer (control channel, MCP). Like every command it is listed in
+  Help ▸ Keyboard Shortcuts, and a key bound to it moves the selected photos' files to the Trash at once, without asking.
+- Nothing else changed: Delete still moves photos to Recently Deleted, and Delete Permanently, Empty Recently
+  Deleted and Remove Folder from Library still leave every file where it is.
+- Undo brings the photos back and moves the files back out of the Trash, as long as they are still there. It
+  never replaces a file that is at their place now, and says what it could not put back.
+- A file that another photo in the same folder uses (another spelling of its name, or that folder reached through a
+  link) stays until the last of them goes. Before a file is erased, every photo of that name in the library is
+  checked, links included. A sidecar goes only when it is that photo's alone: `IMG_1.xmp` stays while a raw, a
+  video or anything else called `IMG_1` is beside it, or a photo of that name stays in the library.
+- Photos whose folder can't be reached (a disk that is not connected) stay in the library: nothing says their
+  files are gone. A file that is gone from a folder that is there just lets its photo leave.
+- On a disk without a Trash (many network shares) the photos stay and the answer names them (`noTrash`), unless
+  `noTrash: "delete"` says their files may be erased; trash and erase are then one undo step, and undo brings
+  the erased photos back, shown as missing, with their edits and keywords. Sidecars beside erased files stay.
+- Nothing records a run while it is under way: if the app is killed while files move, those already moved stay in the
+  Trash (or are erased) and their photos show as missing.
+- Files are checked against the photos in each file's own folder, not against every photo of that name in the
+  library, so a call for hundreds of photos on a network share costs no comparison with every photo of that name.
+- A disk's own Trash (`.Trash-<uid>` at its top) is used only when it is a plain folder of the user that others can't enter; a link, a file, someone else's folder or an open one is refused and counted as `failed`, with how to put it right. A disk whose top folder others could replace our Trash folders in (writable by group or others, no sticky bit, whoever owns it, or owned by neither the user nor root) counts as having no Trash too when it has no `.Trash-<uid>` (a share or external disk mounted with a world-writable, non-sticky mode gets no Trash); with one there, even a private folder of the user's, the files are counted as `failed` and never offered for erasing, with the fix named: make the top folder owned by the user or root and sticky or not writable by others, or move the Trash's files out and remove it. A disk that can't hold such a folder counts as having no Trash, but only when LightCraft just made the folder; one that was already there is never counted as no Trash: remove it or make it private (`chmod 700`).
+- macOS, Linux and the other Unix systems for now. On Windows and in the browser the command says it is not available and changes
+  nothing. The answer has the counts `removed`, `trashed`, `erased`, `missing`, `shared`, `sidecarsLeft`, `skipped`
+  and `stopped` (always 0 here), `noTrash` (the photos on a disk without a Trash) and `failed` (what could not move, and why).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
