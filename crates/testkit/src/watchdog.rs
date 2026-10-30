@@ -119,7 +119,7 @@ fn limit() -> Option<Duration> {
         let value = std::env::var(WATCHDOG_ENV).ok();
         let (minutes, note) = parse_minutes(value.as_deref());
         if let Some(note) = note {
-            eprintln!("{WATCHDOG_ENV}: {note}");
+            crate::note(&format!("{WATCHDOG_ENV}: {note}"));
         }
         let minutes = minutes?;
         // a limit too large for a Duration is no limit
@@ -159,7 +159,7 @@ fn start(limit: Duration) {
             }
         });
         if let Err(e) = spawned {
-            eprintln!("{WATCHDOG_ENV}: can't start the test watchdog ({e}); hung tests won't be stopped");
+            crate::note(&format!("{WATCHDOG_ENV}: can't start the test watchdog ({e}); hung tests won't be stopped"));
         }
     });
 }
@@ -322,6 +322,30 @@ mod tests {
         let _watch = watch();
         let _stderr = std::io::stderr().lock();
         std::thread::sleep(Duration::from_secs(60));
+    }
+
+    /// Run as a child by [`a_mistyped_setting_is_reported_by_a_passing_test`]: a watched test that
+    /// passes, so libtest shows none of its captured output.
+    #[test]
+    #[ignore = "run as a child process by a_mistyped_setting_is_reported_by_a_passing_test"]
+    fn passing_child() {
+        if std::env::var_os(CHILD_ENV).is_none() {
+            return;
+        }
+        let _watch = watch();
+    }
+
+    /// A mistyped `LIGHTCRAFT_TEST_WATCHDOG_MIN` or `LIGHTCRAFT_TIME_SCALE` is read on the first
+    /// watched test's thread; its note reaches the process's stderr even though that test passes
+    /// (with `eprintln!` it went to the test's capture, which libtest drops).
+    #[test]
+    fn a_mistyped_setting_is_reported_by_a_passing_test() {
+        let c = run_stuck_child("watchdog::tests::passing_child", &[(WATCHDOG_ENV, "soon"), (crate::TIME_SCALE_ENV, "fast")], child_deadline());
+        let (ran, stderr) = (c.ran, &c.stderr);
+        let status = c.status.unwrap_or_else(|| panic!("the passing child still ran after {ran:?}: {stderr}"));
+        assert!(status.success(), "{status:?}: {stderr}");
+        assert!(stderr.contains(&format!("{WATCHDOG_ENV}: \"soon\" is not a number of minutes")), "{stderr}");
+        assert!(stderr.contains(&format!("{}: \"fast\" is not a positive number", crate::TIME_SCALE_ENV)), "{stderr}");
     }
 
     /// How a child test run by [`run_stuck_child`] ended.
