@@ -36,7 +36,7 @@ pub struct Ui {
     dl_watch: Vec<String>,
     list: Option<(u64, f64, Value)>,
     /// Why the last file picked with Install from file… was refused, shown under the button.
-    rejected: Option<String>,
+    pub(crate) rejected: Option<String>,
 }
 
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
@@ -278,16 +278,9 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .busy(installing)
         .widget("denoise:installFile")
         .show(ui);
-    if r.clicked()
-        && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
-    {
-        match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
-            Ok(info) => {
-                app.caches.denoise.rejected = None;
-                app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
-            }
-            Err(e) => app.caches.denoise.rejected = Some(plain(&e)),
-        }
+    if r.clicked() {
+        // the dialog runs off the UI thread; the model is checked when it closes
+        crate::pick::choose_and_apply(app, ui.ctx(), crate::pick::Field::DenoiseModel);
     }
     if let Some(why) = &app.caches.denoise.rejected {
         hint(ui, t, why);
@@ -615,6 +608,18 @@ pub fn install(app: &mut LightcraftApp, info: &Value, accepted: bool) -> Result<
         app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "denoise".into() });
     }
     r
+}
+
+/// Check the model file `path` chosen with Install from file…: the review dialog opens, or the
+/// reason it is refused is shown under the button.
+pub(crate) fn inspect_model(app: &mut LightcraftApp, path: &str) {
+    match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
+        Ok(info) => {
+            app.caches.denoise.rejected = None;
+            app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+        }
+        Err(e) => app.caches.denoise.rejected = Some(plain(&e)),
+    }
 }
 
 /// What an engine error says, without the command it came from (the install job's errors read the same way).

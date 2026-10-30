@@ -24,6 +24,7 @@ pub fn start(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, Stri
                 title: Some(crate::i18n::tr("Export Slideshow: folder for the JPEG files").to_string()),
                 filter: None,
                 file_name: Some("Slideshow".into()),
+                start: Default::default(),
             },
             Some("video") if p.get("container").and_then(Value::as_str) == Some("webm") => {
                 PickRequest::save(crate::i18n::tr("Export Slideshow"), "WebM", &["webm"], "Slideshow.webm")

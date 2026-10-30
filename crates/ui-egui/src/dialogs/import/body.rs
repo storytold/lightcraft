@@ -177,8 +177,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.label(egui::RichText::new(shown).color(Tokens::get(ui.ctx()).text_label));
             if app.services.pick_folder.is_some()
                 && crate::widgets::text_button(ui, "importDest", crate::i18n::tr("Choose…"), false).clicked()
-                && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
+                && let Some(f) = crate::pick::choose(app, crate::pick::Field::ImportDestination)
             {
+                // (a synchronous answer; with a background dialog the folder is set when it closes)
                 d.destination = f;
             }
             if !d.destination.is_empty() && crate::widgets::text_button(ui, "importDestReset", crate::i18n::tr("Library"), false).clicked() {

@@ -63,6 +63,25 @@ fn run(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: Value) ->
     }
 }
 
+/// Print ▸ Templates ▸ Import…: a chosen template file is imported.
+pub(crate) fn template_imported(app: &mut LightcraftApp, ctx: &egui::Context, path: String) {
+    if let Some(r) = run(app, ctx, "print.template.import", json!({"path": path})) {
+        app.toast(ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
+    }
+}
+
+/// Print ▸ Templates ▸ Export…: the template `name` is written to the chosen `path`.
+pub(crate) fn template_exported(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, path: String) {
+    if let Some(r) = run(app, ctx, "print.template.export", json!({"name": name, "path": path})) {
+        app.toast(ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
+    }
+}
+
+/// Print ▸ Print Job ▸ Profile ▸ Other…: the job prints with the chosen ICC profile.
+pub(crate) fn use_profile(app: &mut LightcraftApp, ctx: &egui::Context, path: String) {
+    patch_color(app, ctx, "profile", json!({"kind": "icc", "path": path}));
+}
+
 fn patch(app: &mut LightcraftApp, ctx: &egui::Context, params: Value) {
     run(app, ctx, "print.set", params);
 }
@@ -209,12 +228,7 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
         if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
-            let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
-            for path in paths {
-                if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path})) {
-                    app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
-                }
-            }
+            crate::pick::choose_and_apply(app, &ctx, crate::pick::Field::PrintTemplateImport);
         }
     });
     let names: Vec<String> = app.session.print_templates.iter().map(|t| t.name.clone()).collect();
@@ -228,11 +242,7 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
                 if app.services.save_print_template.is_some() && text_button(ui, &format!("printTemplateExport-{i}"), "Export…", false).clicked() {
                     let stem = lightcraft_engine::slide_template::file_stem(name).unwrap_or_else(|| "Print Template".into());
                     let file = format!("{stem}.{}", lightcraft_engine::print::template::FILE_EXT);
-                    if let Some(path) = app.services.save_print_template.as_mut().and_then(|save| save(&file))
-                        && let Some(r) = run(app, &ctx, "print.template.export", json!({"name": name, "path": path}))
-                    {
-                        app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
-                    }
+                    crate::pick::choose_and_apply(app, &ctx, crate::pick::Field::PrintTemplateExport { name: name.clone(), file });
                 }
                 if text_button(ui, &format!("printTemplateApply-{i}"), "Apply", false).clicked() {
                     run(app, &ctx, "print.template.apply", json!({"name": name}));
@@ -533,8 +543,8 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Profile"));
         register(ui, "combo:printProfile", c.response.rect);
     });
-    if pick && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next()) {
-        patch_color(app, &ctx, "profile", json!({"kind": "icc", "path": path}));
+    if pick {
+        crate::pick::choose_and_apply(app, &ctx, crate::pick::Field::PrintProfile);
     }
     row(ui, t, "Intent", |ui| {
         if let Some(v) = choice(ui, "printIntent", &[(PrintIntent::Perceptual, "Perceptual"), (PrintIntent::Relative, "Relative")], color.intent) {

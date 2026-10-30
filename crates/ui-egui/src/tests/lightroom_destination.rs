@@ -424,3 +424,38 @@ fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     assert_eq!(open_dir(&h), Some(other));
     assert!(!target.exists(), "no library was made at {}", target.display());
 }
+
+/// Choose… beside the new library's location shows its folder dialog off the UI thread (#191):
+/// the frame comes back without the synchronous dialog, and the answer fills the field when the
+/// dialog closes.
+#[test]
+fn the_location_dialog_does_not_block_and_its_answer_fills_the_location() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let f = Fixture::new("location-dialog");
+    let mut h = f.app(false);
+    let blocked = Arc::new(AtomicBool::new(false));
+    let b = blocked.clone();
+    h.app.services.pick_folder = Some(Box::new(move || {
+        b.store(true, Ordering::SeqCst);
+        None
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<std::sync::mpsc::Sender<Vec<String>>>::new()));
+    let a = asked.clone();
+    h.app.services.picker = Some(Box::new(move |_req| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        a.lock().unwrap().push(tx);
+        Ok(rx)
+    }));
+    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    h.step();
+    h.step();
+    click(&mut h, "button:lightroomLibraryChoose");
+    assert!(!blocked.load(Ordering::SeqCst), "Choose… called the synchronous dialog on the UI thread");
+    click(&mut h, "button:lightroomLibraryChoose");
+    assert_eq!(asked.lock().unwrap().len(), 1, "one dialog, however often the button is pressed");
+    asked.lock().unwrap()[0].send(vec!["/chosen/place".to_string()]).unwrap();
+    h.step();
+    h.step();
+    assert_eq!(destination(&h).map(|d| d.2), Some("/chosen/place".to_string()));
+}

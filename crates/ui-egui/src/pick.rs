@@ -10,6 +10,9 @@
 //! web, where browser pickers are asynchronous already; tests) answer through the synchronous
 //! services as before.
 
+mod field;
+pub use field::{Field, choose, choose_all, choose_and_apply};
+
 use crate::{LightcraftApp, Services};
 use serde_json::{Value, json};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -37,23 +40,52 @@ pub struct PickRequest {
     pub filter: Option<(String, &'static [&'static str])>,
     /// [`PickKind::Save`]: the suggested file name.
     pub file_name: Option<String>,
+    /// Where the dialog opens.
+    pub start: PickStart,
+}
+
+/// Where a dialog opens, when the host knows a better place than its own default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PickStart {
+    /// The host's choice (usually the last folder used).
+    #[default]
+    Default,
+    /// The folder the system keeps monitor profiles in.
+    MonitorProfiles,
 }
 
 impl PickRequest {
     pub fn files(title: Option<String>, filter: impl Into<String>, extensions: &'static [&'static str]) -> Self {
-        PickRequest { kind: PickKind::Files, title, filter: Some((filter.into(), extensions)), file_name: None }
+        PickRequest { kind: PickKind::Files, title, filter: Some((filter.into(), extensions)), file_name: None, start: PickStart::Default }
     }
 
     pub fn file(title: impl Into<String>, filter: impl Into<String>, extensions: &'static [&'static str]) -> Self {
-        PickRequest { kind: PickKind::File, title: Some(title.into()), filter: Some((filter.into(), extensions)), file_name: None }
+        PickRequest {
+            kind: PickKind::File,
+            title: Some(title.into()),
+            filter: Some((filter.into(), extensions)),
+            file_name: None,
+            start: PickStart::Default,
+        }
     }
 
     pub fn folder(title: impl Into<String>) -> Self {
-        PickRequest { kind: PickKind::Folder, title: Some(title.into()), filter: None, file_name: None }
+        PickRequest { kind: PickKind::Folder, title: Some(title.into()), filter: None, file_name: None, start: PickStart::Default }
+    }
+
+    pub fn starting_in(mut self, start: PickStart) -> Self {
+        self.start = start;
+        self
     }
 
     pub fn save(title: impl Into<String>, filter: impl Into<String>, extensions: &'static [&'static str], file_name: impl Into<String>) -> Self {
-        PickRequest { kind: PickKind::Save, title: Some(title.into()), filter: Some((filter.into(), extensions)), file_name: Some(file_name.into()) }
+        PickRequest {
+            kind: PickKind::Save,
+            title: Some(title.into()),
+            filter: Some((filter.into(), extensions)),
+            file_name: Some(file_name.into()),
+            start: PickStart::Default,
+        }
     }
 }
 
@@ -66,14 +98,46 @@ pub const CURVE_PRESET_EXTENSIONS: &[&str] = &["lccurve", "json"];
 /// channel with the chosen paths (none = cancelled). `Err` when no dialog could be started.
 pub type Picker = Box<dyn FnMut(PickRequest) -> Result<Receiver<Vec<String>>, String>>;
 
-/// A dialog that is up for a command. When it closes, the command runs again with the answer
-/// under `key`.
+/// What happens when a dialog closes with something chosen.
+enum Then {
+    /// The command runs again with the answer under `key`.
+    Run { params: Value, key: &'static str, kind: PickKind },
+    /// The field takes the chosen paths.
+    Field(Field),
+}
+
+/// A dialog that is up for a command or a field. When it closes, the answer is applied.
 pub struct Pending {
     pub command: String,
-    params: Value,
-    key: &'static str,
-    kind: PickKind,
+    then: Then,
     rx: Receiver<Vec<String>>,
+}
+
+/// Whether [`start`] showed the dialog.
+enum Started {
+    /// It is up (or was already); the answer is applied when it closes.
+    Later,
+    /// The host cannot show one elsewhere (or failed to start it).
+    No,
+}
+
+/// Show `request` through the host's [`Picker`] and note what to do with its answer. A dialog
+/// already up for `command` is not opened twice.
+fn start(app: &mut LightcraftApp, command: &str, request: PickRequest, then: Then) -> Started {
+    if app.pending_picks.iter().any(|p| p.command == command) {
+        return Started::Later;
+    }
+    let Some(show) = app.services.picker.as_mut() else { return Started::No };
+    match show(request) {
+        Ok(rx) => {
+            app.pending_picks.push(Pending { command: command.to_string(), then, rx });
+            Started::Later
+        }
+        Err(e) => {
+            log::warn!("{command}: no background file dialog ({e}); asking on the UI thread");
+            Started::No
+        }
+    }
 }
 
 /// How a command's request for a path was answered.
@@ -98,18 +162,9 @@ pub fn ask(
     request: PickRequest,
     now: impl FnOnce(&mut Services) -> Option<Vec<String>>,
 ) -> Picked {
-    if app.pending_picks.iter().any(|p| p.command == command) {
+    let kind = request.kind;
+    if let Started::Later = start(app, command, request, Then::Run { params: params.clone(), key, kind }) {
         return Picked::Later;
-    }
-    if let Some(start) = app.services.picker.as_mut() {
-        let kind = request.kind;
-        match start(request) {
-            Ok(rx) => {
-                app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
-                return Picked::Later;
-            }
-            Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
-        }
     }
     match now(&mut app.services) {
         Some(paths) => Picked::Now(paths),
@@ -138,6 +193,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut answered = Vec::new();
     let mut waiting = Vec::new();
     for p in std::mem::take(&mut app.pending_picks) {
+        if let Then::Field(f) = &p.then
+            && !f.is_open(app)
+        {
+            // its dialog was closed meanwhile: a later answer has nowhere to go
+            log::info!("{}: its dialog closed while the file dialog was up; its answer is dropped", p.command);
+            continue;
+        }
         match p.rx.try_recv() {
             Ok(paths) if paths.is_empty() => {}
             Ok(paths) => answered.push((p, paths)),
@@ -151,9 +213,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.pending_picks = waiting;
     for (p, paths) in answered {
-        let params = with_answer(&p.params, p.key, p.kind, &paths);
-        if let Err(e) = app.run(&p.command, params) {
-            app.toast_error(ctx, e);
+        match p.then {
+            Then::Run { params, key, kind } => {
+                let params = with_answer(&params, key, kind, &paths);
+                if let Err(e) = app.run(&p.command, params) {
+                    app.toast_error(ctx, e);
+                }
+            }
+            Then::Field(f) => {
+                if f.is_open(app) {
+                    for path in paths {
+                        field::apply(app, ctx, &f, path);
+                    }
+                }
+            }
         }
     }
 }

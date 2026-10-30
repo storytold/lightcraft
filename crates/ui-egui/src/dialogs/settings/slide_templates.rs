@@ -68,6 +68,20 @@ fn is_current(look: &SlideLook, now: &SlideLook) -> bool {
     }
 }
 
+/// Settings ▸ Slideshow ▸ Templates ▸ Import…: a chosen template file is imported.
+pub(crate) fn imported(app: &mut LightcraftApp, ctx: &egui::Context, path: String) {
+    act(app, ctx, "slideshow.templates.import", json!({"path": path}), |r| {
+        crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default())
+    });
+}
+
+/// Export…: the template `id` is written to the chosen `path`.
+pub(crate) fn exported(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, path: String) {
+    act(app, ctx, "slideshow.templates.export", json!({"id": id, "path": path}), |r| {
+        crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default())
+    });
+}
+
 /// Run a template command; tell the user how it went.
 fn act(app: &mut LightcraftApp, ctx: &egui::Context, cmd: &str, p: serde_json::Value, done: impl FnOnce(&serde_json::Value) -> String) {
     match app.run(cmd, p) {
@@ -175,11 +189,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, tpl: &Template, name: &str) 
     }
     if tpl.id != PREVIOUS && item(ui, "slideshowTemplateExport", "Export…", app.services.save_slideshow_template.is_some()) {
         let file = format!("{}.json", lightcraft_engine::slide_template::file_stem(&tpl.name).unwrap_or_else(|| "Slideshow Template".into()));
-        if let Some(path) = app.services.save_slideshow_template.as_mut().and_then(|save| save(&file)) {
-            act(app, &ctx, "slideshow.templates.export", json!({"id": tpl.id, "path": path}), |r| {
-                crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default())
-            });
-        }
+        crate::pick::choose_and_apply(app, &ctx, crate::pick::Field::SlideshowTemplateExport { id: tpl.id.clone(), file });
         ui.close();
     }
     if user {
@@ -246,12 +256,7 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.data_mut(|d| d.insert_temp(mem, name));
         if app.services.pick_slideshow_templates.is_some() && crate::widgets::text_button(ui, "slideshowTemplateImport", "Import…", false).clicked()
         {
-            let paths = app.services.pick_slideshow_templates.as_mut().map(|pick| pick()).unwrap_or_default();
-            for path in paths {
-                act(app, &ctx, "slideshow.templates.import", json!({"path": path}), |r| {
-                    crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default())
-                });
-            }
+            crate::pick::choose_and_apply(app, &ctx, crate::pick::Field::SlideshowTemplateImport);
         }
     });
     if app.session.slide_templates_dir.is_none() {

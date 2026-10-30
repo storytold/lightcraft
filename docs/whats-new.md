@@ -1,5 +1,11 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Choosing a folder or file no longer freezes the window
+- Browse Folder…, the import review's Copy to / Move to Choose…, the export folder and watermark graphic Choose…, Settings ▸ Import ▸ Watched folder, Settings ▸ Performance ▸ Choose Folder… (smart previews), Install from file… (AI Denoise), Settings ▸ Slideshow ▸ Overlays ▸ identity plate image, the Lightroom import's library location and Add a model file… now open their file dialog without stopping the window: progress bars keep moving, and on Linux the desktop no longer reports LightCraft as not responding (issues #191, #3140). The folder or file you pick appears when the dialog closes; if you closed the dialog it belongs to meanwhile, the answer is dropped.
+- The same goes for Print ▸ Templates ▸ Import… and Export…, the Print Job's Profile ▸ Other…, Settings ▸ Display ▸ Choose Profile…, Settings ▸ Slideshow ▸ Templates ▸ Import… and a template's Export…, and the Soft Proofing profile's Other…. As before, several template files chosen at once are all imported, and the profile dialogs open in the folder where the system keeps monitor profiles.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

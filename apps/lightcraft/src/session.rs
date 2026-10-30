@@ -15,7 +15,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
         // stopped the window answering the compositor, which then reported the app as hung.
         picker: Some(Box::new(move |req: lightcraft_ui_egui::pick::PickRequest| {
-            use lightcraft_ui_egui::pick::PickKind;
+            use lightcraft_ui_egui::pick::{PickKind, PickStart};
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
             std::thread::Builder::new()
@@ -30,6 +30,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                     }
                     if let Some(n) = &req.file_name {
                         d = d.set_file_name(n);
+                    }
+                    if req.start == PickStart::MonitorProfiles
+                        && let Some(dir) = display_profile_dir()
+                    {
+                        d = d.set_directory(dir);
                     }
                     let s = |p: std::path::PathBuf| p.to_string_lossy().to_string();
                     let paths: Vec<String> = match req.kind {
@@ -198,7 +203,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                 .map(|p| p.to_string_lossy().to_string())
         })),
         pick_slideshow_templates: Some(Box::new(|| {
-            rfd::FileDialog::new()
+            file_dialog()
                 .set_title(lightcraft_ui_egui::i18n::tr("Import Slideshow Templates"))
                 .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Slideshow Templates"), &["json"])
                 .pick_files()
@@ -208,7 +213,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                 .collect()
         })),
         save_slideshow_template: Some(Box::new(|name: &str| {
-            rfd::FileDialog::new()
+            file_dialog()
                 .set_title(lightcraft_ui_egui::i18n::tr("Export Slideshow Template"))
                 .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Slideshow Templates"), &["json"])
                 .set_file_name(name)
