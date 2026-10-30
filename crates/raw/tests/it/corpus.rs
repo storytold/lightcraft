@@ -1594,11 +1594,11 @@ fn corpus_light_lri() {
     };
     assert_eq!((*points_v, *points_h, *map_planes), (13, 17, 1));
     assert_eq!(gains.len(), 13 * 17);
-    // Independently checked against the sample's 17x13 LRI calibration grid:
-    // the centre is unity and the four corners compensate the strong falloff.
-    assert!((0.95..=1.05).contains(&gains[6 * 17 + 8]), "centre gain {}", gains[6 * 17 + 8]);
-    for i in [0, 16, 12 * 17, 13 * 17 - 1] {
-        assert!((2.5..=3.6).contains(&gains[i]), "corner gain[{i}] = {}", gains[i]);
+    // A1's 17x13 vignetting grid as read from the file by a separate protobuf reader: unity at the centre, and four
+    // distinct corners, so a flipped or transposed grid fails
+    assert!((gains[6 * 17 + 8] - 1.0).abs() < 1e-6, "centre gain {}", gains[6 * 17 + 8]);
+    for (i, want) in [(0, 3.2910), (16, 3.3807), (12 * 17, 3.3047), (13 * 17 - 1, 3.3087)] {
+        assert!((gains[i] - want).abs() < 1e-3, "corner gain[{i}] = {}, want {want}", gains[i]);
     }
     assert_eq!(img.metadata.model.as_deref(), Some("L16"));
     assert_eq!(img.metadata.capture_time.map(|t| (t.year, t.month, t.day)), Some((2017, 9, 28)));
