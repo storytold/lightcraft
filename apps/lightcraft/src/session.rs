@@ -278,7 +278,8 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_d
     };
     let t0 = std::time::Instant::now();
     let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
-    match s.open_library(&dir, seed_demo) {
+    // a new library starts empty: its first screen asks how to begin (sample photos are one way)
+    match s.open_library(&dir, false) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);
             log::info!(

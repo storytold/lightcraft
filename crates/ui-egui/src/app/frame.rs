@@ -374,6 +374,7 @@ impl LightcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.library_changed(&ctx);
+        panels::empty_library::follow(self);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         if self.ui.fullscreen {
@@ -407,6 +408,7 @@ impl LightcraftApp {
         // right panels and left panel run to the bottom; the bottom bar sits between them).
         panels::topbar::show(self, ui);
         panels::library_problem::banner(self, ui);
+        panels::samples::banner(self, ui);
         panels::strip::show(self, ui);
         // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
         let chrome = theme::Tokens::get(&ctx).chrome;

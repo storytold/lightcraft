@@ -417,7 +417,10 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     );
     if let Some(mut canvas) = canvas {
         let ui = &mut canvas;
-        crate::panels::bottombar::show(app, ui);
+        // (not under the welcome: nothing to switch views of or size yet)
+        if !crate::panels::empty_library::in_view(app) {
+            crate::panels::bottombar::show(app, ui);
+        }
         let bg = if matches!(
             app.ui.view,
             crate::state::ViewMode::Detail | crate::state::ViewMode::Compare | crate::state::ViewMode::Survey | crate::state::ViewMode::Reference

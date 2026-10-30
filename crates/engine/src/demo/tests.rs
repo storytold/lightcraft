@@ -1,5 +1,26 @@
 use super::*;
 
+#[test]
+fn the_welcome_samples_arrive_unedited() {
+    let mut s = Session::new();
+    let edited: Vec<u32> = ops(&mut s)
+        .iter()
+        .filter_map(|op| match op {
+            Op::AddPhoto { photo } => match photo.source {
+                Source::Demo { scene } if *photo.develop != DevelopSettings::default() => Some(scene),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(!edited.is_empty(), "a few samples come edited, for the grid's variety");
+    let welcome = welcome_scenes();
+    assert_eq!(welcome.len(), 5, "every scene the welcome shows exists");
+    for (scene, title) in welcome {
+        assert!(!edited.contains(&scene), "“{title}” comes edited: its thumbnail would show it otherwise");
+    }
+}
+
 fn small_scene() -> lightcraft_scenes::Scene {
     lightcraft_scenes::demo_library().swap_remove(0)
 }
