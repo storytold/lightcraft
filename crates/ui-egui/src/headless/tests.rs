@@ -1774,6 +1774,37 @@ fn settle_waits_for_file_system_checks() {
     assert_eq!(check(&mut h), Some(true));
 }
 
+/// A file-system check that panics is no pending work for ever: the count drops (so `busy()` and `settle` go on) and the check can be asked again.
+#[test]
+fn a_file_system_check_that_panics_is_not_pending_for_ever() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+    fn panics(_: &str) -> bool {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        panic!("a listing that dies");
+    }
+    let mut h = demo([800.0, 600.0]);
+    h.settle(SETTLE);
+    let check = |h: &mut Headless| {
+        let raw = HeadlessView::raw_input(h.size, 1.0, 0.0, vec![]);
+        h.view.run(raw, |ui| {
+            let _ = crate::panels::left::fs_cached(ui, "test-panics", "x", 0.0, panics);
+        });
+    };
+    check(&mut h);
+    let t0 = Instant::now();
+    while crate::panels::left::fs_cached_running(&h.view.ctx) > 0 && t0.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(crate::panels::left::fs_cached_running(&h.view.ctx), 0, "the dead check no longer counts as running");
+    check(&mut h);
+    let t0 = Instant::now();
+    while ASKED.load(Ordering::SeqCst) < 2 && t0.elapsed() < SETTLE {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(ASKED.load(Ordering::SeqCst), 2, "and it is asked again, not stuck as running");
+}
+
 /// Photo > Rename Photos…: the dialog previews and renames the selection.
 #[test]
 fn rename_dialog_renames_the_selection() {

@@ -2,6 +2,15 @@
 
 ## 2026-10-24
 
+### The Missing Photos count no longer checks the whole library after every change
+- The Missing Photos count used to check every file of the library again every few seconds and after every
+  change, which kept a library on a network share busy. Each file is now checked once when the library opens and
+  again five minutes after the last round of checks ended, one at a time and after what the window asks about; the
+  files of photos that come in or move are checked as they do. Edits that change no file (a rating, an album, a
+  keyword) check nothing. Opening another library drops the check of the one that was open.
+  While an import, an import review scan, a Synchronize Folder or a Local folder listing is reading the same
+  files, the check waits and then goes on where it stopped, so it no longer slows them down.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for

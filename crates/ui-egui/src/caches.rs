@@ -8,6 +8,10 @@ pub struct LibraryCounts {
     pub deleted: usize,
 }
 
+/// How often every library photo's file is checked for the Missing Photos count (each one once,
+/// after whatever the panels ask: a library on a share is not checked over and over).
+pub(crate) const SWEEP_SECONDS: f64 = 300.0;
+
 /// The values the filter bar's pickers offer.
 #[derive(Clone, Debug, Default)]
 pub struct FilterValues {
@@ -35,6 +39,28 @@ pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
 /// library saved on every edit.
 fn still_right(cat: &lightcraft_catalog::Catalog, revision: u64, reads: lightcraft_catalog::Aspects) -> bool {
     revision == cat.revision || cat.aspects_since(revision).is_some_and(|changed| !changed.any_of(reads))
+}
+
+/// Runs `list` on a thread of its own (named for the library's files) with `flag` set for as long as it runs. The flag
+/// is cleared however the thread ends, a panic included, and when no thread could be started.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_listing(flag: &std::sync::Arc<std::sync::atomic::AtomicBool>, list: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    struct Done(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Done {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+    flag.store(true, std::sync::atomic::Ordering::Release);
+    let done = Done(flag.clone());
+    // (a thread that did not start drops the closure, and with it the guard)
+    std::thread::Builder::new()
+        .name("lc-library-files".into())
+        .spawn(move || {
+            let _done = done;
+            list();
+        })
+        .map(drop)
 }
 
 /// What the tallies below read of a photo, besides whether it is in the library.
@@ -189,6 +215,76 @@ impl Caches {
         }
         self.counts = Some((cat.revision, c));
         c
+    }
+    /// Missing Photos' count: the library photos whose file the background checks found gone
+    /// (see [`missing_count::MissingCount`]). The files of photos that came in or moved are asked
+    /// about at once; every file is handed to the checks when the library opens and every
+    /// [`SWEEP_SECONDS`] (see [`Caches::check_files`]), and again when changes to the library
+    /// couldn't be followed photo by photo; never once per edit. `now` is egui's time.
+    pub fn missing_count(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        library: u64,
+        files: &lightcraft_engine::availability::Availability,
+        now: f64,
+    ) -> usize {
+        let (n, lost) = self.missing.update(cat, library, files, now);
+        // photos changed while nobody followed them: a check of every file covers them, unless
+        // the last one started after them
+        self.files_unchecked |= lost && self.files_swept.is_none_or(|(of, revision, _)| of != library || revision < cat.revision);
+        n
+    }
+    /// Whether the Missing Photos count has a pass to make soon (the panel asks for a frame then).
+    pub fn missing_waiting(&self) -> bool {
+        self.missing.waiting()
+    }
+    /// Hand every library photo's file to the background checks (one at a time, after what is
+    /// asked) when the library is new here, files came in that no check was asked for, or
+    /// [`SWEEP_SECONDS`] passed since the last check ended; `now` is egui's time. The list is made
+    /// from a copy of the catalog on a worker thread. Returns whether a check is going on: the
+    /// caller keeps asking for frames then, because the time the last one ended is the time of the
+    /// last frame that saw it going on.
+    pub fn check_files(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        library: u64,
+        files: &lightcraft_engine::availability::Availability,
+        now: f64,
+    ) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.files_swept.is_some_and(|(of, _, _)| of != library) {
+            // another library: what is left of the one that was open is not what to check now, and a list
+            // of its files being made must not start a sweep (the new library's list is due at once)
+            files.restart_sweeps();
+            self.files_listing = std::sync::Arc::default();
+            self.files_swept = None;
+        }
+        let checking = files.sweeping() > 0 || self.files_listing.load(Ordering::Acquire);
+        if checking {
+            // (the next one is due a while after this one ends, however long it takes)
+            if let Some((_, _, at)) = self.files_swept.as_mut() {
+                *at = now;
+            }
+        }
+        let due = self.files_unchecked || self.files_swept.is_none_or(|(_, _, at)| now - at >= SWEEP_SECONDS);
+        if !due || !files.is_background() || checking {
+            return checking;
+        }
+        self.files_swept = Some((library, cat.revision, now));
+        self.files_unchecked = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let epoch = files.restart_sweeps();
+            let (cat, files) = (cat.clone(), files.clone());
+            let started = run_listing(&self.files_listing, move || {
+                files.sweep_in(epoch, lightcraft_engine::cmd::missing::candidates(&cat));
+            });
+            if let Err(e) = started {
+                // tried again at the next check
+                log::warn!("missing photos: no thread to list the library's files: {e}");
+            }
+        }
+        true
     }
     /// Everyone named on a face in the library (for completing a name as it is typed).
     pub fn person_names(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<String>> {

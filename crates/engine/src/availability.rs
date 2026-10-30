@@ -200,6 +200,14 @@ impl Availability {
         lock(&self.state).gone.len()
     }
 
+    /// Ask the UI for a frame (what the worker does when an answer changed), for work made for it
+    /// on another thread.
+    pub fn wake(&self) {
+        if let Some(w) = &self.background {
+            w();
+        }
+    }
+
     /// What the sweep under way has left to check (0: none under way, though its last file may still
     /// be in flight).
     pub fn sweeping(&self) -> usize {
@@ -512,6 +520,23 @@ mod tests {
         all.sort();
         all.dedup();
         assert_eq!(all.len(), 100, "every file checked once, none again from the start");
+    }
+
+    #[test]
+    fn a_sweep_gives_way_while_a_task_is_in_the_activity_stack_and_goes_on_when_its_guard_drops() {
+        let (a, log, _) = logged();
+        let activity = crate::activity::Activity::default();
+        let act = activity.clone();
+        a.sweep_yields_to(Arc::new(move || act.any_of(&["scan", "import", "sync"])));
+        // (a task that never ends cleanly: its guard drops as its thread unwinds)
+        let guard = activity.start("scan", "Reading photos", crate::activity::Cancel::No);
+        assert!(a.sweep((0..5).map(|i| format!("sweep {i}")).collect()));
+        std::thread::sleep(YIELD_POLL * 3);
+        assert!(held(&log).is_empty());
+        let other = activity.start("export", "Exporting", crate::activity::Cancel::No);
+        drop(other);
+        drop(guard);
+        wait_until("the sweep", || held(&log).len() == 5);
     }
 
     #[test]

@@ -17,6 +17,10 @@ impl LightcraftApp {
             // worker fills: a sleeping NAS or a dropped share never stalls a frame
             let repaint = ctx.clone();
             self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
+            // …which gives way to the file work of an import, a scan, a Synchronize Folder and the Local view's
+            // listings: one share, one stream of reads. The task guards decide, so a task that ends, fails or
+            // panics lets go; a listing hung on a dead mount holds the sweep back until it returns.
+            self.session.media.availability.sweep_yields_to(crate::clock::sweep_gives_way(self.session.activity.clone(), ctx));
             self.styled = true;
             self.font_language = self.ui.language;
         } else if self.font_language != self.ui.language {
