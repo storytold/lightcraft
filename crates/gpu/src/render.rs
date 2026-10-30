@@ -689,6 +689,9 @@ pub fn render(
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
     let (p, aux) = finish_block(&fp, &terms, &present);
+    if crate::ctx::failed() {
+        return None; // a malformed parameter block failed the render: the CPU fallback redoes it
+    }
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
     let out = cx.zeroed(n);

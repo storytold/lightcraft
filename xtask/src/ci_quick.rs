@@ -4,7 +4,7 @@
 //! parity check, ~23 minutes cold. `--quick` looks at what changed since the merge base with
 //! `origin/main` (or `--base REF`), committed or not, and runs:
 //!
-//! - fmt, layers, assets: always (seconds);
+//! - fmt, layers, assets, roots: always (seconds);
 //! - clippy on the whole workspace (check builds only; catches callers broken by an API change);
 //! - the tests of the changed packages only (not their dependents);
 //! - heif when `lightcraft-codecs` / `lightcraft-heif` changed;
@@ -34,6 +34,7 @@ const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs", "lightcraft-heif"];
 /// An entry ending in `/` covers the directory. `embedded_files_are_mapped` keeps this complete.
 const EMBEDDED: &[(&str, &[&str])] = &[
     ("assets/app-icon/", &["lightcraft"]),
+    ("assets/app-icon/hicolor/128x128/apps/ai.storyteller.lightcraft.png", &["lightcraft-ui-egui"]),
     ("assets/camera-profiles/", &["lightcraft-engine"]),
     ("assets/camera-tone/", &["lightcraft-engine"]),
     ("assets/fonts/", &["lightcraft-engine", "lightcraft-ui-egui"]),

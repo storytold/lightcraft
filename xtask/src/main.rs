@@ -2,6 +2,8 @@
 //!
 //! Pure Rust (std + serde_json; flate2/brotli for the web bundle). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod assets;
 mod bench;
@@ -11,6 +13,7 @@ mod ci_report;
 mod ico;
 mod layers;
 mod parity;
+mod roots;
 mod stats;
 mod version;
 mod web;
@@ -39,6 +42,8 @@ commands:
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
   layers          enforce the crate dependency layering (plan/architecture.md §3)
+  roots           every production crate root carries #![forbid(unsafe_code)] and the six-lint
+                  deny list (AGENTS.md; crates/sysmem is exempt from the forbid only)
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
@@ -47,7 +52,7 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md] [--quick [--base REF]]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
+                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, roots, wasm
                   (stops at first failure). Tests run under cargo test (cargo nextest with
                   LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
                   them it prints the translation gaps report (never a failure). Writes
@@ -75,6 +80,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
+        Some("roots") => roots::run(),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
@@ -117,9 +123,17 @@ fn cmd_raw_frame(files: &[&str]) -> Result<(), String> {
 pub fn root() -> PathBuf {
     // `cargo run` sets it at run time; prefer that over the compile-time value, which goes stale
     // when the checkout moves and the cached xtask binary isn't rebuilt
-    let dir = std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).filter(|d| d.join("Cargo.toml").is_file());
-    let dir = dir.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    dir.parent().expect("xtask has a parent dir").to_path_buf()
+    workspace_root(std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).filter(|d| d.join("Cargo.toml").is_file()), env!("CARGO_MANIFEST_DIR"))
+}
+
+/// The workspace root for an xtask-crate directory. A runtime manifest dir (already checked to
+/// carry Cargo.toml) wins only when it has a parent: a filesystem root or an empty path names no
+/// crate below a workspace, and there is no directory above it. The compile-time fallback
+/// (`<workspace>/xtask`) always has a parent; without one the crate dir itself is the best
+/// remaining answer.
+fn workspace_root(runtime_manifest_dir: Option<PathBuf>, compile_time_manifest_dir: &str) -> PathBuf {
+    let dir = runtime_manifest_dir.filter(|d| d.parent().is_some()).unwrap_or_else(|| PathBuf::from(compile_time_manifest_dir));
+    dir.parent().map_or_else(|| dir.clone(), Path::to_path_buf)
 }
 
 pub fn cargo() -> Command {
@@ -163,4 +177,32 @@ pub fn metadata() -> Result<serde_json::Value, String> {
         return Err(format!("cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    /// A runtime `CARGO_MANIFEST_DIR` without a parent (`/`, or an empty path) cannot name the
+    /// xtask crate: the parent lookup used to crash on it, and the workspace root falls back to
+    /// the compile-time value instead.
+    #[test]
+    fn a_runtime_manifest_dir_without_a_parent_is_not_the_workspace_root() {
+        let root = super::workspace_root(Some(PathBuf::from("/")), "/checkout/xtask");
+        assert_eq!(root, Path::new("/checkout"));
+        let root = super::workspace_root(Some(PathBuf::from("")), "/checkout/xtask");
+        assert_eq!(root, Path::new("/checkout"));
+    }
+
+    #[test]
+    fn a_runtime_manifest_dir_names_its_own_workspace() {
+        let root = super::workspace_root(Some(PathBuf::from("/checkout/xtask")), "/elsewhere/xtask");
+        assert_eq!(root, Path::new("/checkout"));
+    }
+
+    #[test]
+    fn without_a_runtime_value_the_compile_time_manifest_dir_decides() {
+        let root = super::workspace_root(None, "/checkout/xtask");
+        assert_eq!(root, Path::new("/checkout"));
+    }
 }
