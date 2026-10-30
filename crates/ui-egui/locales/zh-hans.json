@@ -948,6 +948,7 @@
   "Move Down in Stack": "在堆叠中下移",
   "Move Folder": "移动文件夹",
   "Move Folder To…": "将文件夹移动到…",
+  "Moves the folder on disk into the folder you choose; its photos follow. You can undo this.": "将磁盘上的文件夹移动到你选择的文件夹中，其中的照片随之移动。可以撤销。",
   "Move Mask": "移动蒙版",
   "Move Preset to Group": "将预设移动到分组",
   "Move Up in Stack": "在堆叠中上移",

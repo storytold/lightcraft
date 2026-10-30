@@ -27,6 +27,10 @@ pub(crate) trait MoveFs {
     /// Copy `a` to a new file `b` (an independent copy, never a link), failing when `b` exists.
     fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()>;
     fn remove_file(&self, p: &Path) -> std::io::Result<()>;
+    /// Move, create or remove a folder on disk for a history step (see `FolderMove`).
+    fn move_folder(&self, from: &str, to: &str) -> std::result::Result<(), String> {
+        crate::cmd::browse::folder_on_disk(from, to)
+    }
     /// Another photo file beside the stem-named sidecar `sidecar` that shares its stem (e.g.
     /// `IMG_1.JPG` for `IMG_1.xmp`), which still uses that sidecar.
     fn stem_sibling(&self, sidecar: &Path) -> Option<String>;

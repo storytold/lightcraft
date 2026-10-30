@@ -79,7 +79,7 @@ pub(super) fn folder_tree(
                     key: "name".into(),
                 });
             }
-            if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
+            if move_folder_item(app, ui, format!("localFolderMove:{path}")) {
                 let into = app.services.pick_folder.as_mut().and_then(|f| f());
                 if let Some(into) = into {
                     match app.run("folder.move", json!({"path": path, "into": into})) {
@@ -590,6 +590,20 @@ fn folder_label_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode)
     register(ui, "folderLabelMenu", menu.response.rect);
 }
 
+/// The "Move Folder To…" row of a folder's menu, registered as widget `id` (so the control
+/// channel and tests can click it). Only where the host can choose a
+/// folder (`pick_folder`); returns whether it was clicked.
+fn move_folder_item(app: &LightcraftApp, ui: &mut egui::Ui, id: String) -> bool {
+    if app.services.pick_folder.is_none() {
+        return false;
+    }
+    let r = ui
+        .button(crate::i18n::tr("Move Folder To…"))
+        .on_hover_text(crate::i18n::tr("Moves the folder on disk into the folder you choose; its photos follow. You can undo this."));
+    register(ui, id, r.rect);
+    r.clicked()
+}
+
 /// The context menu of a folder row: the folder's disk actions (the same as Local's, photos
 /// follow) and taking its photos out of the library.
 fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
@@ -609,7 +623,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
             });
             ui.close();
         }
-        if app.services.pick_folder.is_some() && ui.button(crate::i18n::tr("Move Folder To…")).clicked() {
+        if move_folder_item(app, ui, format!("folderMove:{path}")) {
             let into = app.services.pick_folder.as_mut().and_then(|f| f());
             if let Some(into) = into {
                 match app.run("folder.move", json!({"path": path, "into": into})) {

@@ -1778,6 +1778,56 @@ fn a_renamed_folder_keeps_its_place_in_the_tree() {
     assert!(has(&h, &format!("source:libfolder:{b}/pics2/trip")), "the chosen folder is still on screen after the rename");
 }
 
+/// A folder's menu has Move Folder To… as a widget of its own (so it can be clicked by id): it moves the folder into the chosen one on disk, and a host that can't choose a
+/// folder doesn't list it.
+#[test]
+fn a_library_folders_menu_has_a_move_folder_item_that_moves_it() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let base = std::env::temp_dir().join(format!("lc-ui-move-item-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let _cleanup = Cleanup(base.clone());
+    std::fs::create_dir_all(base.join("pics/trip")).unwrap();
+    std::fs::create_dir_all(base.join("archive")).unwrap();
+    let b = base.to_string_lossy().replace('\\', "/");
+    let trip = format!("{b}/pics/trip");
+    let shown = |h: &mut Headless| {
+        h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+        h.app.session.library_folder = Some(trip.clone());
+        h.step();
+        h.step();
+    };
+    let photo = format!("{trip}/a.jpg");
+
+    // (tall enough that the shown folder's row, under a temp directory's long path, is on screen to be clicked)
+    // no way to choose a folder here: no item
+    let mut h = folders_app_with_services(&[&photo], [1400.0, 1400.0], Services { png: None, ..Default::default() });
+    shown(&mut h);
+    right_click(&mut h, &format!("source:libfolder:{trip}"));
+    assert!(!has(&h, &format!("folderMove:{trip}")));
+
+    let archive = format!("{b}/archive");
+    let picked = archive.clone();
+    let services = Services { pick_folder: Some(Box::new(move || Some(picked.clone()))), png: None, ..Default::default() };
+    let mut h = folders_app_with_services(&[&photo], [1400.0, 1400.0], services);
+    shown(&mut h);
+    right_click(&mut h, &format!("source:libfolder:{trip}"));
+    assert!(has(&h, &format!("folderMove:{trip}")), "the item is a widget");
+    click(&mut h, &format!("folderMove:{trip}"));
+    assert!(base.join("archive/trip").is_dir() && !base.join("pics/trip").exists(), "moved on disk");
+    let moved = h
+        .app
+        .session
+        .catalog
+        .photos()
+        .any(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.replace('\\', "/") == format!("{archive}/trip/a.jpg")));
+    assert!(moved, "its photo followed");
+}
+
 /// The menu opens from anywhere on a folder row, the disclosure triangle included; a disk row
 /// has its own, the startup disk none.
 #[test]

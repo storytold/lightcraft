@@ -726,6 +726,7 @@
   "Move Down in Stack": "Опустить в стопке",
   "Move Folder": "Переместить папку",
   "Move Folder To…": "Переместить папку в…",
+  "Moves the folder on disk into the folder you choose; its photos follow. You can undo this.": "Перемещает папку на диске в выбранную папку; её фото следуют за ней. Это можно отменить.",
   "Move Mask": "Переместить маску",
   "Move Preset to Group": "Переместить пресет в группу",
   "Move Up in Stack": "Поднять в стопке",

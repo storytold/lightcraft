@@ -942,6 +942,7 @@
   "Move": "移動",
   "Move Down in Stack": "スタック内で下に移動",
   "Move Folder To…": "フォルダを移動…",
+  "Moves the folder on disk into the folder you choose; its photos follow. You can undo this.": "ディスク上のフォルダを選んだフォルダの中へ移動します。写真もいっしょに移ります。取り消すこともできます。",
   "Move Up in Stack": "スタック内で上に移動",
   "Move the files (into the library's Originals/, or a folder you choose), removing them from the source": "ライブラリのOriginalsまたは指定フォルダへ移動し、元の場所から削除",
   "Move them": "移動する",

@@ -1086,6 +1086,7 @@
   "More preset options": "Інші параметри набору налаштувань",
   "Move Down in Stack": "Перемістити нижче в стосі",
   "Move Folder To…": "Перемістити теку до…",
+  "Moves the folder on disk into the folder you choose; its photos follow. You can undo this.": "Переміщує теку на диску до вибраної теки; її фото переміщуються разом із нею. Це можна скасувати.",
   "Move Up in Stack": "Перемістити вище в стосі",
   "Move the files (into the library's Originals/, or a folder you choose), removing them from the source": "Перемістити файли (до Originals/ бібліотеки або вибраної теки), видаливши їх із джерела",
   "Move them": "Перемістити їх",

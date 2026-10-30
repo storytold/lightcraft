@@ -1136,6 +1136,7 @@
   "Move Down in Stack": "Přesunout v sadě dolů",
   "Move Folder": "Přesunout složku",
   "Move Folder To…": "Přesunout složku do…",
+  "Moves the folder on disk into the folder you choose; its photos follow. You can undo this.": "Přesune složku na disku do vybrané složky; její fotografie se přesunou s ní. Akci lze vrátit zpět.",
   "Move Mask": "Přesunout masku",
   "Move Preset to Group": "Přesunout přednastavení do skupiny",
   "Move Preset to New Group": "Přesunout přednastavení do nové skupiny",

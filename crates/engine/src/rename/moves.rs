@@ -151,18 +151,24 @@ pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::resu
 
 /// Final `SetFile` per photo (nested batches included), filtered by destination only afterward.
 pub(super) fn set_file_ops_to(op: &Op, to: &HashSet<&str>, out: &mut Vec<Op>) {
+    set_file_ops_where(op, &|path| to.contains(path), out);
+}
+
+/// The last `SetFile` or `Relink` of each photo in `op` whose new path satisfies `wanted`.
+pub(crate) fn set_file_ops_where(op: &Op, wanted: &dyn Fn(&str) -> bool, out: &mut Vec<Op>) {
     let mut pending = vec![op];
     let mut order = Vec::new();
     let mut final_ops = HashMap::new();
     while let Some(op) = pending.pop() {
         match op {
             Op::Batch { ops } => pending.extend(ops.iter().rev()),
-            Op::SetFile { id, .. } if final_ops.insert(*id, op).is_none() => order.push(*id),
+            Op::SetFile { id, .. } | Op::Relink { id, .. } if final_ops.insert(*id, op).is_none() => order.push(*id),
             _ => {}
         }
     }
     out.extend(order.into_iter().filter_map(|id| {
         let op = final_ops.get(&id).copied()?;
-        matches!(op, Op::SetFile { source: Source::File { path }, .. } if to.contains(path.as_str())).then(|| op.clone())
+        matches!(op, Op::SetFile { source: Source::File { path }, .. } | Op::Relink { source: Source::File { path }, .. } if wanted(path.as_str()))
+            .then(|| op.clone())
     }));
 }
