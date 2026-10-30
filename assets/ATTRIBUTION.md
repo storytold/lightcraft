@@ -54,3 +54,10 @@ Notes
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their licences and attribution in its
   `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
   releases). Never commit font files here; add new fonts to craft-fonts (craftrules `standards/fonts.md`).
+
+## Window-controls review screenshots
+
+| Path | Asset | Creator | Source | Licence | Added | Modifications |
+|---|---|---|---|---|---|---|
+| `docs/window-controls/gnome-wayland.png` | LightCraft window controls on GNOME Wayland | @danielmigueltejedor with Codex | Original screenshot of an isolated compositor and generated demo content | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | 2026-10-21 | none |
+| `docs/window-controls/kde-x11.png` | LightCraft window controls on KWin with an X11 client | @danielmigueltejedor with Codex | Original screenshot of an isolated compositor and generated demo content | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) | 2026-10-21 | none |
