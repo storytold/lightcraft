@@ -1,5 +1,39 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Choose how many of a person's faces a name suggestion is based on
+- Settings ▸ Faces ▸ Matching ▸ Faces per person in a match: a face was always matched to a person by the mean of the
+  2 of their faces most like it, so in a large library two odd photos of someone (blurred, in profile) were enough for
+  a stranger to be suggested as them, and confirming the suggestions in a batch then snowballed. Choose 1 to 8 (2 is
+  still the default): more faces mean fewer wrong suggestions for people with many photos, and fewer suggestions for
+  people with few. It applies to name suggestions, a person's More faces and the unnamed faces. Agents:
+  `faces.matching {topFaces}`; `faces.suggest` and `faces.evaluate` take `topFaces` too, so `faces.evaluate` can
+  compare counts on your own photos. (#3250)
+
+## 2026-10-29
+
+### A person's page no longer offers someone else's faces, nor faces like everybody's
+- A person's More faces left out nobody: a face that looked a little like them was offered even when it looked much more
+  like someone already named, so when two people look alike, one's page offered the other's faces. And poor faces
+  (tiny, blurred, from behind), which look a little like everybody, filled the pages of people with many photos.
+  A face is now offered only when it looks clearly more like this person than like anyone else already named, by the
+  same margin as name suggestions.
+- Settings ▸ Faces ▸ Matching ▸ Ignore a person's odd faces (from behind, misnamed), off by default: a person's faces
+  far from their average face (a head from behind, a dark profile, someone else named by mistake) no longer count
+  when their page looks for faces like theirs, nor when it checks a face is clearly more like them than like anyone
+  else. In a library where one person's 776 faces included 37 such, nearly every face offered on their page was a
+  back of a head; with it on, the page offers their face. Fewer suggestions, though, for photos of someone that look
+  very different (as a child, thirty years later). Agents: `faces.matching {skipOdd}`.
+
+### A person's page opens in seconds in a large library
+- Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
+  runs on every processor core, and each comparison of two faces uses the processor's vector instructions. In a
+  library of 92 000 unnamed faces, a person with 4 100 named ones is estimated to have taken about 2 minutes 40 seconds
+  on one core of an Apple M1 Pro, with the window frozen, and now about 3 seconds (both measured on 3 000 of those
+  faces, 5.3 s and 0.1 s, and scaled up). Name suggestions and the order of the unnamed
+  faces get the faster comparison too.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

@@ -280,6 +280,7 @@ mod imp {
     use lightcraft_faces::runtime::Embedder;
     use lightcraft_geom::Rect;
     use lightcraft_meta::{Region, RegionKind};
+    use rayon::prelude::*;
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -538,6 +539,7 @@ mod imp {
             .filter(|v: &Vec<f32>| !v.is_empty())
             .unwrap_or_else(|| (4..=16).map(|i| i as f32 * 0.05).collect());
         let budget = Duration::from_millis(p.get("budgetMs").and_then(Value::as_u64).unwrap_or(0).min(3_600_000));
+        let top = top_faces_param(s, p).clamp(1, matching::MAX_TOP_FACES);
         let started = Instant::now();
         // `scope: "visible"` looks only at the photos the current filter shows (say one year, or one album)
         let scope: Option<std::collections::HashSet<PhotoId>> = (str_scope(p) == Some("visible")).then(|| s.visible_cloned().into_iter().collect());
@@ -582,7 +584,7 @@ mod imp {
                 continue;
             }
             let refs: Vec<(&str, &[f32])> = others.iter().map(|g| (g.name.as_str(), &g.emb[..])).collect();
-            let ranked = matching::rank(&q.emb, &refs);
+            let ranked = matching::rank_top(&q.emb, &refs, top);
             queries += 1;
             if ranked.first().is_some_and(|r| r.name.eq_ignore_ascii_case(&q.name)) {
                 top1 += 1;
@@ -605,6 +607,7 @@ mod imp {
             "pendingPhotos": todo.len().saturating_sub(done),
             "top1": pct(top1, queries),
             "margin": margin,
+            "topFaces": top,
             "burstSecs": burst,
             "sweep": sweep.iter().map(|(t, sg, ok)| json!({"threshold": t, "suggested": sg, "correct": ok, "precision": pct(*ok, *sg), "recall": pct(*ok, queries)})).collect::<Vec<_>>(),
         }))
@@ -705,7 +708,8 @@ mod imp {
 
     /// The unnamed faces that look most like the person whose lower-cased name is `key`, best first, at most `limit`: each
     /// is scored like a suggestion (the mean of its two closest faces of theirs) and kept above four fifths of the
-    /// model's suggestion bar, since a person looks at these before anything is named. Only faces already embedded can be
+    /// model's suggestion bar, since a person looks at these before anything is named; a face that does not look clearly
+    /// more like them than like anyone else already named (by [`DEFAULT_MARGIN`]) is left out. Only faces already embedded can be
     /// found; `ready` says whether recognition is running at all.
     pub fn similar(s: &mut Session, key: &str, limit: usize) -> Similar {
         let none = Similar { items: Vec::new(), ready: false, pending: 0 };
@@ -716,11 +720,14 @@ mod imp {
         let Ok(embedder) = current_with(s, "faces.person", false) else { return none };
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
         let (mut gallery, mut candidates): (Vec<Arc<[f32]>>, Vec<(u64, usize, Rect, Arc<[f32]>)>) = (Vec::new(), Vec::new());
+        // everyone else's named faces, by person
+        let mut others: std::collections::HashMap<String, Vec<Arc<[f32]>>> = std::collections::HashMap::new();
         for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
             for (index, r) in ph.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == RegionKind::Face) {
                 let Some(e) = s.faces.index.get(ph.id.0, &r.rect) else { continue };
-                match r.name.as_deref() {
-                    Some(n) if n.trim().to_lowercase() == key => gallery.push(e.clone()),
+                match r.name.as_deref().map(|n| n.trim().to_lowercase()) {
+                    Some(n) if n == key => gallery.push(e.clone()),
+                    Some(n) if !n.is_empty() => others.entry(n).or_default().push(e.clone()),
                     Some(_) => {}
                     None => candidates.push((ph.id.0, index, r.rect, e.clone())),
                 }
@@ -731,16 +738,43 @@ mod imp {
             return ready;
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|e| ("person", &e[..])).collect();
-        let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
-            .into_iter()
+        // with Settings ▸ Faces ▸ Ignore a person's odd faces, only their typical faces: a face from behind named after
+        // them would bring every other back of a head along
+        let skip_odd = read_settings(&dir).skip_odd;
+        fn faces_of(faces: &[Arc<[f32]>], skip_odd: bool) -> Vec<&[f32]> {
+            let all: Vec<&[f32]> = faces.iter().map(|e| &e[..]).collect();
+            if skip_odd { matching::typical(&all) } else { all }
+        }
+        let refs: Vec<&[f32]> = faces_of(&gallery, skip_odd);
+        // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
+        // in a library of 90 000, so on every core (minutes on one)
+        let top = top_faces(s);
+        let mut scored: Vec<(f32, u64, usize, Rect, Arc<[f32]>)> = candidates
+            .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
-                let score = matching::rank(&e, &refs).first()?.score;
-                (score >= bar).then_some((score, photo, index, rect))
+                let score = matching::person_score(&e, &refs, top)?;
+                (score >= bar).then_some((score, photo, index, rect, e))
             })
             .collect();
         scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-        scored.truncate(limit);
+        // a face is offered only when it looks clearly more like this person than like anyone else already named, by the
+        // margin name suggestions ask for: one that looks more like someone else is theirs (two people who look alike),
+        // and one that looks about as much like everybody is a poor face (tiny, blurred, from behind) that would fill
+        // the page. Best first, a batch at a time until the page is full
+        let others: Vec<Vec<&[f32]>> = others.values().map(|faces| faces_of(faces, skip_odd)).collect();
+        let mut kept = Vec::with_capacity(limit);
+        for batch in scored.chunks(256) {
+            let theirs: Vec<bool> = batch
+                .par_iter()
+                .map(|(score, .., e)| others.iter().any(|g| matching::person_score(e, g, top).is_some_and(|o| o > *score - DEFAULT_MARGIN)))
+                .collect();
+            kept.extend(batch.iter().zip(theirs).filter(|(_, theirs)| !theirs).map(|(c, _)| (c.0, c.1, c.2, c.3)));
+            if kept.len() >= limit {
+                break;
+            }
+        }
+        kept.truncate(limit);
+        let scored = kept;
         let items = scored
             .into_iter()
             .map(|(score, photo, index, rect)| {
@@ -818,10 +852,11 @@ mod imp {
             .collect();
         let refs: Vec<(&str, &[f32])> = gallery.iter().map(|(n, e)| (n.as_str(), &e[..])).collect();
         let threshold = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
+        let top = top_faces(s);
         let mut suggestions = std::collections::HashMap::new();
         if !refs.is_empty() {
             for ((photo, index, _), e) in ordered.iter().take(limit) {
-                if let Some(x) = matching::suggest(&matching::rank(e, &refs), threshold, DEFAULT_MARGIN) {
+                if let Some(x) = matching::suggest(&matching::rank_top(e, &refs, top), threshold, DEFAULT_MARGIN) {
                     suggestions.insert((*photo, *index), (x.name, x.score));
                 }
             }
@@ -831,6 +866,23 @@ mod imp {
         all.extend(beyond.into_iter().map(|(f, _)| f));
         all.extend(plain);
         super::Arranged { ordered: grouped, ready: true, suggestions }
+    }
+
+    /// How many of a person's best matching faces a match is based on (Settings ▸ Faces), looked up at most once a second.
+    fn top_faces(s: &mut Session) -> usize {
+        if let Some((t, n)) = s.faces.top_seen
+            && t.elapsed() < RECHECK
+        {
+            return n;
+        }
+        let n = s.face_models_dir.as_deref().map_or(matching::TOP_FACES, |d| read_settings(d).top_faces());
+        s.faces.top_seen = Some((Instant::now(), n));
+        n
+    }
+
+    /// `topFaces` asked for in a command, else the setting.
+    fn top_faces_param(s: &mut Session, p: &Value) -> usize {
+        p.get("topFaces").and_then(Value::as_u64).map_or_else(|| top_faces(s), |n| usize::try_from(n).unwrap_or(matching::MAX_TOP_FACES))
     }
 
     /// Whether face recognition is switched on, looked up at most once a second.
@@ -854,6 +906,7 @@ mod imp {
         let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v as f32);
         let threshold = num("threshold").or(model_threshold).unwrap_or(DEFAULT_THRESHOLD);
         let margin = num("margin").unwrap_or(DEFAULT_MARGIN);
+        let top = top_faces_param(s, p).clamp(1, matching::MAX_TOP_FACES);
         // the photos asked about are embedded first, then the named faces they are compared with, within the budget
         let budget = Duration::from_millis(p.get("budgetMs").and_then(Value::as_u64).unwrap_or(1500).min(600_000));
         let started = Instant::now();
@@ -891,7 +944,7 @@ mod imp {
                     faces.push(json!({"index": index, "pending": true}));
                     continue;
                 };
-                let ranked = matching::rank(q, &refs);
+                let ranked = matching::rank_top(q, &refs, top);
                 let suggestion = matching::suggest(&ranked, threshold, margin);
                 faces.push(json!({
                     "index": index,
@@ -902,7 +955,7 @@ mod imp {
             photos.push(json!({"id": id.0, "faces": faces}));
         }
         Ok(
-            json!({"model": s.faces.index.tag, "threshold": threshold, "margin": margin, "galleryFaces": gallery.len(), "pendingPhotos": pending_photos, "photos": photos}),
+            json!({"model": s.faces.index.tag, "threshold": threshold, "margin": margin, "topFaces": top, "galleryFaces": gallery.len(), "pendingPhotos": pending_photos, "photos": photos}),
         )
     }
     #[cfg(test)]
@@ -1124,7 +1177,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Suggest Names for Faces",
             [],
             None,
-            "{ids?, threshold?, margin?, budgetMs?} → {photos: [{id, faces: [{index, suggestion: {name, score, runnerUp} | null, candidates: [{name, score}]}]}]} — who the unnamed faces in these photos might be, from the faces already named in the library. Only suggestions: nothing is named",
+            "{ids?, threshold?, margin?, topFaces?, budgetMs?} → {photos: [{id, faces: [{index, suggestion: {name, score, runnerUp} | null, candidates: [{name, score}]}]}]} — who the unnamed faces in these photos might be, from the faces already named in the library. Only suggestions: nothing is named",
             super::always,
             imp::suggest
         ),
@@ -1142,7 +1195,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Evaluate Face Recognition",
             [],
             None,
-            "{budgetMs?: 0, burstSecs?: 5, margin?, thresholds?: [..], scope?: \"visible\"} → {queries, top1, sweep: [{threshold, suggested, correct, precision, recall}]} — leave-one-out over your named faces: each is ranked against the others (ignoring shots within burstSecs of it) to show how well the chosen model recognises people in *your* photos and which threshold to trust. Faces not yet embedded are done within budgetMs (`faces.index` does them all); counts only",
+            "{budgetMs?: 0, burstSecs?: 5, margin?, thresholds?: [..], topFaces?, scope?: \"visible\"} → {queries, top1, topFaces, sweep: [{threshold, suggested, correct, precision, recall}]} — leave-one-out over your named faces: each is ranked against the others (ignoring shots within burstSecs of it) to show how well the chosen model recognises people in *your* photos and which threshold to trust. Faces not yet embedded are done within budgetMs (`faces.index` does them all); counts only",
             super::always,
             imp::evaluate
         ),
