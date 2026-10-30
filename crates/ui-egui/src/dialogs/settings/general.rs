@@ -1,5 +1,6 @@
 use super::widgets::{check, choices, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use crate::menu_item::MenuItem;
 
 // ------------------------------------------------------------------------------------- General
 
@@ -147,7 +148,7 @@ pub(super) fn preset_combo(
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
     let mut out = None;
     let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).show_ui(ui, |ui| {
-        if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {
+        if MenuItem::new(crate::i18n::tr(none_label)).selected(current.is_none()).show(ui).clicked() {
             out = Some(None);
         }
         if let Some(pid) = crate::panels::presets::picker_rows(ui, id, &app.session.presets, current) {

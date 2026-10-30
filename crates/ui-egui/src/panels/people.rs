@@ -12,6 +12,7 @@ use lightcraft_catalog::Person;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -186,8 +187,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
     let full = person.name.clone();
     crate::widgets::context_menu(&resp, |ui| {
-        let r = ui.button(crate::i18n::tr("Rename Person…"));
-        register(ui, "personMenu:rename", r.rect);
+        let r = MenuItem::new(crate::i18n::tr("Rename Person…")).widget("personMenu:rename").show(ui);
         if r.clicked() {
             open_rename(app, &full);
         }

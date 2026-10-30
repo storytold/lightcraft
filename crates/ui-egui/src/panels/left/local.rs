@@ -1,6 +1,7 @@
 use super::folders::folder_tree;
 use super::rows::Row;
-use super::{Icon, LibrarySource, LightcraftApp, SidebarSection, json, register};
+use super::{Icon, LibrarySource, LightcraftApp, SidebarSection, json};
+use crate::menu_item::MenuItem;
 
 /// Local's folders as they stand this frame, and the folder being browsed among them.
 pub(super) struct LocalNow {
@@ -96,16 +97,14 @@ pub(super) fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &Local
 /// Restore All.
 fn hidden_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, hidden: &[(String, String)]) {
     for (name, path) in hidden {
-        let r = ui.button(name).on_hover_text(path);
-        register(ui, format!("local:restoreHidden:{path}"), r.rect);
+        let r = MenuItem::new(name).widget(format!("local:restoreHidden:{path}")).show(ui).on_hover_text(path);
         if r.clicked() {
             let _ = app.run("local.restoreHidden", json!({"path": path}));
             ui.close();
         }
     }
     ui.separator();
-    let r = ui.button(crate::i18n::tr("Restore All"));
-    register(ui, "local:restoreHidden:all", r.rect);
+    let r = MenuItem::new(crate::i18n::tr("Restore All")).widget("local:restoreHidden:all").show(ui);
     if r.clicked() {
         let _ = app.run("local.restoreHidden", json!({}));
         ui.close();
@@ -306,6 +305,33 @@ mod tests {
         view.run(raw, |ui| {
             assert_eq!(super::local_now(&mut app, ui).unwrap().places.places, places);
         });
+    }
+
+    /// Every row of the "Show N hidden locations" list is a `MenuItem`: the first one, reached with
+    /// Tab, has the menu row's focus ring over its whole row, and it is reachable by its widget name.
+    #[test]
+    fn the_hidden_locations_list_is_made_of_menu_item_rows() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let hidden =
+            vec![("Pictures".to_string(), "/lightcraft-test/pictures".to_string()), ("Work".to_string(), "/lightcraft-test/work".to_string())];
+        let id = "local:restoreHidden:/lightcraft-test/pictures";
+        let mut view = crate::headless::HeadlessView::new();
+        for frame in 0..4 {
+            let tab = egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+            let events = if frame == 1 { vec![tab] } else { vec![] };
+            let raw = crate::headless::HeadlessView::raw_input(egui::vec2(300.0, 300.0), 1.0, frame as f64 / 60.0, events);
+            view.run(raw, |ui| super::hidden_menu(&mut app, ui, &hidden));
+            let widgets = crate::widgets::take_registry(&view.ctx);
+            let rect = widgets.iter().find(|(w, _)| w == id).unwrap_or_else(|| panic!("{id} not registered: {widgets:?}")).1;
+            if frame == 3 {
+                let accent = crate::theme::Tokens::get(&view.ctx).accent;
+                let ringed = view
+                    .painted_shapes()
+                    .into_iter()
+                    .any(|s| matches!(s, egui::epaint::Shape::Rect(r) if r.rect == rect && r.stroke.width == 1.5 && r.stroke.color == accent));
+                assert!(ringed, "{id}: the focused row has no menu row focus ring");
+            }
+        }
     }
 
     #[test]

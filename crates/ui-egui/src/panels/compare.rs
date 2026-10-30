@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::render::Slot;
 use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
@@ -521,10 +522,10 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
         crate::widgets::context_menu(&resp, |ui| {
-            if ui.button(crate::i18n::tr("Swap")).clicked() {
+            if MenuItem::new(crate::i18n::tr("Swap")).show(ui).clicked() {
                 let _ = swap(app);
             }
-            if ui.button(crate::i18n::tr("Make Candidate the Select")).clicked() {
+            if MenuItem::new(crate::i18n::tr("Make Candidate the Select")).show(ui).clicked() {
                 let _ = make_select(app);
             }
             ui.separator();
@@ -618,7 +619,7 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (img, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
     app.image_rect = Some(img);
     crate::widgets::context_menu(&lresp, |ui| {
-        if ui.button(crate::i18n::tr("Clear Reference")).clicked() {
+        if MenuItem::new(crate::i18n::tr("Clear Reference")).show(ui).clicked() {
             app.ui.reference = None;
             app.ui.view = ViewMode::Detail;
         }

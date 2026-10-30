@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -353,9 +354,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
 fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
-        let r = ui.add_enabled(enabled, egui::Button::new(label));
-        register(ui, format!("keywordMenu:{id}"), r.rect);
-        r.clicked()
+        MenuItem::new(label).check_slot(true).enabled(enabled).widget(format!("keywordMenu:{id}")).show(ui).clicked()
     };
     if item(ui, "create", &crate::i18n::tr_format!("Create Keyword Tag Inside “{name}”…", name = name), true) {
         let mut d = create_dialog(app);
@@ -369,8 +368,8 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
         app.ui.dialog = Some(edit_dialog(app, path));
     }
     let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, path));
-    let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
-    if item(ui, "defaultParent", &label, true) {
+    let label = crate::i18n::tr("Put New Keywords Inside This Keyword");
+    if MenuItem::new(label).checked(is_default).widget("keywordMenu:defaultParent").show(ui).clicked() {
         let _ = app.run("keyword.setDefaultParent", json!({"keyword": if is_default { serde_json::Value::Null } else { json!(path) }}));
     }
     ui.separator();

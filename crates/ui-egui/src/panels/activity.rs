@@ -55,7 +55,8 @@ fn detail_line(t: &TaskInfo) -> String {
 
 /// Draw the stack (called every frame, after the panels and dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let all = app.session.activity.list();
+    // (a task waiting in line has nothing to show yet and no progress to draw: agents see it in `activity.list`)
+    let all: Vec<TaskInfo> = app.session.activity.list().into_iter().filter(|t| !t.waiting).collect();
     if all.is_empty() {
         app.activity_expanded = false;
         return;
@@ -147,7 +148,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
 }
 
 /// The progress bar, named after its task for screen readers; while the amount of work isn't
-/// known, a segment sweeps across.
+/// known, a segment sweeps across (it stands still with Reduce motion on).
 pub(crate) fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) -> egui::Response {
     let fraction = (task.total > 0).then(|| (task.done as f64 / task.total as f64) as f32);
     let response = crate::progress::Progress::new(fraction).width(width).dimmed(task.cancelling).show(ui);

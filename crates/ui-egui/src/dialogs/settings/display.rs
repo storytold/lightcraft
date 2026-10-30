@@ -1,6 +1,7 @@
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
 use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
+use crate::menu_item::MenuItem;
 
 // ---------------------------------------------------------------------------------- Interface
 
@@ -78,6 +79,26 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
+    let mut reduce = app.reduce_motion();
+    let has_system = app.system_reduce_motion_available();
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(&mut reduce, crate::i18n::tr("Reduce motion"));
+        register(ui, "check:settings.reduceMotion".to_string(), r.rect);
+        if r.changed() {
+            app.ui.settings.reduce_motion = Some(reduce);
+        }
+        r.on_hover_text(crate::i18n::tr(if has_system {
+            "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here."
+        } else {
+            "Turns off zoom and spinner animations. Fades stay."
+        }));
+        if has_system
+            && app.ui.settings.reduce_motion.is_some()
+            && crate::widgets::text_button(ui, "settings.reduceMotionFollow", "Use the system setting", false).clicked()
+        {
+            app.ui.settings.reduce_motion = None;
+        }
+    });
     heading(ui, t, crate::i18n::tr("Filmstrip"));
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");
@@ -110,12 +131,23 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
     hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
 }
 
+/// The rows of one Info line's list, one `MenuItem` per field; choosing one sets `line`. Each row
+/// is registered as `button:{id}-{field}`.
+pub(crate) fn info_line_rows(ui: &mut egui::Ui, id: &str, line: &mut crate::state::LoupeInfoField) {
+    for f in crate::state::LoupeInfoField::ALL {
+        let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        if MenuItem::new(crate::i18n::tr(f.label())).selected(*line == *f).widget(format!("button:{id}-{key}")).show(ui).clicked() {
+            *line = *f;
+        }
+    }
+}
+
 /// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
 /// which, the three lines each of Info 1 and Info 2 shows, which of them shows briefly when the
 /// photo changes, and whether the loupe shows its loading and rendering message
 /// (`view.viewOptions`). Changes apply as they are made.
 pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
+    use crate::state::{InfoOverlay as I, LoupeInfo};
     heading(ui, t, crate::i18n::tr("Loupe View"));
     let mut show = app.ui.info_overlay != I::Off;
     if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay") {
@@ -132,14 +164,7 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
             let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
-                for f in F::ALL {
-                    let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-                    let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
-                    register(ui, format!("button:{id}-{key}"), r.rect);
-                    if r.clicked() {
-                        *line = *f;
-                    }
-                }
+                info_line_rows(ui, &id, line);
             });
             crate::widgets::name_combo(
                 &r.response,

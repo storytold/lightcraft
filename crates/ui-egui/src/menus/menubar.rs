@@ -1042,7 +1042,6 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let total: f32 = widths.iter().sum();
     let mut clicked: Option<(String, Value)> = None;
     let start = ui.cursor().left();
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     // Menus hang below the whole top bar and never grow past the window (#189): a tall menu
     // scrolls instead of egui sliding it up over the titles.
     let bar_bottom = Some(ui.max_rect().bottom());
@@ -1071,7 +1070,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
             egui::Popup::menu(r)
                 .close_behavior(close)
                 .open_memory(None)
-                .show(|ui| crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 1, bar_bottom)));
+                .show(|ui| crate::menu_level::level(ui, 1, bar_bottom, |ui| nodes_ui(ui, items, &mut clicked, 1, bar_bottom)));
         }
         ui.spacing_mut().item_spacing.x = saved;
     } else {
@@ -1080,7 +1079,7 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         egui::Popup::menu(&r).show(|ui| {
             crate::menu_level::level(ui, 1, bar_bottom, |ui| {
                 for (title, items) in &bar {
-                    submenu(ui, title, crate::i18n::tr(title).to_string(), 1, bar_bottom, |ui| nodes_ui(ui, items, mac, &mut clicked, 2, bar_bottom));
+                    submenu(ui, title, false, 1, bar_bottom, |ui| nodes_ui(ui, items, &mut clicked, 2, bar_bottom));
                 }
             });
         });
@@ -1142,8 +1141,9 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
 /// A submenu row showing `text` at `depth`, whose rows `children` draws one level deeper,
 /// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
 /// label), and while its submenu is open it is the anchor the next frame's room is measured from.
-fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
-    let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
+fn submenu(ui: &mut egui::Ui, label: &str, gutter: bool, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
+    let text = crate::i18n::tr(label);
+    let r = crate::menu_item::MenuItem::new(text).check_slot(gutter).submenu(ui, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
     crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
     if r.inner.is_some() {
         crate::menu_level::set_anchor(ui.ctx(), depth + 1, r.response.rect);
@@ -1151,7 +1151,7 @@ fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_botto
 }
 
 /// `depth` is 1 for a top-level menu's rows; `bar_bottom` is where the menu bar ends.
-fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Option<(String, Value)>, depth: usize, bar_bottom: Option<f32>) {
+fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], clicked: &mut Option<(String, Value)>, depth: usize, bar_bottom: Option<f32>) {
     ui.set_min_width(220.0);
     for n in nodes {
         match n {
@@ -1159,23 +1159,21 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                 ui.separator();
             }
             MenuNode::Submenu { label, children } => {
-                submenu(ui, label, format!("      {}", crate::i18n::tr(label)), depth, bar_bottom, |ui| {
-                    nodes_ui(ui, children, mac, clicked, depth + 1, bar_bottom)
-                });
+                submenu(ui, label, true, depth, bar_bottom, |ui| nodes_ui(ui, children, clicked, depth + 1, bar_bottom));
             }
             MenuNode::Item { id, params, label, shortcut, enabled, checked } => {
-                // a gutter for check marks, like native menus
-                let mut b = egui::Button::new(format!("      {}", display_item_label(id, params, label)));
+                // the check slot is reserved on every row, like native menus
+                let mut item = crate::menu_item::MenuItem::new(display_item_label(id, params, label))
+                    .check_slot(true)
+                    .enabled(*enabled)
+                    .widget(format!("menuitem:{id}"));
+                if let Some(on) = checked {
+                    item = item.checked(*on);
+                }
                 if let Some(sc) = shortcut {
-                    b = b.shortcut_text(shortcut_text(sc, mac));
+                    item = item.shortcut(sc);
                 }
-                let r = ui.add_enabled(*enabled, b);
-                crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
-                if *checked == Some(true) {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
-                    crate::icons::paint(ui.painter(), c, crate::icons::Icon::Check, if *enabled { t.text } else { t.text_disabled });
-                }
+                let r = item.show(ui);
                 if r.clicked() {
                     *clicked = Some((id.clone(), params.clone()));
                     ui.close();

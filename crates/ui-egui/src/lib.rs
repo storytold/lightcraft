@@ -23,6 +23,7 @@ pub mod lightroom_import;
 pub mod links;
 pub mod menus;
 mod model_setup;
+pub mod motion;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -66,6 +67,8 @@ pub use state::UiState;
 pub use widgets::album_picker;
 pub use widgets::button;
 pub use widgets::date_picker;
+pub use widgets::kbd;
+pub use widgets::menu_item;
 pub use widgets::progress;
 pub use widgets::rating;
 pub use widgets::text_field;
@@ -85,7 +88,7 @@ pub use clock::{monotonic_ms, now_ms};
 pub use services::OpenModelFolderFn;
 pub use services::{
     CheckEditorFn, HostAction, OpenAllWithFn, OpenUrlFn, OpenWithFn, PickFiles, PickFolder, PngEncode, RevealFn, SaveFile, ScreenProfileFn, Services,
-    SharedWrite, SystemThemeFn, WriteFn,
+    SharedWrite, SystemReduceMotionFn, SystemThemeFn, WriteFn,
 };
 use state::{GestureFrame, InjectedPress};
 
@@ -333,6 +336,9 @@ pub struct LightcraftApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// The last answer of `services.system_reduce_motion` and when it was read.
+    pub(crate) system_reduce_motion: Option<bool>,
+    pub(crate) system_reduce_motion_read: Option<f64>,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,

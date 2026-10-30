@@ -15,6 +15,7 @@ use lightcraft_engine::print_color::{ManagedSpace, PrintColorSettings, PrintInte
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::{register, text_button};
 
@@ -423,7 +424,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         let current = current_paper(&l.page.paper);
         let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
             for name in layout::paper_names().chain(std::iter::once("custom")) {
-                if ui.selectable_label(current == name, paper_label(name)).clicked() {
+                if MenuItem::new(&paper_label(name)).selected(current == name).show(ui).clicked() {
                     patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
                 }
             }
@@ -515,18 +516,17 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     row(ui, t, "Profile", |ui| {
         let c = craft_ui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
-                let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
-                register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
-                if r.clicked() && color.profile != managed(space) {
+                let id = format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default());
+                let selected = color.profile == managed(space);
+                if MenuItem::new(crate::i18n::tr(label)).selected(selected).widget(id).show(ui).clicked() && !selected {
                     patch_color(app, &ctx, "profile", to_value(managed(space)));
                 }
             }
             if let PrintProfile::Icc { .. } = &color.profile {
-                let _ = ui.selectable_label(true, shown.as_str());
+                MenuItem::new(shown.as_str()).selected(true).inert().show(ui);
             }
             if app.services.pick_display_profile.is_some() {
-                let r = ui.selectable_label(false, crate::i18n::tr("Other…"));
-                register(ui, "item:printProfile-other", r.rect);
+                let r = MenuItem::picker(crate::i18n::tr("Other…")).widget("item:printProfile-other").show(ui);
                 pick |= r.clicked();
             }
         });
@@ -748,13 +748,13 @@ fn package_cells(
             for (how, label) in
                 [("toFront", "Bring to Front"), ("forward", "Bring Forward"), ("backward", "Send Backward"), ("toBack", "Send to Back")]
             {
-                if ui.button(crate::i18n::tr(label)).clicked() {
+                if MenuItem::new(crate::i18n::tr(label)).show(ui).clicked() {
                     run(app, &ctx, "print.cell.stack", json!({"id": id, "order": how}));
                     ui.close();
                 }
             }
             ui.separator();
-            if ui.button(crate::i18n::tr("Delete Cell")).clicked() {
+            if MenuItem::new(crate::i18n::tr("Delete Cell")).show(ui).clicked() {
                 run(app, &ctx, "print.cell.delete", json!({"id": id}));
                 ui.close();
             }

@@ -2,6 +2,7 @@ use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
     pos2, register, section_header, slider, vec2,
 };
+use crate::menu_item::MenuItem;
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
 pub fn apply_slider_out(
@@ -79,8 +80,8 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     // (clicked, hovered)
     let mut pick: (Option<String>, Option<String>) = (None, None);
     let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
-        let r = ui.selectable_label(id == cur, crate::i18n::profile_label(id, name));
-        register(ui, format!("profileMenu:{key}:{id}"), r.rect);
+        let label = crate::i18n::profile_label(id, name);
+        let r = MenuItem::new(label).selected(id == cur).widget(format!("profileMenu:{key}:{id}")).show(ui);
         if r.clicked() {
             pick.0 = Some(id.to_string());
         }
@@ -103,15 +104,14 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         ui.separator();
     }
     for g in profile_groups() {
-        let r = crate::widgets::menu_button(ui, crate::i18n::tr(g), |ui| {
+        let r = MenuItem::new(crate::i18n::tr(g)).check_slot(true).widget(format!("profileMenu:groupMenu:{g}")).submenu(ui, |ui| {
             crate::menu_level::level(ui, 2, Some(below), |ui| {
                 ui.set_min_width(170.0);
                 for p in PROFILES.iter().filter(|p| p.group == g) {
                     item(ui, "group", p.id, p.name, &mut pick);
                 }
-            });
+            })
         });
-        register(ui, format!("profileMenu:groupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
@@ -122,15 +122,14 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     lut_groups.dedup();
     for g in &lut_groups {
         // a folder's name as it is, and its own widget id even when it matches a built-in group
-        let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
+        let r = MenuItem::new(g.as_str()).check_slot(true).widget(format!("profileMenu:lutGroupMenu:{g}")).submenu(ui, |ui| {
             crate::menu_level::level(ui, 2, Some(below), |ui| {
                 ui.set_min_width(170.0);
                 for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
                     item(ui, "group", &p.id, &p.name, &mut pick);
                 }
-            });
+            })
         });
-        register(ui, format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
@@ -143,14 +142,12 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         } else {
             crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
         };
-        let r = ui.button(label);
-        register(ui, "profileMenu:toggleFavorite", r.rect);
+        let r = MenuItem::new(&label).check_slot(true).widget("profileMenu:toggleFavorite").show(ui);
         if r.clicked() {
             let _ = app.run("profile.favorite", json!({"id": cur}));
         }
     }
-    let r = ui.button(crate::i18n::tr("Browse…"));
-    register(ui, "profileMenu:browse", r.rect);
+    let r = MenuItem::new(crate::i18n::tr("Browse…")).check_slot(true).widget("profileMenu:browse").show(ui);
     if r.clicked() {
         let _ = app.run("panel.profiles", json!({}));
     }
@@ -196,11 +193,9 @@ pub(super) fn section(
         }
     }
     crate::widgets::context_menu(&resp, |ui| {
-        let mut solo = app.ui.single_panel;
-        let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
-        register(ui, "sectionMenu:solo", item.rect);
+        let item = MenuItem::new(crate::i18n::tr("Solo Mode")).checked(app.ui.single_panel).widget("sectionMenu:solo").show(ui);
         if item.clicked() {
-            if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
+            if let Err(e) = app.run("view.soloSections", json!({"on": !app.ui.single_panel})) {
                 app.toast(ui.ctx(), e);
             }
             ui.close();
@@ -293,14 +288,5 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
             app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data"))
         }
         Ok(_) => app.toast(ctx, crate::i18n::tr("This raw variant still can't be decoded")),
-    }
-}
-
-/// The Reset button's tooltip with the reset shortcut as this platform writes it (issue #1751).
-pub(super) fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
-    let base = crate::i18n::tr("Reset all edits");
-    match crate::shortcuts::shortcut_of(keymap, "develop.reset") {
-        Some(sc) => format!("{base} ({})", crate::menubar::shortcut_text(sc, mac)),
-        None => base.to_string(),
     }
 }
