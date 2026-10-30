@@ -56,7 +56,7 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
         LibrarySource::Album(a) => s.catalog.album(a).and_then(|a| a.smart.as_deref().cloned()),
         _ => None,
     };
-    match smart {
+    let mut rules = match smart {
         Some(base) => {
             // overlay the fields the filter bar changed
             let cur = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -81,7 +81,12 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
             }
             f
         }
+    };
+    // a view of a smart album limited to an album that is gone is saved without that limit
+    if rules.album.is_some_and(|a| s.catalog.album(a).is_none()) {
+        rules.album = None;
     }
+    rules
 }
 
 impl Session {

@@ -109,6 +109,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(problems) = f.rule_set.as_ref().filter(|_| sets_rules).map(|rs| rs.check(&s.catalog)).filter(|p| !p.is_empty()) {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
                 }
+                // an album this call names is one the library has (one named before and since
+                // deleted is let go of, `Session::reconcile_view`)
+                if p.get("album").is_some_and(|a| !a.is_null()) && f.album.is_some_and(|a| s.catalog.album(a).is_none()) {
+                    return Err(bad("library.filter", "no such album"));
+                }
                 s.filter = f;
                 s.shelved_filter = None;
                 Ok(json!({"count": s.visible().len()}))
@@ -877,13 +882,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     view
                 } else {
                     let replace = bool_or(p, "replace", false);
-                    let folder = cur.library_folder.clone();
+                    let (folder, album) = (cur.library_folder.clone(), cur.album);
                     let base = if replace { Default::default() } else { cur };
                     let mut r = merge_rules(&base, p.get("rules").unwrap_or(&Value::Null), "album.setRules", &s.catalog, Some(id))?;
                     // the rules dialog has no folder field: replacing its rules keeps the folder
                     // unless the call says (`libraryFolder: null`) to drop it
                     if replace && p.get("rules").and_then(|r| r.get("libraryFolder")).is_none() {
                         r.library_folder = folder;
+                    }
+                    // nor one for the album a saved view is limited to
+                    // (`album: null` drops it). One that is gone is let go of: this is where
+                    // the mark on such an album sends the person
+                    if replace && p.get("rules").and_then(|r| r.get("album")).is_none() {
+                        r.album = album.filter(|a| s.catalog.album(*a).is_some());
                     }
                     r
                 };
@@ -935,10 +946,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 let ops = order.into_iter().rev().map(|id| Op::RemoveAlbum { id }).collect();
+                // a deleted album that was being shown gives way to All Photos, as after any
+                // other way it goes (`Session::reconcile_view`)
                 s.commit(if folder { "Delete Folder" } else { "Delete Album" }, Op::Batch { ops })?;
-                if matches!(s.source, LibrarySource::Album(current) if removed.contains(&current)) {
-                    s.source = LibrarySource::All;
-                }
                 ok()
             }
         ),
@@ -1031,12 +1041,19 @@ pub fn specs() -> Vec<CommandSpec> {
             has_library_selection,
             |s, p| {
                 let id = album_param(p, "id", "album.addPhotos")?;
-                let targets = crate::cmd::photo_ids(p, "album.addPhotos")?.unwrap_or_else(|| s.selected());
+                // photos that are there: an album doesn't list one that is gone (a selection
+                // dragged here after an undo took one of its photos away)
+                let mut targets = crate::cmd::photo_ids(p, "album.addPhotos")?.unwrap_or_else(|| s.selected());
+                targets.retain(|t| s.catalog.photo(*t).is_some());
                 let al = s.catalog.album(id).ok_or_else(|| bad("album.addPhotos", "no such album"))?;
                 if al.is_smart() || al.folder {
                     return Err(bad("album.addPhotos", "smart albums and folders can't hold photos"));
                 }
                 let (targets, skipped) = album_targets_or_err(s, "album.addPhotos", targets)?;
+                // nothing left to add: the album is unchanged, so no undo step
+                if targets.is_empty() {
+                    return Ok(json!({"added": 0, "skipped": skipped}));
+                }
                 let mut photos = al.photos.clone();
                 let before = photos.len();
                 // looked up, not searched for: adding thousands to a big album stays linear
