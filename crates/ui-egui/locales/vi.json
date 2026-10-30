@@ -1291,7 +1291,6 @@
   "Photo Grid (G)": "Lưới ảnh (G)",
   "Photo Merge": "Ghép ảnh",
   "Photo menu. The filmstrip has the photo context menu too. Adding a file again that is in Recently Deleted no": "Menu Ảnh. Dải phim cũng có menu ngữ cảnh ảnh. Thêm lại tệp đang ở Đã xóa gần đây không",
-  "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Ảnh → Chỉnh trong → Chỉnh trong PhotoCraft (⇧⌘E, hoặc nhấp phải ảnh) kết xuất bản sao kèm chỉnh sửa, xếp chồng với bản gốc và mở trong PhotoCraft. Lưu ở đó thì bản sao cập nhật tại đây. Dạng PSD, PhotoCraft lưu thẳng lại. Để trống vị trí trừ khi dùng bản portable.",
   "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Ảnh → Chỉnh trong trình soạn ngoài (⇧⌘E) kết xuất bản sao TIFF 16 bit, xếp chồng với bản gốc và mở tại đây (tên app trên macOS, đường dẫn chương trình ở nơi khác).",
   "PhotoCraft": "PhotoCraft",
   "Photos": "Ảnh",
@@ -2235,5 +2234,9 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Model installation failed": "Cài đặt mô hình thất bại",
+  "The download failed": "Tải xuống thất bại",
+  "starting…": "đang khởi động…",
+  "Photo > Edit In > Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Ảnh > Chỉnh trong > Chỉnh trong PhotoCraft (⇧⌘E, hoặc nhấp phải ảnh) kết xuất bản sao kèm chỉnh sửa, xếp chồng với bản gốc và mở trong PhotoCraft. Lưu ở đó thì bản sao cập nhật tại đây. Dạng PSD, PhotoCraft lưu thẳng lại. Để trống vị trí trừ khi dùng bản portable."
 }

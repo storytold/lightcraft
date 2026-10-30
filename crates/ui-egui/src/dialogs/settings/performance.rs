@@ -5,6 +5,11 @@ use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Token
 
 // --------------------------------------------------------------------------------- Performance
 
+/// "GPU: <adapter>", or "GPU: starting…" (in the language shown) while the adapter is not known yet.
+pub(crate) fn gpu_line(adapter: Option<String>) -> String {
+    format!("GPU: {}", adapter.unwrap_or_else(|| crate::i18n::tr("starting…").to_string()))
+}
+
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
@@ -15,12 +20,13 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             None => "No usable GPU found: rendering on the CPU".to_string(),
         }
     } else {
-        format!("GPU: {}", gpu::adapter_name().unwrap_or_else(|| "starting…".into()))
+        gpu_line(gpu::adapter_name())
     };
     // One line, the whole text on hover: the reason can be a long driver message (no adapter
     // among the backends …), and the GPU state is process-wide, so it may change between frames;
     // a hint that wrapped would move every control below it under the pointer.
-    ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
+    ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.legible(t.text_dim, t.chrome, 4.5))).truncate())
+        .on_hover_text(&status);
     row(ui, t, crate::i18n::tr("Preview size"), |ui| {
         let opts: Vec<(u32, String)> =
             PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();
@@ -79,6 +85,14 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     smart_previews(app, ui, t);
 }
 
+/// What the smart previews row says after the path of a folder the library was not given: "(library
+/// default)", in the language shown. (The catalogs have that message with the two spaces that
+/// follow a path.)
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn smart_folder_default() -> String {
+    crate::i18n::tr("  (library default)").trim().to_string()
+}
+
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
 /// the effective folder, what is in it, and choosing another one.
 #[cfg(not(target_arch = "wasm32"))]
@@ -102,16 +116,17 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let available = loc["available"].as_bool().unwrap_or(true);
     let custom = loc["custom"].as_bool().unwrap_or(false);
     row(ui, t, crate::i18n::tr("Folder"), |ui| {
+        let default = smart_folder_default();
         path_label(
             ui,
             "settingsSmartFolder",
             &path,
             egui::TextStyle::Body.resolve(ui.style()),
-            if available { t.text } else { t.reject },
-            if custom { 0.0 } else { label_width(ui, "(library default)", egui::TextStyle::Body) },
+            if available { t.text } else { t.legible(t.reject, t.chrome, 4.5) },
+            if custom { 0.0 } else { label_width(ui, &default, egui::TextStyle::Body) },
         );
         if !custom {
-            let r = ui.label(RichText::new("(library default)").color(t.text));
+            let r = ui.label(RichText::new(default).color(t.text));
             register(ui, "text:settingsSmartDefault", r.rect);
         }
     });

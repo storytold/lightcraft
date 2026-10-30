@@ -389,6 +389,32 @@ fn theme_id() -> egui::Id {
     egui::Id::unique("lightcraft-theme")
 }
 
+impl Tokens {
+    /// `color` as it is where it stands `ratio`:1 or more against `on`, as WCAG measures it (4.5
+    /// for text, 3 for a line or a mark that says where something is); else moved toward the text
+    /// colour, which stands furthest from every surface, in small steps until it does, and the
+    /// text colour itself when nothing on the way does (or `ratio` is no number).
+    ///
+    /// For text and marks drawn in a token chosen for its hue or its quietness (the dim text, the
+    /// accent, the caution and reject colours, a border) on a surface where a theme's value for it
+    /// is too close to read: the token keeps its value for everything else that uses it.
+    pub fn legible(&self, color: Color32, on: Color32, ratio: f32) -> Color32 {
+        fn luminance(c: Color32) -> f32 {
+            let linear = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+        }
+        let stands = |c: Color32| {
+            let (a, b) = (luminance(c), luminance(on));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05) >= ratio
+        };
+        const STEPS: u8 = 32;
+        (0..STEPS).map(|step| color.lerp_to_gamma(self.text, f32::from(step) / f32::from(STEPS))).find(|c| stands(*c)).unwrap_or(self.text)
+    }
+}
+
 /// The theme `ctx` is styled with (none before the first [`apply_kind`]).
 pub fn current(ctx: &egui::Context) -> Option<ThemeKind> {
     ctx.data(|d| d.get_temp::<ThemeKind>(theme_id()))

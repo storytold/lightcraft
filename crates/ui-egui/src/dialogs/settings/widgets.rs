@@ -73,8 +73,23 @@ pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
     .inner
 }
 
+/// What says where a control is, and what a text box says while it is empty, made legible for
+/// everything drawn in `ui` from here on: the border of a button, checkbox, radio button, list or
+/// text box stands 3:1 against the window and against a theme card's fill, a text box in use is
+/// outlined in an accent that does too, and placeholder text stands 4.5:1 in its box.
+pub(super) fn legible_controls(ui: &mut egui::Ui, t: &Tokens) {
+    // (a little over 3:1 as a colour: a radio button's ring is one antialiased pixel wide, and
+    // what is drawn of it is fainter than the colour it is drawn in)
+    let border = t.legible(t.legible(t.button_border, t.chrome, 3.0), t.inset, 3.6);
+    let visuals = ui.visuals_mut();
+    visuals.widgets.inactive.bg_stroke.color = border;
+    visuals.selection.stroke.color = t.legible(t.accent, t.chrome, 3.0);
+    visuals.weak_text_color = Some(t.legible(t.text_dim, t.field, 4.5));
+}
+
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
+    // (an explanation is small text: the dim colour where it reads, else as near it as reads)
+    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.legible(t.text_dim, t.chrome, 4.5)));
 }
 
 /// A checkbox addressable as `check:{id}`; true when toggled.

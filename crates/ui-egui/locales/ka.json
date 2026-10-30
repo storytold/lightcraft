@@ -1484,7 +1484,6 @@
   "Photo Merge": "ფოტოების გაერთიანება",
   "Photo Merge of Canon CR2 (and other raws whose colour LightCraft fits from the camera's own JPEG, such as NEF and": "Canon CR2-ის (და სხვა RAW ფაილების, რომელთა ფერსაც LightCraft კამერის საკუთარი JPEG-იდან არგებს, როგორიცაა NEF და",
   "Photo menu. The filmstrip has the photo context menu too. Adding a file again that is in Recently Deleted no": "„ფოტო“ მენიუში. კადრების ზოლსაც აქვს ფოტოს კონტექსტური მენიუ. ახლახან წაშლილში მყოფი ფაილის ხელახლა დამატება აღარ",
-  "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "ფოტო → რედაქტირება სხვა პროგრამაში → რედაქტირება PhotoCraft-ში (⇧⌘E, ან მარჯვენა დაწკაპუნება ფოტოზე) არენდერებს ასლს თქვენი ცვლილებებით, ორიგინალთან ერთ დასტაში აერთიანებს და PhotoCraft-ში ხსნის. იქ შენახვისას ასლი აქაც განახლდება. PSD-ის შემთხვევაში PhotoCraft პირდაპირ მასში ინახავს. მდებარეობა ცარიელი დატოვეთ, თუ პორტატულ ასლს არ იყენებთ.",
   "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "ფოტო → რედაქტირება გარე რედაქტორში (⇧⌘E) ქმნის 16-ბიტიან TIFF ასლს, ორიგინალთან ერთად დასტაში აერთიანებს და აქ ხსნის (macOS-ზე აპის სახელი, სხვაგან — პროგრამის მისამართი).",
   "Photos": "ფოტოები",
   "Photos are shown through your monitor's ICC profile, so colours are right on wide-gamut and calibrated displays, and the Detail view uses the display's whole gamut. The histogram, the preview caches and exports are not affected.": "ფოტოები თქვენი მონიტორის ICC პროფილით ნაჩვენებია, ამიტომ ფერები სწორია ფართო ფერთა გამისა და დაკალიბრებულ ეკრანებზე, ხოლო დეტალური ხედი ეკრანის მთელ ფერთა გამას იყენებს. ჰისტოგრამაზე, წინასწარი ხედების ქეშებსა და ექსპორტზე ეს გავლენას არ ახდენს.",
@@ -2734,5 +2733,9 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Model installation failed": "მოდელის ინსტალაცია ვერ მოხერხდა",
+  "The download failed": "ჩამოტვირთვა ვერ მოხერხდა",
+  "starting…": "იწყება…",
+  "Photo > Edit In > Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "ფოტო > რედაქტირება სხვა პროგრამაში > რედაქტირება PhotoCraft-ში (⇧⌘E, ან მარჯვენა დაწკაპუნება ფოტოზე) არენდერებს ასლს თქვენი ცვლილებებით, ორიგინალთან ერთ დასტაში აერთიანებს და PhotoCraft-ში ხსნის. იქ შენახვისას ასლი აქაც განახლდება. PSD-ის შემთხვევაში PhotoCraft პირდაპირ მასში ინახავს. მდებარეობა ცარიელი დატოვეთ, თუ პორტატულ ასლს არ იყენებთ."
 }

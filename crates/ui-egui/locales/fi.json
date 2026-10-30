@@ -1414,7 +1414,6 @@
   "Photo Grid": "Kuvaruudukko",
   "Photo Grid (G)": "Kuvaruudukko (G)",
   "Photo Merge": "Kuvien yhdistäminen",
-  "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Kuva → Muokkaa ohjelmassa → Muokkaa PhotoCraftissa (⇧⌘E tai napsauta kuvaa hiiren kakkospainikkeella) renderöi kopion muokkauksineen, pinoaa sen alkuperäisen kanssa ja avaa sen PhotoCraftissa. Tallenna siellä, niin kopio päivittyy täällä. PSD-muodossa PhotoCraft tallentaa suoraan siihen. Jätä sijainti tyhjäksi, ellet käytä kannettavaa kopiota.",
   "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Kuva → Muokkaa ulkoisessa muokkausohjelmassa (⇧⌘E) renderöi 16-bittisen TIFF-kopion, pinoaa sen alkuperäisen kanssa ja avaa sen täällä (macOS:ssä sovelluksen nimi, muualla ohjelman polku).",
   "PhotoCraft": "PhotoCraft",
   "Photos": "Kuvat",
@@ -2327,5 +2326,9 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Model installation failed": "Mallin asennus epäonnistui",
+  "The download failed": "Lataus epäonnistui",
+  "starting…": "käynnistyy…",
+  "Photo > Edit In > Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Kuva > Muokkaa ohjelmassa > Muokkaa PhotoCraftissa (⇧⌘E tai napsauta kuvaa hiiren kakkospainikkeella) renderöi kopion muokkauksineen, pinoaa sen alkuperäisen kanssa ja avaa sen PhotoCraftissa. Tallenna siellä, niin kopio päivittyy täällä. PSD-muodossa PhotoCraft tallentaa suoraan siihen. Jätä sijainti tyhjäksi, ellet käytä kannettavaa kopiota."
 }
