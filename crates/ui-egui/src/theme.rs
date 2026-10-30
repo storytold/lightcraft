@@ -44,6 +44,10 @@ pub struct Tokens {
     pub grid_bg: Color32,
     pub cell: Color32,
     pub cell_selected: Color32,
+    /// Border around the active photo's thumbnail in the grid.
+    pub cell_active_border: Color32,
+    /// Border around the other selected photos' thumbnails.
+    pub cell_selected_border: Color32,
     /// A thumbnail's place while its picture is still being made: static, apart from the grid, the
     /// cells and the canvas in every theme.
     pub skeleton: Color32,
@@ -128,6 +132,8 @@ impl Default for Tokens {
             grid_bg: Color32::from_rgb(0x0f, 0x0f, 0x0f),
             cell: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             cell_selected: Color32::from_rgb(0x2d, 0x2d, 0x2d),
+            cell_active_border: Color32::WHITE,
+            cell_selected_border: Color32::from_gray(170),
             skeleton: Color32::from_rgb(0x25, 0x25, 0x25),
             divider: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             inset: Color32::from_rgb(0x23, 0x23, 0x23),
@@ -194,6 +200,8 @@ impl Tokens {
                 grid_bg: rgb(0xd9d9d9),
                 cell: rgb(0xcbcbcb),
                 cell_selected: rgb(0xb4b4b4),
+                cell_active_border: rgb(0x1c1c1c),
+                cell_selected_border: rgb(0x555555),
                 skeleton: rgb(0xa6a6a6),
                 divider: rgb(0xc4c4c4),
                 inset: rgb(0xdcdcdc),
@@ -225,6 +233,8 @@ impl Tokens {
                 grid_bg: rgb(0xf2f2f2),
                 cell: rgb(0xe8e8e8),
                 cell_selected: rgb(0xd2d2d2),
+                cell_active_border: rgb(0x161616),
+                cell_selected_border: rgb(0x666666),
                 skeleton: rgb(0xbcbcbc),
                 divider: rgb(0xe0e0e0),
                 inset: rgb(0xf0f0f0),
