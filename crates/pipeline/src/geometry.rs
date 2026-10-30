@@ -228,13 +228,16 @@ impl Frame {
 
     /// The most pixels this frame's render may have: [`MAX_RENDER_PIXELS`], or this frame's own
     /// (cropped) pixel count when that is larger — a render is never held below the photo's own
-    /// size. The exemption is the source's own pixels at most: the crop rectangle comes from
-    /// settings (a sidecar, a preset, `develop.merge`, `render --settings`), and a turned crop is
-    /// deliberately left unclipped to 0..1 (`DevelopSettings::keep_in_range`, issue #1946), so it
-    /// can name more pixels than the photo has and must not lift the ceiling with them.
+    /// size. The exemption is the photo's area at most: the crop rectangle comes from settings (a
+    /// sidecar, a preset, `develop.merge`, `render --settings`), and a turned crop is deliberately
+    /// left unclipped to 0..1 (`DevelopSettings::keep_in_range`, issue #1946), so it can name more
+    /// pixels than the photo has and must not lift the ceiling with them. The comparison is by
+    /// area, not per side, because a legitimate straightened crop can be wider than the photo
+    /// itself while its corners still lie inside it — clamping a side would shrink a native render
+    /// that fits.
     fn pixel_ceiling(&self) -> f64 {
         let (nw, nh) = self.native_size();
-        (nw.min(self.ow) * nh.min(self.oh)).max(MAX_RENDER_PIXELS)
+        (nw * nh).min(self.ow * self.oh).max(MAX_RENDER_PIXELS)
     }
 
     /// Output pixels per unit of the oriented image's long edge.
@@ -529,8 +532,8 @@ mod tests {
     /// The crop rectangle comes from settings (a sidecar, a preset, `develop.merge`,
     /// `render --settings`), and a turned crop is deliberately left unclipped to 0..1
     /// (`DevelopSettings::keep_in_range`), so a hostile or typo'd one can name more pixels than the
-    /// photo has. It must not lift the ceiling with them: the exemption stops at the photo's own
-    /// pixels, so the fit below lands at 512 megapixels, not at the ~2 gigapixels the crop names.
+    /// photo has. It must not lift the ceiling with them: the exemption stops at the photo's area,
+    /// so the fit below lands at 512 megapixels, not at the ~2 gigapixels the crop names.
     #[test]
     fn an_out_of_bounds_crop_cannot_lift_the_ceiling_past_the_photo() {
         let mut s = DevelopSettings::default();
@@ -540,5 +543,19 @@ mod tests {
         let (w, h) = f.fit(200_000, 100_000);
         assert!((w as i64 - 32_000).abs() <= 1 && (h as i64 - 16_000).abs() <= 1, "{w}×{h}");
         assert!((w * h) as f64 <= MAX_RENDER_PIXELS * 1.001, "{} px", w * h);
+    }
+
+    /// A straightened crop may be wider than the photo itself while its corners still lie inside
+    /// it: 54000×13000 at 45° fits a 48000×48000 photo (702 megapixels of its own). The exemption
+    /// is the photo's *area*, so this native render is returned as asked, not shrunk by a clamped
+    /// side.
+    #[test]
+    fn a_straightened_crop_wider_than_the_photo_keeps_its_native_size() {
+        let mut s = DevelopSettings::default();
+        let (rw, rh) = (1.125, 13_000.0 / 48_000.0);
+        s.crop.geometry.rect = Rect::new(0.5 - rw / 2.0, 0.5 - rh / 2.0, 0.5 + rw / 2.0, 0.5 + rh / 2.0);
+        s.crop.geometry.angle = 45.0;
+        let f = Frame::new(48_000, 48_000, &s, true);
+        assert_eq!(f.fit(54_000, 13_000), (54_000, 13_000));
     }
 }
