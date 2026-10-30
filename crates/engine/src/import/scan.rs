@@ -1,6 +1,6 @@
-use super::files::{expand, probe_all};
+use super::files::{expand_knowing, probe_all};
 use super::types::ImportCandidate;
-use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
@@ -12,6 +12,8 @@ pub struct ScanInput {
     /// ([`library_hashes`]), on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed, for the import that follows.
+    listed: ListedFolders,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
@@ -77,6 +79,8 @@ pub struct ScanProgress {
 pub struct ScanOutput {
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
+    /// The folders the scan listed (kept with the probes, for the import that follows).
+    pub listed: ListedFolders,
 }
 
 impl ScanInput {
@@ -85,7 +89,13 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            probe: s.media.file_probe.clone(),
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+            listed: ListedFolders::default(),
+        };
         (input, paths.to_vec())
     }
 
@@ -112,8 +122,21 @@ pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
-pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let files = expand(paths, input.skip.as_deref());
+pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
+    let listed = &mut input.listed;
+    let (files, _) = expand_knowing(
+        paths,
+        input.skip.as_deref(),
+        crate::walk::Limits::default(),
+        // (always `true`: nothing here stops the walk. `progress.cancel` is read only once it is over, in
+        // `scan_files`, which stops the probing and returns what it has)
+        Some(&mut |dir, names, complete, modified| {
+            listed.note(dir, names, complete, modified);
+            true
+        }),
+        true,
+        &|_| false,
+    );
     scan_files(input, files, progress)
 }
 
@@ -184,5 +207,5 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    ScanOutput { candidates: out, probes: kept, listed: input.listed }
 }

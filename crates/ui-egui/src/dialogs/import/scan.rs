@@ -214,6 +214,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;
     d.library = Some(app.session.library_generation());
+    app.review_pending_listed = Some(out.listed);
     app.review_pending = Some(crate::state::Dialog::Import { opts: Box::new(d) });
     show_pending_review(app, ctx);
 }
@@ -229,10 +230,12 @@ fn show_pending_review(app: &mut LightcraftApp, ctx: &egui::Context) {
         && !opts.in_library(app)
     {
         app.review_pending = None;
+        app.review_pending_listed = None;
         return;
     }
     if app.ui.dialog.is_none() {
         app.ui.dialog = app.review_pending.take();
+        app.review_listed = app.review_pending_listed.take();
     } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }

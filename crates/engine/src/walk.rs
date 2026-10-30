@@ -87,9 +87,24 @@ pub enum EntryKind {
 
 /// What [`files_in_noting`] hands over for each folder it lists: the folder, the name and kind
 /// of every entry in it (hidden ones too), and whether that is all of them (not when the walk
-/// stopped inside the folder, or an entry could not be read). It answers whether to go on: `false`
-/// ends the walk there (a scan cancelled; [`Walked::truncated`] is left alone: who stopped it knows).
-pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool) -> bool;
+/// stopped inside the folder, or an entry could not be read), and the folder's modification time when the walk read
+/// it and it was old enough to show a later change ([`files_in_noting_timed`]; else `None`). It answers whether to go
+/// on: `false` ends the walk there (a scan cancelled; [`Walked::truncated`] is left alone: who stopped it knows).
+pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool, Option<std::time::SystemTime>) -> bool;
+
+/// How old a folder's modification time must be, when the folder is read, for a change after the
+/// listing to show in it. File systems keep folder times in whole seconds (HFS+, ext3) or two
+/// (FAT, and SMB1's DOS times): a file added in the same tick as the listing would leave the
+/// time as it was. Two seconds is the coarsest of them (git's "racily clean" rule, for the same reason).
+const TIME_GRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `dir`'s modification time, when it is old enough ([`TIME_GRAIN`]) that a change after now
+/// would move it: read before the folder is listed, so nothing added during the listing hides.
+fn settled_time(dir: &Path) -> Option<std::time::SystemTime> {
+    let modified = std::fs::metadata(dir).and_then(|m| m.modified()).ok()?;
+    let now = std::time::SystemTime::now();
+    modified.checked_add(TIME_GRAIN).filter(|t| *t <= now).map(|_| modified)
+}
 
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
@@ -102,10 +117,16 @@ pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnM
 /// find its files has, with that, the answer to "is this name there" for everything in it, and
 /// need not ask the disk again (a round trip for each name on a network share).
 pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
-    walk(root, skip, limits, keep, Some(note))
+    walk(root, skip, limits, keep, Some((note, false)))
 }
 
-fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool, mut note: Option<NoteFolder>) -> Walked {
+/// [`files_in_noting`], also reading each folder's modification time (before it is listed; a round
+/// trip on a network share) and handing it over when it is old enough to show a later change.
+pub fn files_in_noting_timed(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
+    walk(root, skip, limits, keep, Some((note, true)))
+}
+
+fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool, mut note: Option<(NoteFolder, bool)>) -> Walked {
     let mut out = Walked::default();
     // canonical folders reached through a link, so a link loop is walked at most once
     let mut linked: HashSet<PathBuf> = HashSet::new();
@@ -130,6 +151,7 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             out.truncated = true;
             continue;
         }
+        let modified = if note.as_ref().is_some_and(|n| n.1) { settled_time(&path) } else { None };
         let Ok(rd) = std::fs::read_dir(&path) else { continue };
         let mut children: Vec<(PathBuf, bool)> = Vec::new();
         // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
@@ -184,8 +206,8 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             };
             children.push((p, dir));
         }
-        if let (Some(note), Some(listed)) = (note.as_mut(), listed)
-            && !note(&path, listed, complete)
+        if let (Some((note, _)), Some(listed)) = (note.as_mut(), listed)
+            && !note(&path, listed, complete, modified)
         {
             break;
         }
@@ -249,7 +271,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("a.jpg"), root.join("link.jpg")).unwrap();
         let mut noted: Vec<(PathBuf, Vec<(String, EntryKind)>, bool)> = Vec::new();
-        let walked = files_in_noting(&root, None, Limits::default(), |_| true, &mut |dir, entries, complete| {
+        let walked = files_in_noting(&root, None, Limits::default(), |_| true, &mut |dir, entries, complete, _| {
             let mut entries: Vec<(String, EntryKind)> = entries.into_iter().map(|(n, k)| (n.to_string_lossy().to_string(), k)).collect();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             noted.push((dir.to_path_buf(), entries, complete));
@@ -265,7 +287,7 @@ mod tests {
 
         // stopped inside the first folder: its listing is not all of it
         let mut cut = Vec::new();
-        let walked = files_in_noting(&root, None, Limits { max_depth: 8, max_entries: 2 }, |_| true, &mut |dir, entries, complete| {
+        let walked = files_in_noting(&root, None, Limits { max_depth: 8, max_entries: 2 }, |_| true, &mut |dir, entries, complete, _| {
             cut.push((dir.to_path_buf(), entries.len(), complete));
             true
         });
