@@ -653,6 +653,29 @@ impl Catalog {
     }
 
     fn apply_inner(&mut self, op: Op) -> Result<Op> {
+        // a photo that comes, goes, is deleted or restored, is imported from Local or gets other content can change
+        // whether the photos with its content have the same content as another one (`index::content_key`), when
+        // anything asks
+        let photo = match &op {
+            Op::AddPhoto { photo } => Some(photo.id),
+            Op::RemovePhoto { id } | Op::SetDeleted { id, .. } | Op::SetLocal { id, .. } | Op::SetContent { id, .. } => Some(*id),
+            _ => None,
+        }
+        .filter(|_| self.follows_contents());
+        let albums = matches!(op, Op::AddAlbum { .. } | Op::RemoveAlbum { .. } | Op::SetAlbumRules { .. });
+        let before = photo.and_then(|id| self.content_of(id));
+        let inv = self.apply_op(op)?;
+        if let Some(id) = photo {
+            let after = self.content_of(id);
+            self.content_moved(id, before, after);
+        }
+        if albums {
+            self.index.albums_changed();
+        }
+        Ok(inv)
+    }
+
+    fn apply_op(&mut self, op: Op) -> Result<Op> {
         // An op that changes one photo says which (`photo_mut`, and adding or removing it below). Every other kind
         // can change what any photo matches or where it sorts: an album's photos or rules, a stack, a keyword's
         // name. Listed kind by kind, so a new one has to be put on one side.
