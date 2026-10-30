@@ -200,7 +200,8 @@ fn clock_minute(now: &str) -> &str {
     now.get(..16).unwrap_or(now)
 }
 
-/// Whether a query can change membership without a catalog edit, including the smart albums it tests.
+/// Whether a query can change membership without a catalog edit, including the smart albums it tests (and the ones
+/// inside a folder of albums it tests, at any depth).
 fn filter_depends_on_clock(filter: &Filter, catalog: &Catalog) -> bool {
     if filter.depends_on_now() {
         return true;
@@ -211,7 +212,12 @@ fn filter_depends_on_clock(filter: &Filter, catalog: &Catalog) -> bool {
         if !seen.insert(id) {
             continue;
         }
-        let Some(smart) = catalog.album(id).and_then(|album| album.smart.as_deref()) else { continue };
+        let Some(album) = catalog.album(id) else { continue };
+        if album.folder {
+            pending.extend(catalog.album_members(id));
+            continue;
+        }
+        let Some(smart) = album.smart.as_deref() else { continue };
         if smart.depends_on_now() {
             return true;
         }
@@ -628,10 +634,13 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command asked ([`Catalog::apply_new`]); undo, redo and
+    /// opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let inv = self.catalog.apply_new(op)?;
+        self.forget_media_of(&fwd);
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -645,13 +654,29 @@ impl Session {
         Ok(())
     }
 
+    /// [`Catalog::apply`] for what brings back what was (an undo, a redo, a repair): not held to
+    /// the loop rule a new edit is ([`Session::commit`]).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
-        let mut invalidated = Vec::new();
-        // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
-        let mut replaced = Vec::new();
-        let mut pending = vec![&op];
+        let media = Self::media_of(&op);
+        let inv = self.catalog.apply(op)?;
+        self.forget_media(media);
+        Ok(inv)
+    }
+
+    /// Drops what is cached of the files of the photos `op` (just applied) gave another file or
+    /// content, added or removed.
+    fn forget_media_of(&mut self, op: &Op) {
+        let media = Self::media_of(op);
+        self.forget_media(media);
+    }
+
+    /// The photos `op` gives another file or content, adds or removes, and of those the ones
+    /// whose file was replaced (their faces were made from the old pixels, issue #1524).
+    fn media_of(op: &Op) -> (Vec<PhotoId>, Vec<PhotoId>) {
+        let (mut invalidated, mut replaced) = (Vec::new(), Vec::new());
+        let mut pending = vec![op];
         while let Some(op) = pending.pop() {
             match op {
                 Op::SetContent { id, .. } => {
@@ -664,7 +689,11 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        (invalidated, replaced)
+    }
+
+    /// Forgets what [`Session::media_of`] found, once the op is applied.
+    fn forget_media(&mut self, (invalidated, replaced): (Vec<PhotoId>, Vec<PhotoId>)) {
         for id in invalidated {
             self.media.forget(id);
         }
@@ -674,7 +703,6 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
-        Ok(inv)
     }
 
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
@@ -1114,7 +1142,7 @@ impl Session {
             // its own order, Recently Added (how far back it reaches moves with every import), Missing Photos.
             let own_order = matches!(self.source, LibrarySource::Album(a) if self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && self.filter == Filter::default()
-                && self.catalog.album(a).is_some_and(|al| !al.is_smart()));
+                && self.catalog.album(a).is_some_and(|al| !al.is_smart() && !al.folder));
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
             // with the clock as well as with edits: a photo nobody touched can stop matching. It is asked whole.
@@ -1154,7 +1182,9 @@ impl Session {
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
+                // an album's own order; a smart album and a folder of albums have none
                 && !al.is_smart()
+                && !al.folder
                 && self.filter == Filter::default()
             {
                 // each photo's place looked up, not searched for (a big album sorted in O(n log n))
