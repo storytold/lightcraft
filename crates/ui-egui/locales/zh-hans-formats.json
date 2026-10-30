@@ -153,6 +153,7 @@
   "; {outside} outside its time range": "；{outside} 张不在其时间范围内",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：{} 个 PR，{} 次提交，+{} / −{} 行（Δ {}），+{} / −{} 个二进制资源，{} – {}",
   "Added {what} to {name}": "已将{what}添加到 {name}",
+  "Adjustments: {n}": "调整：{n}",
   "Auto Import: added {} photo{}": "自动导入：已添加 {0} 张照片{1:.0}",
   "Building previews for {} photos…": "正在为 {0} 张照片生成预览…",
   "Couldn't open the editor: {e}": "无法打开编辑器：{e}",

@@ -1,5 +1,5 @@
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, pos2, register, vec2};
+use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Value, Vec2, json, pos2, register, vec2};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
@@ -379,6 +379,96 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     field(ui, "Keywords", |ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut d.keywords).hint_text(crate::i18n::tr("comma, separated")).desired_width(f32::INFINITY));
         register(ui, "field:importKeywords", r.rect);
+    });
+    recipe_section(app, ui, d);
+}
+
+/// The develop controls offered in the import review's optional batch-edit recipe: the everyday
+/// adjustments, not a second editor. Each must be one a recipe may name (`library.import` refuses
+/// the others: no white balance, geometry or crop); a test holds the list to that. Anything else is
+/// reached by choosing or saving a preset.
+pub(super) const RECIPE_CONTROLS: &[&str] = &[
+    "light.exposure",
+    "light.contrast",
+    "light.highlights",
+    "light.shadows",
+    "light.whites",
+    "light.blacks",
+    "color.vibrance",
+    "color.saturation",
+    "effects.clarity",
+    "effects.texture",
+    "effects.dehaze",
+    "detail.sharpenAmount",
+    "grain.amount",
+    "vignette.amount",
+];
+
+/// A recipe as the `recipe` param of `library.import` and `preset.saveRecipe`.
+pub(super) fn recipe_items(recipe: &std::collections::BTreeMap<String, f64>) -> Value {
+    Value::Array(recipe.iter().map(|(id, v)| json!({"id": id, "value": v})).collect())
+}
+
+/// Record a slider's new value in the recipe: a control back at its default is no longer named.
+pub(super) fn note_recipe_value(recipe: &mut std::collections::BTreeMap<String, f64>, spec: &lightcraft_develop::controls::ControlSpec, value: f64) {
+    if (value - spec.default).abs() < 1e-9 {
+        recipe.remove(spec.id);
+    } else {
+        recipe.insert(spec.id.to_string(), value);
+    }
+}
+
+/// The optional "Batch edits" section of the import review: a small recipe of develop controls set
+/// on every photo this import adds, on top of its XMP sidecar, camera default and the chosen preset.
+/// The recipe lives only in the dialog until the import runs, so cancelling changes neither the
+/// catalog nor the preset collections; "Save as Preset" is the explicit way to keep one for reuse.
+fn recipe_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    let t = Tokens::get(ui.ctx());
+    let open_id = egui::Id::unique("import-recipe-open");
+    let mut open = ui.ctx().data(|m| m.get_temp::<bool>(open_id)).unwrap_or(false);
+    field(ui, "Batch edits", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::widgets::text_button(ui, "importRecipeToggle", if open { "Hide adjustments" } else { "Adjust…" }, open).clicked() {
+            open = !open;
+        }
+        let n = d.recipe.len();
+        let summary = if n == 0 { crate::i18n::tr("None").to_string() } else { crate::i18n::tr_format!("Adjustments: {n}", n = n) };
+        ui.label(egui::RichText::new(summary).color(if n == 0 { t.text_dim } else { t.text_label }));
+    });
+    ui.ctx().data_mut(|m| m.insert_temp(open_id, open));
+    if !open {
+        return;
+    }
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "Set on every photo this import adds, after its XMP sidecar and the preset above; photos the library already has are left alone. A slider left at its default changes nothing. Nothing is saved unless you save it as a preset.",
+        ))
+        .color(t.text_dim)
+        .small(),
+    );
+    for &id in RECIPE_CONTROLS {
+        let Some(spec) = lightcraft_develop::controls::find(id) else { continue };
+        let v = d.recipe.get(id).copied().unwrap_or(spec.default);
+        if let Some(nv) = crate::widgets::slider(ui, spec, v, true, None).value {
+            note_recipe_value(&mut d.recipe, spec, nv);
+        }
+    }
+    field(ui, "Recipe", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        crate::text_field::TextField::singleline("field:importRecipeName", &mut d.recipe_name)
+            .hint(crate::i18n::tr("name for a saved preset"))
+            .width(160.0)
+            .show(ui);
+        let can = !d.recipe.is_empty() && !d.recipe_name.trim().is_empty();
+        let b = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Save as Preset")));
+        register(ui, "button:importRecipeSave", b.rect);
+        if b.clicked() {
+            let params = json!({"name": d.recipe_name.trim(), "recipe": recipe_items(&d.recipe)});
+            match app.run("preset.saveRecipe", params) {
+                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr("Saved as a preset")),
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
     });
 }
 

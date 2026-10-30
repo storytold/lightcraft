@@ -159,6 +159,8 @@ impl ImportJob {
     /// Snapshot what an import with `opts` needs from the session (no file-system calls). Takes
     /// the probes a preceding scan left ([`Session::import_probes`]).
     pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
+        // a recipe is checked before any file is read or placed, not when the photos are committed
+        crate::cmd::check_recipe(&opts.recipe).map_err(|e| crate::cmd::bad("library.import", e))?;
         let mode = opts.mode;
         // Only a library on disk has an `Originals/` folder. The browser build keeps the bytes of
         // every added file in its own storage already, so "copy" there means "add".

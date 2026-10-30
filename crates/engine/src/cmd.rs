@@ -252,6 +252,66 @@ pub(crate) fn bool_or(p: &Value, key: &str, d: bool) -> bool {
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)
 }
+
+/// A batch-edit recipe from a command's params: `[{id, value}, …]`, each `id` a develop control a
+/// recipe may name ([`check_recipe`]). Empty when absent or null. A malformed item, a control a
+/// recipe may not name, or more entries than there are controls is an error, so a typo is refused
+/// rather than silently ignored. An id named twice counts once, the last value winning; the list
+/// comes back in id order.
+pub(crate) fn recipe_param(p: &Value, cmd: &str) -> Result<Vec<(String, f64)>> {
+    let Some(v) = p.get("recipe").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let Some(items) = v.as_array() else {
+        return Err(bad(cmd, "`recipe` must be a list of {id, value}"));
+    };
+    let most = lightcraft_develop::controls::CONTROLS.len();
+    if items.len() > most {
+        return Err(bad(cmd, format!("a recipe has one entry per control, at most {most} (it has {})", items.len())));
+    }
+    let mut by_id = std::collections::BTreeMap::new();
+    for it in items {
+        let id = it.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "each recipe item needs an `id`"))?;
+        let value = it.get("value").and_then(Value::as_f64).ok_or_else(|| bad(cmd, format!("recipe `{id}` needs a numeric `value`")))?;
+        by_id.insert(id.to_string(), value);
+    }
+    let recipe: Vec<(String, f64)> = by_id.into_iter().collect();
+    check_recipe(&recipe).map_err(|e| bad(cmd, e))?;
+    Ok(recipe)
+}
+
+/// Whether every control of `recipe` is one a batch-edit recipe may name, else why not. The rule is
+/// on the control's spec: a plain control of the shared list, writable on any photo's settings
+/// (`set` takes it), outside the Geometry section and not white balance.
+///
+/// - Per-photo instances (`pointColor.0.hueShift`, `redEye.0.pupilSize`) are not in the list; on a
+///   photo without that instance a write is dropped.
+/// - Geometry controls (`crop.angle`, `geometry.*`) need the photo's own size: the slider refits the
+///   crop around a new angle, which a batch write cannot do.
+/// - White balance means something else on each kind of file (Kelvin on a raw with matrices,
+///   relative to the as-shot white on a rendered photo or a raw without them), so one temperature
+///   cannot name the same look for every photo of a batch.
+pub(crate) fn check_recipe(recipe: &[(String, f64)]) -> std::result::Result<(), String> {
+    use lightcraft_develop::{Section, controls};
+    let mut scratch = lightcraft_develop::DevelopSettings::default();
+    for (id, value) in recipe {
+        let Some(spec) = controls::CONTROLS.iter().find(|c| c.id == id.as_str()) else {
+            return Err(format!(
+                "unknown recipe control `{id}` (see develop.controls; a control that belongs to one photo, such as pointColor.0.hueShift, is not one)"
+            ));
+        };
+        if spec.section == Section::Geometry {
+            return Err(format!("`{id}` is a geometry control: a recipe does not crop, straighten or transform photos"));
+        }
+        if id.starts_with("wb.") {
+            return Err(format!(
+                "`{id}` is white balance: a recipe does not set it, because a temperature means something else on a raw than on a rendered photo"
+            ));
+        }
+        if !controls::set(&mut scratch, id, *value) {
+            return Err(format!("recipe control `{id}` cannot be set"));
+        }
+    }
+    Ok(())
+}
 pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
     let a = p.get(key)?.as_array()?;
     Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))

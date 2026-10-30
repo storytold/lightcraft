@@ -15,7 +15,8 @@
 //! 6. Apply each photo's XMP sidecar (or a raw/DNG file's embedded XMP): the sidecar wins for
 //!    metadata and develop settings are restored (see [`crate::sidecar`]). Its capture time fills
 //!    in when the file has none (read before step 5, so it also files and names the copy).
-//! 7. Optionally apply a preset and add keywords (the import dialog's options).
+//! 7. Optionally apply a preset, then a batch-edit recipe (one more History step), and add
+//!    keywords (the import dialog's options).
 //! 8. Commit all new photos as one undoable op. (Undoing a move removes the catalog records;
 //!    the files stay at the destination — undo never moves files back over a card.)
 //!

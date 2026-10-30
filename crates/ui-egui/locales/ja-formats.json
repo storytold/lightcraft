@@ -153,6 +153,7 @@
   "; {outside} outside its time range": "。{outside}枚は記録時間の範囲外",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：PR {}件、コミット {}件、+{} / −{} 行（Δ {}）、バイナリアセット +{} / −{}、{} – {}",
   "Added {what} to {name}": "{what}を{name}に追加しました",
+  "Adjustments: {n}": "調整：{n}",
   "Auto Import: added {} photo{}": "自動読み込み：{}枚の写真を追加しました{:.0}",
   "Building previews for {} photos…": "{}枚のプレビューを作成中…",
   "Couldn't open the editor: {e}": "エディターを開けませんでした：{e}",

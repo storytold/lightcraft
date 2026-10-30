@@ -25,6 +25,7 @@
   "Added {n} photo{} to My Photos": "В «Мои фото» добавлено фото: {n}{:.0}",
   "Added {n} photo{} to “{}”": "В «{1}» добавлено фото: {n}{0:.0}",
   "Added {what} to {name}": "{what}: добавлено в {name}",
+  "Adjustments: {n}": "Корректировки: {n}",
   "Adding photos… {} of {}": "Добавление фото… {} из {}",
   "All {n} selected photos move by the same amount.": "Все выбранные фото ({n}) сдвигаются на одно и то же значение.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Уже в библиотеке, в «Недавно удалённых»: выбрано фото: {}{:.0} · щёлкните правой кнопкой → Восстановить или Удалить навсегда, чтобы импортировать заново",

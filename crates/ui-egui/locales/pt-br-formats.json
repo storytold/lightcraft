@@ -153,6 +153,7 @@
   "; {outside} outside its time range": "; {outside} fora do intervalo de tempo",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}: {} PRs, {} commits, +{} / −{} linhas (Δ {}), +{} / −{} arquivos binários, {} – {}",
   "Added {what} to {name}": "{what} adicionado a {name}",
+  "Adjustments: {n}": "Ajustes: {n}",
   "Auto Import: added {} photo{}": "Importação automática: {} foto{1} adicionada{1}",
   "Building previews for {} photos…": "Gerando prévias de {} fotos…",
   "Couldn't open the editor: {e}": "Não foi possível abrir o editor: {e}",

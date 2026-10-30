@@ -286,6 +286,19 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     p.edited = Some(now.clone());
                     p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
                 }
+                // the batch-edit recipe goes on top of everything above (sidecar, camera default,
+                // preset): only the controls it names change, through the same specs the sliders use
+                if !opts.recipe.is_empty() {
+                    let mut d = (*p.develop).clone();
+                    for (id, v) in &opts.recipe {
+                        // (`ImportJob::new` refused any id `set` would not write, and `set` clamps to the range)
+                        lightcraft_develop::controls::set(&mut d, id, *v);
+                    }
+                    let d = std::sync::Arc::new(d);
+                    p.develop = d.clone();
+                    p.edited = Some(now.clone());
+                    p.history.push(lightcraft_catalog::HistoryStep { label: "Import adjustments".into(), settings: d });
+                }
                 report.imported.push(id.0);
                 p.local = opts.local;
                 if opts.local {

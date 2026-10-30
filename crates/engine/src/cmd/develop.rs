@@ -33,6 +33,58 @@ fn groups_param(p: &Value, c: &str) -> Result<Option<Vec<SettingsGroup>>> {
     }
 }
 
+/// The leaves of `a` that differ from `b` (same shape), as a partial JSON object: `None` when they
+/// are equal. Used to store only what a batch-edit recipe names, so applying the saved preset
+/// later never overrides the settings the recipe doesn't name.
+fn partial_diff(a: &Value, b: &Value) -> Option<Value> {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in x {
+                if let Some(d) = partial_diff(v, y.get(k).unwrap_or(&Value::Null)) {
+                    out.insert(k.clone(), d);
+                }
+            }
+            (!out.is_empty()).then_some(Value::Object(out))
+        }
+        (x, y) => (x != y).then(|| x.clone()),
+    }
+}
+
+/// The settings as JSON with the HDR subtree always present: [`Hdr`] is left out while it is the default
+/// (its JSON stays as it was), so a reset to a default HDR value would have nothing to compare with and
+/// would be dropped from a saved preset.
+fn full_json(s: &DevelopSettings) -> Value {
+    let mut v = s.to_json();
+    if let Some(obj) = v.as_object_mut() {
+        obj.entry("hdr").or_insert_with(|| serde_json::to_value(s.hdr).unwrap_or(Value::Null));
+    }
+    v
+}
+
+/// The partial settings a batch-edit recipe names, with the values the import would give (clamped
+/// by the control specs). Each named control is compared with the same control at a value it is not
+/// set to, so a control the recipe sets to its default (a reset) is stored too, and nothing else is.
+/// `None` when the recipe names nothing that is stored, or a control that cannot be written.
+fn recipe_partial(recipe: &[(String, f64)]) -> Option<Value> {
+    let (mut named, mut other) = (DevelopSettings::default(), DevelopSettings::default());
+    for (id, v) in recipe {
+        if !controls::set(&mut named, id, *v) {
+            return None;
+        }
+    }
+    for (id, _) in recipe {
+        let (spec, now) = (controls::find(id)?, controls::get(&named, id)?);
+        if !controls::set(&mut other, id, if now > spec.min { spec.min } else { spec.max }) {
+            return None;
+        }
+    }
+    partial_diff(&full_json(&named), &full_json(&other))
+}
+
+/// The longest name or group a saved recipe preset may have (characters).
+const MAX_PRESET_TEXT: usize = 100;
+
 fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let p = s.catalog.photo(id);
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
@@ -1032,6 +1084,41 @@ pub fn specs() -> Vec<CommandSpec> {
             s.presets.push(Preset::from_settings(&pid, name, group, &d, &groups));
             Ok(json!({"id": pid}))
         }),
+        cmd!(
+            "preset.saveRecipe",
+            "Save Import Recipe as Preset",
+            [],
+            None,
+            "{name (up to 100 characters), group?: default Import Recipes, recipe: [{id: a plain develop control (develop.controls; no white balance, geometry or crop), value}]} → {id, name} — save a batch-edit recipe (as library.import takes it) as a user preset, so it can be reused from the Preset list; only the settings the recipe names are stored, so applying it later never overrides the rest. The preset gets an id no other preset has; saving the same recipe under the same name and group again returns the preset that already is",
+            always,
+            |s, p| {
+                const C: &str = "preset.saveRecipe";
+                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing name"))?.to_string();
+                let group = str_param(p, "group").map(str::trim).filter(|g| !g.is_empty()).unwrap_or("Import Recipes").to_string();
+                if name.chars().count() > MAX_PRESET_TEXT || group.chars().count() > MAX_PRESET_TEXT {
+                    return Err(bad(C, format!("a name or group is at most {MAX_PRESET_TEXT} characters")));
+                }
+                let recipe = super::recipe_param(p, C)?;
+                if recipe.is_empty() {
+                    return Err(bad(C, "the recipe is empty"));
+                }
+                let settings = recipe_partial(&recipe).ok_or_else(|| bad(C, "the recipe sets nothing a preset can store"))?;
+                // presets get their ids as imported ones do (`user.<group>-<name>`, then -2, -3…): an id from the list's
+                // length repeats once a preset is deleted, and the first preset with an id is the one that gets applied
+                let preset = Preset { id: String::new(), name, group, settings, favorite: false, builtin: false };
+                let id = match s.add_presets(vec![preset.clone()]).into_iter().next() {
+                    Some(id) => id,
+                    // the same recipe under the same name and group is already a preset
+                    None => s
+                        .presets
+                        .iter()
+                        .find(|q| !q.builtin && q.name == preset.name && q.group == preset.group && q.settings == preset.settings)
+                        .map(|q| q.id.clone())
+                        .ok_or_else(|| bad(C, "the preset could not be saved"))?,
+                };
+                Ok(json!({"id": id, "name": preset.name}))
+            }
+        ),
         cmd!("preset.delete", "Delete Preset", [], None, "{id}", always, |s, p| {
             let pid = str_param(p, "id").ok_or_else(|| bad("preset.delete", "missing id"))?;
             let i = s.presets.iter().position(|x| x.id == pid).ok_or_else(|| bad("preset.delete", "unknown preset"))?;
@@ -1204,5 +1291,48 @@ fn has_history_after(s: &Session) -> std::result::Result<(), String> {
         Ok(())
     } else {
         Err("at the latest History step".into())
+    }
+}
+
+#[cfg(test)]
+mod recipe_tests {
+    use super::*;
+
+    /// Equal settings differ nowhere, so there is nothing to store; a difference comes back with
+    /// its path only.
+    #[test]
+    fn partial_diff_is_the_changed_leaves_only() {
+        let a = json!({"light": {"exposure": 1.0, "contrast": 0.0}, "color": {"vibrance": 5.0}});
+        assert_eq!(partial_diff(&a, &a), None);
+        let b = json!({"light": {"exposure": 0.0, "contrast": 0.0}, "color": {"vibrance": 5.0}});
+        assert_eq!(partial_diff(&a, &b), Some(json!({"light": {"exposure": 1.0}})));
+        assert_eq!(partial_diff(&a, &json!({})), Some(a.clone()), "a leaf the other side lacks is a difference");
+    }
+
+    fn recipe(items: &[(&str, f64)]) -> Vec<(String, f64)> {
+        items.iter().map(|(id, v)| (id.to_string(), *v)).collect()
+    }
+
+    /// A recipe that names nothing, or a control `set` would drop (a per-photo instance on fresh
+    /// settings), stores nothing: the command answers with an error, not an empty preset.
+    #[test]
+    fn a_recipe_that_stores_nothing_is_none() {
+        assert_eq!(recipe_partial(&[]), None);
+        assert_eq!(recipe_partial(&recipe(&[("pointColor.0.hueShift", 5.0)])), None, "set returns false for it");
+        assert_eq!(recipe_partial(&recipe(&[("nope.nope", 5.0)])), None);
+        assert_eq!(recipe_partial(&recipe(&[("light.exposure", 0.5)])), Some(json!({"light": {"exposure": 0.5}})));
+        // a reset to the control's default is stored
+        assert_eq!(recipe_partial(&recipe(&[("light.exposure", 0.0)])), Some(json!({"light": {"exposure": 0.0}})));
+    }
+
+    /// The HDR subtree is left out of the JSON while it is the default, so a reset of a headroom to its
+    /// default is stored in the preset by itself and next to another adjustment.
+    #[test]
+    fn an_hdr_reset_is_stored_alone_and_next_to_another_adjustment() {
+        let reset = recipe_partial(&recipe(&[("hdr.maxEv", 3.0)])).expect("a reset is stored");
+        assert_eq!(reset.pointer("/hdr/max_ev"), Some(&json!(3.0)), "{reset}");
+        let both = recipe_partial(&recipe(&[("hdr.maxEv", 3.0), ("light.exposure", 0.5)])).expect("both are stored");
+        assert_eq!(both.pointer("/hdr/max_ev"), Some(&json!(3.0)), "{both}");
+        assert_eq!(both.pointer("/light/exposure"), Some(&json!(0.5)), "{both}");
     }
 }
