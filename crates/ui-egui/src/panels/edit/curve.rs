@@ -67,7 +67,7 @@ fn commit_interaction(app: &mut LightcraftApp, ui: &egui::Ui, dragging: bool, st
     if !dragging || !(stopped || released) {
         return false;
     }
-    let _ = app.run("develop.endInteraction", json!({}));
+    app.act("develop.endInteraction", json!({}));
     true
 }
 
@@ -108,7 +108,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         && near_curve(q) <= PARAM_GRAB
     {
         let x = from_screen_x(q);
-        let _ = app.run("develop.beginInteraction", json!({"label": "Parametric Curve"}));
+        app.act("develop.beginInteraction", json!({"label": "Parametric Curve"}));
         let region = model.region_at(x);
         let initial_amount = model.amounts.get(region).copied().unwrap_or(0.0);
         let start_pos = to_screen(x, model.at(x));
@@ -135,7 +135,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         }
     }
     if let Some((id, v)) = set {
-        let _ = app.run("develop.set", json!({"control": id, "value": v}));
+        app.act("develop.set", json!({"control": id, "value": v}));
     }
     let dropped = resp.drag_stopped();
     if commit_interaction(app, ui, dragged.is_some(), dropped) {
@@ -199,7 +199,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
                 if resp.double_clicked() {
                     app.ui.curve_channel = ch.into();
-                    let _ = app.run("curve.reset", json!({"channel": ch}));
+                    app.act("curve.reset", json!({"channel": ch}));
                 } else if resp.clicked() {
                     app.ui.curve_channel = ch.into();
                 }
@@ -323,7 +323,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
         // pick the point under the press, not where the pointer is once the drag threshold passed
-        let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
+        app.act("develop.beginInteraction", json!({"label": "Tone Curve"}));
         match nearest(q) {
             Some((i, dist)) if dist < 10.0 => dragging = Some(i),
             _ => {
@@ -378,7 +378,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     }
     if let Some(v) = new_pts {
         let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
-        let _ = app.run("develop.curve", json!({"channel": ch, "points": arr}));
+        app.act("develop.curve", json!({"channel": ch, "points": arr}));
     }
     // the drag is over when egui says so, or when the pointer comes up without it saying so (a
     // release outside the window would otherwise leave the interaction open, and every later edit a
@@ -415,13 +415,13 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), crate::i18n::builtin_label(&p.name, p.builtin));
                     register(ui, format!("curvePreset:{}", p.name), r.rect);
                     if r.clicked() {
-                        let _ = app.run("curve.applyPreset", json!({"name": p.name}));
+                        app.act("curve.applyPreset", json!({"name": p.name}));
                         ui.close();
                     }
                     if !p.builtin {
                         crate::widgets::context_menu(&r, |ui| {
                             if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
-                                let _ = app.run("curve.deletePreset", json!({"name": p.name}));
+                                app.act("curve.deletePreset", json!({"name": p.name}));
                                 ui.close();
                             }
                         });
@@ -436,12 +436,12 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     ui.close();
                 }
                 if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
-                    let _ = app.run("file.importCurvePresets", json!({}));
+                    app.act("file.importCurvePresets", json!({}));
                     ui.close();
                 }
                 let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
                 if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
-                    let _ = app.run("file.exportCurvePresets", json!({}));
+                    app.act("file.exportCurvePresets", json!({}));
                     ui.close();
                 }
                 if presets.iter().any(|p| !p.builtin) {
@@ -453,7 +453,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     "Reset all curves: point curves (all channels) and parametric (double-click a channel to reset only that one)",
                 ));
                 if r.clicked() {
-                    let _ = app.run("curve.reset", json!({"channel": "all"}));
+                    app.act("curve.reset", json!({"channel": "all"}));
                 }
             });
         });
@@ -470,13 +470,13 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     let r = ui.button(label);
     register(ui, "curveMenu:resetChannel", r.rect);
     if r.clicked() {
-        let _ = app.run("curve.reset", json!({"channel": ch}));
+        app.act("curve.reset", json!({"channel": ch}));
         ui.close();
     }
     let r = ui.button(crate::i18n::tr("Reset All Curves"));
     register(ui, "curveMenu:resetAll", r.rect);
     if r.clicked() {
-        let _ = app.run("curve.reset", json!({"channel": "all"}));
+        app.act("curve.reset", json!({"channel": "all"}));
         ui.close();
     }
 }

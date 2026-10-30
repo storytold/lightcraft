@@ -177,7 +177,7 @@ pub(super) fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &s
         app.session.slideshow = next;
     }
     if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        let _ = app.run("slideshow.playback", json!({ key: v }));
+        app.act("slideshow.playback", json!({ key: v }));
     }
 }
 

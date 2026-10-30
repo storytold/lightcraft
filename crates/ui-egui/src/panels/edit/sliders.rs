@@ -4,21 +4,16 @@ use super::{
 };
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
-pub fn apply_slider_out(
-    app: &mut LightcraftApp,
-    spec: &ControlSpec,
-    out: SliderOut,
-    mut set: impl FnMut(&mut LightcraftApp, f64) -> Result<Value, String>,
-) {
+pub fn apply_slider_out(app: &mut LightcraftApp, spec: &ControlSpec, out: SliderOut, mut set: impl FnMut(&mut LightcraftApp, f64) -> Option<Value>) {
     if out.drag_started && !out.reset {
-        let _ = app.run("develop.beginInteraction", json!({"label": spec.label}));
+        app.act("develop.beginInteraction", json!({"label": spec.label}));
         app.ui.dragging_control = Some(spec.id.to_string());
     }
     if let Some(v) = out.value {
-        let _ = set(app, v);
+        set(app, v);
     }
     if out.drag_stopped || out.reset {
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
         app.ui.dragging_control = None;
     }
 }
@@ -27,7 +22,7 @@ pub(crate) fn control(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
     let out = slider(ui, spec, v, enabled, None);
-    apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+    apply_slider_out(app, spec, out, |app, v| app.act("develop.set", json!({"control": id, "value": v})));
 }
 
 /// Relative temperature scale for rendered (non-raw) files: −100..100 ↔ Kelvin via mired shift.
@@ -146,13 +141,13 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         let r = ui.button(label);
         register(ui, "profileMenu:toggleFavorite", r.rect);
         if r.clicked() {
-            let _ = app.run("profile.favorite", json!({"id": cur}));
+            app.act("profile.favorite", json!({"id": cur}));
         }
     }
     let r = ui.button(crate::i18n::tr("Browse…"));
     register(ui, "profileMenu:browse", r.rect);
     if r.clicked() {
-        let _ = app.run("panel.profiles", json!({}));
+        app.act("panel.profiles", json!({}));
     }
     // resting on a profile previews it in the loupe
     if let Some(hovered_id) = &pick.1
@@ -166,7 +161,7 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
     }
     if let Some(id) = pick.0 {
-        let _ = app.run("develop.profile", json!({"id": id}));
+        app.act("develop.profile", json!({"id": id}));
     }
 }
 
@@ -187,7 +182,7 @@ pub(super) fn section(
     let open = app.ui.section_open(id);
     let (resp, toggled) = section_header(ui, id, title, open, Some(d.section_enabled(id)));
     if let Some(on) = toggled {
-        let _ = app.run("develop.sectionEnabled", json!({"section": id, "enabled": on}));
+        app.act("develop.sectionEnabled", json!({"section": id, "enabled": on}));
     } else if resp.clicked() {
         // ⌥-click opens just this section, as in Lightroom Classic
         let solo = ui.input(|i| i.modifiers.alt);
@@ -272,7 +267,7 @@ pub(super) fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize
                     if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)))
                         .clicked()
                     {
-                        let _ = app.run("develop.quickAdjust", json!({"control": ctl, "delta": d}));
+                        app.act("develop.quickAdjust", json!({"control": ctl, "delta": d}));
                     }
                 }
                 ui.end_row();

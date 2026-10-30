@@ -3,10 +3,11 @@ use super::services::Services;
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
 use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
-    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
-    SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
-    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, REFUSAL_SECONDS, Receiver, Refusal,
+    SCREEN_PROFILE, SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session,
+    ShotGeometry, TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import,
+    lightroom_import, menus, merge, model_setup, panels, pick, recheck, refusal_toast, render, shortcuts, slideshow_export, state, sync, tasks,
+    theme, updates_ui, widgets,
 };
 
 mod control;
@@ -181,22 +182,58 @@ impl LightcraftApp {
         }
     }
 
-    /// Run a UI or engine command by id. The single entry point for every frontend path.
+    /// Run a UI or engine command by id. The single entry point for every frontend path: the
+    /// error comes back in full and nothing is shown, for agents (the control channel) and for
+    /// code that deals with the answer itself. A widget acting for the person uses [`Self::act`].
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.run_typed(id, params).map_err(|e| e.message)
+        self.run_told(id, params).map_err(|refusal| refusal.error)
     }
 
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        self.run_told(id, params).map_err(|refusal| CommandError { message: refusal.error, kind: refusal.kind })
+    }
+
+    /// Run a command for the person at the interface (a click, a drop, a key): when it is
+    /// refused, a toast says why, so no widget has to pass that on by hand (or forget to).
+    /// `None` when it was refused: say a success of your own only on `Some`, or it writes over
+    /// the reason. A widget says which of `act`, [`Self::quiet`] and [`Self::run`] it means; it does
+    /// not drop `run`'s result (`let _ = app.run(…)`), nor `let _ = app.session.execute(…)`, which
+    /// goes round this, unless a comment says why: `// refusal expected: <reason>`.
+    pub fn act(&mut self, id: &str, params: Value) -> Option<Value> {
+        let before = self.ui.toast.clone();
+        match self.run_told(id, params) {
+            Ok(v) => Some(v),
+            Err(refusal) => {
+                let now = self.tick_now();
+                // A toast the command made itself (a partial import report) says what did happen:
+                // keep it ahead of the reason rather than replacing it.
+                let made = self.ui.toast.take().filter(|t| Some(t) != before.as_ref()).map(|t| t.0);
+                let said = refusal_toast(made, &refusal);
+                self.ui.toast = Some((said, now + REFUSAL_SECONDS, None));
+                None
+            }
+        }
+    }
+
+    /// Run a command whose refusal is expected here and means nothing to the person (it is
+    /// tried on the off chance, or again on every frame of a gesture): nothing is shown. Say why
+    /// at the call. `None` when it was refused.
+    pub fn quiet(&mut self, id: &str, params: Value) -> Option<Value> {
+        self.run_told(id, params).ok()
+    }
+
+    /// [`Self::run`], keeping what a refusal says to a person apart from the whole error.
+    fn run_told(&mut self, id: &str, params: Value) -> Result<Value, Refusal> {
         if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result.map_err(CommandError::from);
+            return result.map_err(Refusal::plain);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
-                docking::reveal_command(self, id)?;
+                docking::reveal_command(self, id).map_err(Refusal::plain)?;
             }
-            return r.map_err(CommandError::from);
+            return r.map_err(Refusal::plain);
         }
         let params = if id == "crop.aspect"
             && params.get("aspect").and_then(Value::as_str) == Some("toggle")
@@ -207,7 +244,7 @@ impl LightcraftApp {
         } else {
             params
         };
-        let r = self.session.execute(id, &params).map_err(CommandError::from);
+        let r = self.session.execute(id, &params).map_err(Refusal::from);
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -265,11 +302,11 @@ impl LightcraftApp {
             self.ui.toast = Some((text, now + TOAST_SECONDS, label));
         }
         match &r {
-            Err(e) => {
-                log::warn!("{id}: {e}");
-                self.ui.status = e.message.clone();
+            Err(refusal) => {
+                log::warn!("{id}: {}", refusal.error);
+                self.ui.status = refusal.error.clone();
                 // no detector yet: offer it (its terms first) instead of only saying so
-                if id == "faces.detect" && e.kind == ErrorKind::ModelMissing(AiModel::FaceDetector) {
+                if id == "faces.detect" && refusal.kind == ErrorKind::ModelMissing(AiModel::FaceDetector) {
                     panels::faces::offer_detector(self);
                 }
             }
@@ -424,12 +461,10 @@ impl LightcraftApp {
     /// Auto straighten (the crop panel's Auto, a double-click with the Straighten tool), saying so
     /// when it finds nothing to level by instead of leaving the photo as it is without a word.
     pub fn auto_straighten(&mut self, ctx: &egui::Context) {
-        match self.run("crop.autoStraighten", serde_json::json!({})) {
-            Ok(r) if r.get("changed").and_then(Value::as_bool) == Some(false) => {
-                self.toast(ctx, crate::i18n::tr("No horizon or vertical lines to level by"));
-            }
-            Ok(_) => {}
-            Err(e) => self.toast(ctx, e),
+        if let Some(r) = self.act("crop.autoStraighten", serde_json::json!({}))
+            && r.get("changed").and_then(Value::as_bool) == Some(false)
+        {
+            self.toast(ctx, crate::i18n::tr("No horizon or vertical lines to level by"));
         }
     }
 

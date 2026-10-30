@@ -66,11 +66,11 @@ fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
         if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, crate::i18n::tr("Show/hide My Photos panel"))
             .clicked()
         {
-            let _ = app.run("view.leftPanel", json!({}));
+            app.act("view.leftPanel", json!({}));
         }
         ui.add_space(8.0);
         if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
-            let _ = app.run("view.back", json!({}));
+            app.act("view.back", json!({}));
         }
         icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
         if !app.native_menu {
@@ -117,7 +117,7 @@ fn search_field(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rect
         .response;
     if resp.changed() {
         let q = app.ui.search.clone();
-        let _ = app.run("library.filter", json!({"text": q}));
+        app.act("library.filter", json!({"text": q}));
     }
 }
 
@@ -154,7 +154,7 @@ fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rec
         crate::i18n::tr("Filter bar").into()
     });
     if fresp.clicked() {
-        let _ = app.run("view.filterBar", json!({}));
+        app.act("view.filterBar", json!({}));
     }
 }
 
@@ -198,12 +198,8 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
             ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
             register(ui, "indicator:unsaved", r);
         }
-        // a refusal says why (Import while a Lightroom catalog is coming in)
-        if resp.clicked()
-            && !cmd.is_empty()
-            && let Err(e) = app.run(cmd, json!({}))
-        {
-            app.toast_error(ui.ctx(), e);
+        if resp.clicked() && !cmd.is_empty() {
+            app.act(cmd, json!({}));
         }
         x -= 40.0;
     }
@@ -221,13 +217,13 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
     register(ui, "icon:appearance", r);
     paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
     if resp.clicked() {
-        let _ = app.run("view.appearance", json!({}));
+        app.act("view.appearance", json!({}));
     }
     crate::widgets::context_menu(&resp, |ui| {
         let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
         register(ui, "menu:appearanceSettings", settings.rect);
         if settings.clicked() {
-            let _ = app.run("app.settings", json!({"tab": "interface"}));
+            app.act("app.settings", json!({"tab": "interface"}));
             ui.close();
         }
         let favorites = app.ui.settings.favorite_themes.clone();
@@ -241,7 +237,7 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
                 let r = ui.selectable_label(app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind, crate::i18n::tr(kind.label()));
                 register(ui, format!("menu:themeFavorite-{}", kind.id()), r.rect);
                 if r.clicked() {
-                    let _ = app.run("view.theme", json!({"theme": kind.id()}));
+                    app.act("view.theme", json!({"theme": kind.id()}));
                     ui.close();
                 }
             }

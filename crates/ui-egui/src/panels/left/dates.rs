@@ -31,7 +31,7 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
     if resp.clicked() {
         let v = if sel { serde_json::Value::Null } else { json!(key) };
         browse_all_photos(app, !sel);
-        let _ = app.run("library.filter", json!({"date": v}));
+        app.act("library.filter", json!({"date": v}));
     }
     open
 }
@@ -41,6 +41,6 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
 /// missing (issue #341). Only when choosing (`on`), not when clearing the row again.
 pub(crate) fn browse_all_photos(app: &mut LightcraftApp, on: bool) {
     if on && app.session.source != LibrarySource::All {
-        let _ = app.run("library.source", json!({"kind": "all"}));
+        app.act("library.source", json!({"kind": "all"}));
     }
 }

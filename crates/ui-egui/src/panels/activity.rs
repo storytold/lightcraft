@@ -112,6 +112,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// ✕ on task `id`'s row. The task may have just finished or stopped being cancellable: nothing to tell the user then,
 /// so the command goes to the engine directly (`LightcraftApp::run` would put its error in the status bar).
 pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
+    // refusal expected: the task finished or stopped being cancellable between the frame that drew ✕ and the click
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 

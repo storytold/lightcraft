@@ -25,7 +25,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if let Some(r) = ui.horizontal(|ui| crate::rating::Rating::new("info", p.rating).show(ui)).inner {
             let mut params = json!({"rating": r});
             crate::panels::compare::target_active(app, &mut params);
-            let _ = app.run("photo.rate", params);
+            app.act("photo.rate", params);
         }
         ui.add_space(6.0);
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
@@ -45,7 +45,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     // in Compare / Survey only the active photo, as the rating keys and the bottom pill do
                     let mut params = json!({"label": if on { "none".to_string() } else { key }});
                     crate::panels::compare::target_active(app, &mut params);
-                    let _ = app.run("photo.label", params);
+                    app.act("photo.label", params);
                 }
             }
             if let Some(l) = p.label {
@@ -89,7 +89,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         small(ui, "File Name");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::widgets::icon_button(ui, "infoRename", Icon::Pencil, vec2(20.0, 20.0), false, true, "Rename…").clicked() {
-                let _ = app.run("dialog.rename", json!({}));
+                app.act("dialog.rename", json!({}));
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(&p.file_name).color(t.text)).truncate());
@@ -108,7 +108,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     if crate::widgets::icon_button(ui, "infoReveal", Icon::Folder, vec2(20.0, 20.0), false, true, crate::menus::reveal_label())
                         .clicked()
                     {
-                        let _ = app.run("app.showInFinder", json!({}));
+                        app.act("app.showInFinder", json!({}));
                     }
                 });
             }
@@ -117,7 +117,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         small(ui, "Captured");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::widgets::icon_button(ui, "editCaptureTime", Icon::Pencil, vec2(20.0, 20.0), false, true, "Edit Capture Time…").clicked() {
-                let _ = app.run("dialog.captureTime", json!({}));
+                app.act("dialog.captureTime", json!({}));
             }
             let cap = p.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| "—".into());
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -218,7 +218,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))
             .clicked()
         {
-            let _ = app.run("dialog.allMetadata", json!({}));
+            app.act("dialog.allMetadata", json!({}));
         }
     });
 }
@@ -405,7 +405,7 @@ fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let on = app.ui.settings.info_selected_photos;
         for (id, label, selected) in [("infoFor-target", "Target Photo", false), ("infoFor-selected", "Selected Photos", true)] {
             if text_button(ui, id, label, on == selected).clicked() && on != selected {
-                let _ = app.run("view.infoSelectedPhotos", json!({"on": selected}));
+                app.act("view.infoSelectedPhotos", json!({"on": selected}));
             }
         }
     });
@@ -424,7 +424,7 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
             let on = !mixed && st == current;
             if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
                 let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
-                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
+                app.act("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
             }
         }
     });
@@ -461,7 +461,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     }
     // Return (one line) or leaving saves; Esc gives the edit up
     if r.committed() && (edit.text != edit.start || edit.clears()) {
-        let _ = app.run("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));
+        app.act("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));
     }
     ui.add_space(6.0);
 }

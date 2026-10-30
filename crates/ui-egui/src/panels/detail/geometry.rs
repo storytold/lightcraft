@@ -108,7 +108,7 @@ fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
 pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: egui::Vec2) {
     let centre = area.center() - img.min - delta;
     let pan = bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)));
-    let _ = app.run("view.navigate", json!({"pan": pan}));
+    app.act("view.navigate", json!({"pan": pan}));
 }
 
 /// A drag with the middle button (the mouse wheel pressed) pans the zoomed photo whatever tool is
@@ -184,7 +184,7 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
     let point = (anchor - img.min) / img.size();
     let offset = area.center() - anchor - delta;
     let pan = bounded_pan(area, size, (point.x + offset.x / size.x.max(1.0), point.y + offset.y / size.y.max(1.0)));
-    let _ = app.run("view.navigate", json!({"zoom": zoom, "pan": pan}));
+    app.act("view.navigate", json!({"zoom": zoom, "pan": pan}));
     ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
     ui.ctx().request_repaint();
     true

@@ -69,20 +69,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 14 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
-                let _ = app.run("develop.auto", json!({}));
+            if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() && app.act("develop.auto", json!({})).is_some() {
+                // only when it went through: refused (the original is missing…), `act` said why
                 app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
             }
             let bw = crate::is_bw(&d);
             if text_button(ui, "bw", crate::i18n::tr("B&W"), bw).clicked() {
-                let _ = app.run("develop.treatment", json!({}));
+                app.act("develop.treatment", json!({}));
             }
             // HDR editing, next to B&W as Lightroom has it
             if text_button(ui, "hdr", crate::i18n::tr("HDR"), d.hdr.enabled)
                 .on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"))
                 .clicked()
             {
-                let _ = app.run("develop.hdr", json!({"enabled": !d.hdr.enabled}));
+                app.act("develop.hdr", json!({"enabled": !d.hdr.enabled}));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
@@ -113,7 +113,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
-                        let _ = app.run("develop.autoSync", json!({"on": false}));
+                        app.act("develop.autoSync", json!({"on": false}));
                     }
                 });
             });
@@ -143,7 +143,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 )
                 .clicked()
                 {
-                    let _ = app.run("panel.profiles", json!({}));
+                    app.act("panel.profiles", json!({}));
                 }
             });
         });
@@ -160,7 +160,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
             crate::widgets::register(ui, "check:profile.cameraLocalTone", r.rect);
             if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
+                app.act("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
         });
     }
@@ -206,7 +206,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         }
                         if ui.selectable_label(d.wb.mode == m, m.label()).clicked() {
                             let mode = serde_json::to_value(m).unwrap_or_default();
-                            let _ = app.run("develop.wb", json!({"mode": mode}));
+                            app.act("develop.wb", json!({"mode": mode}));
                         }
                     }
                 });
@@ -238,9 +238,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, "wb.tint", true);
         } else {
             let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
-            apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
+            apply_slider_out(app, &REL_TEMP, out, |app, v| app.act("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
             let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
-            apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
+            apply_slider_out(app, &REL_TINT, out, |app, v| app.act("develop.set", json!({"control": "wb.tint", "value": v})));
         }
         control(app, ui, d, "color.vibrance", true);
         control(app, ui, d, "color.saturation", true);
@@ -289,7 +289,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 chosen = crate::widgets::segmented(ui, "vignetteStyle", &items, active, 3);
             });
             if let Some(i) = chosen {
-                let _ = app.run(
+                app.act(
                     "develop.merge",
                     serde_json::json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}),
                 );
@@ -329,11 +329,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
             if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
+                app.act("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
             }
             let mut lp = d.optics.lens_profile;
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
+                app.act("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
             if lp && !has_lens {
                 ui.label(
@@ -385,6 +385,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     ui.add_space(40.0);
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
-        let _ = app.run("develop.reset", json!({}));
+        app.act("develop.reset", json!({}));
     }
 }

@@ -6,7 +6,7 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         if text_button(ui, "versionCreate", crate::i18n::tr("Create Version"), false).clicked() {
-            let _ = app.run("version.create", json!({}));
+            app.act("version.create", json!({}));
         }
         ui.add_space(8.0);
         // Named (made by you) and Auto (made by LightCraft) versions
@@ -65,7 +65,7 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
             if resp.double_clicked() {
                 crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
             } else if resp.clicked() && !current {
-                let _ = app.run("version.restore", json!({"index": i}));
+                app.act("version.restore", json!({"index": i}));
             }
             let resp = resp.on_hover_text(crate::i18n::tr(if current {
                 "The photo has these settings"
@@ -74,20 +74,20 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
             }));
             crate::widgets::context_menu(&resp, |ui| {
                 if ui.button(crate::i18n::tr("Restore")).clicked() {
-                    let _ = app.run("version.restore", json!({"index": i}));
+                    app.act("version.restore", json!({"index": i}));
                 }
                 if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
-                    let _ = app.run("version.update", json!({"index": i}));
+                    app.act("version.update", json!({"index": i}));
                 }
                 if ui.button(crate::i18n::tr("Rename…")).clicked() {
                     crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
                 }
                 if ui.button(crate::i18n::tr("Set as Before")).clicked() {
-                    let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
+                    app.act("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
                 }
                 ui.separator();
                 if ui.button(crate::i18n::tr("Delete")).clicked() {
-                    let _ = app.run("version.delete", json!({"index": i}));
+                    app.act("version.delete", json!({"index": i}));
                 }
             });
         }
@@ -159,19 +159,21 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 text,
             );
             if resp.clicked() {
-                let _ = app.run("history.restore", json!({"index": i}));
+                app.act("history.restore", json!({"index": i}));
             }
             crate::widgets::context_menu(&resp, |ui| {
                 if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
-                    let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
+                    app.act("beforeAfter.setBefore", json!({"source": "history", "index": i}));
                 }
                 if ui.button(crate::i18n::tr("Create Version from Step")).clicked() {
-                    let _ = app.run("history.restore", json!({"index": i}));
-                    let _ = app.run("version.create", json!({"name": h.label}));
+                    // refused: `act` said why, and a version of the current step would be wrong
+                    if app.act("history.restore", json!({"index": i})).is_some() {
+                        app.act("version.create", json!({"name": h.label}));
+                    }
                 }
                 ui.separator();
                 if ui.button(crate::i18n::tr("Clear History")).clicked() {
-                    let _ = app.run("history.clear", json!({}));
+                    app.act("history.clear", json!({}));
                 }
             });
         }

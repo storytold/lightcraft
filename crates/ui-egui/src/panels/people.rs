@@ -76,7 +76,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let b = crate::widgets::arrow_button(&mut child, RichText::new(label).font(t.font(13.0)), crate::icons::Icon::ChevronRight, false);
         register(ui, "people:last", b.rect);
         if b.on_hover_text(crate::i18n::tr("Back to this person")).clicked() {
-            let _ = app.run("view.person", json!({"name": last}));
+            app.act("view.person", json!({"name": last}));
         }
     }
     ui.painter().text(pos2(head.right() - PAD, head.center().y), Align2::RIGHT_CENTER, people.len().to_string(), t.font(13.0), t.text_dim);
@@ -193,7 +193,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
         }
     });
     if resp.clicked() {
-        let _ = app.run("view.person", json!({"name": person.name}));
+        app.act("view.person", json!({"name": person.name}));
     }
 }
 

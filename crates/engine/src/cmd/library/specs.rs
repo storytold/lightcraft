@@ -398,7 +398,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             |s, p| {
                 let c = "photo.pasteMetadata";
-                let clip = s.meta_clipboard.clone().ok_or_else(|| bad(c, "nothing copied (photo.copyMetadata)"))?;
+                let clip = s.meta_clipboard.clone().ok_or_else(|| bad(c, "nothing copied: use Copy Metadata first"))?;
                 let fields: Option<Vec<String>> =
                     p.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
                 let mut params = serde_json::Map::new();
