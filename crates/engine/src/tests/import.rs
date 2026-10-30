@@ -3612,7 +3612,7 @@ fn content_duplicates_name_their_match_and_can_be_imported_anyway() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// A ticked duplicate of a file in the same batch, with the other one not ticked, imports once.
+/// A ticked duplicate of a file in the same batch, with the other one not ticked, imports both files: the first stays the original.
 #[test]
 fn import_anyway_in_a_batch_keeps_the_first_file_as_the_original() {
     let src = temp_dir("dup-anyway-batch");
