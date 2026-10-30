@@ -87,6 +87,9 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     app.ui.reference = None;
     app.ui.compare = None;
     app.ui.brief_info = crate::state::BriefInfo::default();
+    // (samples seen in the library just left say nothing about this one: the banner's reset of "hidden" waits for samples
+    // that appear in it)
+    app.samples_present = None;
     if app.ui.view == crate::state::ViewMode::Reference {
         app.ui.view = crate::state::ViewMode::PhotoGrid;
     }

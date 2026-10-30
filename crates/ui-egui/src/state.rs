@@ -46,6 +46,9 @@ pub struct UiState {
     pub frame_rate: bool,
     pub view: ViewMode,
     pub left_panel: bool,
+    /// The person closed the banner over the sample photos (Hide / Keep Them); adding the samples
+    /// again shows it again.
+    pub samples_banner_hidden: bool,
     pub right: RightPanel,
     /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
     #[serde(skip)]
@@ -367,6 +370,7 @@ impl Default for UiState {
             luminance_map_restore: None,
             view: ViewMode::Detail,
             left_panel: false,
+            samples_banner_hidden: false,
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,

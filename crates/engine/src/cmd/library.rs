@@ -21,6 +21,15 @@ pub use specs::specs;
 #[path = "library/tests_relative_ratings.rs"]
 mod relative_rating_tests;
 
+/// `library.addSamples` is for a library without them.
+fn no_samples(s: &Session) -> std::result::Result<(), String> {
+    if s.has_samples() { Err("the sample photos are already in this library".into()) } else { Ok(()) }
+}
+
+/// `library.removeSamples` needs sample photos to remove.
+fn has_samples(s: &Session) -> std::result::Result<(), String> {
+    if s.has_samples() { Ok(()) } else { Err("this library has no sample photos".into()) }
+}
 #[cfg(test)]
 #[path = "library/tests_flag_cycle.rs"]
 mod flag_cycle_tests;

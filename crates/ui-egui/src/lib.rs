@@ -99,6 +99,8 @@ pub use services::{
 use state::{GestureFrame, InjectedPress};
 
 const TOAST_SECONDS: f64 = 1.4;
+/// A toast with more to read (where something went).
+const TOAST_READ_SECONDS: f64 = 4.0;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -353,6 +355,10 @@ pub struct LightcraftApp {
     /// Whether each recent library can be opened, answered by a worker (issue #1290): the launch
     /// list and File ▸ Open Recent Library never look at a folder on the UI thread.
     pub recent_checks: panels::library_problem::RecentChecks,
+    /// Whether the library held sample photos last frame (`None` before the first): samples that
+    /// newly appear, however they came (the welcome, Help ▸ Add Sample Photos, an agent), bring
+    /// back a samples banner closed over earlier ones.
+    pub samples_present: Option<bool>,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
 }

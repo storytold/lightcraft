@@ -25,6 +25,7 @@ pub mod person;
 pub mod presets;
 pub mod profiles;
 pub mod right;
+pub mod samples;
 pub mod second;
 pub mod slideshow;
 pub mod strip;
@@ -102,13 +103,19 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
     let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
     let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
+    let galley = painter.layout(text.clone(), t.font(14.0), foreground, wrap);
     let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
     let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
     let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
     painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
     painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
+    // a screen reader reads it out when it comes, without leaving what it was reading
+    egui::Area::new(egui::Id::unique("toast-words")).order(egui::Order::Foreground).fixed_pos(r.min).interactable(false).show(ctx, |ui| {
+        let resp = ui.interact(r, ui.scope_id().with("toast"), egui::Sense::hover());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
+        ctx.accesskit_node_builder(resp.id, |node| node.set_live(egui::accesskit::Live::Polite));
+    });
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 

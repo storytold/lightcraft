@@ -35,6 +35,7 @@
   "Added {n} keyword{}": "Đã thêm {n} từ khóa{:.0}",
   "Added {n} photo{} to My Photos": "Đã thêm {n} ảnh{:.0} vào Ảnh của tôi",
   "Added {n} photo{} to “{}”": "Đã thêm {n} ảnh{0:.0} vào «{1}»",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "Đã thêm {n} ảnh mẫu, với album trong «{folder}» và từ khóa để dùng thử",
   "Added {what} to {name}": "Đã thêm {what} vào {name}",
   "Added “{keyword}” to {n} photo{}": "Đã thêm «{keyword}» vào {n} ảnh{:.0}",
   "Adding photos… {} of {}": "Đang thêm ảnh… {} / {}",
@@ -305,5 +306,6 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Removed {n} sample photos. Edit → Undo brings them back.": "Đã xóa {n} ảnh mẫu. Chỉnh sửa → Hoàn tác sẽ đưa chúng trở lại."
 }

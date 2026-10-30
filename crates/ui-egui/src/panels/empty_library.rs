@@ -1,5 +1,6 @@
 //! A library with no photos yet: what the grid and the Detail view show instead of a dead end,
-//! with Import Photos… and Import Lightroom Catalog… as buttons, and the view it opens on.
+//! with Import Photos…, Import Lightroom Catalog… and the sample photos as buttons, and the view
+//! it opens on. A library just created asks this as its welcome: it starts empty.
 
 use egui::Rect;
 use serde_json::json;
@@ -49,6 +50,17 @@ pub fn hint(keymap: &Keymap, mac: bool) -> String {
     }
 }
 
+/// "Welcome to LightCraft" for a library just created (it never held a photo), else "Your
+/// library is empty". A temporary session (the library couldn't be opened) is never welcomed.
+pub fn title(session: &lightcraft_engine::Session, temporary: bool) -> &'static str {
+    if welcomes(session, temporary) { "Welcome to LightCraft" } else { "Your library is empty" }
+}
+
+fn welcomes(session: &lightcraft_engine::Session, temporary: bool) -> bool {
+    !temporary && session.catalog.never_held_photos()
+}
+
+const SAMPLES: EmptyAction = EmptyAction { command: "library.addSamples", label: "Try Sample Photos", widget: "button:emptySamples" };
 const IMPORT_PHOTOS: EmptyAction = EmptyAction { command: "file.addPhotos", label: "Import Photos…", widget: "button:emptyImportPhotos" };
 const IMPORT_LIGHTROOM: EmptyAction =
     EmptyAction { command: "file.importLightroom", label: "Import Lightroom Catalog…", widget: "button:emptyImportLightroom" };
@@ -57,17 +69,24 @@ const IMPORT_LIGHTROOM: EmptyAction =
 /// menu item does; a refusal shows as a toast.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect) {
     // the browser build can't read a Lightroom catalog from disk: only offer what works there
-    let actions: &[EmptyAction] = if cfg!(target_arch = "wasm32") { &[IMPORT_PHOTOS] } else { &[IMPORT_PHOTOS, IMPORT_LIGHTROOM] };
+    // samples in Recently Deleted are still in the library: adding them again would be refused
+    let samples = !app.session.has_samples();
+    let actions: &[EmptyAction] = match (cfg!(target_arch = "wasm32"), samples) {
+        (true, true) => &[IMPORT_PHOTOS, SAMPLES],
+        (true, false) => &[IMPORT_PHOTOS],
+        (false, true) => &[IMPORT_PHOTOS, IMPORT_LIGHTROOM, SAMPLES],
+        (false, false) => &[IMPORT_PHOTOS, IMPORT_LIGHTROOM],
+    };
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let hint = hint(&app.ui.settings.keymap, mac);
-    let clicked = super::empty_state(
-        ui,
-        rect,
-        "Your library is empty",
-        "Photos you import show up here. Nothing is copied or moved unless you choose to.",
-        actions,
-        Some(&hint),
-    );
+    let temporary = app.library_problem.is_some();
+    let title = title(&app.session, temporary);
+    let body = if welcomes(&app.session, temporary) {
+        "Start with photos of your own, or look around with a set of sample photos first. Nothing is copied or moved unless you choose to."
+    } else {
+        "Photos you import show up here. Nothing is copied or moved unless you choose to."
+    };
+    let clicked = super::empty_state(ui, rect, title, body, actions, Some(&hint));
     if let Some(command) = clicked
         && let Err(e) = app.run(command, json!({}))
     {
