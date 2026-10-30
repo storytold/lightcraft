@@ -450,3 +450,122 @@ fn people_and_subject_use_person_mattes() {
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
+
+/// The alpha cache's key changes with everything an alpha is evaluated from (a stale key would
+/// put a stale mask on screen), and not with the mask's other sliders.
+#[test]
+fn alpha_keys_change_with_every_input_of_the_alpha() {
+    let keys = AlphaKeys { geo: 1, image: 2 };
+    let comp = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let one = |shape| Mask { components: vec![comp(shape)], ..Default::default() };
+    let radial = one(MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.3, ry: 0.2, angle: 0.0, feather: 50.0, invert: false });
+    let lum = one(MaskShape::LuminanceRange { lo: 0.3, hi: 0.7, lo_feather: 0.1, hi_feather: 0.1 });
+    let key = |m: &Mask| alpha_key(m, keys, 0.0);
+    // a stored segmentation of the same size with other logits
+    let object = |v: f32| {
+        let seg = Some(SegMask::from_logits(4, &[v; 16]));
+        one(MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: vec![], seg, detail: vec![], edge: 0.0 })
+    };
+    assert_ne!(key(&object(4.0)), key(&object(-4.0)));
+    let edits: [fn(&mut Mask); 7] = [
+        |m| m.refine = 10.0,
+        |m| m.invert = true,
+        |m| m.adjust.amount = 50.0,
+        |m| m.components[0].invert = true,
+        |m| m.components[0].op = MaskOp::Intersect,
+        |m| {
+            if let MaskShape::Radial { feather, .. } = &mut m.components[0].shape {
+                *feather = 50.5;
+            }
+        },
+        |m| {
+            let shape = MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(0.0, 1.0) };
+            m.components.push(MaskComponent { name: None, op: MaskOp::Subtract, invert: false, shape });
+        },
+    ];
+    for (i, edit) in edits.iter().enumerate() {
+        let mut m = radial.clone();
+        edit(&mut m);
+        assert_ne!(key(&m), key(&radial), "edit {i}");
+    }
+    let mut m = radial.clone();
+    (m.id, m.name, m.adjust.exposure, m.adjust.clarity) = (9, "Renamed".into(), 1.0, 30.0);
+    assert_eq!(key(&m), key(&radial));
+    // the frame for every mask; the image and the exposure for the masks that read them
+    let (other_geo, other_image) = (AlphaKeys { geo: 3, ..keys }, AlphaKeys { image: 4, ..keys });
+    let refined = Mask { refine: 40.0, ..radial.clone() };
+    for m in [&radial, &lum, &refined] {
+        assert_ne!(alpha_key(m, other_geo, 0.0), key(m));
+    }
+    assert_eq!((alpha_key(&radial, other_image, 0.0), alpha_key(&radial, keys, 1.0)), (key(&radial), key(&radial)));
+    assert_ne!(alpha_key(&lum, other_image, 0.0), key(&lum));
+    assert_ne!(alpha_key(&lum, keys, 1.0), key(&lum));
+    assert_ne!(alpha_key(&refined, other_image, 0.0), key(&refined));
+    assert_eq!(alpha_key(&refined, keys, 1.0), key(&refined));
+}
+
+/// Alphas are only handed back to a render with the segmentation mattes they were evaluated
+/// with (another photo's mattes, or none, start empty).
+#[test]
+fn alpha_cache_is_tied_to_the_mattes() {
+    let (a, b) = (Arc::new(Mattes::default()), Arc::new(Mattes::default()));
+    let mut c = AlphaCache::<Plane>::default();
+    c.keep(Some(&a), vec![(1, Arc::new(Plane::new(2, 2)))]);
+    assert!(c.clone().take(Some(&b)).is_empty());
+    assert!(c.clone().take(None).is_empty());
+    assert_eq!(c.take(Some(&a)).len(), 1);
+    assert!(c.is_empty());
+}
+
+#[cfg(test)]
+mod refinement_regression {
+    use super::*;
+    #[test]
+    fn packed_and_reused_refinement_preserves_finite_bits() {
+        for (w, h, sigma) in [(121, 83, 1.0), (399, 267, 11.7), (601, 403, 60.0)] {
+            let guide = Plane::from_fn(w, h, |x, y| ((x * 17 + y * 23) % 103) as f32 / 19.0 - 3.0);
+            let p = Plane::from_fn(w, h, |x, y| ((x * 7 + y * 11) % 97) as f32 / 97.0);
+            let expected = guided_cross_reference(&guide, &p, sigma, 0.02);
+            let mut cache = RefinementCache::default();
+            for (gkey, pkey) in [(1, 1), (1, 2), (2, 2), (2, 2)] {
+                let result = guided_cross_cached(&guide, &p, sigma, 0.02, &mut cache, gkey, Some(pkey));
+                for (actual, reference) in result.data.iter().zip(&expected.data) {
+                    assert_eq!(actual.to_bits(), reference.to_bits());
+                }
+                assert!(cache.bytes() <= REFINEMENT_BYTES);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod special_value_refinement_regression {
+    use super::*;
+    #[test]
+    // NaN payload propagation is not part of the grouped-filter contract. All
+    // other results, including signed zero and infinities, must retain their bits.
+    fn special_value_refinement_matches_scalar_values_and_classes() {
+        let vals = [-0.0, 0.0, 1.0, -1.0, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fc00001), f32::from_bits(0xffc00002)];
+        for (w, h, sigma) in [(17, 9, 0.0), (33, 65, 1.0), (65, 33, 11.7)] {
+            for mode in 0..3 {
+                let guide =
+                    Plane::from_fn(
+                        w,
+                        h,
+                        |x, y| if mode == 0 { ((x * 17 + y * 23) % 103) as f32 / 19.0 - 3.0 } else { vals[(x + y * 3) % vals.len()] },
+                    );
+                let p = Plane::from_fn(w, h, |x, y| if mode == 1 { ((x * 7 + y * 11) % 97) as f32 / 97.0 } else { vals[(x * 3 + y) % vals.len()] });
+                let expected = guided_cross_reference(&guide, &p, sigma, 0.02);
+                let mut cache = RefinementCache::default();
+                for (gkey, pkey) in [(1, 1), (1, 2), (2, 2), (2, 2)] {
+                    let result = guided_cross_cached(&guide, &p, sigma, 0.02, &mut cache, gkey, Some(pkey));
+                    for (i, (a, b)) in result.data.iter().zip(&expected.data).enumerate() {
+                        assert!(
+                            a.is_nan() && b.is_nan() || a.to_bits() == b.to_bits(),
+                            "w={w} h={h} sigma={sigma} mode={mode} gkey={gkey} pkey={pkey} pixel={i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

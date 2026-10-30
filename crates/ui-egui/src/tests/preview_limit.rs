@@ -251,6 +251,11 @@ mod in_the_loupe {
         assert_eq!(shown.full.0.max(shown.full.1), native, "cut from the photo's own pixels");
         assert_eq!(shown.window, plain.window, "the same part of the photo");
         assert_ne!(shown.settings, plain.settings, "the overlay is part of the window's look");
+        let job = h.app.session.region_job(id, shown.full.0, shown.full.1, shown.window, true).unwrap();
+        let overlay = crate::panels::detail::view_overlay(&h.app, &d);
+        let exact = h.app.renderer.job_for(Slot::Region, job.with_overlay(overlay));
+        assert_eq!(shown.key, exact.key, "the overlay window settles at exact quality");
+        assert_eq!(h.app.renderer.textures.get(&Slot::Region).unwrap().key, exact.key);
 
         h.app.ui.mask_overlay = false;
         h.settle(SETTLE);
@@ -1134,11 +1139,15 @@ mod in_the_loupe {
             let m = h.app.renderer.memory();
             (m["stageCaches"]["gpuBytes"].as_u64().unwrap() + m["stageCaches"]["cpuBytes"].as_u64().unwrap()) as usize
         };
+        // Drafts have their own filter grid and stage entry. Include that
+        // live entry before choosing a budget below the views' normal usage.
+        h.app.session.begin_interaction("Exposure").unwrap();
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.0}}), T);
+        assert!(h.settle(SETTLE));
         let before = held(&h);
         assert!(before > 3, "the views hold something ({before} bytes)");
         // a third of it is the budget: over it, but inside the runaway limit (four times)
         h.app.renderer.stage_budget_override = Some(before / 3);
-        h.app.session.begin_interaction("Exposure").unwrap();
         for tick in 0..8 {
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
             h.settle(SETTLE);

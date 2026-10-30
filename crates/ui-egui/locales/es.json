@@ -1777,6 +1777,7 @@
   "Zoom 100%": "Zoom 100%",
   "Zoom In": "Acercar",
   "Zoom Out": "Alejar",
+  "Zoom detail is unavailable. Try a lower zoom.": "No se puede mostrar el detalle ampliado. Prueba con menos zoom.",
   "Zoom to Fit": "Zoom para encajar",
   "Zoom to page level": "Zoom a nivel de página",
   "a literal %": "un % literal",

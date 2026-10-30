@@ -1595,6 +1595,7 @@
   "Zoom 100%": "缩放 100%",
   "Zoom In": "放大",
   "Zoom Out": "缩小",
+  "Zoom detail is unavailable. Try a lower zoom.": "无法显示放大细节。请尝试降低缩放比例。",
   "Zoom to Fit": "适合窗口",
   "Zoom to page level": "缩放至页面级别",
   "a literal %": "字面上的 %",

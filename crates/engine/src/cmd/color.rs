@@ -32,7 +32,7 @@ pub(crate) fn probe(s: &mut Session, c: &str, x: f64, y: f64, neutral: impl FnOn
     let req = lightcraft_pipeline::RenderRequest::fit(PROBE_EDGE, PROBE_EDGE);
     let plan = lightcraft_pipeline::plan(&src, &info, &d, &req);
     let q = plan.frame.norm_to_out(plan.w, plan.h).apply(Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)));
-    let img = lightcraft_pipeline::render(&src, &info, &d, &req).image;
+    let img = lightcraft_pipeline::render(&src, &info, &d, &req).map_err(|e| bad(c, e))?.image;
     let (cx, cy) = (q.x.floor() as isize, q.y.floor() as isize);
     let mut acc = [0.0f32; 3];
     let mut n = 0.0;

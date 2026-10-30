@@ -38,6 +38,43 @@ fn renders_know_the_original_size_whichever_level_they_come_from() {
 }
 
 #[test]
+fn bounded_window_keys_are_distinct_and_order_independent() {
+    use lightcraft_pipeline::{MaskView, OutputDepth, Overlay, PixelWindow};
+    let mut session = crate::Session::with_demo();
+    let id = session.active().unwrap();
+    // Unedited Before and After views may share a key. Use distinct
+    // settings here to exercise both sets of render states.
+    let mut edit = (*session.develop_of(id).unwrap()).clone();
+    edit.light.exposure = 0.5;
+    session.set_develop(id, edit, "Exposure").unwrap();
+    let mut keys = std::collections::HashSet::new();
+    for before in [false, true] {
+        for x in [101, 202] {
+            let job = session.region_job_of(id, 1201, 803, PixelWindow { x, y: 77, w: 121, h: 83 }, true, before).unwrap();
+            for overlay in [
+                Overlay::None,
+                Overlay::Mask { id: 1, view: MaskView::Color, color: [255, 0, 0], opacity: 50 },
+                Overlay::AllMasks { view: MaskView::Color, color: [0, 255, 0], opacity: 70 },
+            ] {
+                let exact = job.clone().with_overlay(overlay);
+                let bounded = exact.clone().bounded_window();
+                assert!(bounded.request.is_bounded_window());
+                assert_eq!(bounded.key, bounded.clone().bounded_window().key);
+                assert_eq!(bounded.key, job.clone().bounded_window().with_overlay(overlay).key);
+                assert_eq!(bounded.clone().draft().key, exact.clone().draft().bounded_window().key);
+                for key in [exact.key, exact.clone().draft().key, bounded.key, bounded.draft().key] {
+                    assert!(keys.insert(key), "distinct inputs: before={before} x={x} overlay={overlay:?} key={key:016x}");
+                }
+                let deep = RenderJob { request: RenderRequest { depth: OutputDepth::U16, ..exact.request }, ..exact.clone() };
+                assert_eq!(deep.clone().bounded_window().key, deep.key);
+            }
+        }
+    }
+    let full = session.render_job(id, 1201, 803, false, true).unwrap();
+    assert_eq!(full.clone().bounded_window().key, full.key);
+}
+
+#[test]
 fn denoise_mix_is_reserved_before_the_source_enters_the_cache() {
     let mut plain = Rgb32f::new(8, 8);
     plain.data.fill([1.0; 3]);
@@ -96,7 +133,7 @@ fn decoder_info_survives_render_jobs_cache_and_eviction() {
     job.settings = Arc::new(DevelopSettings::default());
     let r = job.clone().run();
     assert_eq!(r.loaded.as_ref().unwrap().info.as_ref(), Some(&info));
-    let expected = lightcraft_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request);
+    let expected = lightcraft_pipeline::render(&r.loaded.as_ref().unwrap().image, &info, &job.settings, &job.request).unwrap();
     assert_eq!(r.rendered.as_ref().unwrap().image.data, expected.image.data);
     s.accept(&r);
     job.source = s.media.source_ref(s.catalog.photo(id).unwrap(), job.level);
@@ -154,9 +191,12 @@ fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_a
     let new = r.rendered.as_ref().unwrap().image.data.clone();
     // the old pipeline: the same settings against the relative-scale source facts of an older build
     let old_info = SourceInfo { raw: true, relative_wb: true, as_shot_temp: 6500.0, as_shot_tint: 0.0, ..Default::default() };
-    let old = lightcraft_pipeline::render(&pixels, &old_info, &d, &request).image.data;
+    let old = lightcraft_pipeline::render(&pixels, &old_info, &d, &request).unwrap().image.data;
     assert_eq!(new, old, "the look of an existing edit changed");
-    assert_ne!(new, lightcraft_pipeline::render(&pixels, &decoded, &lightcraft_develop::DevelopSettings::for_raw(4986.0, -2.0), &request).image.data);
+    assert_ne!(
+        new,
+        lightcraft_pipeline::render(&pixels, &decoded, &lightcraft_develop::DevelopSettings::for_raw(4986.0, -2.0), &request).unwrap().image.data
+    );
     // accepting the result records the as-shot white, journaled but not undoable, and the settings are untouched
     s.accept(&r);
     let p = s.catalog.photo(id).unwrap();
@@ -176,7 +216,7 @@ fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_a
     s.accept(&r);
     assert_eq!(s.pending_log.len(), log);
     // a catalog-only (proxy) render of the same settings before the decode gave the same pixels too
-    let proxy = lightcraft_pipeline::render(&pixels, &header, &d, &request).image.data;
+    let proxy = lightcraft_pipeline::render(&pixels, &header, &d, &request).unwrap().image.data;
     assert_eq!(proxy, old, "a smart preview of an existing edit changed");
 }
 

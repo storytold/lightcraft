@@ -123,6 +123,8 @@ impl WireJob {
             proof: None,
             window: self.window.map(|[x, y, w, h]| lightcraft_engine::pipeline::PixelWindow { x, y, w, h }),
             display: None,
+            // web windows are main's already
+            bounded_window: false,
         }
     }
 
@@ -199,7 +201,7 @@ impl WorkerCore {
                 lightcraft_engine::pipeline::render_cached(&src.image, &info, &job.settings, &job.request(), &st)
             }
             None => lightcraft_engine::pipeline::render(&src.image, &info, &job.settings, &job.request()),
-        };
+        }?;
         // an HDR edit's histogram shows its HDR range (as on native)
         if let Some(h) = lightcraft_engine::pipeline::hdr_histogram(&src.image, &info, &job.settings, &job.request()) {
             rendered.histogram = h;
@@ -423,6 +425,96 @@ mod tests {
         // stays within docs/gpu-pipeline.md's bound (≤ 3 LSB per channel) rather than bit-exact
         let max = a.image.data.iter().zip(&b.image.data).flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c]))).max();
         assert!(max.is_some_and(|m| m <= 3), "max channel difference {max:?}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn oversized_native_context_uses_the_proxy_and_worker_recovers() {
+        use lightcraft_engine::pipeline::PixelWindow;
+        let mut session = Session::with_demo();
+        let id = session.visible_cloned()[0];
+        let win = PixelWindow { x: 20000, y: 12000, w: 400, h: 300 };
+        let mut job = session.region_job(id, 1920, 1280, win, false).unwrap();
+        job.settings = Arc::new(DevelopSettings::default());
+        let settings = Arc::make_mut(&mut job.settings);
+        settings.effects.dehaze = 100.0;
+        settings.effects.clarity = 15.0;
+        settings.light.highlights = -40.0;
+        settings.light.shadows = 30.0;
+        job.request.max_w = 48000;
+        job.request.max_h = 32000;
+        let mut wire = WireJob::from_job(&job, false, "Region");
+        wire.max_edge = 600;
+        let mut wire: WireJob = serde_json::from_str(&serde_json::to_string(&wire).unwrap()).unwrap();
+        let mut core = WorkerCore::default();
+        // Keep the virtual frame 3:2. The first demo can be portrait, where
+        // clipping the work rectangle at the right edge keeps its context small.
+        let source = DecodedSource::new(
+            Arc::new(lightcraft_raster::Rgb32f::from_fn(600, 400, |x, y| {
+                let l = 0.01 + ((x * 17 + y * 23) % 103) as f32 / 103.0;
+                [l, l * 0.82, l * 1.15]
+            })),
+            None,
+        );
+        let cost = source.bytes();
+        core.sources.insert(wire.source_key(), source, cost);
+        let rendered = core.render(&wire, None).unwrap();
+        assert_eq!((rendered.image.width, rendered.image.height), (win.w, win.h));
+        let source = core.sources.get(&wire.source_key()).cloned().unwrap();
+        let info = source.info_or(wire.info());
+        let request = wire.request();
+        let plan = lightcraft_engine::pipeline::plan(&source.image, &info, &wire.settings, &request);
+        let full = lightcraft_engine::pipeline::plan(&source.image, &info, &wire.settings, &RenderRequest { window: None, ..request });
+        assert!(lightcraft_engine::pipeline::airlight::check_prepare(&full, Some(&plan)).is_err());
+        assert_eq!((plan.w, plan.h), (win.w, win.h), "oversized filter support uses the bounded work image");
+        assert!(core.stages.values().all(|cache| cache.bytes() <= win.w * win.h * 64), "retain only bounded intermediate images");
+        let expected = lightcraft_engine::pipeline::render(&source.image, &info, &wire.settings, &request).unwrap();
+        assert_eq!(rendered.image, expected.image, "the wire preserves the proxy fallback's pixels");
+        job.source = SourceRef::Loaded(Box::new(source));
+        job.info = info;
+        let native = job.clone().run().rendered.unwrap();
+        let max = native.image.data.iter().flatten().zip(rendered.image.data.iter().flatten()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(max <= 3, "native job and CPU worker fallback differ by {max}");
+
+        // A requested image above the bound still fails before any work image
+        // allocation. The same worker must accept a smaller request afterwards.
+        wire.window = Some([0, 0, 48000, 32000]);
+        let retained: usize = core.stages.values().map(|cache| cache.bytes()).sum();
+        let error = core.render(&wire, None).err().expect("requested window exceeds memory budget");
+        assert!(error.contains("memory budget"), "{error}");
+        assert_eq!(core.stages.values().map(|cache| cache.bytes()).sum::<usize>(), retained);
+        wire.max_w = 600;
+        wire.max_h = 400;
+        wire.window = Some([16, 16, 121, 83]);
+        let rendered = core.render(&wire, None).unwrap();
+        assert_eq!((rendered.image.width, rendered.image.height), (121, 83));
+        job.request = wire.request();
+        assert!(job.run().rendered.is_ok());
+    }
+
+    #[test]
+    #[ignore = "large decoded-source regression; run serially with --ignored"]
+    fn default_large_sources_render_in_the_worker() {
+        for (w, h, window, fit) in [(6000, 4000, false, false), (9504, 6336, false, false), (9504, 6336, false, true), (9504, 6336, true, false)] {
+            let mut session = Session::with_demo();
+            let id = session.visible_cloned()[0];
+            let job = session.render_job(id, 1600, 1067, false, true).unwrap();
+            let mut wire = WireJob::from_job(&job, false, "Region");
+            wire.settings = Arc::new(DevelopSettings::default());
+            wire.max_edge = w;
+            wire.max_w = if fit { 1600 } else { w };
+            wire.max_h = if fit { 1067 } else { h };
+            wire.stages = Some("Region".into());
+            wire.window = window.then_some([w / 3, h / 3, 121, 83]);
+            let wire: WireJob = serde_json::from_str(&serde_json::to_string(&wire).unwrap()).unwrap();
+            let source = DecodedSource::new(Arc::new(lightcraft_raster::Rgb32f::new(w, h)), None);
+            let cost = source.bytes();
+            let mut core = WorkerCore::default();
+            core.sources.insert(wire.source_key(), source, cost);
+            let result = core.render(&wire, None).unwrap();
+            let expected = if window { (121, 83) } else { (wire.max_w, wire.max_h) };
+            assert_eq!((result.image.width, result.image.height), expected);
+        }
     }
 
     // a job from before windows existed has none

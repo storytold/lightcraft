@@ -1601,6 +1601,7 @@
   "Zoom 100%": "縮放至 100%",
   "Zoom In": "放大",
   "Zoom Out": "縮小",
+  "Zoom detail is unavailable. Try a lower zoom.": "無法顯示放大細節。請嘗試降低縮放比例。",
   "Zoom to Fit": "縮放至符合視窗",
   "Zoom to page level": "符合頁面大小",
   "a literal %": "字面上的 %",

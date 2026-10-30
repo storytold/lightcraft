@@ -27,6 +27,11 @@ Blacks at 0) is the identity up to white: the SDR shoulder no longer pulls 1.0 d
 255 to 254, issue #1945). It landed in place as a bug fix, since the tone map promised identity at
 neutral settings; edited curves keep the shoulder and their V1 look.
 
+Native window context fixes (issue #1146) expand only the work area of a window render.
+The full-frame path and the filters are unchanged, so V1 and V2 full-render pixels
+stay byte-identical and no process version is added. Hidden and empty masks retain main's #1214 fix: they do not select
+the tone base Clarity reads. Window support follows the planes that can affect pixels. See [window context](window-context.md).
+
 ## Adding a process
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in

@@ -12,7 +12,7 @@ use crate::geometry::Frame;
 use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
 use crate::tone::ToneMap;
-use crate::{Prepared, SourceInfo, for_rows};
+use crate::{PixelWindow, Prepared, SourceInfo, for_rows};
 
 #[inline]
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
@@ -279,6 +279,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn finish(
     p: &Prepared,
     s: &DevelopSettings,
@@ -287,8 +288,10 @@ pub(crate) fn finish(
     space: OutputSpace,
     display: Option<&crate::DisplaySpace>,
     proof: Option<crate::Proof>,
+    keep: Option<PixelWindow>,
 ) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
+    let at = keep.unwrap_or(PixelWindow { x: 0, y: 0, w, h }).clamped(w, h);
     let mut fp =
         FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long: p.px_per_long, air_pre: p.air, space });
     fp.proof = proof.map(|pr| pr.params(space));
@@ -296,14 +299,14 @@ pub(crate) fn finish(
         fp.for_display(d, proof);
     }
     let trc = fp.out_trc;
-    let data = finish_with(p, &fp, false, |e| match trc {
+    let data = finish_with(p, &fp, at, false, |e| match trc {
         OutputTrc::Srgb => [enc(e[0]), enc(e[1]), enc(e[2]), 255],
         t => {
             let x = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0)))));
             [x[0], x[1], x[2], 255]
         }
     });
-    Rgba8 { width: w, height: h, data }
+    Rgba8 { width: at.w, height: at.h, data }
 }
 
 /// [`finish`] into 16-bit display-encoded or 32-bit float linear samples (output primaries).
@@ -312,45 +315,50 @@ pub(crate) fn finish_deep(
     s: &DevelopSettings,
     frame: &Frame,
     info: &SourceInfo,
-    space: OutputSpace,
-    depth: OutputDepth,
+    output: (OutputSpace, OutputDepth),
     proof: Option<crate::Proof>,
+    keep: Option<PixelWindow>,
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
+    let (space, depth) = output;
     let (w, h) = (p.img.width, p.img.height);
+    let at = keep.unwrap_or(PixelWindow { x: 0, y: 0, w, h }).clamped(w, h);
     let mut fp =
         FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long: p.px_per_long, air_pre: p.air, space });
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+            let v = finish_with(p, &fp, at, true, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
         OutputDepth::F32Hdr => {
             // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
             let peak = fp.peak;
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
+            let v = finish_with(p, &fp, at, true, |e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
             DeepSamples::F32(v.into_flattened())
         }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            let v = finish_with(p, &fp, true, |e| match trc {
+            let v = finish_with(p, &fp, at, true, |e| match trc {
                 OutputTrc::Srgb => e.map(q),
                 t => e.map(|v| q(t.encode(srgb_to_linear(v.clamp(0.0, 1.0))))),
             });
             DeepSamples::U16(v.into_flattened())
         }
     };
-    DeepImage { width: w, height: h, space, samples }
+    DeepImage { width: at.w, height: at.h, space, samples }
 }
 
 /// The per-pixel stage: every output pixel's colour in the output primaries, encoded with the sRGB
 /// curve (tone curves and grain applied; not clamped), handed to `store` for the final encoding.
 /// `exact`: encode with the exact sRGB curve instead of the (8/10-bit accurate) table.
+/// `at`: output pixels within the prepared work image; retain that image's coordinates
+/// for plane reads, grain and vignette.
 pub(crate) fn finish_with<T: Copy + Default + Send>(
     p: &Prepared,
     fp: &FinishParams,
+    at: PixelWindow,
     exact: bool,
     store: impl Fn([f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
@@ -367,9 +375,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let srgb = srgb_lut();
     let peak = fp.peak;
     let hdr = peak > 1.0;
-    let mut out = vec![T::default(); w * h];
-    for_rows(&mut out, w, |y, row| {
+    let at = at.clamped(w, h);
+    let mut out = vec![T::default(); at.w * at.h];
+    for_rows(&mut out, at.w, |y, row| {
+        let y = y + at.y;
         for (x, px) in row.iter_mut().enumerate() {
+            let x = x + at.x;
             let i = y * w + x;
             let raw = p.img.data[i];
             let local = pixel_local_terms(p, &terms, i);
@@ -763,6 +774,60 @@ fn enc(v: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finishing_only_the_requested_pixels_matches_finishing_then_cropping() {
+        use crate::{Quality, RenderRequest, local};
+        use lightcraft_raster::Rgb32f;
+        use std::sync::Arc;
+
+        let src = Rgb32f::from_fn(300, 200, |x, y| {
+            let v = 0.05 + ((x / 7 + y / 11) % 9) as f32 * 0.1;
+            [v, v * 0.8, v * 1.1]
+        });
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.effects.clarity = 80.0;
+        s.effects.texture = 60.0;
+        s.effects.dehaze = 50.0;
+        s.light.highlights = -60.0;
+        s.grain.amount = 40.0;
+        s.vignette.amount = -60.0;
+        let req = RenderRequest { window: Some(PixelWindow { x: 221, y: 143, w: 71, h: 53 }), ..RenderRequest::fit(600, 400) };
+        let plan = crate::plan(&src, &info, &s, &req);
+        let img = Arc::new(plan.frame.sample(&src, plan.w, plan.h));
+        let prep = local::prepare(
+            img,
+            &s,
+            &plan.frame,
+            plan.px_per_long,
+            Quality::Full,
+            &mut local::Planes::default(),
+            None,
+            (&mut crate::masks::AlphaCache::default(), crate::masks::AlphaKeys { geo: 0, image: 0 }),
+        );
+        let k = plan.keep.unwrap();
+        for space in [OutputSpace::Srgb, OutputSpace::DisplayP3] {
+            let f = finish(&prep, &s, &plan.frame, &info, space, None, None, None);
+            let w = finish(&prep, &s, &plan.frame, &info, space, None, None, Some(k));
+            assert_eq!(w, f.crop(k.x, k.y, k.w, k.h));
+            for depth in [OutputDepth::U16, OutputDepth::F32Linear, OutputDepth::F32Hdr] {
+                let mut deep = s.clone();
+                if depth == OutputDepth::F32Hdr {
+                    deep.hdr.enabled = true;
+                    deep.hdr.max_ev = 3.0;
+                    deep.light.exposure = 3.0;
+                }
+                let f = finish_deep(&prep, &deep, &plan.frame, &info, (space, depth), None, None);
+                let w = finish_deep(&prep, &deep, &plan.frame, &info, (space, depth), None, Some(k));
+                if depth == OutputDepth::F32Hdr {
+                    let DeepSamples::F32(samples) = &w.samples else { panic!("HDR must return float samples") };
+                    assert!(samples.iter().any(|&v| v > 1.0), "HDR must exercise samples above SDR white");
+                }
+                assert_eq!(w, f.crop(k.x, k.y, k.w, k.h));
+            }
+        }
+    }
 
     #[test]
     fn refine_saturation_restores_the_pre_curve_saturation() {

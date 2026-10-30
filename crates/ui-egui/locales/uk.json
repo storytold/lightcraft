@@ -1546,6 +1546,7 @@
   "You can close this: the download continues, and resumes if interrupted.": "Можна закрити це вікно: завантаження триває й відновиться після переривання.",
   "Your Name": "Ваше ім’я",
   "Zoom 100%": "Масштаб 100%",
+  "Zoom detail is unavailable. Try a lower zoom.": "Не вдалося показати деталі при збільшенні. Зменште масштаб.",
   "Zoom to Fit": "Масштабувати до вміщення",
   "a literal %": "буквальний %",
   "a removed photo": "вилучене фото",

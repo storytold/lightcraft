@@ -261,7 +261,7 @@ impl crate::Session {
         self.region_job_of(id, full_w, full_h, window, apply_crop, true)
     }
 
-    fn region_job_of(
+    pub(super) fn region_job_of(
         &mut self,
         id: PhotoId,
         full_w: usize,

@@ -94,6 +94,22 @@ impl RenderJob {
         self
     }
 
+    /// A window job rendered as main did (see [`lightcraft_pipeline::RenderRequest::bounded_window`]):
+    /// a quick first look while the exact window follows. Gets its own result key.
+    pub fn bounded_window(mut self) -> Self {
+        if cfg!(not(target_arch = "wasm32"))
+            && self.request.window.is_some()
+            && self.request.depth == lightcraft_pipeline::OutputDepth::U8
+            && !self.request.bounded_window
+        {
+            self.request.bounded_window = true;
+            self.key ^= 0x5851_f42d_4c95_7f2d;
+            self.cache = None;
+            self.view_cache = None;
+        }
+        self
+    }
+
     /// Draw a diagnostic overlay over the result (e.g. Point Color's visualized range). Gets its
     /// own result key.
     pub fn with_overlay(mut self, overlay: lightcraft_pipeline::Overlay) -> Self {
@@ -270,7 +286,23 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let (mut rendered, gpu_fallback) = match develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return RenderResult {
+                            request_id: self.request_id,
+                            source_key: self.source_key,
+                            photo: self.photo,
+                            level: self.level,
+                            key: self.key,
+                            rendered: Err(error),
+                            gpu_fallback: None,
+                            loaded: (!was_loaded).then_some(source),
+                            quick: None,
+                            display: None,
+                        };
+                    }
+                };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -326,8 +358,15 @@ impl RenderJob {
 /// Render `src`: on the GPU when `gpu` is set and a GPU is available (`lightcraft_gpu`), else on
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
-pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
-    develop_reporting(src, info, s, req, stages, gpu).0
+pub fn develop(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    gpu: bool,
+) -> Result<Rendered, String> {
+    develop_reporting(src, info, s, req, stages, gpu).map(|r| r.0)
 }
 
 /// [`develop`], also saying why the render fell back from the GPU to the CPU when it did (`None`:
@@ -340,13 +379,13 @@ pub fn develop_reporting(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
-    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu);
+) -> Result<(Rendered, Option<String>), String> {
+    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu)?;
     // an HDR edit's preview is its SDR rendition: its histogram shows the HDR range instead
     if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
         rendered.histogram = h;
     }
-    (rendered, fallback)
+    Ok((rendered, fallback))
 }
 
 fn develop_image(
@@ -356,7 +395,7 @@ fn develop_image(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
+) -> Result<(Rendered, Option<String>), String> {
     // LUT profiles have no GPU stage: they render on the CPU
     let fallback = if gpu
         && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
@@ -364,7 +403,7 @@ fn develop_image(
         && req.proof.is_none()
     {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
-            Ok(r) => return (r, None),
+            Ok(r) => return Ok((r, None)),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
             Err(lightcraft_gpu::Fallback::NotTried) => None,
         }
@@ -374,6 +413,6 @@ fn develop_image(
     let rendered = match stages {
         Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
         None => lightcraft_pipeline::render(src, info, s, req),
-    };
-    (rendered, fallback)
+    }?;
+    Ok((rendered, fallback))
 }

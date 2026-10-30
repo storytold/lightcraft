@@ -296,11 +296,14 @@ fn out_of_gamut(r: vec3<f32>, t: f32) -> bool {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
     let h = pu(F_H);
-    let x = gid.x;
-    let y = gid.y + pu(F_Y0);
-    if (x >= w || y >= h) {
+    let ox = gid.x;
+    let oy = gid.y + pu(F_Y0);
+    let ow = pu(F_KEEP_W);
+    if (ox >= ow || oy >= pu(F_KEEP_H)) {
         return;
     }
+    let x = ox + pu(F_KEEP_X);
+    let y = oy + pu(F_KEEP_Y);
     let i = y * w + x;
     let n = w * h;
     let gain = pf(F_GAIN);
@@ -562,5 +565,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         e = vec3<f32>(0.0, 0.25, 1.0);
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
-    out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
+    out[oy * ow + ox] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
 }

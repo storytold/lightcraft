@@ -1524,6 +1524,7 @@
   "Zoom 100%": "100%表示",
   "Zoom In": "拡大",
   "Zoom Out": "縮小",
+  "Zoom detail is unavailable. Try a lower zoom.": "拡大表示の詳細を表示できません。ズーム倍率を下げてください。",
   "Zoom to Fit": "全体を表示",
   "a literal %": "% 記号そのもの",
   "a removed photo": "削除された写真",

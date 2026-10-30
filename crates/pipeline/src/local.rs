@@ -10,6 +10,8 @@ use std::sync::Arc;
 use lightcraft_raster::{Plane, Rgb32f, par_join};
 
 use crate::geometry::Frame;
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::sampling::{GuidedGrid, ResampleTaps};
 use crate::{Prepared, Quality, SourceInfo, for_rows, masks, timed};
 
 /// White balance (relative to the source's as-shot white) and exposure, in place.
@@ -169,13 +171,33 @@ pub fn guided(p: &Plane, sigma: f32, eps: f32) -> Plane {
 /// Blurred guided-filter coefficients (mean a, mean b) of `p`; every pass row-parallel, and the
 /// two independent blurs of each step run side by side.
 fn guided_coeffs(p: &Plane, sigma: f32, eps: f32) -> (Plane, Plane) {
-    let (mean, corr) = par_join(|| gaussian(p, sigma), || gaussian(&p.map(|v| v * v), sigma));
-    let a = corr.zip_map(&mean, |c, m| {
-        let var = (c - m * m).max(0.0);
-        var / (var + eps)
-    });
-    let b = mean.zip_map(&a, |m, a| m - a * m);
-    par_join(|| gaussian(&a, sigma), || gaussian(&b, sigma))
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (mean, corr) = par_join(|| gaussian(p, sigma), || gaussian(&p.map(|v| v * v), sigma));
+        let a = corr.zip_map(&mean, |c, m| {
+            let var = (c - m * m).max(0.0);
+            var / (var + eps)
+        });
+        let b = mean.zip_map(&a, |m, a| m - a * m);
+        par_join(|| gaussian(&a, sigma), || gaussian(&b, sigma))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use lightcraft_raster::blur::gaussian_owned;
+        let (mut mean, mut corr) = par_join(|| gaussian(p, sigma), || gaussian_owned(p.map(|v| v * v), sigma));
+        for_rows(&mut corr.data, p.width, |y, row| {
+            for (c, m) in row.iter_mut().zip(mean.row(y)) {
+                let var = (*c - m * m).max(0.0);
+                *c = var / (var + eps);
+            }
+        });
+        for_rows(&mut mean.data, p.width, |y, row| {
+            for (m, a) in row.iter_mut().zip(corr.row(y)) {
+                *m -= a * *m;
+            }
+        });
+        par_join(|| gaussian_owned(corr, sigma), || gaussian_owned(mean, sigma))
+    }
 }
 
 /// `q = a·p + b` per pixel. Reduced coefficients are sampled with the same separable
@@ -250,6 +272,32 @@ pub fn guided_fast(p: &Plane, sigma: f32, eps: f32) -> Plane {
     guided_apply(p, &ma, &mb)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn guided_fast_window(p: &Plane, sigma: f32, eps: f32, view: Option<crate::geometry::ViewWindow>) -> Plane {
+    let step = guided_fast_step(sigma);
+    let Some(grid) = GuidedGrid::for_window(p.width, p.height, step, view) else {
+        return guided_fast(p, sigma, eps);
+    };
+    let lo = crate::sampling::resize(p, &grid.down);
+    let (ma, mb) = guided_coeffs(&lo, sigma / step as f32, eps);
+    guided_apply(p, &crate::sampling::resize(&ma, &grid.up), &crate::sampling::resize(&mb, &grid.up))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tone_base_window(l: &Plane, sigma: f32, detail: usize, view: Option<crate::geometry::ViewWindow>) -> Plane {
+    if detail == 0 { guided_fast_window(l, sigma, BASE_EPS, view) } else { guided_fast_window(&median_hv(l, detail), sigma, BASE_EPS, view) }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn guided_fast_window(p: &Plane, sigma: f32, eps: f32, _view: Option<crate::geometry::ViewWindow>) -> Plane {
+    guided_fast(p, sigma, eps)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn tone_base_window(l: &Plane, sigma: f32, detail: usize, _view: Option<crate::geometry::ViewWindow>) -> Plane {
+    tone_base(l, sigma, detail)
+}
+
 /// Separable median (`2r+1` px along each row, then each column; clamped edges). It keeps the
 /// steps between regions where they are and removes features thinner than about `r` px.
 pub fn median_hv(p: &Plane, r: usize) -> Plane {
@@ -315,9 +363,17 @@ fn total_key_inv(k: i32) -> u32 {
 fn transpose(p: &Plane) -> Plane {
     let (w, h) = (p.width, p.height);
     let mut t = Plane::new(h, w);
-    for_rows(&mut t.data, h, |x, row| {
-        for (y, v) in row.iter_mut().enumerate() {
-            *v = p.data[y * w + x];
+    const BLOCK: usize = 32;
+    // Keep both source and destination tiles in cache instead of reading a
+    // whole strided column before visiting the next one. This only copies bits.
+    for_rows(&mut t.data, h * BLOCK, |band, out| {
+        let x0 = band * BLOCK;
+        for y0 in (0..h).step_by(BLOCK) {
+            for (x, row) in out.chunks_mut(h).enumerate() {
+                for (y, v) in row.iter_mut().enumerate().take((y0 + BLOCK).min(h)).skip(y0) {
+                    *v = p.data[y * w + x0 + x];
+                }
+            }
         }
     });
     t
@@ -456,12 +512,18 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
             let y = luminance_2020(c).max(1e-6);
             [c[0] / y, c[1] / y, c[2] / y]
         });
+        #[cfg(target_arch = "wasm32")]
         let b = gaussian(&chroma, nr.sigma);
+        #[cfg(not(target_arch = "wasm32"))]
+        let b = lightcraft_raster::blur::gaussian_owned(chroma, nr.sigma);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
                 let yl = luminance_2020(*p);
+                #[cfg(target_arch = "wasm32")]
                 let c0 = chroma.data[i];
+                #[cfg(not(target_arch = "wasm32"))]
+                let c0 = p.map(|v| v / yl.max(1e-6));
                 let cb = b.data[i];
                 *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
             }
@@ -557,15 +619,23 @@ pub struct PlaneSigmas {
     pub chroma: Option<f32>,
 }
 
+/// Spatial planes selected by the global settings and visible, nonempty masks.
+/// Hidden and empty masks do not choose the tone base Clarity reads (#1214).
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+    select_plane_sigmas(s, px_per_long, q)
+}
+
+/// Plan context for the same planes that can affect the rendered pixels.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn context_plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+    select_plane_sigmas(s, px_per_long, q)
+}
+
+fn select_plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
-    // A hidden mask, or one with no components, does not change the picture. Its sliders must
-    // not pick the tone base Clarity reads (#1214).
-    let live = |m: &&lightcraft_develop::Mask| m.visible && !m.components.is_empty();
-    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().filter(live).any(|m| f(&m.adjust) != 0.0);
-    let tone_active = s.light.highlights != 0.0
-        || s.light.shadows != 0.0
-        || s.masks.iter().filter(live).any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
+    let local_any =
+        |f: fn(&lightcraft_develop::LocalAdjustments) -> bool| s.masks.iter().any(|m| (m.visible && !m.components.is_empty()) && f(&m.adjust));
+    let tone_active = s.light.highlights != 0.0 || s.light.shadows != 0.0 || local_any(|a| a.highlights != 0.0 || a.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
@@ -573,25 +643,26 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         let sigma = (0.015 * ppl).max(1.0);
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
     });
-    let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
+    let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity != 0.0)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
     let texture = (s.effects.texture != 0.0
         || s.detail.sharpen_amount != 0.0
-        || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
-        || local_any(|a| a.noise)
-        || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
+        || local_any(|a| a.texture != 0.0)
+        || local_any(|a| a.sharpness != 0.0)
+        || local_any(|a| a.noise != 0.0)
+        || local_any(|a| a.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));
-    let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
-    let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
+    let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze != 0.0)).then(|| (0.02 * ppl).max(1.0));
+    let chroma = (local_any(|a| a.moire != 0.0) || local_any(|a| a.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
     PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
 }
 
-/// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
-/// reusing whatever `planes` already holds for it. Missing planes are computed side by side (each
+/// The spatial planes and mask alphas the per-pixel stage needs for `img` (white-balanced, before
+/// exposure), reusing whatever `planes` and `alphas` already hold for it. Missing planes are computed side by side (each
 /// one alone scales poorly: the guided filters work on small subsampled grids).
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn prepare(
     img: Arc<Rgb32f>,
     s: &DevelopSettings,
@@ -599,7 +670,25 @@ pub(crate) fn prepare(
     px_per_long: f64,
     q: Quality,
     planes: &mut Planes,
-    mattes: Option<&masks::Mattes>,
+    mattes: Option<&Arc<masks::Mattes>>,
+    alphas: (&mut masks::AlphaCache, masks::AlphaKeys),
+) -> Prepared {
+    prepare_with_guidance(img, s, frame, frame.view, px_per_long, q, planes, mattes, alphas)
+}
+
+/// Bounded windows use main's local filter grid. The geometric frame still
+/// places masks and effects in full-frame coordinates.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_with_guidance(
+    img: Arc<Rgb32f>,
+    s: &DevelopSettings,
+    frame: &Frame,
+    guidance_view: Option<crate::geometry::ViewWindow>,
+    px_per_long: f64,
+    q: Quality,
+    planes: &mut Planes,
+    mattes: Option<&Arc<masks::Mattes>>,
+    alphas: (&mut masks::AlphaCache, masks::AlphaKeys),
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
@@ -616,10 +705,10 @@ pub(crate) fn prepare(
     });
     let l = &log_l;
     let (base, (clarity_blur, (texture_blur, dark))) = par_join(
-        || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail)))),
+        || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base_window(l, sg, base_detail, guidance_view)))),
         || {
             par_join(
-                || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast(l, sg, CLARITY_EPS)))),
+                || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast_window(l, sg, CLARITY_EPS, guidance_view)))),
                 || {
                     par_join(
                         || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
@@ -645,7 +734,15 @@ pub(crate) fn prepare(
         None => (None, 1.0),
     };
     let ev = s.light.exposure as f32;
-    let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
+    #[cfg(target_arch = "wasm32")]
+    let masks = {
+        let _ = alphas;
+        timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes.map(|a| &**a)))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let (cache, keys) = alphas;
+    #[cfg(not(target_arch = "wasm32"))]
+    let masks = timed("masks", || masks::evaluate_cached(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes, keys, cache));
     Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
@@ -887,5 +984,35 @@ mod nr_tests {
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod median_replacement_tests {
+    use super::*;
+    #[test]
+    fn running_median_matches_sorting_each_neighborhood() {
+        for n in [1, 2, 31, 1027] {
+            let src: Vec<_> = (0..n)
+                .map(|i| match i % 29 {
+                    0 => -0.0,
+                    1 => 0.0,
+                    2 => f32::INFINITY,
+                    3 => f32::NEG_INFINITY,
+                    4 => f32::from_bits(0x7fc00001),
+                    5 => f32::from_bits(0xffc00002),
+                    _ => ((i * 193 + i / 11 * 17) % 127) as f32 / 13.0 - 4.0,
+                })
+                .collect();
+            for radius in [1, 9, 24] {
+                let mut out = vec![0.0; n];
+                median_row(&src, &mut out, radius);
+                for (x, value) in out.iter().enumerate() {
+                    let mut taps: Vec<_> = (0..2 * radius + 1).map(|i| src[(x + i).saturating_sub(radius).min(n - 1)]).collect();
+                    taps.sort_unstable_by(f32::total_cmp);
+                    assert_eq!(value.to_bits(), taps[radius].to_bits(), "length={n} radius={radius} x={x}");
+                }
+            }
+        }
     }
 }

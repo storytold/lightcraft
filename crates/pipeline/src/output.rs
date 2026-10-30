@@ -346,6 +346,23 @@ pub struct DeepImage {
 }
 
 impl DeepImage {
+    /// A window of these samples, preserving their depth and colour space.
+    pub fn crop(&self, x: usize, y: usize, w: usize, h: usize) -> Self {
+        let win = crate::PixelWindow { x, y, w, h }.clamped(self.width, self.height);
+        let copy = |len: usize| {
+            (win.y..win.y + win.h).filter_map(move |row| {
+                let start = row.checked_mul(self.width)?.checked_add(win.x)?.checked_mul(3)?;
+                let end = start.checked_add(win.w.checked_mul(3)?)?;
+                (end <= len).then_some(start..end)
+            })
+        };
+        let samples = match &self.samples {
+            DeepSamples::U16(v) => DeepSamples::U16(copy(v.len()).flat_map(|r| v.get(r).unwrap_or_default().iter().copied()).collect()),
+            DeepSamples::F32(v) => DeepSamples::F32(copy(v.len()).flat_map(|r| v.get(r).unwrap_or_default().iter().copied()).collect()),
+        };
+        Self { width: win.w, height: win.h, space: self.space, samples }
+    }
+
     /// The same image reduced to 8 bits, display-encoded with the space's curve.
     pub fn to_rgba8(&self) -> lightcraft_raster::Rgba8 {
         let mut out = lightcraft_raster::Rgba8::new(self.width, self.height);

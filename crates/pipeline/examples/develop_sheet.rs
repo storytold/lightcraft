@@ -22,7 +22,7 @@ fn main() {
         edited.grading.shadows = lightcraft_develop::Wheel { hue: 210.0, sat: 18.0, lum: 0.0 };
         edited.grading.highlights = lightcraft_develop::Wheel { hue: 40.0, sat: 14.0, lum: 0.0 };
         for (col, s) in [DevelopSettings::default(), edited].iter().enumerate() {
-            let r = render(&src, &SourceInfo::default(), s, &RenderRequest::fit(cw, ch)).image;
+            let r = render(&src, &SourceInfo::default(), s, &RenderRequest::fit(cw, ch)).unwrap().image;
             let (ox, oy) = (col * cw + (cw - r.width) / 2, row * ch + (ch - r.height) / 2);
             for y in 0..r.height {
                 for x in 0..r.width {

@@ -89,6 +89,7 @@
   "Margins are a share of the slide's shorter side, so slides look the same on any screen.": "Okraje se zadávají jako podíl kratší strany snímku, takže snímky vypadají na každé obrazovce stejně.",
   "Show guides": "Zobrazit vodítka",
   "Aspect preview": "Poměr stran náhledu",
+  "Zoom detail is unavailable. Try a lower zoom.": "Detaily při přiblížení nejsou k dispozici. Zkuste menší přiblížení.",
   "Zoom to fill frame": "Přiblížit pro vyplnění rámečku",
   "Stroke border": "Obrysový rámeček",
   "Colour": "Barva",

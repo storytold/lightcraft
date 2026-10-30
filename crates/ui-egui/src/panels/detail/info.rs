@@ -1,3 +1,4 @@
+use super::filmstrip::NAV_W;
 use super::geometry::focus_box;
 use super::{Color32, LightcraftApp, PhotoId, Pos2, Rect, Sense, Stroke, Tokens, json, pos2, register, register_geometry, vec2};
 
@@ -544,4 +545,21 @@ mod info_overlay_tests {
         photo.flag = lightcraft_catalog::Flag::Reject;
         assert!(badges(&photo).is_some(), "a rejected photo shows its flag alone");
     }
+}
+
+/// A failed zoom job keeps the whole-frame preview visible. The status stays
+/// until the requested region succeeds or the view no longer needs that region.
+pub(super) fn region_failure_notice(ui: &mut egui::Ui, canvas: Rect, error: &str, navigator: bool) {
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter_at(canvas);
+    let width = (canvas.width() - 48.0 - if navigator { NAV_W + 12.0 } else { 0.0 }).clamp(80.0, 420.0);
+    let message = crate::i18n::tr("Zoom detail is unavailable. Try a lower zoom.");
+    let g = p.layout(message.into(), t.font(12.0), Color32::WHITE, width);
+    let size = g.size() + vec2(20.0, 12.0);
+    // Leave room for the Before/After labels along the canvas' lower edge.
+    let r = Rect::from_min_size(pos2(canvas.left() + 12.0, canvas.bottom() - size.y - 36.0), size);
+    p.rect_filled(r, 4.0, Color32::from_black_alpha(225));
+    p.galley(r.min + vec2(10.0, 6.0), g, Color32::WHITE);
+    register(ui, "notice:regionFailure:loupe", r);
+    ui.interact(r, egui::Id::unique("region-failure-notice"), Sense::hover()).on_hover_text(error);
 }

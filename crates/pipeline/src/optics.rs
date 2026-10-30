@@ -570,22 +570,29 @@ fn hue_weight(h: f32, lo: f32, hi: f32) -> f32 {
 /// Long edge (px) at which defringe widths are specified: fringes are 1–7 px wide on a ~4000 px image.
 pub const DEFRINGE_REF_LONG: f64 = 4000.0;
 
+/// Neighbourhood read by Defringe, shared with the window planner. Zero when disabled.
+pub(crate) fn defringe_radius(s: &DevelopSettings, scale: f64) -> usize {
+    let o = &s.optics;
+    if !s.section_enabled("optics") || (o.defringe_purple_amount <= 0.0 && o.defringe_green_amount <= 0.0) {
+        return 0;
+    }
+    let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount).min(20.0);
+    // Fringe width in source px grows with the amount (1..7 px), in output px at least one.
+    let radius = ((1.0 + max_amt * 0.3) * scale).round();
+    if radius.is_finite() { radius.max(1.0) as usize } else { 1 }
+}
+
 /// Defringe: desaturate purple / green colour fringes that sit next to high-contrast edges. `scale` is output
 /// pixels per reference pixel (output long edge / [`DEFRINGE_REF_LONG`]) so the fringe width is the same
 /// fraction of the image at any size.
 pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     let o = &s.optics;
-    if !s.section_enabled("optics") || (o.defringe_purple_amount <= 0.0 && o.defringe_green_amount <= 0.0) {
+    let radius = defringe_radius(s, scale);
+    if radius == 0 {
         return;
     }
     let (w, h) = (img.width, img.height);
-    // as far as the sliders go (0–20): an amount from a damaged catalog or sidecar made the
-    // radius overflow
-    let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount).min(20.0);
-    // fringe width in source px grows with the amount (1..7 px), in output px at least one (and
-    // never wider than the picture)
-    let radius = ((1.0 + max_amt * 0.3) * scale).round();
-    let radius = if radius.is_finite() { radius.clamp(1.0, w.max(h).max(1) as f64) as usize } else { 1 };
+    let radius = radius.min(w.max(h).max(1));
     // perceptual lightness and its local range (dilated contrast)
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };

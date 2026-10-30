@@ -13,7 +13,7 @@ fn scene() -> Rgb32f {
 
 #[test]
 fn default_render_is_sane() {
-    let r = render(&scene(), &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(240, 240));
+    let r = render(&scene(), &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(240, 240)).unwrap();
     assert_eq!((r.image.width, r.image.height), (240, 160));
     let m = mean_luma(&r.image);
     assert!((40.0..220.0).contains(&m), "{m}");
@@ -23,7 +23,7 @@ fn default_render_is_sane() {
 #[test]
 fn grey_ramp_stays_neutral() {
     let src = Rgb32f::from_fn(64, 8, |x, _| [0.002 * 1.12f32.powi(x as i32); 3]);
-    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(64, 8));
+    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(64, 8)).unwrap();
     for p in &r.image.data {
         assert!((p[0] as i32 - p[1] as i32).abs() <= 1 && (p[1] as i32 - p[2] as i32).abs() <= 1, "{p:?}");
     }
@@ -32,12 +32,12 @@ fn grey_ramp_stays_neutral() {
 #[test]
 fn every_slider_changes_or_keeps_output_without_panicking() {
     let src = scene();
-    let base = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(96, 96)).image;
+    let base = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(96, 96)).unwrap().image;
     for c in controls::CONTROLS {
         for v in [c.min, c.max] {
             let mut s = DevelopSettings::default();
             controls::set(&mut s, c.id, v);
-            let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96));
+            let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).unwrap();
             assert!(r.image.width > 0, "{}", c.id);
             let _ = &base;
         }
@@ -51,7 +51,7 @@ fn exposure_is_monotone() {
     for ev in [-3.0, -1.5, 0.0, 1.0, 2.5] {
         let mut s = DevelopSettings::default();
         s.light.exposure = ev;
-        let m = mean_luma(&render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).image);
+        let m = mean_luma(&render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).unwrap().image);
         assert!(m > prev, "{ev}: {m} <= {prev}");
         prev = m;
     }
@@ -63,7 +63,7 @@ fn directional_sliders() {
     let at = |id: &str, v: f64| {
         let mut s = DevelopSettings::default();
         controls::set(&mut s, id, v);
-        mean_luma(&render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).image)
+        mean_luma(&render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(96, 96)).unwrap().image)
     };
     let base = at("light.exposure", 0.0);
     assert!(at("light.shadows", 100.0) > base);
@@ -86,7 +86,7 @@ fn dehaze_does_not_crush_dark_regions_next_to_bright_ones() {
     let src = Rgb32f::from_fn(240, 160, |x, _| if x < 120 { [0.02, 0.03, 0.012] } else { [0.45, 0.5, 0.55] });
     let mut s = DevelopSettings::default();
     s.effects.dehaze = 80.0;
-    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 160)).image;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 160)).unwrap().image;
     for ch in 0..3 {
         let mut v: Vec<u8> = Vec::with_capacity(160 * 100);
         for y in 0..160 {
@@ -114,8 +114,8 @@ fn resolution_independence_of_local_contrast() {
     let mut s = DevelopSettings::default();
     s.effects.clarity = 80.0;
     s.light.shadows = 60.0;
-    let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(120, 120)).image;
-    let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(480, 480)).image;
+    let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(120, 120)).unwrap().image;
+    let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(480, 480)).unwrap().image;
     let bl = big.to_linear();
     let down = lightcraft_raster::resample::resize(&bl, small.width, small.height, lightcraft_raster::resample::Filter::Box).to_srgb8();
     let err: f32 = small.data.iter().zip(&down.data).map(|(a, b)| (a[1] as f32 - b[1] as f32).abs()).sum::<f32>() / small.len() as f32;
@@ -126,7 +126,7 @@ fn resolution_independence_of_local_contrast() {
 fn crop_and_straighten_output_size() {
     let mut s = DevelopSettings::default();
     s.crop.geometry = lightcraft_geom::crop_fit_angle(240.0, 160.0, 8.0, Some(1.0));
-    let r = render(&scene(), &SourceInfo::default(), &s, &RenderRequest::fit(200, 200));
+    let r = render(&scene(), &SourceInfo::default(), &s, &RenderRequest::fit(200, 200)).unwrap();
     assert_eq!((r.image.width, r.image.height), (200, 200));
 }
 
@@ -146,7 +146,7 @@ fn mask_brightens_only_inside() {
         adjust: lightcraft_develop::LocalAdjustments { exposure: 2.0, ..Default::default() },
         ..Default::default()
     });
-    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(100, 100)).image;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(100, 100)).unwrap().image;
     assert!(r.get(50, 50)[0] > r.get(5, 5)[0] + 40);
 }
 
@@ -162,7 +162,7 @@ fn perf_report() {
     let t = std::time::Instant::now();
     let n = 5;
     for _ in 0..n {
-        let _ = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(2560, 1440));
+        let _ = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(2560, 1440)).unwrap();
     }
     eprintln!("render 2160x1440 from 6 MP: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
 }
@@ -174,7 +174,7 @@ fn unedited_rendered_source_is_passthrough() {
     let src8 = lightcraft_raster::Rgba8::from_fn(256, 4, |x, y| [x as u8, (x as u8).wrapping_add(y as u8 * 40), 255 - x as u8, 255]);
     let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
     let src = src8.to_linear().map(|c| m.apply_f32(c));
-    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(256, 4)).image;
+    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(256, 4)).unwrap().image;
     let mut worst = 0i32;
     for (a, b) in src8.data.iter().zip(&r.data) {
         for c in 0..3 {
@@ -195,7 +195,7 @@ fn unedited_neutral_near_whites_are_passthrough() {
     });
     let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
     let src = src8.to_linear().map(|c| m.apply_f32(c));
-    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(vals.len(), 1)).image;
+    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(vals.len(), 1)).unwrap().image;
     let got: Vec<[u8; 3]> = r.data.iter().map(|p| [p[0], p[1], p[2]]).collect();
     let want: Vec<[u8; 3]> = vals.iter().map(|&v| [v, v, v]).collect();
     assert_eq!(got, want);
@@ -254,8 +254,8 @@ fn stage_cache_matches_uncached_render_through_a_slider_session() {
     for (i, step) in steps.iter().enumerate() {
         step(&mut s);
         for req in [&full, &draft] {
-            let a = render_cached(&src, &info, &s, req, &cache).image;
-            let b = render(&src, &info, &s, req).image;
+            let a = render_cached(&src, &info, &s, req, &cache).unwrap().image;
+            let b = render(&src, &info, &s, req).unwrap().image;
             if req.quality == Quality::Draft && i == 6 {
                 // a draft while noise reduction changes keeps the wide planes of the image before it
                 let d = max_diff(&a, &b);
@@ -273,7 +273,7 @@ fn stage_cache_matches_uncached_render_through_a_slider_session() {
     assert_eq!(cache.bytes(), 0);
     // a different source buffer never hits another source's entries
     let other = Arc::new(Rgb32f::filled(src.width, src.height, [0.3, 0.3, 0.3]));
-    assert_eq!(render_cached(&other, &info, &s, &full, &cache).image, render(&other, &info, &s, &full).image);
+    assert_eq!(render_cached(&other, &info, &s, &full, &cache).unwrap().image, render(&other, &info, &s, &full).unwrap().image);
 }
 
 #[test]
@@ -287,22 +287,204 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
     let full = RenderRequest { quality: Quality::Full, ..draft };
     let mut s = typical_edits();
     s.effects.clarity = 60.0;
-    render_cached(&src, &info, &s, &draft, &cache);
+    render_cached(&src, &info, &s, &draft, &cache).unwrap();
     let clarity_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.clarity.clone()).unwrap().1;
     let first = clarity_plane(&cache);
     s.detail.nr_luminance = 50.0;
-    render_cached(&src, &info, &s, &draft, &cache);
+    render_cached(&src, &info, &s, &draft, &cache).unwrap();
     assert!(Arc::ptr_eq(&first, &clarity_plane(&cache)), "a draft redid the clarity plane for a noise-reduction change");
     for v in [10.0, 45.0, 80.0] {
         s.detail.nr_luminance = v;
         s.detail.nr_color = v / 2.0;
-        let a = render_cached(&src, &info, &s, &draft, &cache).image;
-        let d = max_diff(&a, &render(&src, &info, &s, &draft).image);
+        let a = render_cached(&src, &info, &s, &draft, &cache).unwrap().image;
+        let d = max_diff(&a, &render(&src, &info, &s, &draft).unwrap().image);
         // close to the exact draft (a few levels at edges, where clarity is strong)
         assert!(d <= 8, "nr {v}: {d}");
         // a full-quality render after the drafts is exact (it never takes the stand-in planes)
-        assert_eq!(render_cached(&src, &info, &s, &full, &cache).image, render(&src, &info, &s, &full).image, "nr {v}");
+        assert_eq!(render_cached(&src, &info, &s, &full, &cache).unwrap().image, render(&src, &info, &s, &full).unwrap().image, "nr {v}");
     }
+}
+
+/// [`typical_edits`] plus masks of every kind the alpha cache must tell apart: ones that read
+/// only the frame (gradients, a brush), the image (Auto Mask, Subject, Refine Edges) or the image
+/// and the exposure (luminance and colour range, Sky).
+fn masked_edits() -> DevelopSettings {
+    use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let comp = |op: MaskOp, shape: MaskShape| MaskComponent { name: None, op, invert: false, shape };
+    let mask = |id: u32, components: Vec<MaskComponent>, refine: f64| Mask {
+        id,
+        components,
+        adjust: LocalAdjustments { exposure: 0.4 * (id as f64 - 3.0), clarity: 20.0, noise: 30.0, ..Default::default() },
+        refine,
+        ..Default::default()
+    };
+    let stroke = |y: f64, auto_mask: bool| BrushStroke {
+        points: (0..12).map(|k| Point::new(0.1 + k as f64 * 0.06, y)).collect(),
+        size: 0.05,
+        auto_mask,
+        ..Default::default()
+    };
+    let mut s = typical_edits();
+    s.masks = vec![
+        mask(
+            1,
+            vec![
+                comp(MaskOp::Add, MaskShape::Radial { center: Point::new(0.4, 0.5), rx: 0.3, ry: 0.2, angle: 10.0, feather: 50.0, invert: false }),
+                comp(MaskOp::Subtract, MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(0.0, 0.4) }),
+            ],
+            0.0,
+        ),
+        mask(2, vec![comp(MaskOp::Add, MaskShape::Linear { start: Point::new(0.5, 1.0), end: Point::new(0.5, 0.3) })], 60.0),
+        mask(3, vec![comp(MaskOp::Add, MaskShape::LuminanceRange { lo: 0.3, hi: 0.7, lo_feather: 0.1, hi_feather: 0.1 })], 0.0),
+        mask(4, vec![comp(MaskOp::Add, MaskShape::ColorRange { samples: vec![[0.6, -0.05, -0.08]], refine: 50.0 })], 0.0),
+        mask(5, vec![comp(MaskOp::Add, MaskShape::Brush { strokes: vec![stroke(0.3, false), stroke(0.7, true)] })], 0.0),
+        mask(6, vec![comp(MaskOp::Add, MaskShape::Sky), comp(MaskOp::Intersect, MaskShape::Background)], 0.0),
+    ];
+    s
+}
+
+/// A cached render with masks is the same image as an uncached one through any edit, global or
+/// to a mask, at either size.
+#[test]
+fn stage_cache_with_masks_matches_uncached_render_through_a_slider_session() {
+    use crate::{Quality, StageCache, render_cached};
+    use lightcraft_develop::{BrushStroke, MaskShape};
+    use lightcraft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(scene());
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let full = RenderRequest::fit(200, 200);
+    let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(120, 120) };
+    let mut s = masked_edits();
+    let steps: Vec<Box<dyn Fn(&mut DevelopSettings)>> = vec![
+        Box::new(|_| {}),
+        Box::new(|s| s.light.exposure = -0.6),
+        Box::new(|s| s.light.contrast = 30.0),
+        Box::new(|s| s.masks[0].adjust.exposure = 1.2),
+        Box::new(|s| s.masks[1].refine = 30.0),
+        Box::new(|s| s.masks[2].components[0].shape = MaskShape::LuminanceRange { lo: 0.2, hi: 0.6, lo_feather: 0.1, hi_feather: 0.2 }),
+        Box::new(|s| s.masks[3].adjust.amount = 40.0),
+        Box::new(|s| s.masks[4].invert = true),
+        Box::new(|s| {
+            if let MaskShape::Brush { strokes } = &mut s.masks[4].components[0].shape {
+                strokes.push(BrushStroke { points: vec![Point::new(0.5, 0.5), Point::new(0.6, 0.55)], erase: true, ..Default::default() });
+            }
+        }),
+        Box::new(|s| s.masks[5].visible = false),
+        Box::new(|s| s.masks.swap(0, 1)),
+        Box::new(|s| {
+            s.wb.mode = lightcraft_develop::WbMode::Custom;
+            s.wb.temp = 4200.0;
+        }),
+        Box::new(|s| s.effects.clarity = -20.0),
+        Box::new(|s| s.masks[5].visible = true),
+        Box::new(|s| s.crop.geometry.rect = lightcraft_geom::Rect::new(0.05, 0.1, 0.9, 0.85)),
+        Box::new(|s| s.light.exposure = 0.9),
+        // (last: a draft then keeps the wide planes of the image before noise reduction)
+        Box::new(|s| s.detail.nr_luminance = 40.0),
+    ];
+    let nr_step = steps.len() - 1;
+    for (i, step) in steps.iter().enumerate() {
+        step(&mut s);
+        for req in [&full, &draft] {
+            let a = render_cached(&src, &info, &s, req, &cache).unwrap().image;
+            let b = render(&src, &info, &s, req).unwrap().image;
+            if i != nr_step || req.quality != Quality::Draft {
+                assert_eq!(a, b, "step {i} {:?}", req.quality);
+            }
+            // and the alphas held are those a cold cache evaluates
+            let fresh = StageCache::default();
+            render_cached(&src, &info, &s, req, &fresh).unwrap();
+            let (warm, cold) = (cached_alphas(&cache), cached_alphas(&fresh));
+            assert_eq!(warm.len(), cold.len(), "step {i} {:?}", req.quality);
+            for (k, (a, b)) in warm.iter().zip(&cold).enumerate() {
+                assert!(**a == **b, "step {i} {:?}: mask {k} is stale", req.quality);
+            }
+        }
+    }
+}
+
+/// The alphas held by the stage cache's most recent entry, in mask order.
+fn cached_alphas(cache: &crate::StageCache) -> Vec<std::sync::Arc<lightcraft_raster::Plane>> {
+    cache.entries.lock().unwrap().last().unwrap().masks.planes().cloned().collect()
+}
+
+#[test]
+fn mask_alphas_are_reused_until_what_they_read_changes() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::MaskShape;
+    use lightcraft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(scene());
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(200, 200);
+    // radial − linear (reads the frame only), linear with Refine Edges (the image), luminance
+    // range (the image and the exposure)
+    let mut s = masked_edits();
+    s.masks.truncate(3);
+    render_cached(&src, &info, &s, &req, &cache).unwrap();
+    let step = |s: &DevelopSettings| -> Vec<bool> {
+        let before = cached_alphas(&cache);
+        render_cached(&src, &info, s, &req, &cache).unwrap();
+        let after = cached_alphas(&cache);
+        assert_eq!(after.len(), before.len());
+        before.iter().zip(&after).map(|(a, b)| Arc::ptr_eq(a, b)).collect()
+    };
+    // exposure: only the range mask reads it
+    s.light.exposure += 0.5;
+    assert_eq!(step(&s), [true, true, false]);
+    // a mask's own sliders (except Amount) and global sliders no mask reads
+    s.masks[0].adjust.exposure = -1.0;
+    s.masks[2].adjust.clarity = 50.0;
+    s.effects.clarity = 40.0;
+    s.light.highlights = 10.0;
+    assert_eq!(step(&s), [true, true, true]);
+    // Amount scales the alpha
+    s.masks[1].adjust.amount = 50.0;
+    assert_eq!(step(&s), [true, false, true]);
+    // the image changes (white balance): the masks that read it
+    s.wb.mode = lightcraft_develop::WbMode::Custom;
+    s.wb.temp = 4000.0;
+    assert_eq!(step(&s), [true, false, false]);
+    // a shape moves: that mask only
+    s.masks[0].components[0].shape = MaskShape::Radial { center: Point::new(0.6, 0.5), rx: 0.3, ry: 0.2, angle: 10.0, feather: 50.0, invert: false };
+    assert_eq!(step(&s), [false, true, true]);
+    // the frame changes (a flip: same size): all of them
+    s.crop.flip_h = true;
+    assert_eq!(step(&s), [false, false, false]);
+    // a hidden mask's alpha is let go: only the visible masks' are held
+    s.masks[2].visible = false;
+    render_cached(&src, &info, &s, &req, &cache).unwrap();
+    assert_eq!(cached_alphas(&cache).len(), 2);
+}
+
+/// The memory a stage cache reports covers every buffer it holds, the mask alphas and the blurred
+/// chromaticity (local Noise / Moiré) included.
+#[test]
+fn stage_cache_bytes_count_mask_alphas_and_the_chroma_plane() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    use std::sync::Arc;
+    let src = Arc::new(scene());
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let mut s = DevelopSettings::default();
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.3, ry: 0.3, angle: 0.0, feather: 50.0, invert: false };
+    s.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+        adjust: LocalAdjustments { noise: 40.0, ..Default::default() },
+        ..Default::default()
+    });
+    let img = render_cached(&src, &info, &s, &RenderRequest::fit(200, 200), &cache).unwrap().image;
+    let n = img.width * img.height;
+    // the sampled and linear images (12 B/px each), log luminance and the texture band that local
+    // Noise reads (4 B/px each), the blurred chromaticity (12 B/px) and the mask's alpha (4 B/px)
+    assert_eq!(cache.bytes(), (12 + 12 + 4 + 4 + 12 + 4) * n);
 }
 
 #[test]
@@ -313,11 +495,11 @@ fn exposure_after_spatial_filters_equals_exposing_the_source() {
     let info = SourceInfo { raw: true, ..Default::default() };
     let mut s = typical_edits();
     s.light.exposure = 1.3;
-    let a = render(&src, &info, &s, &RenderRequest::fit(200, 200)).image;
+    let a = render(&src, &info, &s, &RenderRequest::fit(200, 200)).unwrap().image;
     let g = 2f32.powf(1.3);
     let scaled = src.map(|c| c.map(|v| v * g));
     s.light.exposure = 0.0;
-    let b = render(&scaled, &info, &s, &RenderRequest::fit(200, 200)).image;
+    let b = render(&scaled, &info, &s, &RenderRequest::fit(200, 200)).unwrap().image;
     let d = max_diff(&a, &b);
     assert!(d <= 2, "max difference {d}");
 }
@@ -354,7 +536,7 @@ fn color_range_sampling_respects_disabled_sections() {
             ..Default::default()
         });
         let overlay = RenderRequest { overlay: Overlay::Mask { id: 1, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 }, ..req };
-        let img = render(&src, &info, &s, &overlay).image;
+        let img = render(&src, &info, &s, &overlay).unwrap().image;
         assert_eq!(img.data[12 * 32 + 16], [255; 4], "the sampled colour is selected with {section} off");
     }
 }
@@ -384,25 +566,25 @@ fn sections_switched_off_render_as_defaults() {
     let src = Rgb32f::from_fn(32, 24, |x, y| [0.05 + x as f32 / 40.0, 0.1 + y as f32 / 30.0, 0.3]);
     let info = SourceInfo::default();
     let req = RenderRequest::fit(32, 24);
-    let plain = render(&src, &info, &DevelopSettings::default(), &req).image;
+    let plain = render(&src, &info, &DevelopSettings::default(), &req).unwrap().image;
     let mut s = DevelopSettings::default();
     s.light.exposure = 1.5;
     s.light.contrast = 40.0;
     s.color.saturation = -60.0;
     s.color.vibrance = 30.0;
     s.detail.sharpen_amount = 120.0;
-    let edited = render(&src, &info, &s, &req).image;
+    let edited = render(&src, &info, &s, &req).unwrap().image;
     assert_ne!(edited.data, plain.data);
     for section in ["light", "color", "detail"] {
         s.set_section_enabled(section, false);
     }
-    assert_eq!(render(&src, &info, &s, &req).image.data, plain.data, "every edited section off = the unedited photo");
+    assert_eq!(render(&src, &info, &s, &req).unwrap().image.data, plain.data, "every edited section off = the unedited photo");
     // one section back on brings back only its own adjustments
     s.set_section_enabled("light", true);
     let mut light_only = DevelopSettings::default();
     light_only.light.exposure = 1.5;
     light_only.light.contrast = 40.0;
-    assert_eq!(render(&src, &info, &s, &req).image.data, render(&src, &info, &light_only, &req).image.data);
+    assert_eq!(render(&src, &info, &s, &req).unwrap().image.data, render(&src, &info, &light_only, &req).unwrap().image.data);
     assert!(matches!(DevelopSettings::default().effective(), std::borrow::Cow::Borrowed(_)), "nothing is copied when every section is on");
 }
 
@@ -415,23 +597,23 @@ fn calibration_shifts_colours_but_keeps_greys() {
     let mut s = DevelopSettings::default();
     s.calibration.red_hue = 80.0;
     s.calibration.green_sat = -60.0;
-    let a = render(&grey, &info, &DevelopSettings::default(), &req).image;
-    let b = render(&grey, &info, &s, &req).image;
+    let a = render(&grey, &info, &DevelopSettings::default(), &req).unwrap().image;
+    let b = render(&grey, &info, &s, &req).unwrap().image;
     assert!(max_diff(&a, &b) <= 1);
     // a red patch rotates towards yellow (green rises relative to blue)
     let red = Rgb32f::filled(16, 16, [0.3, 0.04, 0.03]);
-    let r0 = render(&red, &info, &DevelopSettings::default(), &RenderRequest::fit(16, 16)).image.data[0];
-    let r1 = render(&red, &info, &s, &RenderRequest::fit(16, 16)).image.data[0];
+    let r0 = render(&red, &info, &DevelopSettings::default(), &RenderRequest::fit(16, 16)).unwrap().image.data[0];
+    let r1 = render(&red, &info, &s, &RenderRequest::fit(16, 16)).unwrap().image.data[0];
     assert!(r1[1] as i32 - r1[2] as i32 > r0[1] as i32 - r0[2] as i32 + 5, "{r0:?} -> {r1:?}");
     // shadows tint: magenta (+) lowers green in a dark grey
     let dark = Rgb32f::filled(16, 16, [0.01, 0.01, 0.01]);
     s = DevelopSettings::default();
     s.calibration.shadows_tint = 100.0;
-    let d = render(&dark, &info, &s, &RenderRequest::fit(16, 16)).image.data[0];
+    let d = render(&dark, &info, &s, &RenderRequest::fit(16, 16)).unwrap().image.data[0];
     assert!(d[1] + 3 < d[0], "{d:?}");
     // the section toggle disables it
     s.set_section_enabled("calibration", false);
-    let off = render(&dark, &info, &s, &RenderRequest::fit(16, 16)).image.data[0];
+    let off = render(&dark, &info, &s, &RenderRequest::fit(16, 16)).unwrap().image.data[0];
     assert!(off[1].abs_diff(off[0]) <= 1, "{off:?}");
 }
 
@@ -442,16 +624,16 @@ fn refine_saturation_tames_a_contrast_curve() {
     let req = RenderRequest::fit(16, 16);
     let sat = |p: [u8; 4]| p[0] as i32 - p[2] as i32;
     let mut s = DevelopSettings::default();
-    let flat = render(&src, &info, &s, &req).image.data[0];
+    let flat = render(&src, &info, &s, &req).unwrap().image.data[0];
     s.curve.master = vec![
         lightcraft_geom::Point::new(0.0, 0.0),
         lightcraft_geom::Point::new(0.3, 0.15),
         lightcraft_geom::Point::new(0.7, 0.85),
         lightcraft_geom::Point::new(1.0, 1.0),
     ];
-    let full = render(&src, &info, &s, &req).image.data[0];
+    let full = render(&src, &info, &s, &req).unwrap().image.data[0];
     s.curve.refine_saturation = 0.0;
-    let refined = render(&src, &info, &s, &req).image.data[0];
+    let refined = render(&src, &info, &s, &req).unwrap().image.data[0];
     assert!(sat(full) > sat(refined), "{flat:?} {full:?} {refined:?}");
     // the curve's tone change stays
     let y = |p: [u8; 4]| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
@@ -471,8 +653,8 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
     let blue = |img: &lightcraft_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
 
     // proofing sRGB on an sRGB render changes nothing but the warning
-    let plain = render(&src, &info, &s, &req(OutputSpace::Srgb, None)).image;
-    let same = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(Proof { space: OutputSpace::Srgb, ..Default::default() }))).image;
+    let plain = render(&src, &info, &s, &req(OutputSpace::Srgb, None)).unwrap().image;
+    let same = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(Proof { space: OutputSpace::Srgb, ..Default::default() }))).unwrap().image;
     assert_eq!(plain, same);
     let warned = render(
         &src,
@@ -480,6 +662,7 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
         &s,
         &req(OutputSpace::Srgb, Some(Proof { space: OutputSpace::Srgb, dest_warning: true, display_warning: false, profile: 0 })),
     )
+    .unwrap()
     .image;
     let n = red(&warned);
     assert!(n > 0 && n < warned.len(), "{n}");
@@ -493,12 +676,14 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
             proof: Some(Proof { space: OutputSpace::Srgb, dest_warning: true, display_warning: true, profile: 0 }),
             ..RenderRequest::fit(64, 8)
         },
-    );
+    )
+    .unwrap();
     assert_eq!(red(&g.image) + blue(&g.image), 0);
 
     // a wide-gamut render proofed for sRGB loses the colours sRGB can't hold
-    let wide = render(&src, &info, &s, &req(OutputSpace::DisplayP3, None)).image;
-    let proofed = render(&src, &info, &s, &req(OutputSpace::DisplayP3, Some(Proof { space: OutputSpace::Srgb, ..Default::default() }))).image;
+    let wide = render(&src, &info, &s, &req(OutputSpace::DisplayP3, None)).unwrap().image;
+    let proofed =
+        render(&src, &info, &s, &req(OutputSpace::DisplayP3, Some(Proof { space: OutputSpace::Srgb, ..Default::default() }))).unwrap().image;
     assert_ne!(wide, proofed);
     // proofing a wider space than the display: what the display can't show is flagged blue
     let pro = render(
@@ -507,6 +692,7 @@ fn soft_proof_maps_into_the_proof_gamut_and_flags_what_does_not_fit() {
         &s,
         &req(OutputSpace::Srgb, Some(Proof { space: OutputSpace::ProPhoto, dest_warning: true, display_warning: true, profile: 0 })),
     )
+    .unwrap()
     .image;
     assert!(blue(&pro) > 0);
     assert!(red(&pro) < n, "ProPhoto holds more than sRGB");
@@ -525,22 +711,23 @@ fn display_space_renders_like_the_matching_output_space() {
     let req = |space, display, proof| RenderRequest { space, display, proof, ..RenderRequest::fit(120, 120) };
     for space in [OutputSpace::Srgb, OutputSpace::DisplayP3] {
         let d = DisplaySpace::of(space, 7).unwrap();
-        let want = render(&src, &info, &s, &req(space, None, None)).image;
-        let got = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(d), None)).image;
+        let want = render(&src, &info, &s, &req(space, None, None)).unwrap().image;
+        let got = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(d), None)).unwrap().image;
         assert!(max_diff(&got, &want) <= 1, "{space:?}: {}", max_diff(&got, &want));
     }
     // a wide display shows the saturated colours sRGB clips
-    let srgb = render(&src, &info, &s, &req(OutputSpace::Srgb, None, None)).image;
-    let p3 = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::DisplayP3, 1).unwrap()), None)).image;
+    let srgb = render(&src, &info, &s, &req(OutputSpace::Srgb, None, None)).unwrap().image;
+    let p3 = render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::DisplayP3, 1).unwrap()), None)).unwrap().image;
     assert!(max_diff(&srgb, &p3) > 4);
 
     // soft proofing on a display: the display gamut warning is about *this* display
     let blue = |img: &lightcraft_raster::Rgba8| img.data.iter().filter(|p| p[2] == 255 && p[0] == 0 && p[1] < 80).count();
     let pro = Some(Proof { space: OutputSpace::ProPhoto, dest_warning: false, display_warning: true, profile: 0 });
-    let on_srgb = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Srgb, 2).unwrap()), pro)).image);
-    let on_wide = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Rec2020, 3).unwrap()), pro)).image);
+    let on_srgb = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Srgb, 2).unwrap()), pro)).unwrap().image);
+    let on_wide =
+        blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, Some(DisplaySpace::of(OutputSpace::Rec2020, 3).unwrap()), pro)).unwrap().image);
     assert!(on_srgb > 0 && on_wide < on_srgb, "{on_srgb} {on_wide}");
-    let plain = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, None, pro)).image);
+    let plain = blue(&render(&src, &info, &s, &req(OutputSpace::Srgb, None, pro)).unwrap().image);
     assert_eq!(plain, on_srgb, "an sRGB display warns like no display profile");
 }
 
@@ -564,18 +751,18 @@ fn soft_proof_through_a_device_table() {
     let info = SourceInfo { raw: true, ..Default::default() };
     let white = Rgb32f::from_fn(16, 4, |_, _| [100.0; 3]);
     let req = |proof| RenderRequest { space: OutputSpace::Srgb, proof, ..RenderRequest::fit(16, 4) };
-    let plain = render(&white, &info, &DevelopSettings::default(), &req(None)).image;
+    let plain = render(&white, &info, &DevelopSettings::default(), &req(None)).unwrap().image;
     let pr = Proof { profile: id, dest_warning: true, ..Default::default() };
-    let paper = render(&white, &info, &DevelopSettings::default(), &req(Some(pr))).image;
+    let paper = render(&white, &info, &DevelopSettings::default(), &req(Some(pr))).unwrap().image;
     assert!(plain.data[0][0] > 250 && paper.data[0][0] < 240 && paper.data[0][0] > 200, "{:?} {:?}", plain.data[0], paper.data[0]);
     // an unknown id falls back to the space proof (sRGB on sRGB: no change)
-    let none = render(&white, &info, &DevelopSettings::default(), &req(Some(Proof { profile: 12345, ..Default::default() }))).image;
+    let none = render(&white, &info, &DevelopSettings::default(), &req(Some(Proof { profile: 12345, ..Default::default() }))).unwrap().image;
     assert_eq!(none, plain);
     // saturated colours are flagged
     let src = scene();
     let mut s = DevelopSettings::default();
     s.color.saturation = 100.0;
-    let warned = render(&src, &info, &s, &req(Some(pr))).image;
+    let warned = render(&src, &info, &s, &req(Some(pr))).unwrap().image;
     assert!(warned.data.iter().any(|p| p[..3] == [255, 0, 0]));
 }
 
@@ -600,14 +787,14 @@ fn tint_negative_is_green_and_positive_is_magenta() {
         SourceInfo { raw: true, as_shot_temp: 4200.0, as_shot_tint: 15.0, camera_color: Some(camera_color(4200.0, 15.0)), ..Default::default() },
     ] {
         let mut s = DevelopSettings::default();
-        let neutral = render(&src, &info, &s, &RenderRequest::fit(16, 16)).image.get(8, 8);
+        let neutral = render(&src, &info, &s, &RenderRequest::fit(16, 16)).unwrap().image.get(8, 8);
         assert!((neutral[0] as i16 - neutral[1] as i16).abs() <= 1);
         assert!((neutral[2] as i16 - neutral[1] as i16).abs() <= 1);
         s.wb.mode = WbMode::Custom;
         s.wb.temp = info.as_shot_temp;
         for delta in [-50.0, 50.0] {
             s.wb.tint = info.as_shot_tint + delta;
-            let p = render(&src, &info, &s, &RenderRequest::fit(16, 16)).image.get(8, 8);
+            let p = render(&src, &info, &s, &RenderRequest::fit(16, 16)).unwrap().image.get(8, 8);
             let magenta = (p[0] as f64 + p[2] as f64) / 2.0 - p[1] as f64;
             assert!(magenta * delta > 100.0, "delta {delta} must follow the green/magenta track, got {p:?}");
         }
@@ -654,9 +841,9 @@ fn legacy_relative_white_balance_renders_as_before_on_a_kelvin_raw() {
             (k.wb.temp, k.wb.tint, k.wb.scale) = (kt, ktint, WbScale::Kelvin);
             assert!(near(old, wb_matrix_for(&new_info, &k), 3e-4), "as shot {as_t}/{as_tint}, {temp}/{tint} → {kt}/{ktint}");
             // and the rendered pixels agree
-            let a = render(&src, &old_info, &s, &RenderRequest::fit(16, 16)).image;
-            let b = render(&src, &new_info, &s, &RenderRequest::fit(16, 16)).image;
-            let c = render(&src, &new_info, &k, &RenderRequest::fit(16, 16)).image;
+            let a = render(&src, &old_info, &s, &RenderRequest::fit(16, 16)).unwrap().image;
+            let b = render(&src, &new_info, &s, &RenderRequest::fit(16, 16)).unwrap().image;
+            let c = render(&src, &new_info, &k, &RenderRequest::fit(16, 16)).unwrap().image;
             for (x, (y, z)) in a.data.iter().zip(b.data.iter().zip(&c.data)) {
                 assert_eq!(x, y, "as shot {as_t}/{as_tint}, {temp}/{tint}");
                 assert!(x.iter().zip(z).all(|(p, q)| p.abs_diff(*q) <= 1), "{x:?} {z:?}");
@@ -684,7 +871,7 @@ fn legacy_relative_white_balance_renders_as_before_on_a_kelvin_raw() {
     assert_eq!(legacy_to_kelvin(6500.0, 0.0, (f64::NAN, 0.0)), (6500.0, 0.0));
     assert_eq!(crate::local::legacy_white(f64::NAN, 0.0, (5000.0, 0.0)), None);
     let hostile = SourceInfo { raw: true, legacy_relative_wb: true, as_shot_temp: f64::NAN, as_shot_tint: 0.0, ..Default::default() };
-    let _ = render(&Rgb32f::filled(4, 4, [0.2; 3]), &hostile, &s, &RenderRequest::fit(4, 4));
+    let _ = render(&Rgb32f::filled(4, 4, [0.2; 3]), &hostile, &s, &RenderRequest::fit(4, 4)).unwrap();
 }
 
 /// Before an edit, the settings' white balance is brought onto the source's scale: Kelvin raws mark it (converting
@@ -804,7 +991,7 @@ fn stored_process_numbers_render_with_a_known_process() {
         for s in [DevelopSettings::default(), edited.clone()] {
             for req in [RenderRequest::fit(96, 96), deep] {
                 let out = |s: &DevelopSettings| {
-                    let r = render(&src, info, s, &req);
+                    let r = render(&src, info, s, &req).unwrap();
                     (r.image.data, r.deep)
                 };
                 let v1 = out(&with(&s, ProcessVersion::V1));
@@ -835,7 +1022,7 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         s.light.highlights = -60.0;
         s.light.shadows = 60.0;
         let t = std::time::Instant::now();
-        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(280, 180));
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(280, 180)).unwrap();
         assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
     }

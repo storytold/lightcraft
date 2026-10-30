@@ -82,7 +82,7 @@ fn manual_distortion_straightens_barrel_grid() {
     let src = synth(w, h, barrel_undistort(w as f64, h as f64, k), |p| [grid_value(p, 40.0); 3]);
     let rows = [12usize, 150, 308];
     let measure = |s: &DevelopSettings| {
-        let img = render(&src, &SourceInfo::default(), s, &RenderRequest::fit(w, h)).image;
+        let img = render(&src, &SourceInfo::default(), s, &RenderRequest::fit(w, h)).unwrap().image;
         let xs: Vec<f64> = rows.iter().map(|&y| line_x(&img, y, 40.0, 15.0)).collect();
         let ys: Vec<f64> = [12usize, 220, 468].iter().map(|&x| line_y(&img, x, 40.0, 15.0)).collect();
         (spread(&xs), spread(&ys))
@@ -119,17 +119,17 @@ fn fringe(img: &Rgba8) -> f64 {
 fn remove_ca_aligns_colour_planes() {
     let (w, h) = (640usize, 420usize);
     let src = ca_source(w, h, 0.005, -0.004);
-    let before = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    let before = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).unwrap().image;
     let mut s = DevelopSettings::default();
     s.optics.remove_ca = true;
-    let after = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+    let after = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).unwrap().image;
     let (fb, fa) = (fringe(&before), fringe(&after));
     assert!(fa < fb * 0.35, "fringing {fb:.2} → {fa:.2}");
     // manual sliders can do the same: +ca_red shrinks... the red plane is sampled further out
     let mut m = DevelopSettings::default();
     m.optics.ca_red = 0.005 / 0.003 * 100.0;
     m.optics.ca_blue = -0.004 / 0.003 * 100.0;
-    let manual = render(&src, &SourceInfo::default(), &m, &RenderRequest::fit(w, h)).image;
+    let manual = render(&src, &SourceInfo::default(), &m, &RenderRequest::fit(w, h)).unwrap().image;
     assert!(fringe(&manual) < fb * 0.35, "manual {:.2}", fringe(&manual));
 }
 
@@ -144,17 +144,17 @@ fn profile_corrections_use_embedded_lens_only_when_enabled() {
     };
     let info = SourceInfo { lens: Some(lens), ..SourceInfo::default() };
     let mut s = DevelopSettings::default();
-    let off = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
-    let plain = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+    let off = render(&src, &info, &s, &RenderRequest::fit(w, h)).unwrap().image;
+    let plain = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).unwrap().image;
     assert_eq!(off.data, plain.data, "profile corrections off: embedded data ignored");
     s.optics.lens_profile = true;
-    let on = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+    let on = render(&src, &info, &s, &RenderRequest::fit(w, h)).unwrap().image;
     assert_ne!(on.data, off.data);
     // corners brightened by the embedded vignette correction
     assert!(on.get(2, 2)[1] as i32 >= off.get(2, 2)[1] as i32);
     s.optics.profile_distortion = 0.0;
     s.optics.profile_vignetting = 0.0;
-    let zero = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+    let zero = render(&src, &info, &s, &RenderRequest::fit(w, h)).unwrap().image;
     assert_eq!(zero.data, off.data, "0 % = no correction");
 }
 
@@ -173,8 +173,8 @@ fn optics_preview_matches_export() {
     s.optics.vignetting_midpoint = 30.0;
     s.optics.ca_red = 30.0;
     s.optics.defringe_purple_amount = 8.0;
-    let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 240)).image;
-    let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(960, 960)).image;
+    let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 240)).unwrap().image;
+    let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(960, 960)).unwrap().image;
     let err = mean_abs_diff_downscaled(&small, &big);
     assert!(err < 4.0, "mean abs error {err}");
 }
@@ -225,13 +225,13 @@ fn manual_transforms_straighten_known_keystone() {
         let fwd = crate::transform::manual(&g);
         let src = keystoned_grid(w, h, fwd, 40.0);
         let s = DevelopSettings { geometry: g.clone(), ..Default::default() };
-        let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+        let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).unwrap().image;
         let xs: Vec<f64> = [60usize, 150, 260].iter().map(|&y| line_x(&img, y, 200.0, 15.0)).collect();
         let ys: Vec<f64> = [60usize, 220, 420].iter().map(|&x| line_y(&img, x, 200.0, 15.0)).collect();
         assert!(spread(&xs) < 1.0 && (xs[0] - 200.0).abs() < 1.0, "{g:?}: vertical line at {xs:?}");
         assert!(spread(&ys) < 1.0 && (ys[0] - 200.0).abs() < 1.0, "{g:?}: horizontal line at {ys:?}");
         // and without the correction the lines are not straight/where they belong
-        let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+        let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).unwrap().image;
         let rx: Vec<f64> = [60usize, 150, 260].iter().map(|&y| line_x(&raw, y, 200.0, 15.0)).collect();
         let ry: Vec<f64> = [60usize, 220, 420].iter().map(|&x| line_y(&raw, x, 200.0, 15.0)).collect();
         assert!(spread(&rx) > 1.5 || spread(&ry) > 1.5 || (rx[0] - 200.0).abs() > 1.5, "{g:?}: source should be distorted");
@@ -241,6 +241,7 @@ fn manual_transforms_straighten_known_keystone() {
 fn blank_fraction(img: &Rgba8) -> f64 {
     let blank =
         crate::render(&Rgb32f::filled(4, 4, crate::geometry::BLANK), &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(4, 4))
+            .unwrap()
             .image
             .get(1, 1);
     img.data.iter().filter(|p| (0..3).all(|i| (p[i] as i32 - blank[i] as i32).abs() <= 1)).count() as f64 / img.len() as f64
@@ -252,10 +253,10 @@ fn constrain_crop_removes_blank_areas() {
     let mut s = DevelopSettings::default();
     s.geometry.vertical = -60.0;
     s.geometry.rotate = 4.0;
-    let free = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+    let free = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).unwrap().image;
     assert!(blank_fraction(&free) > 0.03, "keystone leaves blank corners: {}", blank_fraction(&free));
     s.geometry.constrain_crop = true;
-    let c = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+    let c = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).unwrap().image;
     assert_eq!((c.width, c.height), (free.width, free.height), "constrain keeps the aspect");
     assert!(blank_fraction(&c) < 0.002, "constrained: {}", blank_fraction(&c));
 }
@@ -269,8 +270,8 @@ fn transforms_preview_matches_export() {
     s.geometry.rotate = 2.5;
     s.geometry.scale = 105.0;
     s.geometry.constrain_crop = true;
-    let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 240)).image;
-    let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(960, 960)).image;
+    let small = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 240)).unwrap().image;
+    let big = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(960, 960)).unwrap().image;
     assert_eq!(small.width * 4, big.width);
     let err = mean_abs_diff_downscaled(&small, &big);
     assert!(err < 4.0, "mean abs error {err}");
@@ -331,7 +332,7 @@ fn upright_render(src: &Rgb32f, mode: Upright) -> Rgba8 {
     let mut s = DevelopSettings::default();
     s.geometry.upright = mode;
     s.geometry.upright_transform = Some(crate::upright::auto_transform(src, &SourceInfo::default(), &s, mode));
-    render(src, &SourceInfo::default(), &s, &RenderRequest::fit(src.width, src.height)).image
+    render(src, &SourceInfo::default(), &s, &RenderRequest::fit(src.width, src.height)).unwrap().image
 }
 
 #[test]
@@ -340,7 +341,7 @@ fn upright_vertical_fixes_converging_verticals() {
     // "shot from below" and slightly rolled: the inverse of what the correction should do
     let shot = lightcraft_develop::Geometry { vertical: 35.0, rotate: -2.0, ..Default::default() };
     let src = keystoned_grid(w, h, crate::transform::manual(&shot), 48.0);
-    let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).unwrap().image;
     let before = vertical_line_track(&raw, 130.0);
     assert!(spread(&before) > 6.0, "source verticals converge: {before:?}");
     for mode in [Upright::Vertical, Upright::Auto, Upright::Full] {
@@ -399,7 +400,7 @@ fn guided_upright_from_two_vertical_guides() {
     s.geometry.upright = Upright::Guided;
     s.geometry.guides =
         vec![(norm(Point::new(-0.5, -0.5)), norm(Point::new(-0.5, 0.5))), (norm(Point::new(0.55, -0.4)), norm(Point::new(0.55, 0.5)))];
-    let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+    let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).unwrap().image;
     for x0 in [180.0, 360.0, 540.0] {
         let t = vertical_line_track(&img, x0);
         assert!(spread(&t) < 1.2, "guided: line near {x0} at {t:?}");
@@ -426,9 +427,9 @@ fn upright_analysis_is_resolution_independent() {
     // a setting that names the mode without a stored transform renders like the stored one
     let mut s1 = DevelopSettings::default();
     s1.geometry.upright = Upright::Vertical;
-    let lazy = render(&small, &SourceInfo::default(), &s1, &RenderRequest::fit(300, 300)).image;
+    let lazy = render(&small, &SourceInfo::default(), &s1, &RenderRequest::fit(300, 300)).unwrap().image;
     s1.geometry.upright_transform = Some(b);
-    let stored = render(&small, &SourceInfo::default(), &s1, &RenderRequest::fit(300, 300)).image;
+    let stored = render(&small, &SourceInfo::default(), &s1, &RenderRequest::fit(300, 300)).unwrap().image;
     assert_eq!(lazy.data, stored.data);
 }
 

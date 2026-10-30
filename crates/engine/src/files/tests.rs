@@ -658,7 +658,7 @@ fn corpus_rw2_distortion_matches_the_camera_jpeg() {
         assert_eq!(probe_bytes("x.dng", &dng).unwrap().embedded_lens, probed.embedded_lens, "{name}: lost in the DNG");
         let mut s = lightcraft_develop::DevelopSettings::default();
         let render = |s: &lightcraft_develop::DevelopSettings| {
-            lightcraft_pipeline::render(&src, &info, s, &lightcraft_pipeline::RenderRequest::fit(EDGE, EDGE)).image
+            lightcraft_pipeline::render(&src, &info, s, &lightcraft_pipeline::RenderRequest::fit(EDGE, EDGE)).unwrap().image
         };
         let before = render(&s);
         s.optics.lens_profile = true;
@@ -972,7 +972,7 @@ fn clipped_highlights_stay_neutral_when_darkened() {
     let mut h100 = lightcraft_develop::DevelopSettings::default();
     h100.light.highlights = -100.0;
     for (name, s) in [("Highlights -100", h100), ("#523's edit", issue)] {
-        let out = render(&img, &info, &s, &RenderRequest::fit(96, 64)).image;
+        let out = render(&img, &info, &s, &RenderRequest::fit(96, 64)).unwrap().image;
         let p = out.get(28, 32);
         assert!(p[1] < 250, "{name}: the clipped light is darkened ({p:?})");
         let spread = p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2]);
@@ -998,7 +998,7 @@ fn darkened_ramp(rows: std::ops::Range<usize>, height: usize) -> ([[u8; 4]; 3], 
     colour.apply(&mut img);
     let mut s = lightcraft_develop::DevelopSettings::default();
     s.light.exposure = -2.0;
-    let out = render(&img, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, height)).image;
+    let out = render(&img, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, height)).unwrap().image;
     let step = |x: usize| {
         let (a, b) = (out.get(x - 1, y), out.get(x, y));
         (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0)
@@ -1062,7 +1062,7 @@ fn second_clip(top: usize, strip: usize, band: usize) -> ([[u8; 4]; 2], u8) {
     colour.apply(&mut img);
     let mut s = lightcraft_develop::DevelopSettings::default();
     s.light.exposure = -2.0;
-    let out = render(&img, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, h)).image;
+    let out = render(&img, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, h)).unwrap().image;
     let step = |x: usize| {
         let (a, b) = (out.get(x - 1, y), out.get(x, y));
         (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0)
@@ -1271,7 +1271,7 @@ fn dng_sky_matte_drives_the_sky_mask() {
     };
     let s = DevelopSettings { masks: vec![sky], ..Default::default() };
     let req = RenderRequest::fit(8, 16);
-    let green = |s: &DevelopSettings, info: &SourceInfo, y: usize| render(&img, info, s, &req).image.get(4, y)[1] as i32;
+    let green = |s: &DevelopSettings, info: &SourceInfo, y: usize| render(&img, info, s, &req).unwrap().image.get(4, y)[1] as i32;
     let plain = DevelopSettings::default();
     assert_eq!(green(&s, &info, 2), green(&plain, &info, 2), "no sky at the top");
     assert!(green(&s, &info, 13) + 40 < green(&plain, &info, 13), "the sky at the bottom is darkened");
@@ -1298,8 +1298,8 @@ fn dng_white_balance_uses_the_camera_colour_model() {
     let mut s = lightcraft_develop::DevelopSettings::default();
     (s.wb.mode, s.wb.temp, s.wb.tint) = (lightcraft_develop::WbMode::Custom, 3000.0, 20.0);
     let req = RenderRequest::fit(32, 32);
-    let camera = render(&img, &info, &s, &req).image;
-    let adapted = render(&img, &SourceInfo { camera_color: None, ..info.clone() }, &s, &req).image;
+    let camera = render(&img, &info, &s, &req).unwrap().image;
+    let adapted = render(&img, &SourceInfo { camera_color: None, ..info.clone() }, &s, &req).unwrap().image;
     assert_ne!(camera.data, adapted.data);
 }
 
@@ -1359,11 +1359,11 @@ fn dng_gain_table_map_renders_when_asked() {
     let mut s = lightcraft_develop::DevelopSettings::default();
     // (darker, so that ×4 never reaches white)
     s.light.exposure = -3.0;
-    let off = render(&img, &info, &s, &req).image;
-    assert_eq!(off.data, render(&img, &plain_info, &s, &req).image.data, "off: the map changes nothing");
+    let off = render(&img, &info, &s, &req).unwrap().image;
+    assert_eq!(off.data, render(&img, &plain_info, &s, &req).unwrap().image.data, "off: the map changes nothing");
     s.profile.camera_local_tone = true;
     assert!(s.to_json().to_string().contains("camera_local_tone"), "the option is part of the settings (and their hash)");
-    let on = render(&img, &info, &s, &req).image;
+    let on = render(&img, &info, &s, &req).unwrap().image;
     // brightness gained, per column: none at the left edge, most at the right
     let column = |im: &lightcraft_raster::Rgba8, x: usize| (0..im.height).map(|y| im.data[y * im.width + x][1] as f32).sum::<f32>();
     let gain = |x: usize| column(&on, x) / column(&off, x).max(1.0);
@@ -1373,9 +1373,9 @@ fn dng_gain_table_map_renders_when_asked() {
     // the photo turned upside down: the map follows the raw, so the brightened side swaps
     s.orientation = lightcraft_geom::Orientation::Rotate180;
     s.profile.camera_local_tone = false;
-    let off = render(&img, &info, &s, &req).image;
+    let off = render(&img, &info, &s, &req).unwrap().image;
     s.profile.camera_local_tone = true;
-    let on = render(&img, &info, &s, &req).image;
+    let on = render(&img, &info, &s, &req).unwrap().image;
     let gain = |x: usize| column(&on, x) / column(&off, x).max(1.0);
     assert!(gain(0) > 1.4 && (gain(last) - 1.0).abs() < 0.08, "rotated: {} … {}", gain(0), gain(last));
     // a rendered (non-raw) source never gets it
