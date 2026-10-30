@@ -996,7 +996,7 @@
   "In library": "ბიბლიოთეკაში",
   "In memory — nothing is saved": "მეხსიერებაში — არაფერი ინახება",
   "In use": "გამოიყენება",
-  "In-memory session: these settings last until LightCraft quits.": "სესია მეხსიერებაში: ეს პარამეტრები LightCraft-იდან გასვლამდე მოქმედებს.",
+  "In-memory session: the library's settings last until LightCraft quits.": "სესია მეხსიერებაში: ბიბლიოთეკის პარამეტრები LightCraft-იდან გასვლამდე მოქმედებს.",
   "Include on Export": "ექსპორტისას ჩართვა",
   "Include selected photos": "მონიშნული ფოტოების ჩართვა",
   "Include subfolders": "ქვესაქაღალდეების ჩართვა",
@@ -2734,5 +2734,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Files": "ფაილები",
+  "Monitor": "მონიტორი"
 }

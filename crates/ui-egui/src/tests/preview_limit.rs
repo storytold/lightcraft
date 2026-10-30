@@ -1147,7 +1147,7 @@ mod in_the_loupe {
         assert!(held(&h) > before / 3, "and they are still there");
     }
 
-    /// Load a Display P3 monitor profile (`app.displayProfile`), as Settings ▸ Display does.
+    /// Load a Display P3 monitor profile (`app.displayProfile`), as Settings ▸ Monitor does.
     fn use_display_profile(h: &mut Headless) {
         let dir = std::env::temp_dir().join(format!("lightcraft-zoom-display-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).expect("temp dir");

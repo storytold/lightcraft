@@ -203,7 +203,7 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
     }
 }
 
-/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
+/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Appearance).
 fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;

@@ -25,7 +25,7 @@ unless Settings says to always merge (*Turning the question off*, below):
 The window opens on *Merge* when the open library has no photos (there is nothing to merge with) and on *Create a
 new library* when it has some.
 
-**Turning the question off.** Settings → General → Library → *When importing a Lightroom catalog*: *Ask where to
+**Turning the question off.** Settings → Library → *When importing a Lightroom catalog*: *Ask where to
 import it* (the default) or *Always merge into the open library* (how imports always worked before). The window's
 *Don't ask again (always merge into the open library)* checkbox, offered with *Merge*, picks the second; the window
 says where to turn the question back on. The choice is an app setting (`ui.json`, `settings.lightroomImport`:

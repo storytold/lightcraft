@@ -924,7 +924,7 @@
   "In library": "Kirjastossa",
   "In memory — nothing is saved": "Muistissa — mitään ei tallenneta",
   "In use": "Käytössä",
-  "In-memory session: these settings last until LightCraft quits.": "Muistissa oleva istunto: nämä asetukset säilyvät, kunnes LightCraft suljetaan.",
+  "In-memory session: the library's settings last until LightCraft quits.": "Muistissa oleva istunto: kirjaston asetukset säilyvät, kunnes LightCraft suljetaan.",
   "Include Amount": "Sisällytä määrä",
   "Include brush size, feather and flow": "Sisällytä siveltimen koko, häivytys ja virtaus",
   "Include on Export": "Sisällytä vientiin",
@@ -2327,5 +2327,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Files": "Tiedostot",
+  "Monitor": "Näyttö"
 }

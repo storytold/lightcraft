@@ -929,7 +929,7 @@
   "In library": "Di pustaka",
   "In memory — nothing is saved": "Di memori — tidak ada yang disimpan",
   "In use": "Sedang digunakan",
-  "In-memory session: these settings last until LightCraft quits.": "Sesi dalam memori: pengaturan ini berlaku hingga LightCraft ditutup.",
+  "In-memory session: the library's settings last until LightCraft quits.": "Sesi dalam memori: pengaturan pustaka berlaku hingga LightCraft ditutup.",
   "Include on Export": "Sertakan saat ekspor",
   "Include selected photos": "Sertakan foto yang dipilih",
   "Include subfolders": "Sertakan subfolder",
@@ -2339,5 +2339,8 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Files": "File",
+  "Monitor": "Monitor",
+  "Appearance": "Penampilan"
 }

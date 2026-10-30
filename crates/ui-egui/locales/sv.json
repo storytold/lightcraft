@@ -995,7 +995,7 @@
   "In Use": "Används",
   "In use": "Används",
   "in use": "används",
-  "In-memory session: these settings last until LightCraft quits.": "Session i minnet: de här inställningarna gäller tills LightCraft avslutas.",
+  "In-memory session: the library's settings last until LightCraft quits.": "Session i minnet: bibliotekets inställningar gäller tills LightCraft avslutas.",
   "Include Amount": "Ta med antal",
   "Include brush size, feather and flow": "Ta med penselstorlek, fjädring och flöde",
   "Include on Export": "Ta med vid export",
@@ -2429,5 +2429,7 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Files": "Filer",
+  "Monitor": "Bildskärm"
 }

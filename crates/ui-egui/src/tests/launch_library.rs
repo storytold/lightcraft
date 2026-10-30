@@ -1,4 +1,4 @@
-//! Issue #1290: what opens at launch. Settings ▸ General ▸ At launch opens the last library or
+//! Issue #1290: what opens at launch. Settings ▸ Library ▸ At launch opens the last library or
 //! asks with a window listing the recent ones (greyed out with the reason when they can't be
 //! opened); Alt/Option held as the window appears asks once; one recent entry can be forgotten from
 //! File ▸ Open Recent Library, the window and `app.recentLibraries {remove}`.
@@ -485,7 +485,7 @@ fn settings_choose_ask_me_and_opening_a_library_records_when() {
     assert_eq!(h.app.ui.settings.recent_opened.get(&first).map(String::as_str), Some("2026-09-30T12:00:00"));
     assert!(!h.app.ui.settings.recent_opened.contains_key("/forgotten"));
 
-    h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "general"}}), T);
+    h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "library"}}), T);
     settle(&mut h);
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:settingsAtLaunch-1"}), T)["ok"], true);
     settle(&mut h);

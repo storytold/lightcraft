@@ -18,7 +18,7 @@ would correct twice; KWin keeps that profile in its own settings, not colord, so
 
 ## Using it
 
-Settings ▸ Display ▸ **Choose Profile…** picks an `.icc` / `.icm` file (the dialog opens where the system keeps
+Settings ▸ Monitor ▸ **Choose Profile…** picks an `.icc` / `.icm` file (the dialog opens where the system keeps
 them: `~/.local/share/icc` on Linux, ColorSync's folders on macOS, `…\spool\drivers\color` on Windows). **Use sRGB**
 (on macOS and Linux **Use Screen Profile**) goes back to no profile. The choice is an app setting (`ui.json`, `displayProfile`)
 and applies at once; a file that can't be used is reported there and previews stay sRGB.

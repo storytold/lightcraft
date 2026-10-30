@@ -4134,7 +4134,7 @@ fn about_dialog_tabs_show_the_credits() {
     assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About), "switching tabs keeps the dialog open");
 }
 
-/// Settings ▸ Display / `app.displayProfile`: previews are shown through the monitor profile
+/// Settings ▸ Monitor / `app.displayProfile`: previews are shown through the monitor profile
 /// (the loupe rendered for the display, thumbnails converted from sRGB, the histogram still
 /// sRGB); a file that can't be used is an error, or, as the setting, reported with previews
 /// left sRGB.
@@ -4203,12 +4203,12 @@ fn display_profile_converts_previews() {
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!(h.app.renderer.display_id(), Some(d.id()));
     assert_eq!(h.app.ui.settings.display_profile, p3);
-    // …chosen as the setting (Settings ▸ Display), it is reported and previews go back to sRGB
+    // …chosen as the setting (Settings ▸ Monitor), it is reported and previews go back to sRGB
     h.app.ui.settings.display_profile = bad.clone();
     h.step();
     assert!(h.app.display_error.as_deref().is_some_and(|e| e.contains("not a valid ICC profile")), "{:?}", h.app.display_error);
     assert_eq!(h.app.renderer.display_id(), None);
-    // the Display tab shows it
+    // the Monitor tab shows it
     let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "display"}}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();

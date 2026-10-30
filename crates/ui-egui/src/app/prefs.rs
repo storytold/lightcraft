@@ -48,7 +48,7 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
-        // the monitor profile (Settings ▸ Display): previews follow it from the next frame
+        // the monitor profile (Settings ▸ Monitor): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();
             match lightcraft_engine::display::Display::load_opt(&path) {

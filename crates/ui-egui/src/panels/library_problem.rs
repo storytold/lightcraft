@@ -3,7 +3,7 @@
 //! Continue Without Saving and Quit. Continuing shows a banner under the top bar for as long as the
 //! session is temporary.
 //!
-//! The same window lists the recent libraries to choose from when Settings ▸ General ▸ At launch
+//! The same window lists the recent libraries to choose from when Settings ▸ Library ▸ At launch
 //! is *Ask me*, or when Alt/Option is held as the window first appears (issue #1290): Open, Open
 //! Another…, New Library…, Remove from List and Quit, with the arrow keys, Return and Esc.
 //! [`launch_plan`] decides at launch which of the two the desktop app starts with.

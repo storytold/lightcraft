@@ -14,7 +14,7 @@ pub enum StartupView {
     Detail,
 }
 
-/// What the desktop app opens at launch (Settings ▸ General ▸ At launch; issue #1290). `--library`
+/// What the desktop app opens at launch (Settings ▸ Library ▸ At launch; issue #1290). `--library`
 /// and `LIGHTCRAFT_LIBRARY` come first either way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +40,7 @@ pub enum GridBadges {
 /// How many libraries File ▸ Open Recent Library remembers.
 pub const RECENT_LIBRARIES: usize = 8;
 
-/// Whether the interface uses the dark or the light theme (Settings ▸ Interface ▸ Appearance).
+/// Whether the interface uses the dark or the light theme (Settings ▸ Appearance).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AppearanceMode {
@@ -195,7 +195,7 @@ pub struct AppSettings {
     pub lightroom_import: LightroomImport,
 }
 
-/// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
+/// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ Library ▸ When importing a Lightroom catalog). Saved as
 /// `"ask"` / `"alwaysMerge"`; anything else in a hand-edited `ui.json` reads as [`Self::Ask`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

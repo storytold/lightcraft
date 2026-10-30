@@ -1,4 +1,4 @@
-//! Library preferences (Settings → Import / Performance): develop defaults applied on import and
+//! Library preferences (Settings → Library / Import / Performance): develop defaults applied on import and
 //! the thumbnail cache budget. Saved in the library's `prefs.json` (see [`crate::library`]).
 
 use serde_json::{Value, json};

@@ -181,7 +181,7 @@ then are refused with a toast.
 
 ### Choosing the library at launch
 
-With Settings ▸ General ▸ At launch set to Ask me (`ui.set {"settings": {"atLaunch": "ask"}}`; `"last"`, the
+With Settings ▸ Library ▸ At launch set to Ask me (`ui.set {"settings": {"atLaunch": "ask"}}`; `"last"`, the
 default, opens the last library), or Alt/Option held during the first 2 s after the window appears, the desktop app
 shows a window listing the recent libraries (issue #1290). `--library` and `LIGHTCRAFT_LIBRARY` skip it, and so does
 `--memory`; `lightcraft-cli` never shows it. `ui.inspect` → `libraryProblem.chooser` is `{libraries: [{path,
@@ -237,7 +237,7 @@ choice it opens with, `"open"` when the library is empty, else `"new"`). Its wid
 `field:lightroomLibraryLocation`, `button:lightroomLibraryChoose` (where there is a folder dialog), `check:lightroomDontAsk` (with Merge only; sets
 `"alwaysMerge"`), `button:dialogOk` / `ui.dialog.confirm` (which stays open on an error such as a folder that isn't
 empty) and `button:dialogCancel`. With `"alwaysMerge"` (`ui.set {"settings": {"lightroomImport": "alwaysMerge"}}`,
-or Settings ▸ General `button:settingsLightroomImport-0|1`), or in a session in memory, it imports into the open
+or Settings ▸ Library `button:settingsLightroomImport-0|1`), or in a session in memory, it imports into the open
 library without asking.
 
 ## External controllers

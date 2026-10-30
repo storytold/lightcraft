@@ -336,7 +336,7 @@ pub struct LightcraftApp {
     memory_applied: Option<u32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
-    /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
+    /// Why the display profile setting could not be applied (shown in Settings ▸ Monitor).
     pub display_error: Option<String>,
     /// The screen profile in use while no display profile is chosen (`services.screen_profile`),
     /// and when it was last read (egui time, s).

@@ -1,7 +1,40 @@
+use super::import::xmp_sidecars;
+use super::performance::local_folders;
+#[cfg(not(target_arch = "wasm32"))]
+use super::performance::smart_previews;
 use super::widgets::{check, choices, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
 
 // ------------------------------------------------------------------------------------- General
+
+/// Library: the library itself. Where it is and opening another ([`library_section`]), where
+/// its smart previews are kept ([`smart_previews`], for a library on disk), and what leaves its
+/// catalog by itself ([`local_folders`]).
+pub(super) fn library_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    library_section(app, ui, t);
+    #[cfg(not(target_arch = "wasm32"))]
+    smart_previews(app, ui, t);
+    local_folders(app, ui, t);
+    in_memory_note(app, ui, t);
+}
+
+/// Files: what LightCraft writes beside the photo files ([`xmp_sidecars`]) and what it opens
+/// them in ([`external_editing`]). External Editing is saved with the interface settings, so it
+/// comes first and the in-memory note, which is about the library's settings, ends the tab.
+pub(super) fn files_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    external_editing(app, ui, t);
+    xmp_sidecars(app, ui, t);
+    in_memory_note(app, ui, t);
+}
+
+/// What is saved with the library lasts only as long as a library that is not on disk does:
+/// said at the foot of a tab whose last settings are such (Import says it at its foot itself).
+/// It must not follow settings saved elsewhere (those in ui.json last).
+pub(super) fn in_memory_note(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if app.session.library.is_none() {
+        hint(ui, t, "In-memory session: the library's settings last until LightCraft quits.");
+    }
+}
 
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
@@ -12,7 +45,12 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         });
         crate::i18n::set_language(app.ui.language);
     });
-    heading(ui, t, crate::i18n::tr("Library"));
+    startup_and_culling(app, ui, t);
+}
+
+/// Library: where the open library is, and opening or making another.
+fn library_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, "Library");
     let location = match &app.session.library {
         Some(l) => l.dir.display().to_string(),
         None => crate::i18n::tr("In memory — nothing is saved").to_string(),
@@ -60,7 +98,11 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.lightroom_import,
         );
     });
-    heading(ui, t, crate::i18n::tr("Startup"));
+}
+
+/// Startup and Culling: what LightCraft opens in, and how rating and deleting behave.
+fn startup_and_culling(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, "Startup");
     row(ui, t, crate::i18n::tr("Open in"), |ui| {
         choices(
             ui,
@@ -69,13 +111,17 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.startup_view,
         );
     });
-    heading(ui, t, crate::i18n::tr("Culling"));
+    heading(ui, t, "Culling");
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
-    heading(ui, t, crate::i18n::tr("Dialogs"));
+    heading(ui, t, "Dialogs");
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
-    heading(ui, t, crate::i18n::tr("External Editing"));
+}
+
+/// External Editing: the editors a photo is opened in, and the copy they are given.
+fn external_editing(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, "External Editing");
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
         crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
             .hint(crate::i18n::tr("Found automatically"))

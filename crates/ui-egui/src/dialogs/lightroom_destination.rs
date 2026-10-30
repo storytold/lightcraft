@@ -4,7 +4,7 @@
 //! merge into the library open now or go into a new library, named after the catalog and put next
 //! to the open one. The new library is made and opened as File ▸ New Library… does
 //! (`app.newLibrary`: refused in a folder that isn't empty, or while another import runs), then the
-//! catalog is imported into it. Settings ▸ General ▸ Library (or the window's "Don't ask again")
+//! catalog is imported into it. Settings ▸ Library ▸ When importing a Lightroom catalog (or the window's "Don't ask again")
 //! turns the question off: the catalog then merges into the open library, as it always did.
 //!
 //! Only the app command `file.importLightroom` changes: it takes `{into?: "open" | "new", name?,
@@ -302,7 +302,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     if !*new_library {
         *dont_ask = ticked;
     }
-    ui.label(egui::RichText::new(tr("To be asked again: Settings → General → When importing a Lightroom catalog.")).size(11.0).color(t.text_dim));
+    ui.label(egui::RichText::new(tr("To be asked again: Settings → Library → When importing a Lightroom catalog.")).size(11.0).color(t.text_dim));
 }
 
 #[cfg(test)]

@@ -51,7 +51,12 @@ pub(super) fn button_width(ui: &egui::Ui, text: &str) -> f32 {
 
 pub(crate) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    // `text` is the heading's English name (its message key). It is shown translated and
+    // registered as `heading:{text}` whatever the language, where a section starts, for scripts
+    // and tests that look for one. There is no way back from a translation to its key: two
+    // messages can read alike in a language.
+    let r = ui.label(RichText::new(crate::i18n::tr(text)).font(t.semibold(12.5)).color(t.text));
+    register(ui, format!("heading:{text}"), r.rect);
 }
 
 pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
