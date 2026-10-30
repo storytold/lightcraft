@@ -587,10 +587,11 @@ fn an_exhausted_album_counter_stops_the_import_naming_the_collection() {
     assert_eq!(s.catalog.albums().count(), 1);
     assert!(s.catalog.is_empty());
 }
-/// A collection listed twice imports once when both rows are the same; two different collections under one Lightroom
-/// id stop the import instead of one of them disappearing.
+/// A collection listed twice imports once. A different collection under the same Lightroom id used to stop the import;
+/// like any bad record it now costs only itself (#1588): it is left out with a warning naming both, and its photos go
+/// to the first.
 #[test]
-fn a_collection_listed_twice_imports_once_and_a_conflicting_one_stops_the_import() {
+fn a_collection_listed_twice_imports_once_and_a_conflicting_one_is_skipped_with_a_warning() {
     let mut s = crate::Session::new();
     let mut data = sample();
     data.collections.push(data.collections[1].clone());
@@ -601,10 +602,20 @@ fn a_collection_listed_twice_imports_once_and_a_conflicting_one_stops_the_import
 
     let mut s = crate::Session::new();
     let mut data = sample();
-    data.collections.push(row(json!({"id_local":10,"parent":9,"name":"Rejects","creationId":"collection"})));
-    let err = apply(&mut s, data, false).unwrap_err().to_string();
-    assert!(err.contains("“Keepers”") && err.contains("“Rejects”") && err.contains("collection 10 twice"), "{err}");
-    assert!(s.catalog.albums().next().is_none() && s.catalog.is_empty());
+    // shallower than the first, so a depth-ordered pass would meet it first
+    data.collections.push(row(json!({"id_local":10,"parent":0,"name":"Rejects","creationId":"collection"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "{r}");
+    assert_eq!(r["collections"], 2, "{r}");
+    assert!(s.catalog.albums().all(|a| a.name != "Rejects"));
+    let keepers = album_named(&s, "Keepers");
+    assert_eq!(keepers.photos.len(), 2);
+    assert!(keepers.parent.is_some(), "the first row's place is kept");
+    assert_eq!(
+        r["warnings"],
+        json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
+    );
+    assert_eq!(s.undo.len(), 1);
 }
 /// A damaged index that names one existing album for two collections gives the second an album of its own rather
 /// than merging its photos into the first's.

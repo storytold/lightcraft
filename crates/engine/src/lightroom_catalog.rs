@@ -937,6 +937,35 @@ pub(crate) struct ApplyPrepared<'a> {
     pub(crate) undo0: usize,
 }
 
+/// The catalog's collections with each id once, in catalog order. A row repeated as it is drops quietly; a different
+/// collection with an id an earlier one has is left out with a warning naming both, since two albums can't have one id
+/// (#1588: one bad Lightroom record costs that record, not the import). The photos listed under the id go to the first.
+fn first_of_each_collection<'a>(data: &'a CatalogImport, warnings: &mut Vec<String>) -> Vec<&'a Row> {
+    let mut first: HashMap<i64, &Row> = HashMap::new();
+    let mut rows = Vec::new();
+    for collection in &data.collections {
+        let id = number(collection, "id_local");
+        let Some(kept) = first.get(&id) else {
+            first.insert(id, collection);
+            rows.push(collection);
+            continue;
+        };
+        if *kept != collection {
+            let photos = if data.members.iter().any(|m| number(m, "collection") == id) {
+                format!("; the photos listed under that id go to “{}”", text(kept, "name"))
+            } else {
+                String::new()
+            };
+            warnings.push(format!(
+                "collection “{}”: not imported, it has the id of collection “{}”{photos}",
+                text(collection, "name"),
+                text(kept, "name")
+            ));
+        }
+    }
+    rows
+}
+
 fn stage_collections(
     s: &mut crate::Session,
     data: &CatalogImport,
@@ -945,13 +974,13 @@ fn stage_collections(
     ops: &mut Vec<Op>,
     warnings: &mut Vec<String>,
 ) -> crate::Result<usize> {
+    let rows = first_of_each_collection(data, warnings);
     let mut albums = HashMap::new();
     // Two collections never share an album. An index that names one album for two gives the second a new one; the
     // counter saturates, so a damaged one hands out an id that's taken, and that stops the import instead.
     let mut assigned = HashSet::new();
-    for collection in &data.collections {
-        // a collection listed twice keeps one album; the album loop below tells a repeat from a conflict
-        if number(collection, "systemOnly") != 0 || albums.contains_key(&number(collection, "id_local")) {
+    for &collection in &rows {
+        if number(collection, "systemOnly") != 0 {
             continue;
         }
         let collection_key = format!("{}:{}", key(&data.source), number(collection, "id_local"));
@@ -978,8 +1007,8 @@ fn stage_collections(
         index.collections.insert(collection_key, id.0);
         albums.insert(number(collection, "id_local"), id);
     }
-    let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
-    let collections: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), r)).collect();
+    let parents: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let collections: HashMap<_, _> = rows.iter().map(|r| (number(r, "id_local"), *r)).collect();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
     for member in &data.members {
         grouped_members.entry(number(member, "collection")).or_default().push(member);
@@ -987,7 +1016,7 @@ fn stage_collections(
     for members in grouped_members.values_mut() {
         members.sort_by(|a, b| text(a, "positionInCollection").cmp(text(b, "positionInCollection")));
     }
-    let mut ordered: Vec<_> = data.collections.iter().collect();
+    let mut ordered = rows.clone();
     ordered.sort_by_key(|r| {
         let mut depth = 0;
         let mut at = number(r, "parent");
@@ -1006,23 +1035,9 @@ fn stage_collections(
         })
         .map(|(lr, _)| *lr)
         .collect();
-    // The collection each album was staged for: a collection listed twice is skipped the second time only when the
-    // rows are the same, never a different collection silently dropped.
-    let mut staged: HashMap<_, &Row> = HashMap::new();
     let mut added_folders = HashSet::new();
     for collection in ordered {
         let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
-        if let Some(first) = staged.insert(id, collection) {
-            if first == collection {
-                continue;
-            }
-            return Err(error(format!(
-                "the catalog lists collection {} twice, as “{}” and as “{}”",
-                number(collection, "id_local"),
-                text(first, "name"),
-                text(collection, "name")
-            )));
-        }
         let mut album = Album::new(id, text(collection, "name"));
         album.folder = text(collection, "creationId").contains("group");
         if text(collection, "creationId").contains("smart") {
