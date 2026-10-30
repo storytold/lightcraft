@@ -326,6 +326,7 @@
   "Blue channel": "Синий канал",
   "Blue label": "Синяя метка",
   "Blue/Yellow Fringe": "Сине-жёлтая кайма",
+  "Blue/Yellow": "Синий/жёлтый",
   "Blurry photos below the score are flagged as rejects.": "Размытые фото с оценкой ниже порога помечаются как отклонённые.",
   "Boundary Warp": "Деформация границ",
   "Bright & Airy": "Светлый и воздушный",
@@ -741,6 +742,8 @@
   "Horizontal text": "Горизонтальный текст",
   "How to install the model": "Как установить модель",
   "Hue": "Тон",
+  "Hue Low": "Тон (низ)",
+  "Hue High": "Тон (верх)",
   "Hue Range": "Диапазон тонов",
   "If file exists": "Если файл существует",
   "Image": "Изображение",
@@ -1178,6 +1181,7 @@
   "Red channel": "Красный канал",
   "Red label": "Красная метка",
   "Red/Cyan Fringe": "Красно-голубая кайма",
+  "Red/Cyan": "Красный/голубой",
   "Redo": "Повторить",
   "Reference": "Эталон",
   "Reference View": "Режим эталона",
@@ -2566,5 +2570,6 @@
   "An import is running": "Импорт уже выполняется",
   "An import is running. Drop photos when it has finished": "Импорт уже выполняется. Перетащите фото, когда он закончится",
   "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
+  "Brightness": "Яркость",
   "★ Favorites": "★ Избранное"
 }

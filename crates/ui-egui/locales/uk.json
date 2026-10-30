@@ -171,6 +171,8 @@
   "History": "Історія",
   "Horizontal": "Горизонтальна",
   "Hue": "Тон",
+  "Hue Low": "Нижня межа тону",
+  "Hue High": "Верхня межа тону",
   "Import": "Імпорт",
   "Import Presets": "Імпортувати набори налаштувань",
   "Info": "Інформація",
@@ -490,6 +492,7 @@
   "Blue channel": "Синій канал",
   "Blue label": "Синя мітка",
   "Blue/Yellow Fringe": "Синя/жовта облямівка",
+  "Blue/Yellow": "Синій/жовтий",
   "Blurry photos below the score are flagged as rejects.": "Розмиті фото з оцінкою нижче порога позначаються як відхилені.",
   "Boundary Warp": "Деформація меж",
   "Bright & Airy": "Світле й легке",
@@ -1223,6 +1226,7 @@
   "Red Saturation": "Насиченість червоного",
   "Red channel": "Червоний канал",
   "Red/Cyan Fringe": "Червона/блакитна облямівка",
+  "Red/Cyan": "Червоний/блакитний",
   "Reference": "Еталон",
   "Reference View": "Еталонне подання",
   "Reference the files where they are": "Посилатися на файли в їхньому розташуванні",
@@ -2354,5 +2358,6 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Brightness": "Яскравість"
 }

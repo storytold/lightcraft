@@ -107,7 +107,7 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
     let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
     let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
-    painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
+    painter.rect_filled(r, crate::theme::RADIUS_PANEL, background.gamma_multiply(fade));
     painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }

@@ -163,6 +163,7 @@
   "Blue channel": "Canal azul",
   "Blue label": "Rótulo azul",
   "Blue/Yellow Fringe": "Franja azul/amarela",
+  "Blue/Yellow": "Azul/amarelo",
   "Blurry photos below the score are flagged as rejects.": "Fotos desfocadas abaixo da pontuação são marcadas como rejeitadas.",
   "Boundary Warp": "Deformação de borda",
   "Bright & Airy": "Luminoso e arejado",
@@ -662,6 +663,8 @@
   "Hours": "Horas",
   "How to install the model": "Como instalar o modelo",
   "Hue": "Matiz",
+  "Hue Low": "Matiz baixo",
+  "Hue High": "Matiz alto",
   "Hue Range": "Faixa de matiz",
   "ISO Speed": "Sensibilidade ISO",
   "ISO speed": "Sensibilidade ISO",
@@ -1157,6 +1160,7 @@
   "Red channel": "Canal vermelho",
   "Red label": "Rótulo vermelho",
   "Red/Cyan Fringe": "Franja vermelha/ciano",
+  "Red/Cyan": "Vermelho/ciano",
   "Redo": "Refazer",
   "Reference": "Referência",
   "Reference View": "Exibição de referência",
@@ -2202,5 +2206,6 @@
   "Import dropped files without review": "Importar arquivos soltos sem revisão",
   "An import is running": "Uma importação está em andamento",
   "An import is running. Drop photos when it has finished": "Uma importação está em andamento. Solte as fotos quando ela terminar",
-  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos"
+  "Finish Lightroom catalog import before adding photos": "Conclua a importação do catálogo do Lightroom antes de adicionar fotos",
+  "Brightness": "Brilho"
 }
