@@ -371,8 +371,11 @@ impl DiskCache {
                 read.remove(&key);
             }
         }
-        *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(total);
+        // published under the lock, so a write that lands meanwhile can't be overtaken by this older count
+        let mut published = self.total.lock().unwrap_or_else(|e| e.into_inner());
+        *published = Some(total);
         self.known.store(total, Ordering::Relaxed);
+        drop(published);
     }
 
     /// Bytes on disk when they are known without a scan. Never waits (a scan or a write in progress
@@ -393,8 +396,10 @@ impl DiskCache {
         for (p, _, _) in self.scan() {
             let _ = std::fs::remove_file(p);
         }
-        *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(0);
+        let mut published = self.total.lock().unwrap_or_else(|e| e.into_inner());
+        *published = Some(0);
         self.known.store(0, Ordering::Relaxed);
+        drop(published);
     }
 }
 

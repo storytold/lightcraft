@@ -833,3 +833,30 @@ fn the_disk_caches_size_is_read_without_waiting_for_a_write_or_a_scan() {
     assert_eq!(reopened.disk_size_now(), Some(on_disk));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The size Settings reads ([`DiskCache::known_size`]) is the cache's own count after writes and prunes
+/// that run side by side (render workers and the deferred writer): each count is published under the
+/// lock that guards it, so an older one never overtakes a newer.
+#[test]
+fn the_known_size_matches_the_count_after_writes_and_prunes_side_by_side() {
+    let dir = temp_dir("size-race");
+    // a budget a few pictures big: most writes prune
+    let cache = Arc::new(PreviewCache::with_disk(1 << 20, &dir, 24 * 1024));
+    let workers: Vec<_> = (0..4u8)
+        .map(|t| {
+            let c = cache.clone();
+            std::thread::spawn(move || {
+                for i in 0..40u8 {
+                    c.put(hash_bytes(&[t, i]), Arc::new(gradient(32, 32, t.wrapping_mul(41).wrapping_add(i))));
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join().unwrap();
+    }
+    let d = cache.disk().unwrap();
+    let counted = *d.total.lock().unwrap();
+    assert_eq!(d.known_size(), counted, "the size shown is the cache's count");
+    let _ = std::fs::remove_dir_all(&dir);
+}
