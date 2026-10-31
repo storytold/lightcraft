@@ -1558,3 +1558,71 @@ fn export_lanes_follow_the_setting() {
     assert_eq!(export_lanes_override(), None);
     assert!(export_parallelism(1000) >= 1);
 }
+
+/// A detailed photo-like image (gradients, texture, edges) of `w × h`.
+fn detailed(w: usize, h: usize) -> Rgba8 {
+    let mut img = Rgba8::new(w, h);
+    let mut seed = 12345u32;
+    for y in 0..h {
+        for x in 0..w {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let n = (seed >> 24) as i32 - 128;
+            let base = ((x * 255 / w) as i32 + ((y / 40) % 2) as i32 * 60 + (((x as f32 / 9.0).sin() * 30.0) as i32)).clamp(0, 255);
+            let c = |o: i32| (base + o + n / 3).clamp(0, 255) as u8;
+            img.data[y * w + x] = [c(0), c(-20), c(25), 255];
+        }
+    }
+    img
+}
+
+/// Note 28: "Limit file size" made a full encode per step of a binary search (7-8 of a 6000 px
+/// photo). Now at most two: the quality is predicted from the first encode's size.
+#[test]
+fn a_file_size_limit_takes_at_most_two_encodes() {
+    let img = detailed(1600, 1100);
+    let full = encode_image(&img, &ExportOptions { quality: 90, limit_kb: None, ..Default::default() }).unwrap();
+    for share in [0.8, 0.5, 0.3, 0.15] {
+        let kb = ((full.len() as f64 * share) / 1024.0) as u32;
+        FIT_ENCODES.with(|c| c.set(0));
+        let b = encode_image(&img, &ExportOptions { quality: 90, limit_kb: Some(kb), ..Default::default() }).unwrap();
+        let n = FIT_ENCODES.with(|c| c.get());
+        assert!(b.len() <= kb as usize * 1024, "{} bytes over {kb} KB", b.len());
+        assert!(n <= 2, "{n} encodes for {share} of the size");
+        // and not much smaller than it may be: the quality is close to the best that fits
+        assert!(b.len() as f64 >= kb as f64 * 1024.0 * 0.6, "{} bytes for {kb} KB", b.len());
+    }
+    // one encode when it fits already
+    FIT_ENCODES.with(|c| c.set(0));
+    encode_image(&img, &ExportOptions { quality: 90, limit_kb: Some(100_000), ..Default::default() }).unwrap();
+    assert_eq!(FIT_ENCODES.with(|c| c.get()), 1);
+}
+
+/// The limit holds for a gain map JPEG too (it used to only switch to 4:2:0), in at most two
+/// encodes of the primary image and one of the gain map.
+#[test]
+fn a_gain_map_jpeg_fits_the_file_size_limit() {
+    let sdr = detailed(1200, 800);
+    let hdr = DeepImage {
+        width: 1200,
+        height: 800,
+        space: OutputSpace::Srgb,
+        samples: DeepSamples::F32(
+            sdr.data
+                .iter()
+                .flat_map(|p| {
+                    let l = |v: u8| lightcraft_pipeline::OutputTrc::Srgb.decode(v as f32 / 255.0);
+                    let g = if p[0] > 200 { 3.0 } else { 1.0 };
+                    [l(p[0]) * g, l(p[1]) * g, l(p[2]) * g]
+                })
+                .collect(),
+        ),
+    };
+    let o = ExportOptions { quality: 90, hdr: true, ..Default::default() };
+    let free = encode_gain_map_jpeg(&sdr, &hdr, &o, None).unwrap();
+    let kb = (free.len() as f64 * 0.5 / 1024.0) as u32;
+    FIT_ENCODES.with(|c| c.set(0));
+    let b = encode_gain_map_jpeg(&sdr, &hdr, &ExportOptions { limit_kb: Some(kb), ..o }, None).unwrap();
+    assert!(b.len() <= kb as usize * 1024, "{} bytes over {kb} KB", b.len());
+    assert!(FIT_ENCODES.with(|c| c.get()) <= 2);
+    assert!(lightcraft_codecs::gainmap::read_jpeg(&b).is_some(), "still a gain map JPEG");
+}
