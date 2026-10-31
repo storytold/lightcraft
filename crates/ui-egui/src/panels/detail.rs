@@ -160,6 +160,15 @@ pub(super) fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &l
     register(ui, widget, card);
 }
 
+/// Whether the loupe draws a catalogued video's card: it has no frame on screen to show yet
+/// (playback, trim and cover frames come in a later update), so in every view mode the card stands
+/// in for the picture instead of the error a broken photo shows or a blank pane.
+fn shows_video_card(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, id: PhotoId) -> bool {
+    photo.is_video()
+        && app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
+        && app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != id)
+}
+
 /// Draw the Develop loupe: the optional filmstrip, the fitted or zoomed photo (before/after and
 /// full-screen aware), crop overlays and the render requests for the current view, or, when no
 /// photo is active, the empty-library message if the library is empty and "No photo selected"
@@ -323,10 +332,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // A catalogued video has no frame to decode or show yet (playback, trim and cover frames come
     // in a later update): its card stands in for the picture in every view mode, instead of the
     // error a broken photo shows or a blank pane.
-    let video_only = photo.is_video()
-        && app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
-        && app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != id);
-    if video_only {
+    if shows_video_card(app, &photo, id) {
         video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard");
         shown = "video";
     } else if split {
@@ -394,12 +400,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the render failed while a stand-in is up: what is on screen is all there will be (also while
     // a library change retries it)
     let failed = failed_render(app, id, !rendering && (!show_before || split), shown);
-    // (a catalogued video has no frame to render: its card is all there is, not a failure)
-    if (rendering || failed.is_some()) && photo.kind != lightcraft_catalog::MediaKind::Video {
-        let over = if crop_tool { canvas } else { img_rect.intersect(if split { main_area } else { canvas }) };
-        let over = if over.is_positive() { over } else { canvas };
-        status_pill(ui, app, &photo, [canvas, over], nav, failed);
-    }
+    render_status_pill(ui, app, &photo, nav, rendering, failed, (canvas, img_rect, main_area), split, crop_tool);
     if !fullscreen {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
@@ -613,6 +614,28 @@ fn failed_render<'a>(app: &'a LightcraftApp, id: PhotoId, settled: bool, shown: 
     (settled && !matches!(shown, "render" | "none" | "hover") && (!app.renderer.is_pending(Slot::Main) || app.renderer.retrying(Slot::Main)))
         .then(|| app.renderer.failure_of(Slot::Main, id))
         .flatten()
+}
+
+/// Whether to say what the render is doing, and where: nothing for a catalogued video (it has no
+/// frame to render, so its card is all there is, not a failure), and the pill's rectangle otherwise.
+#[allow(clippy::too_many_arguments)]
+fn render_status_pill(
+    ui: &egui::Ui,
+    app: &LightcraftApp,
+    photo: &lightcraft_catalog::Photo,
+    nav: Option<Rect>,
+    rendering: bool,
+    failed: Option<&str>,
+    (canvas, img_rect, main_area): (Rect, Rect, Rect),
+    split: bool,
+    crop_tool: bool,
+) {
+    if photo.is_video() || !(rendering || failed.is_some()) {
+        return;
+    }
+    let over = if crop_tool { canvas } else { img_rect.intersect(if split { main_area } else { canvas }) };
+    let over = if over.is_positive() { over } else { canvas };
+    status_pill(ui, app, photo, [canvas, over], nav, failed);
 }
 
 /// The pill over the photo (the After in two views; in the crop tool's wide margin, under it): the

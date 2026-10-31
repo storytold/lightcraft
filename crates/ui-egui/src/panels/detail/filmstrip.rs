@@ -123,10 +123,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             let thumb = app.renderer.thumb(*id);
             let is_video = app.session.catalog.photo(*id).is_some_and(|p| p.is_video());
             if thumb.is_none() {
-                p.rect_filled(img_area, 0.0, if is_video { Color32::from_gray(30) } else { t.skeleton });
-                if failed && !is_video {
-                    p.text(img_area.center(), Align2::CENTER_CENTER, "!", t.semibold(14.0), t.text);
-                }
+                paint_missing_frame(p, &t, img_area, is_video, failed);
             }
             let has_thumb = thumb.is_some();
             if let Some(tex) = thumb {
@@ -257,5 +254,15 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     }
     if edited {
         paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
+    }
+}
+
+/// The placeholder a cell shows while its frame is not ready: a catalogued clip's dark tile, which
+/// has no frame to decode yet and must not read as a failed photo, or a photo's skeleton with the
+/// missing-file mark when its thumbnail failed.
+fn paint_missing_frame(p: &egui::Painter, t: &Tokens, img_area: Rect, video: bool, failed: bool) {
+    p.rect_filled(img_area, 0.0, if video { Color32::from_gray(30) } else { t.skeleton });
+    if failed && !video {
+        p.text(img_area.center(), Align2::CENTER_CENTER, "!", t.semibold(14.0), t.text);
     }
 }
