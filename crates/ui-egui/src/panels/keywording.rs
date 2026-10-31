@@ -176,7 +176,7 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
     }
     let t = Tokens::get(ui.ctx());
     let said = crate::i18n::tr_format!("Keywords of {n} selected photos", n = photos);
-    let r = ui.label(egui::RichText::new(said).size(11.5).color(t.text_label));
+    let r = ui.label(egui::RichText::new(said).font(t.caption()).color(t.text_label));
     register(ui, "keywordScope", r.rect);
     ui.add_space(4.0);
 }

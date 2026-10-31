@@ -611,7 +611,7 @@ fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             let l = line.trim_end();
             if let Some(h) = l.strip_prefix("### ") {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.body_strong()).color(t.text));
             } else if let Some(h) = l.strip_prefix("## ") {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
@@ -696,7 +696,7 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
         }
         for (g, list) in &groups {
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(g).font(t.semibold(12.5)).color(t.text));
+            ui.label(egui::RichText::new(g).font(t.body_strong()).color(t.text));
             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                 for (n, v) in list {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
@@ -740,7 +740,7 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
             .color(t.text_dim),
         );
     } else {
-        ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
+        ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.text_caution()));
     }
 }
 
@@ -952,7 +952,7 @@ fn rename_person_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, co
         *confirm = true;
     }
     if let Some(why) = plan.block {
-        ui.label(egui::RichText::new(crate::i18n::tr(why)).color(t.caution));
+        ui.label(egui::RichText::new(crate::i18n::tr(why)).color(t.text_caution()));
     } else {
         ui.label(
             egui::RichText::new(crate::i18n::tr_format!(
@@ -969,7 +969,7 @@ fn rename_person_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, co
                 "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
                 to = to.trim()
             ))
-            .color(t.caution),
+            .color(t.text_caution()),
         );
         let r = ui.checkbox(merge, crate::i18n::tr("Combine with the existing person"));
         crate::widgets::register(ui, "check:personMerge", r.rect);
@@ -1473,7 +1473,9 @@ fn export_apple_photos_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOpti
             )
         });
         ui.label(
-            egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos.")).size(11.0).color(t.text_dim),
+            egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos."))
+                .font(t.caption())
+                .color(t.text_dim),
         );
     }
 }
@@ -1728,7 +1730,7 @@ fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut 
         1 => crate::credits::contributors_ui(app, ui),
         2 => crate::credits::models_ui(ui),
         _ => {
-            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
+            ui.label(egui::RichText::new("LightCraft").font(t.display_strong()).color(t.text));
             ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
             ui.label(crate::i18n::tr_format!(
                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",

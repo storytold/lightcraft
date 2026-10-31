@@ -115,6 +115,51 @@
 
 ## 2026-10-21
 
+### Text sizes
+- Text is set in seven sizes, each with a job: 10 pt for a badge on a thumbnail, 11 for an explanation, the
+  caption over a field or on a small button or choice, 12 for a count or the title of a tab, 13 for controls, rows
+  and values, 14 for the header of a section, 15 for the name of a panel or a window, 18 for the title over the
+  photos. There were seventeen, from 8.5 to 20 pt and often half a point apart: a slider's name was 12.5 pt beside a
+  checkbox's 13, a caption 11 pt in Settings and 11.5 in Info.
+- A size between two went to the one its job has: a slider's name and value 12.5 to 13 pt, a count 12.5 to 12,
+  an explanation or the caption over a field 11.5 to 11, a row of the sidebar and the search box 13.5 to 13, a
+  window's title 16 to 15 (the size of a panel's name), the title over the photos 17 to 18.
+- The smallest text is 10 pt: the format on a filmstrip cell was 8.5, the count on the filter button 9.5.
+- For those who write code: name the size (`t.caption()`, `t.body_strong()`, … in `theme.rs`); a number asked of
+  the theme (`t.font(12.5)`) is drawn at the nearest size.
+
+### Text that can be read
+- The dim text of captions, counts, file names and explanations stands 4.5:1 against every panel, the grid, a
+  cell, a text box and a button, in all four themes. It was 4.20:1 on a panel in Charcoal, 3.3 to 4.4:1 on the
+  surfaces of Silver and Paper. It stays dimmer than a label.
+- So do a placeholder in a text box and anything else written faintly (they were the label colour at 60 %, under
+  4.1:1 on a panel in every theme), a link (the accent as text was 2.56:1 on a panel in Charcoal, and links in About a bright blue
+  at 2.4 to 2.8:1 in the light themes), and a caution or an error written as text (3.09:1 in Silver).
+- A chosen chip keeps its label 4.5:1 on the accent behind it; the count on the filter button and the "!" on the
+  cloud button (while changes can't be saved) are in black or white, whichever stands out from the circle; the name
+  on a selected filmstrip cell or square grid cell, or one tinted by a colour label, is made readable on that cell,
+  and the format over a square cell is light on its dark chip in the light themes too; a hidden mask's name is dim,
+  not the colour of what cannot be used.
+- Left as it was: a count of nothing in the sidebar ("0") is fainter than the other counts on purpose.
+
+### Marks and words over a picture
+- What is written or marked over a photo on a thumbnail or a filmstrip cell, in a toast and in "Before" is in one
+  light ink on a dark shade of its own, the same in every theme: a picture has no theme. In Silver and Paper the stars, the pick flag and the "edited" mark on a thumbnail or a
+  filmstrip cell were the theme's dark greys on a dark bar, and next to invisible; the toast wrote the theme's
+  near-black text on its black shade.
+- The marks on a thumbnail or filmstrip cell (rating stars and the pick or reject flag, and the "edited" mark and
+  colour label at the other side) are each on a small shade, only as wide as they are, wherever they show: before,
+  they lay on the bare photo and went out on a bright one. Which thumbnails show marks is as it was (a rated, flagged
+  or labelled one, or one under the pointer or chosen). The band along the lower edge of a photo under the pointer or
+  a chosen one is as it was; the dark bar across a marked filmstrip cell is gone, its marks being on their shades. On
+  a thumbnail or a filmstrip cell narrower than its marks they end where the photo ends, and the stars close up and
+  get smaller to leave room for the flag, and an "edited" mark or a label's dot with no room left beside them is not drawn.
+- The flag of a rejected photo on a thumbnail or a filmstrip cell is a lighter red, which stands out from its shade in every theme, and
+  a rejected thumbnail is dimmed under its marks, not over them.
+- "Before", over a photo shown as it was before its edits, and the label of a hover preview are on a darker shade.
+- Left as they were: the virtual-copy tag, "Preview" and a stack's count, which were white on dark pills of their
+  own already.
+
 ### Settings window
 - Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
   size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls (in a very short

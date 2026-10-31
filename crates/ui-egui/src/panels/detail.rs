@@ -293,7 +293,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         shown = draw(Slot::Before, img_rect, canvas);
         // on the photo itself, so it gets the hover label's dark pill to stay readable over light
         // pictures; painted after the window renders below, which would cover it zoomed in
-        let g = p.layout_no_wrap(crate::i18n::tr("Before").to_string(), t.font(12.0), Color32::WHITE);
+        let g = p.layout_no_wrap(crate::i18n::tr("Before").to_string(), t.label(), Tokens::on_photo());
         before_badge = Some((label_badge_rect(img_rect, canvas, g.size(), badge_top_inset), g));
     } else if let Some((_key, label)) = &hover_key
         && let Some(tex) = app.renderer.textures.get(&Slot::Hover).filter(|t| t.photo == id)
@@ -582,7 +582,7 @@ fn status_pill(
 fn proof_surround(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, canvas: Rect) {
     p.rect_filled(canvas, 0.0, Color32::from_gray(238));
     let label = crate::i18n::tr_format!("Proof Preview · {}", app.ui.proof.space.label());
-    p.text(pos2(canvas.right() - 16.0, canvas.top() + 14.0), Align2::RIGHT_CENTER, label, t.font(12.5), Color32::from_gray(60));
+    p.text(pos2(canvas.right() - 16.0, canvas.top() + 14.0), Align2::RIGHT_CENTER, label, t.label(), Color32::from_gray(60));
 }
 
 /// Request the window renders, remember which sides have one, and release the slot of a side without.
@@ -795,15 +795,15 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot
 fn draw_hover(p: &egui::Painter, t: &Tokens, tex: &crate::render::Tex, label: &str, [img_rect, canvas]: [Rect; 2], badge_top_inset: f32) {
     let hover_rect = fit_texture_rect(img_rect, tex.size);
     p.image(tex.tex.id(), hover_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-    let g = p.layout_no_wrap(label.to_string(), t.font(12.0), Color32::WHITE);
+    let g = p.layout_no_wrap(label.to_string(), t.label(), Tokens::on_photo());
     let bg = label_badge_rect(hover_rect, canvas, g.size(), badge_top_inset);
     paint_badge(p, bg, g);
 }
 
 /// A label on a dark pill.
 fn paint_badge(p: &egui::Painter, bg: Rect, g: std::sync::Arc<egui::Galley>) {
-    p.rect_filled(bg, 4.0, Color32::from_black_alpha(160));
-    p.galley(bg.min + vec2(8.0, 4.0), g, Color32::WHITE);
+    p.rect_filled(bg, 4.0, Tokens::photo_shade());
+    p.galley(bg.min + vec2(8.0, 4.0), g, Tokens::on_photo());
 }
 
 /// No photo is active: the empty-library message if the library is empty, else "No photo selected".

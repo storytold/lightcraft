@@ -155,7 +155,7 @@ pub(super) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 pos2(r.left() + 24.0, r.center().y),
                 Align2::LEFT_CENTER,
                 crate::i18n::history_label(&h.label, &app.session.presets),
-                t.font(12.5),
+                t.body(),
                 text,
             );
             if resp.clicked() {

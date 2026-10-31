@@ -65,7 +65,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
         let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, why, t.font(12.5), t.text_dim);
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, why, t.label(), t.text_dim);
         return;
     }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(0.0, 4.0))));
@@ -108,12 +108,17 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
             } else {
                 t.canvas
             };
-            p.rect_filled(cr, 0.0, crate::theme::label_background(base, label, selected));
+            let fill = crate::theme::label_background(base, label, selected);
+            p.rect_filled(cr, 0.0, fill);
+            // (a selected cell is lighter than the canvas the dim text is made for, or darker, and
+            // a colour label tints any cell; under the pointer the fill is see-through, and what
+            // the text is on is that fill over the strip)
+            let dim = t.legible(t.text_dim, t.canvas.blend(fill), 4.5);
             let names = app.ui.settings.film_names;
             if let Some(ph) = app.session.catalog.photo(*id).filter(|_| names) {
                 let name = ph.file_name.rsplit_once('.').map(|(n, _)| n).unwrap_or(&ph.file_name);
-                p.text(pos2(cr.left() + 8.0, cr.top() + 10.0), Align2::LEFT_CENTER, film_label(name), t.font(10.0), t.text_dim);
-                p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.semibold(8.5), t.text_dim);
+                p.text(pos2(cr.left() + 8.0, cr.top() + 10.0), Align2::LEFT_CENTER, film_label(name), t.micro(), dim);
+                p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.micro_strong(), dim);
             }
             let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
             crate::panels::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
@@ -137,13 +142,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {
-                    film_badges(p, &t, fr, ph);
+                    film_badges(p, fr, ph);
                 }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
                     let collapsed = st.collapsed;
                     let text =
                         if collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
-                    let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
+                    let g = p.layout_no_wrap(text, t.micro_strong(), Color32::WHITE);
                     let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
                     // like the grid's badge: a click expands / collapses the stack
                     let badge = ui.interact(br, egui::Id::unique(("film-stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
@@ -204,24 +209,42 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
 }
 
 /// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
+fn film_badges(p: &egui::Painter, fr: Rect, ph: &lightcraft_catalog::Photo) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
-    let edited = ph.is_edited();
-    if ph.rating == 0 && ph.flag == Flag::None && !edited {
+    if ph.rating == 0 && ph.flag == Flag::None && !ph.is_edited() {
         return;
     }
     let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
+    // (a picture has no theme: its marks are in one light ink on a shade as wide as they are,
+    // not in the theme's star and label colours, which are dark in the light themes)
+    let ink = Tokens::on_photo();
+    let clipped = p.with_clip_rect(bar.intersect(p.clip_rect()));
+    let p = &clipped;
+    let shade = |from: f32, to: f32| {
+        if to > from {
+            p.rect_filled(Rect::from_min_max(pos2(from, bar.top() + 1.0), pos2(to, bar.bottom() - 1.0)), 3.0, Tokens::photo_shade());
+        }
+    };
+    let flag_w = if ph.flag == Flag::None { 0.0 } else { 12.0 };
+    // (on a narrow thumbnail the stars close up, so that the flag after them is still inside the bar it is clipped to)
+    let crate::widgets::FilmMarks { pitch, edited } = crate::widgets::film_marks(bar.width(), ph.rating as usize, flag_w, ph.is_edited());
+    let marks_w = ph.rating as f32 * pitch + flag_w;
+    if marks_w > 0.0 {
+        shade(bar.left() + 1.0, (bar.left() + 5.0 + marks_w).min(bar.right()));
+    }
+    if edited {
+        shade((bar.right() - 16.0).max(bar.left()), bar.right() - 1.0);
+    }
     let y = bar.center().y;
     let mut x = bar.left() + 3.0;
-    x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;
+    x += crate::rating::paint_rating_spaced(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, pitch, ink) + 2.0;
     match ph.flag {
-        Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPickFilled, t.pick),
-        Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, t.reject),
+        Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPickFilled, ink),
+        Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, Tokens::on_photo_reject()),
         Flag::None => {}
     }
     if edited {
-        paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
+        paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, ink);
     }
 }
