@@ -150,13 +150,15 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if !f.text.trim().is_empty() {
         add(format!("Search: “{}”", f.text.trim()), json!({"text": ""}));
     }
-    if f.rating > 0 {
+    if f.rating_filters() {
         let op = match f.rating_op {
             RatingOp::AtLeast => "≥",
             RatingOp::Exactly => "=",
             RatingOp::AtMost => "≤",
         };
-        add(format!("Rating {op} {}★", f.rating), json!({"rating": 0}));
+        // "= 0" and "≤ 0" are the unrated photos; clearing the chip takes the operator back too
+        let label = if f.rating == 0 { "Unrated".to_string() } else { format!("Rating {op} {}★", f.rating) };
+        add(label, json!({"rating": 0, "ratingOp": "atLeast"}));
     }
     if let Some(fl) = f.flag {
         add(format!("Flag: {}", format!("{fl:?}").to_lowercase()), json!({"flag": Null}));

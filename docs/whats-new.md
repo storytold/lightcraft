@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Filter for unrated photos
+- In the filter bar, Rating "= exactly" or "≤ at most" with no stars now shows the photos without a rating, as in
+  Lightroom. Before, it switched the rating rule off and showed every photo. "≥ at least" with no stars still shows
+  everything, and the chip above the grid reads "Unrated" (issue #3417).
+
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin

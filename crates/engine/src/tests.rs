@@ -1377,6 +1377,41 @@ fn find_similar_of_a_flat_photo_shows_an_empty_view_and_counts_zero() {
     assert_eq!(s.visible_cloned().len(), s.catalog.len());
 }
 
+/// Issue #3417: "exactly" or "at most" no stars in the filter bar shows the unrated photos, as in
+/// Lightroom, instead of switching the rating rule off; "at least" no stars still shows all.
+#[test]
+fn rating_exactly_or_at_most_zero_shows_the_unrated_photos() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    assert!(ids.len() >= 3);
+    s.execute("photo.rate", &json!({"rating": 0, "ids": ids})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2, "ids": [ids[0]]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 5, "ids": [ids[1]]})).unwrap();
+    let unrated = ids.len() - 2;
+    for op in ["exactly", "atMost"] {
+        s.execute("library.filter", &json!({"rating": 0, "ratingOp": op})).unwrap();
+        let shown = s.visible_cloned();
+        assert_eq!(shown.len(), unrated, "{op} 0");
+        assert!(shown.iter().all(|id| s.catalog.photo(*id).unwrap().rating == 0), "{op} 0 shows only unrated photos");
+        assert_eq!(s.catalog.count(&s.filter), unrated);
+        let chips = crate::filter_chips(&s.filter, &s.catalog);
+        assert_eq!(chips.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["Unrated"], "{op}");
+        s.execute("library.filter", &chips[0].clear).unwrap();
+        assert_eq!(s.filter, Default::default(), "the chip clears the rule and its operator");
+        assert_eq!(s.visible_cloned().len(), ids.len());
+    }
+    s.execute("library.filter", &json!({"rating": 0, "ratingOp": "atLeast"})).unwrap();
+    assert_eq!(s.visible_cloned().len(), ids.len(), "at least no stars is every photo");
+    assert!(crate::filter_chips(&s.filter, &s.catalog).is_empty());
+
+    // a smart album of rated photos, viewed with "= no stars": the view saves "= 0", not "= 3"
+    let r = s.execute("album.createSmart", &json!({"name": "Rated", "rules": {"rating": 3}})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": r["id"]})).unwrap();
+    s.execute("library.filter", &json!({"rating": 0, "ratingOp": "exactly"})).unwrap();
+    let saved = s.view_rules();
+    assert_eq!((saved.rating, saved.rating_op), (0, lightcraft_catalog::RatingOp::Exactly));
+}
+
 #[test]
 fn find_similar_values_stay_within_zero_and_one() {
     let mut s = demo();

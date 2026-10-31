@@ -263,9 +263,15 @@ impl Filter {
         self.describe_in(Some(cat))
     }
 
+    /// Whether the rating rule narrows the view. Only "at least no stars" lets every photo through:
+    /// "exactly" or "at most" no stars shows the unrated photos, as in Lightroom's filter bar (#3417).
+    pub fn rating_filters(&self) -> bool {
+        self.rating > 0 || self.rating_op != RatingOp::AtLeast
+    }
+
     fn describe_in(&self, cat: Option<&crate::Catalog>) -> String {
         let mut v: Vec<String> = Vec::new();
-        if self.rating > 0 {
+        if self.rating_filters() {
             let op = match self.rating_op {
                 RatingOp::AtLeast => "≥",
                 RatingOp::Exactly => "=",
@@ -367,7 +373,7 @@ impl Filter {
                 }
             }
         }
-        if self.rating > 0 {
+        if self.rating_filters() {
             let ok = match self.rating_op {
                 RatingOp::AtLeast => p.rating >= self.rating,
                 RatingOp::Exactly => p.rating == self.rating,
