@@ -1,8 +1,9 @@
 //! Straightening never unlocks the crop's aspect ratio. On an
 //! untouched photo the crop tool shows the crop locked to the photo's shape while the crop itself
 //! carries no lock yet; an edit of the angle (the Straighten slider, the Straighten tool's line,
-//! Auto, rotating with the pointer, `develop.set`), a flip or Constrain Crop first stores that
-//! lock, so the crop stays locked and keeps its ratio. Nothing but the lock button (and A) unlocks it.
+//! Auto, rotating with the pointer, `develop.set`) or a flip first stores that lock, so the crop
+//! stays locked and keeps its ratio; Constrain Crop leaves the crop untouched, still shown locked.
+//! Nothing but the lock button (and A) unlocks it.
 
 use std::time::Duration;
 
@@ -209,7 +210,11 @@ fn flips_and_constrain_crop_keep_the_lock() {
         let id = h.app.session.active().expect("a photo");
         let shown = h.app.crop_tool_aspect().map(|(a, b)| f64::from(a) / f64::from(b));
         assert!(shown.is_some_and(|s| (s - want).abs() < 0.01), "{what}: still shown locked to {want}: {shown:?}");
-        if !untouched(&h, id) {
+        if command == "develop.merge" {
+            // Constrain Crop is a Geometry setting: it leaves the crop untouched, so the tool goes on
+            // showing (and the next crop edit stores) the lock it had; nothing to store here
+            assert!(untouched(&h, id), "{what}: the crop is untouched");
+        } else if !untouched(&h, id) {
             assert!(crop_state(&h).0.is_some(), "{what}: the crop carries the lock it shows");
         }
     }
