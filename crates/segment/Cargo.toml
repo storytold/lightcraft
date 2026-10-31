@@ -19,6 +19,8 @@ log = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 lightcraft-fetch = { workspace = true }
+# the CPU kernels share candle's thread pool
+rayon = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { workspace = true, features = ["metal"] }
