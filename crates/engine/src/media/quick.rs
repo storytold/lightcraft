@@ -33,6 +33,10 @@ pub struct QuickJob {
     /// so a folder seen before fills in from small files at once instead of every raw being read
     /// and its camera JPEG decoded again (the loupe's large stand-ins stay in memory).
     pub embedded_on_disk: bool,
+    /// Import tiles need this many pixels when a render can provide them. `None` accepts any
+    /// camera JPEG immediately (ordinary transient stand-ins and preview-only imports).
+    /// An undersized JPEG remains the fallback if the render fails or is unavailable.
+    pub minimum_embedded_edge: Option<usize>,
     /// Last resort: run this thumbnail job.
     pub small: Option<Box<RenderJob>>,
 }
@@ -80,26 +84,38 @@ impl QuickJob {
                 return done(rendered(Arc::unwrap_or_clone(img)), Some(QuickSource::Cached));
             }
         }
+        let mut embedded_fallback = None;
         if let Some((path, loader, edge)) = &self.embedded {
-            if let Some((cache, k)) = &self.embedded_cache
-                && let Some(img) = if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) }
-            {
-                return done(rendered(Arc::unwrap_or_clone(img)), Some(QuickSource::Embedded));
-            }
-            if let Some(image) = loader(path, *edge) {
-                if let Some((cache, k)) = &self.embedded_cache {
-                    if self.embedded_on_disk {
-                        cache.put_deferred(*k, Arc::new(image.clone()));
-                    } else {
-                        cache.put_memory(*k, Arc::new(image.clone()));
+            let kept = self.embedded_cache.as_ref().and_then(|(cache, k)| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) });
+            let image = match kept {
+                Some(img) => Some(Arc::unwrap_or_clone(img)),
+                None => {
+                    let image = loader(path, *edge);
+                    if let (Some(image), Some((cache, k))) = (&image, &self.embedded_cache) {
+                        if self.embedded_on_disk {
+                            cache.put_deferred(*k, Arc::new(image.clone()));
+                        } else {
+                            cache.put_memory(*k, Arc::new(image.clone()));
+                        }
                     }
+                    image
                 }
-                return done(rendered(image), Some(QuickSource::Embedded));
+            };
+            if let Some(image) = image {
+                if self.minimum_embedded_edge.is_none_or(|minimum| image.width.max(image.height) >= minimum) {
+                    return done(rendered(image), Some(QuickSource::Embedded));
+                }
+                embedded_fallback = Some(image);
             }
         }
         if let Some(job) = self.small {
             let r = job.run();
-            return RenderResult { request_id, key, quick: Some(QuickSource::Small), ..r };
+            if r.rendered.is_ok() || embedded_fallback.is_none() {
+                return RenderResult { request_id, key, quick: Some(QuickSource::Small), ..r };
+            }
+        }
+        if let Some(image) = embedded_fallback {
+            return done(rendered(image), Some(QuickSource::Embedded));
         }
         done(Err("no quick preview".into()), None)
     }
