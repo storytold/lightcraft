@@ -471,6 +471,19 @@ pub fn filter_label(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_ca
     }
 }
 
+/// Why a backup or restore was refused or not made, in the interface's language: the engine
+/// says it in English, and the sentences that don't name a folder or a file
+/// (`lightcraft_engine::cmd::backup::REFUSALS`) have translations. A command that is not
+/// available right now gives its reason alone, without the command's id. Anything else is said
+/// as it is.
+pub fn refusal_text(error: &str) -> String {
+    let unavailable = error.strip_prefix("command `").and_then(|rest| rest.split_once("` is not available right now: "));
+    match unavailable {
+        Some((_, why)) => tr_format!("Not available right now: {}", tr(why)),
+        None => tr(error).to_string(),
+    }
+}
+
 /// What people read for a smart-album rule's problem, under its row: the field's name and the
 /// issue, in the current language ("Title: needs something to look for").
 pub fn problem_text(problem: &lightcraft_catalog::rules::Problem) -> String {

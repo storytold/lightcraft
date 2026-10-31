@@ -34,7 +34,11 @@ USAGE:
       engine.commands / ui.inspect / ui.screenshot) and print one JSON line per command:
       {\"command\", \"ok\", \"result\" | \"error\", \"ms\"}. A word without `=` starts the next
       command; values are JSON when they parse (1, true, [1,2], {…}), else strings. Exit status
-      is non-zero when a command fails. Example:
+      is non-zero when a command fails. Headless, a restore or backup started with
+      `background=true` is waited for before the call ends (also before another of its kind
+      starts), and how each ended is one more line (`library.restoreStatus` /
+      `library.backupStatus`); a failed one fails the call, even when a later one worked; not
+      after a command failed, unless --keep-going. Example:
         lightcraft-cli run --import ~/Photos/a.jpg develop.set control=light.exposure value=0.7 \\
             develop.auto app.export path=/tmp/a.jpg longEdge=1600
       Options:
@@ -550,29 +554,14 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let mut steps = parse_steps(&args[i..])?;
     if let Some(path) = &script {
-        let text = if path == "-" {
-            let mut s = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s).map_err(|e| e.to_string())?;
-            s
-        } else {
-            std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?
-        };
-        for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
-            let v: Value = serde_json::from_str(line).map_err(|e| format!("{path}:{}: {e}", n + 1))?;
-            // `{"command": id, "params": …}` or a control request `{"method": m, "params": …}`
-            let id = v
-                .get("command")
-                .or(v.get("method"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("{path}:{}: needs `command` or `method`", n + 1))?;
-            let params = v.get("params").cloned().filter(|p| p.is_object()).unwrap_or_else(|| json!({}));
-            steps.push(Step { id: id.to_string(), params });
-        }
+        steps.extend(read_script(path)?);
     }
     if steps.is_empty() {
         return Err("run: no command given (see `lightcraft-cli commands`)".into());
     }
-    let mut backend: Box<dyn Backend> =
+    // (this process holds the library: what it starts in the background ends with it)
+    let headless = connect.is_none();
+    let mut backend =
         match connect {
             Some(addr) => {
                 if demo || library.is_some() || !imports.is_empty() {
@@ -580,50 +569,176 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
                 Box::new(Remote::connect(&addr).map_err(|e| {
                     format!("LightCraft is not reachable at {addr} ({e}); start it with `lightcraft --control {}`", connect_port(&addr))
-                })?)
+                })?) as Box<dyn Backend>
             }
-            None => {
-                let mut h = match &library {
-                    Some(dir) => {
-                        let mut h = Headless::default();
-                        h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
-                        library_warnings(&mut h.session, "lightcraft-cli");
-                        h
-                    }
-                    None if demo => Headless::demo(),
-                    None => Headless::default(),
-                };
-                if !imports.is_empty() {
-                    let paths = expand_paths(&imports);
-                    let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                    // what follows acts on the imported photos (already-known files are reported as duplicates)
-                    let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
-                    ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
-                    if let Some(first) = ids.first().cloned() {
-                        h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
-                    }
-                }
-                Box::new(h)
-            }
+            None => Box::new(open_headless(library.as_deref(), demo, &imports)?),
         };
     let mut out = std::io::stdout().lock();
-    let mut failed = 0;
+    let mut state = JobState::default();
     for s in &steps {
+        // A background job that ended is the last one the library knows: a later one of the same
+        // kind replaces it, and with it how it ended. So how an earlier one ended is said, and
+        // counted, before another is started.
+        let starts_job = headless && matches!(s.id.as_str(), "library.backup" | "library.restore");
+        if starts_job && say_earlier_jobs(backend.as_mut(), &mut out, &mut state, keep_going)? {
+            break;
+        }
         let t = std::time::Instant::now();
         let line = match run_step(backend.as_mut(), s) {
-            Ok(r) => json!({"command": s.id, "ok": true, "result": r, "ms": (t.elapsed().as_secs_f64() * 1e4).round() / 10.0}),
+            Ok(r) => {
+                // (started in the background: it is seen through below)
+                // (also one that was over before the call returned: how it ended is still to be said)
+                let goes_on = r["running"] == json!(true) || (s.params["background"] == json!(true) && r.get("running").is_some());
+                state.restoring |= goes_on && s.id == "library.restore";
+                state.backing_up |= goes_on && s.id == "library.backup";
+                json!({"command": s.id, "ok": true, "result": r, "ms": (t.elapsed().as_secs_f64() * 1e4).round() / 10.0})
+            }
             Err(e) => {
-                failed += 1;
+                state.failed += 1;
                 json!({"command": s.id, "ok": false, "error": e})
             }
         };
         writeln!(out, "{line}").map_err(|e| e.to_string())?;
-        if failed > 0 && !keep_going {
+        if state.failed > 0 && !keep_going {
             break;
         }
     }
+    // A restore or a backup that a command started in the background is seen through before
+    // this session ends: its work is this process's, and would end with it (a restore given up
+    // with nothing changed, a backup cut short). How it ended is one more line, whether or not
+    // it was over already when it was first asked about.
+    if headless && (state.failed == 0 || keep_going) {
+        for (started, status) in [(state.restoring, "library.restoreStatus"), (state.backing_up, "library.backupStatus")] {
+            if started {
+                let (line, ok) = see_job_through(backend.as_mut(), status);
+                state.failed += usize::from(!ok);
+                writeln!(out, "{line}").map_err(|e| e.to_string())?;
+            }
+        }
+    }
     drop(backend); // a library session is flushed here
-    if failed > 0 { Err(format!("{failed} command(s) failed")) } else { Ok(()) }
+    if state.failed > 0 { Err(format!("{} command(s) failed", state.failed)) } else { Ok(()) }
+}
+
+/// What `run` has seen of background jobs and failures so far.
+#[derive(Default)]
+struct JobState {
+    failed: usize,
+    restoring: bool,
+    backing_up: bool,
+}
+
+/// The result line of a job's status (`ended`, taking `ms` milliseconds to arrive) and whether it
+/// says the job went well.
+fn status_line(status: &str, ended: Result<Value, String>, ms: f64) -> (Value, bool) {
+    match ended {
+        Ok(r) => {
+            let ok = r["error"].is_null();
+            (json!({"command": status, "ok": ok, "result": r, "ms": ms}), ok)
+        }
+        Err(e) => (json!({"command": status, "ok": false, "error": e}), false),
+    }
+}
+
+/// Ask for `status` until its job is over, saying once (when `warn_after` is set) that it is taking
+/// a while. Returns the answer and the wait in milliseconds, to one decimal.
+fn wait_for_status(backend: &mut dyn Backend, status: &str, warn_after: Option<std::time::Duration>) -> (Result<Value, String>, f64) {
+    let step = Step { id: status.to_string(), params: json!({}) };
+    let t = std::time::Instant::now();
+    let mut said = false;
+    let ended = loop {
+        match run_step(backend, &step) {
+            Ok(r) if r["running"] == json!(true) => {
+                // (a restore is moved into place once nothing else is at work in the
+                // library: one that waits is said, not waited for in silence)
+                if let Some(after) = warn_after
+                    && !said
+                    && t.elapsed() > after
+                {
+                    said = true;
+                    eprintln!("lightcraft-cli run: still waiting for {status} to say it is over (stop with Ctrl-C: nothing is left half done)");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => break other,
+        }
+    };
+    (ended, (t.elapsed().as_secs_f64() * 1e4).round() / 10.0)
+}
+
+/// The line for how a background job a command started ended, once seen through.
+fn see_job_through(backend: &mut dyn Backend, status: &str) -> (Value, bool) {
+    let (ended, ms) = wait_for_status(backend, status, Some(std::time::Duration::from_secs(10)));
+    status_line(status, ended, ms)
+}
+
+/// Before a job is started in a headless session: say, and count, how an earlier backup or restore
+/// ended (either kind: the engine refuses a backup while a restore runs, and the other way round).
+/// `true` when the run is to stop (a failure, without `keep_going`).
+fn say_earlier_jobs(backend: &mut dyn Backend, out: &mut impl Write, state: &mut JobState, keep_going: bool) -> Result<bool, String> {
+    let mut stop = false;
+    for (is_backup, status) in [(true, "library.backupStatus"), (false, "library.restoreStatus")] {
+        let earlier = if is_backup { &mut state.backing_up } else { &mut state.restoring };
+        if !*earlier {
+            continue;
+        }
+        // (said here: it is not asked about again at the end, unless another is started)
+        *earlier = false;
+        // (it is seen through first, as at the end)
+        let (ended, ms) = wait_for_status(backend, status, None);
+        let (line, ok) = status_line(status, ended, ms);
+        // (a line for each job, as for the last one at the end; only a failure fails the call)
+        state.failed += usize::from(!ok);
+        writeln!(out, "{line}").map_err(|e| e.to_string())?;
+        stop |= !ok && !keep_going;
+    }
+    Ok(stop)
+}
+
+/// The steps of a `--script` file (`-`: standard input), one JSON object per line.
+fn read_script(path: &str) -> Result<Vec<Step>, String> {
+    let text = if path == "-" {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut s).map_err(|e| e.to_string())?;
+        s
+    } else {
+        std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?
+    };
+    let mut steps = Vec::new();
+    for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("{path}:{}: {e}", n + 1))?;
+        // `{"command": id, "params": …}` or a control request `{"method": m, "params": …}`
+        let id =
+            v.get("command").or(v.get("method")).and_then(Value::as_str).ok_or_else(|| format!("{path}:{}: needs `command` or `method`", n + 1))?;
+        let params = v.get("params").cloned().filter(|p| p.is_object()).unwrap_or_else(|| json!({}));
+        steps.push(Step { id: id.to_string(), params });
+    }
+    Ok(steps)
+}
+
+/// A headless session, on `library` or a demo one, with `imports` already imported and selected
+/// (what follows acts on them; already-known files are reported as duplicates).
+fn open_headless(library: Option<&str>, demo: bool, imports: &[String]) -> Result<Headless, String> {
+    let mut h = match library {
+        Some(dir) => {
+            let mut h = Headless::default();
+            h.session.open_library(dir, demo).map_err(|e| library_error(dir, e))?;
+            library_warnings(&mut h.session, "lightcraft-cli");
+            h
+        }
+        None if demo => Headless::demo(),
+        None => Headless::default(),
+    };
+    if !imports.is_empty() {
+        let paths = expand_paths(imports);
+        let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
+        let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
+        ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
+        if let Some(first) = ids.first().cloned() {
+            h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(h)
 }
 
 fn take_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {

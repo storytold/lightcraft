@@ -153,7 +153,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     for (p, paths) in answered {
         let params = with_answer(&p.params, p.key, p.kind, &paths);
         if let Err(e) = app.run(&p.command, params) {
-            app.toast_error(ctx, e);
+            app.toast_error(ctx, crate::i18n::refusal_text(&e));
         }
     }
 }

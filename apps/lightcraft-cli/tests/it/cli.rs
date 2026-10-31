@@ -1,6 +1,7 @@
 //! End-to-end tests of the `lightcraft-cli` binary: `mcp` over real stdio pipes, `render`, `commands`.
 
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
@@ -813,4 +814,113 @@ fn denoise_serve_runs_tiles_for_another_computer() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&models);
+}
+
+/// Given a library with a backup, when one `run` restores it in the background (as the app
+/// does), then the call ends only when the restore is over: its last line is the restore's own
+/// account, the library is the backup again, and nothing of a restore is left half-way. So is
+/// a backup that was started in the background: it is there when the call returns.
+#[test]
+fn run_sees_a_background_restore_or_backup_through_before_it_ends() {
+    let dir = std::env::temp_dir().join(format!("lc-cli-wait-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("library");
+    let run = |args: &[&str]| -> Vec<Value> {
+        let o = Command::new(binary()).args(["run", "--demo", "--library", lib.to_str().unwrap()]).args(args).output().unwrap();
+        assert!(o.status.success(), "{}\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    };
+    // a backup in the background: made when the call returns, and said
+    let lines = run(&["photo.rate", "rating=4", "library.backup", "background=true"]);
+    let last = lines.last().unwrap();
+    assert_eq!(last["command"], "library.backupStatus", "{lines:?}");
+    assert_eq!(last["result"]["running"], false);
+    let made = last["result"]["report"]["dir"].as_str().expect("the backup was made").to_string();
+    assert!(Path::new(&made).join("backup.json").is_file());
+
+    // the library goes on, and is restored in the background
+    let with_four = |lines: Vec<Value>| lines.last().unwrap()["result"]["selected"].as_u64().unwrap();
+    let before = with_four(run(&["photo.rate", "rating=1", "library.selectBy", "rating=4", "ratingOp=eq"]));
+    let lines = run(&["library.restore", &format!("dir={made}"), "background=true"]);
+    let last = lines.last().unwrap();
+    assert_eq!(last["command"], "library.restoreStatus", "{lines:?}");
+    assert_eq!((last["ok"].clone(), last["result"]["running"].clone()), (json!(true), json!(false)), "{last}");
+    assert!(last["result"]["error"].is_null() && last["result"]["restored"].is_object(), "{last}");
+    assert!(!lib.join("restore.json").exists() && !lib.join("restore.partial").exists());
+    assert!(lib.join("Replaced").is_dir());
+    assert_eq!(with_four(run(&["library.selectBy", "rating=4", "ratingOp=eq"])), before + 1, "the photo has its four stars back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given a backup in the background that fails, when another that works is started after it,
+/// then the call still fails: how the first ended is said (and counted) before the second
+/// replaces it as the last backup the library knows.
+#[test]
+fn run_fails_for_a_background_backup_that_failed_even_when_a_later_one_works() {
+    let dir = std::env::temp_dir().join(format!("lc-cli-wait-failed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (lib, file, good) = (dir.join("library"), dir.join("not-a-folder"), dir.join("good"));
+    std::fs::write(&file, b"x").unwrap();
+    let o = Command::new(binary())
+        .args(["run", "--demo", "--keep-going", "--library", lib.to_str().unwrap()])
+        .args(["library.backup", &format!("dir={}", file.display()), "background=true"])
+        .args(["library.compact", "library.compact", "library.compact"])
+        .args(["library.backup", &format!("dir={}", good.display()), "background=true"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(!o.status.success(), "{said}\n{}", String::from_utf8_lossy(&o.stderr));
+    assert!(said.lines().any(|l| l.contains("\"command\":\"library.backupStatus\"") && l.contains("\"ok\":false")), "{said}");
+    // the later backup was reached and worked
+    // the later backup's own status line says it worked (a backup lands in a folder named by its time)
+    let good_status = said.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).rfind(|v| v["command"] == "library.backupStatus").unwrap();
+    assert!(
+        good_status["ok"] == true && good_status["result"]["error"].is_null() && good_status["result"]["dest"] == good.to_string_lossy().as_ref(),
+        "{said}"
+    );
+    assert!(std::fs::read_dir(&good).is_ok_and(|d| d.count() > 0), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two background backups in a row that both work: each is waited for and said (the second is
+/// not refused for the first one still running), and the call succeeds.
+#[test]
+fn run_says_how_each_of_two_background_backups_ended() {
+    let dir = std::env::temp_dir().join(format!("lc-cli-wait-two-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lib = dir.join("library");
+    let o = Command::new(binary())
+        .args(["run", "--demo", "--library", lib.to_str().unwrap()])
+        .args(["library.backup", &format!("dir={}", dir.join("one").display()), "background=true"])
+        .args(["library.backup", &format!("dir={}", dir.join("two").display()), "background=true"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{said}\n{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(said.lines().filter(|l| l.contains("\"command\":\"library.backupStatus\"") && l.contains("\"ok\":true")).count(), 2, "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A restore into another folder (`to`) with `background=true` is done in the foreground and is
+/// no job: no status line follows it, and the call succeeds.
+#[test]
+fn run_does_not_wait_for_a_restore_into_another_folder() {
+    let dir = std::env::temp_dir().join(format!("lc-cli-restore-to-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lib = dir.join("library");
+    let o = Command::new(binary()).args(["run", "--demo", "--library", lib.to_str().unwrap(), "library.backup"]).output().unwrap();
+    let said = String::from_utf8_lossy(&o.stdout);
+    let made = serde_json::from_str::<Value>(said.lines().last().unwrap()).unwrap()["result"]["report"]["dir"].as_str().unwrap().to_string();
+    let o = Command::new(binary())
+        .args(["run", "--demo", "--library", lib.to_str().unwrap()])
+        .args(["library.restore", &format!("dir={made}"), &format!("to={}", dir.join("elsewhere").display()), "background=true"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{said}\n{}", String::from_utf8_lossy(&o.stderr));
+    assert!(!said.contains("restoreStatus"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
