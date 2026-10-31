@@ -249,18 +249,62 @@ pub fn try_batch_turn_on(role: Role, src_px: usize, out_px: usize) -> Option<Bat
     }
 }
 
-/// A turn for a batch photo on whichever card has room now: the second card first (it keeps the
-/// screen's card free for the interface), then the editing card (whose gate hands out batch turns
-/// only while the interface is idle, §8). `None`: both are busy, or there is no GPU — the caller
-/// renders the photo on the CPU (an export's `mix` mode), as [`try_batch_turn`]'s `None` did. Take
-/// it inside [`as_batch`]; this thread's renders go to the card while the turn is held.
+/// A turn for a batch photo on whichever card has room now and would finish it soonest: each
+/// card's photos running now plus this one, at the card's measured speed for batch work — so both
+/// cards work in proportion to their speed, and a build of two photos at a time puts one on each.
+/// While the desktop app tracks the interface (§8) the second card takes a photo first whenever it
+/// has none, and the editing card's gate hands out turns only while the interface is idle (one at
+/// a time). `None`: both are busy, or there is no GPU — the caller renders the photo on the CPU
+/// (an export's `mix` mode), as [`try_batch_turn`]'s `None` did. Take it inside [`as_batch`];
+/// this thread's renders go to the card while the turn is held.
 pub fn batch_turn_any(src_px: usize, out_px: usize) -> Option<BatchTurn> {
-    if helper_ready()
-        && let Some(t) = try_batch_turn_on(Role::Helper, src_px, out_px)
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        return Some(t);
+        gate::order(turn_bytes(src_px, out_px), helper_ready()).into_iter().find_map(|role| try_batch_turn_on(role, src_px, out_px))
     }
-    try_batch_turn_on(Role::Primary, src_px, out_px)
+    #[cfg(target_arch = "wasm32")]
+    {
+        try_batch_turn_on(Role::Primary, src_px, out_px)
+    }
+}
+
+/// How many cards take batch work now: the editing card (when the GPU is used: its device made,
+/// or not tried yet) and the second card when it is ready ([`helper_ready`]). 0 without a GPU.
+/// Never blocks.
+pub fn batch_cards() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if !allowed() {
+            return 0;
+        }
+        let primary = slot::current(Role::Primary).is_some() || !slot::tried(Role::Primary);
+        usize::from(primary) + usize::from(helper_ready())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+}
+
+/// How many photos batch work should render side by side to keep every card busy, for a caller
+/// that runs `per_card` on one card: `per_card` × [`batch_cards`] (at least `per_card`, at least
+/// 1). Callers still cap it by host memory (decoded sources) as before.
+pub fn batch_lanes_hint(per_card: usize) -> usize {
+    per_card.max(1).saturating_mul(batch_cards().max(1))
+}
+
+/// Card `role`'s measured speed for batch work, in device bytes of finished turns per second with
+/// batch work on it (`None` before it finished any): what [`batch_turn_any`] shares photos by.
+pub fn batch_rate_of(role: Role) -> Option<f64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        gate::measured_rate(role)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = role;
+        None
+    }
 }
 
 /// [`batch_turn_any`], waiting until one card has room (a GPU-only export, a preview build).

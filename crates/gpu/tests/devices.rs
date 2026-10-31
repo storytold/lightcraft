@@ -90,6 +90,14 @@ fn two_devices_render_alike_and_each_card_goes_its_own_way() {
         let b = lightcraft_gpu::try_batch_turn_on(Role::Primary, w * h, w * h).expect("the editing card has room");
         assert_eq!(b.role(), Role::Primary);
     });
+    // two photos at once, the interface idle: one on each card (a 2-lane build uses both)
+    assert_eq!(lightcraft_gpu::batch_cards(), 2);
+    assert_eq!(lightcraft_gpu::batch_lanes_hint(2), 4);
+    lightcraft_gpu::as_batch(|| {
+        let a = lightcraft_gpu::batch_turn_any(w * h, w * h).expect("a turn");
+        let b = lightcraft_gpu::batch_turn_any(w * h, w * h).expect("a second turn");
+        assert_ne!(a.role(), b.role(), "both cards get a photo");
+    });
 
     // ---- §8: batch work leaves the editing card to the interface
     lightcraft_gpu::track_interaction(true);

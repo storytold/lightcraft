@@ -48,6 +48,13 @@ struct State {
     hold_until: Option<Instant>,
     /// Batch renders waiting for their turn now.
     waiting: usize,
+    /// Since when batch renders run without a break (`None`: none runs now).
+    busy_since: Option<Instant>,
+    /// Batch work done (the device bytes of the turns given back) and the time it took with
+    /// batch renders running: the card's measured speed ([`rate`]), which shares batch photos
+    /// out between the cards ([`order`]).
+    done: u64,
+    busy: Duration,
 }
 
 /// One card's gate.
@@ -69,7 +76,17 @@ struct Gate {
 impl Gate {
     const fn new() -> Gate {
         Gate {
-            state: Mutex::new(State { held: 0, jobs: 0, interactive: 0, interactive_ended: None, hold_until: None, waiting: 0 }),
+            state: Mutex::new(State {
+                held: 0,
+                jobs: 0,
+                interactive: 0,
+                interactive_ended: None,
+                hold_until: None,
+                waiting: 0,
+                busy_since: None,
+                done: 0,
+                busy: Duration::ZERO,
+            }),
             cv: Condvar::new(),
             limit: AtomicU64::new(0),
             jobs: AtomicUsize::new(0),
@@ -190,12 +207,11 @@ pub(crate) fn in_one_turn<R>(role: Role, bytes: u64, vram: u64, stop: &dyn Fn() 
     if !is_batch() || in_turn() == Some(role) {
         return f();
     }
-    let turn = enter(role, bytes, vram, stop);
-    let was = IN_TURN.with(|c| c.replace(turn.as_ref().map(|_| role)));
-    let r = f();
-    IN_TURN.with(|c| c.set(was));
-    drop(turn);
-    r
+    let permit = enter(role, bytes, vram, stop);
+    let was = IN_TURN.try_with(|c| c.replace(permit.as_ref().map(|_| role))).ok().flatten();
+    // (put back on unwind too; the turn is given back after the thread's mark)
+    let _turn = Turn { _permit: permit, was };
+    f()
 }
 
 /// A turn taken without waiting ([`try_turn`]): this thread's renders on its card run in it until
@@ -225,12 +241,21 @@ pub(crate) fn try_turn(role: Role, bytes: u64, vram: u64) -> Option<Turn> {
     Some(Turn { _permit: Some(permit), was })
 }
 
+/// Puts this thread's batch flag back when dropped (also when the work panics: an export's photo
+/// that panics, caught further up, must not leave the thread's later renders counted as batch work).
+struct BatchFlag(bool);
+
+impl Drop for BatchFlag {
+    fn drop(&mut self) {
+        let was = self.0;
+        let _ = BATCH.try_with(|b| b.set(was));
+    }
+}
+
 /// Run `f` with this thread's GPU renders counted as batch work.
 pub(crate) fn as_batch<R>(f: impl FnOnce() -> R) -> R {
-    let was = BATCH.with(|b| b.replace(true));
-    let r = f();
-    BATCH.with(|b| b.set(was));
-    r
+    let _flag = BatchFlag(BATCH.try_with(|b| b.replace(true)).unwrap_or(false));
+    f()
 }
 
 /// Are this thread's renders batch work?
@@ -289,6 +314,76 @@ pub(crate) fn hold(d: Duration) {
     s.hold_until = Some(s.hold_until.map_or(until, |t| t.max(until)));
 }
 
+// ------------------------------------------------------------ sharing photos between cards
+
+/// How much batch work time a card's measured speed ([`rate`]) remembers (roughly; older work
+/// counts half each time this much more has passed).
+const RATE_WINDOW: Duration = Duration::from_secs(120);
+
+/// Card `s`'s measured speed for batch work: device bytes of turns given back per second with
+/// batch renders running (several at once included). `None` before it finished any.
+fn rate(s: &State, now: Instant) -> Option<f64> {
+    let busy = s.busy.saturating_add(s.busy_since.map_or(Duration::ZERO, |t| now.saturating_duration_since(t)));
+    let secs = busy.as_secs_f64();
+    (s.done > 0 && secs > 0.001).then(|| s.done as f64 / secs).filter(|r| r.is_finite() && *r > 0.0)
+}
+
+/// The cards to try, in order, for a batch photo needing `bytes` (`helper`: the second card is
+/// ready): the one that would finish it soonest — its photos running now plus this one, at its
+/// measured speed ([`rate`]; both alike until each has finished some) — so both cards work in
+/// proportion to their speed and a build of two photos at a time still uses both. On a tie, the
+/// second card. While the app tracks the interface (§8) the second card takes a photo first
+/// whenever it has none: the editing card only gets one when the second card is working already
+/// (and its gate hands it out only while the interface is idle, one at a time).
+pub(crate) fn order(bytes: u64, helper: bool) -> Vec<Role> {
+    if !helper {
+        return vec![Role::Primary];
+    }
+    let now = Instant::now();
+    let (h_held, h_jobs, h_rate) = {
+        let s = gate(Role::Helper).lock();
+        (s.held, s.jobs, rate(&s, now))
+    };
+    let (p_held, p_rate) = {
+        let s = gate(Role::Primary).lock();
+        (s.held, rate(&s, now))
+    };
+    if tracking() && h_jobs == 0 {
+        return vec![Role::Helper, Role::Primary];
+    }
+    let (h_rate, p_rate) = match (h_rate, p_rate) {
+        (Some(h), Some(p)) => (h, p),
+        _ => (1.0, 1.0),
+    };
+    let finish = |held: u64, rate: f64| held.saturating_add(bytes) as f64 / rate;
+    if finish(h_held, h_rate) <= finish(p_held, p_rate) { vec![Role::Helper, Role::Primary] } else { vec![Role::Primary, Role::Helper] }
+}
+
+/// Card `role`'s measured speed for batch work (device bytes per second; `None` before it
+/// finished any): diagnostics.
+pub(crate) fn measured_rate(role: Role) -> Option<f64> {
+    rate(&gate(role).lock(), Instant::now())
+}
+
+/// Forget the cards' measured speeds (tests).
+#[cfg(test)]
+fn forget_rates() {
+    for r in Role::ALL {
+        let mut s = gate(r).lock();
+        s.done = 0;
+        s.busy = Duration::ZERO;
+        s.busy_since = None;
+    }
+}
+
+/// Record a measured speed for card `role` (tests: fake cards).
+#[cfg(test)]
+fn set_rate(role: Role, done: u64, busy: Duration) {
+    let mut s = gate(role).lock();
+    s.done = done;
+    s.busy = busy;
+}
+
 /// A render's turn at a card; given back when dropped.
 pub(crate) struct Permit {
     role: Role,
@@ -308,6 +403,17 @@ impl Drop for Permit {
         if self.batch {
             s.held = s.held.saturating_sub(self.bytes);
             s.jobs = s.jobs.saturating_sub(1);
+            s.done = s.done.saturating_add(self.bytes);
+            if s.jobs == 0
+                && let Some(t) = s.busy_since.take()
+            {
+                s.busy = s.busy.saturating_add(t.elapsed());
+            }
+            // (the recent past counts most: halve the record now and then)
+            if s.busy > RATE_WINDOW {
+                s.busy /= 2;
+                s.done /= 2;
+            }
         } else {
             s.interactive = s.interactive.saturating_sub(1);
             s.interactive_ended = Some(Instant::now());
@@ -342,6 +448,9 @@ pub(crate) fn enter(role: Role, bytes: u64, vram: u64, stop: &dyn Fn() -> bool) 
         // the second card has no window: nothing of the interface to wait for
         let window_ok = role == Role::Helper || (interface_quiet(&s, now) && s.hold_until.is_none_or(|t| now >= t));
         if held_ok && jobs_ok && window_ok {
+            if s.jobs == 0 {
+                s.busy_since = Some(now);
+            }
             s.held = s.held.saturating_add(bytes);
             s.jobs += 1;
             if waited {
@@ -612,6 +721,109 @@ mod tests {
             assert_eq!(in_turn(), None);
         });
         set_limits(P, None, None);
+    }
+
+    /// Take a permit for a batch photo on the card [`order`] picks first that has room (as
+    /// `batch_turn_any` does with the real cards).
+    fn take(bytes: u64) -> Option<(Role, Permit)> {
+        order(bytes, true).into_iter().find_map(|r| enter(r, bytes, 0, &|| true).map(|p| (r, p)))
+    }
+
+    /// Two fake cards: a build of two photos at a time uses both while the interface is idle,
+    /// only the second card while it is in use, and photos go to the cards in proportion to
+    /// their speed (the measured 69 s with both cards vs 52 s on the 5070 alone: every photo went
+    /// to the second card while it had room).
+    #[test]
+    fn photos_go_to_both_cards_in_proportion_to_their_speed() {
+        let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        set_limits(P, Some(1 << 40), Some(4));
+        set_limits(H, Some(1 << 40), Some(4));
+        forget_rates();
+        let mb = 1u64 << 20;
+        as_batch(|| {
+            // nothing measured yet, untracked (the CLI): the first photo to the second card, the
+            // second to the editing card
+            let a = take(mb).unwrap();
+            let b = take(mb).unwrap();
+            assert_eq!((a.0, b.0), (H, P), "two lanes: one photo on each card");
+            drop((a, b));
+
+            // the app, interface idle: the second card first, then the editing card
+            forget_rates();
+            set_idle(Duration::from_millis(200));
+            track(true);
+            note_interaction();
+            std::thread::sleep(Duration::from_millis(250));
+            assert!(!interface_busy());
+            let a = take(mb).unwrap();
+            let b = take(mb).unwrap();
+            assert_eq!((a.0, b.0), (H, P), "idle: both cards work");
+            drop(b);
+            // in use: the editing card takes nothing, the second card everything
+            note_interaction();
+            let c = take(mb).unwrap();
+            let d = take(mb).unwrap();
+            assert_eq!((c.0, d.0), (H, H), "the interface is in use: only the second card");
+            drop((a, c, d));
+            track(false);
+            set_idle(Duration::from_millis(1000));
+
+            // measured: the editing card twice as fast -> two photos there for each on the second
+            forget_rates();
+            set_rate(P, 2000 * mb, Duration::from_secs(1));
+            set_rate(H, 1000 * mb, Duration::from_secs(1));
+            let held: Vec<_> = (0..6).map(|_| take(mb).unwrap()).collect();
+            let on_p = held.iter().filter(|(r, _)| *r == P).count();
+            assert_eq!(on_p, 4, "4 of 6 on the faster card: {:?}", held.iter().map(|h| h.0).collect::<Vec<_>>());
+            assert_eq!(held.first().map(|h| h.0), Some(P), "alone, a photo goes to the faster card");
+            drop(held);
+            // the second card full: the editing card takes what it can
+            set_limits(H, Some(1 << 40), Some(1));
+            let held: Vec<_> = (0..4).map(|_| take(mb).unwrap()).collect();
+            assert_eq!(held.iter().filter(|(r, _)| *r == H).count(), 1, "its one job, the rest on the editing card");
+            drop(held);
+        });
+        // without a second card: the editing card only
+        assert_eq!(order(1, false), vec![P]);
+        forget_rates();
+        set_limits(P, None, None);
+        set_limits(H, None, None);
+    }
+
+    /// Finished batch work measures the card's speed; it stays finite and positive.
+    #[test]
+    fn a_cards_speed_is_measured_from_its_batch_work() {
+        let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        forget_rates();
+        assert!(measured_rate(H).is_none(), "nothing done yet");
+        as_batch(|| {
+            let p = enter(H, 64 << 20, 0, &|| false).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            drop(p);
+        });
+        let r = measured_rate(H).expect("measured");
+        assert!(r.is_finite() && r > 0.0 && r < (64u64 << 20) as f64 / 0.019, "{r}");
+        forget_rates();
+    }
+
+    /// A batch photo that panics (caught further up, as an export's are) leaves the thread as it
+    /// was: not batch work any more, no turn held. Before, `as_batch` and `in_one_turn` left their
+    /// thread marks set, so the thread's later renders (the loupe's, on a worker reused) were
+    /// counted as batch work and skipped the gate.
+    #[test]
+    fn a_panicking_batch_photo_leaves_the_thread_as_it_was() {
+        let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let r = std::panic::catch_unwind(|| as_batch(|| panic!("a photo's render panicked")));
+        assert!(r.is_err());
+        assert!(!is_batch(), "the thread is interactive again");
+        as_batch(|| {
+            let r = std::panic::catch_unwind(|| in_one_turn(P, 1 << 20, 0, &|| false, || panic!("the HDR rendition panicked")));
+            assert!(r.is_err());
+            assert_eq!(in_turn(), None, "no turn left marked on the thread");
+            assert!(is_batch(), "the outer batch scope is still on");
+        });
+        assert_eq!(usage(P).0, 0, "the turn was given back");
+        assert!(!is_batch());
     }
 
     #[test]
