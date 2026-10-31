@@ -235,7 +235,9 @@ pub fn try_batch_turn_on(role: Role, src_px: usize, out_px: usize) -> Option<Bat
         if !allowed() {
             return None;
         }
-        let g = slot::current(role)?;
+        // (the editing card's device is made here on first use, as a render would; the second
+        // card's only by its warm-up)
+        let g = device_for(role)?;
         let route = RoleGuard::set(role);
         let turn = gate::try_turn(role, turn_bytes(src_px, out_px), gate_vram(&g))?;
         Some(BatchTurn { _turn: Some(turn), _route: Some(route), role })
@@ -1509,7 +1511,8 @@ pub fn helper_setting() -> String {
 pub fn helper_ready() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        allowed() && slot::current(Role::Helper).is_some()
+        // (a lost one is replaced here once its pause is over, on a thread of its own)
+        allowed() && device_for(Role::Helper).is_some()
     }
     #[cfg(target_arch = "wasm32")]
     {
