@@ -24,6 +24,7 @@ use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
 use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
+pub use lightcraft_raw::dcp::DcpProfile;
 use serde::{Deserialize, Serialize};
 
 mod cache;
@@ -79,6 +80,26 @@ pub struct MediaCache {
     pub rendered: Arc<PreviewCache>,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
+    /// Imported camera profiles by id ([`crate::cmd::dcp_profiles`]), handed to the decoder of photos using them.
+    pub camera_profiles: std::collections::HashMap<String, LoadedCameraProfile>,
+}
+
+/// An imported camera profile ready for the decoder, with a fingerprint of its file: decoded sources and cached renders
+/// made with it carry the fingerprint, so a profile deleted, or replaced by another under the same id, never has
+/// its old pictures stand in.
+#[derive(Clone, Debug)]
+pub struct LoadedCameraProfile {
+    pub profile: Arc<DcpProfile>,
+    /// Never 0 (0 is "no camera profile" in a render key).
+    pub fingerprint: u64,
+}
+
+impl LoadedCameraProfile {
+    /// Parse a `.dcp` file's bytes.
+    pub fn parse(bytes: &[u8]) -> Result<Self, lightcraft_raw::dcp::DcpError> {
+        let profile = lightcraft_raw::dcp::parse_dcp(bytes)?;
+        Ok(LoadedCameraProfile { profile: Arc::new(profile), fingerprint: Hasher128::new().update(bytes).finish().0 as u64 | 1 })
+    }
 }
 
 #[cfg(test)]

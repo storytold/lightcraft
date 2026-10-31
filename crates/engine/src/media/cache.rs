@@ -1,6 +1,6 @@
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
-use super::{Arc, DevelopSettings, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
+use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
 /// file system, so it can be asked on the UI thread.
@@ -70,6 +70,7 @@ impl Default for MediaCache {
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
+            camera_profiles: HashMap::new(),
         }
     }
 }
@@ -202,14 +203,16 @@ impl MediaCache {
     }
 
     /// The facts of photo `id`'s cached sources: the decoder's when one has them, else `header`
-    /// (with a smart preview's stored camera tone curve).
-    pub(super) fn source_facts(&self, id: PhotoId, header: SourceInfo) -> SourceInfo {
+    /// (with a smart preview's stored camera tone curve). Only sources developed with `profile` (the photo's imported
+    /// camera profile tag, [`Self::camera_profile_of`], or none) count: one made with another profile has its facts.
+    pub(super) fn source_facts(&self, id: PhotoId, header: SourceInfo, profile: Option<&str>) -> SourceInfo {
         let cached = || {
             self.thumbs
                 .peek(&id)
                 .into_iter()
                 .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
                 .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
+                .filter(|s| s.camera_profile.as_deref() == profile)
         };
         match cached().find(|s| s.info.is_some()).or_else(|| cached().next()) {
             Some(s) => s.info_or(header),
@@ -221,7 +224,7 @@ impl MediaCache {
         self.insert_source(id, level, DecodedSource::new(img, None));
     }
 
-    pub(super) fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
+    pub(crate) fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
         let tick = lightcraft_preview::next_tick();
         match level {
             SourceLevel::Thumb => {
@@ -296,24 +299,49 @@ impl MediaCache {
         self.source_ref_with(p, level, false)
     }
 
+    /// [`Self::source_ref`] without the photo's imported camera profile (keeping its denoised picture): a smart
+    /// preview keeps the file's own colour, and a cached source developed with the profile doesn't stand in for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn source_ref_without_profile(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
+        self.source_ref_for(p, level, true, None)
+    }
+
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        let mut r = self.source_ref_plain(p, level, cached);
+        let wanted = self.camera_profile_of(p);
+        self.source_ref_for(p, level, cached, wanted)
+    }
+
+    /// [`Self::source_ref_with`] developed with camera profile `wanted` (none: the file's own colour).
+    fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+        let mut r = self.source_ref_plain(p, level, cached, wanted);
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
         r
     }
 
-    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+    /// Is photo `p`'s original known to be missing (cached answer only)?
+    fn original_offline(&self, p: &Photo) -> bool {
+        matches!(&p.source, Source::File { path } if self.availability.is_offline(path))
+    }
+
+    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+        // (a source developed with another camera profile, or none, doesn't stand in; a smart preview
+        // has no camera profile, and decoding it again gives the same picture, so it stands in while the
+        // original is offline)
+        if cached
+            && let Some(a) = self.get_source(p.id, level)
+            && (a.camera_profile == wanted.as_ref().map(|(id, _)| id.clone()) || (a.from_proxy && self.original_offline(p)))
+        {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
-        // with a denoised picture, which the thumbnail would lose
+        // with a denoised picture, which the thumbnail would lose, nor from one decoded with another camera profile
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
             && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && (big.camera_profile == wanted.as_ref().map(|(tag, _)| tag.clone()) || (big.from_proxy && self.original_offline(p)))
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -336,12 +364,36 @@ impl MediaCache {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
-            if let SourceRef::File { fallback, .. } = &mut r {
+            if let SourceRef::File { fallback, camera_profile, .. } = &mut r {
                 *fallback = Some(sp);
+                *camera_profile = wanted;
             }
             return r;
         }
-        self.origin_ref(&p.source, max_edge)
+        let mut r = self.origin_ref(&p.source, max_edge);
+        if let SourceRef::File { camera_profile, .. } = &mut r {
+            *camera_profile = wanted;
+        }
+        r
+    }
+
+    /// The imported camera profile photo `p` develops with, when its profile setting names one this library has: what a
+    /// source decoded with it is tagged with (its id and the file's fingerprint), and the profile.
+    pub fn camera_profile_of(&self, p: &Photo) -> Option<(String, Arc<DcpProfile>)> {
+        let id = &p.develop.profile.id;
+        if !crate::cmd::dcp_profiles::is_dcp_id(id) {
+            return None;
+        }
+        self.camera_profiles.get(id).map(|d| (format!("{id}#{:016x}", d.fingerprint), d.profile.clone()))
+    }
+
+    /// What a render with profile `profile_id` adds to its cache keys: the imported camera profile's fingerprint, 0
+    /// for any other profile and for a camera profile this library no longer has (it renders without it).
+    pub fn camera_profile_salt(&self, profile_id: &str) -> u64 {
+        if !crate::cmd::dcp_profiles::is_dcp_id(profile_id) {
+            return 0;
+        }
+        self.camera_profiles.get(profile_id).map_or(0, |d| d.fingerprint)
     }
 
     /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a
@@ -354,12 +406,26 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None, reduced: None },
+                    None => SourceRef::File {
+                        path: format!("demo:{scene}"),
+                        max_edge,
+                        loader: None,
+                        fallback: None,
+                        denoise: None,
+                        camera_profile: None,
+                        reduced: None,
+                    },
                 }
             }
-            Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None, reduced: None }
-            }
+            Source::File { path } => SourceRef::File {
+                path: path.clone(),
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                denoise: None,
+                camera_profile: None,
+                reduced: None,
+            },
         }
     }
 }

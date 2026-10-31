@@ -315,5 +315,20 @@ with a blend mode other than Normal or with a mask are reported, not applied. Bi
 or `.zip` bundles — as creative profiles: they appear in the profile browser under their folder's (or zip's) name and
 take the Amount slider (0–200 %) like the built-in looks. The LUT is applied to the finished, display-encoded colour
 (trilinear; `DOMAIN_MIN` / `DOMAIN_MAX` honoured; 1D LUTs are not supported); photos with a LUT profile render on the
-CPU. A library on disk keeps a copy of each file in its `Profiles/` folder. Adobe's own profile formats (`.dcp`, XMP
-camera/creative profiles with embedded tables) are deliberately not read.
+CPU. A library on disk keeps a copy of each file in its `Profiles/` folder. XMP camera/creative profiles with embedded
+tables are not read.
+
+## Profiles: camera profiles (`.dcp`)
+
+The same command (and File ▸ Import Profiles & Presets…, drag & drop) reads DNG Camera Profiles — the user's own `.dcp`
+files, e.g. made with a colour-checker tool — as camera profiles (`dcp:<camera>-<file>` ids, group *Camera Profiles*,
+listed by `profiles.camera`). Read per DNG specification chapter 6 (`crates/raw/src/dcp.rs`): `ProfileName`,
+`UniqueCameraModel`, `CalibrationIlluminant1/2`, `ColorMatrix1/2`, `ForwardMatrix1/2`, `ProfileHueSatMap*`,
+`ProfileLookTable*`, `ProfileToneCurve` and `BaselineExposureOffset`. Choosing one (`develop.profile {id}`) replaces a raw
+file's colour model when it is decoded — the file's own white balance, analog balance and baseline exposure stay, and a
+profile without a `ProfileToneCurve` (most chart-made ones) keeps the photo's own contrast: the DNG's tone curve, else the
+tone of the look fitted to its camera JPEG — so the
+photo's source is decoded again when its profile changes; rendered (non-raw) photos ignore it. Smart previews and the
+web build's render worker keep the file's own colour. A library on disk keeps a copy of each file in `Profiles/`;
+`profile.deleteCamera` (or `profile.deleteImported`) removes one. No profile ships with LightCraft, and the repository
+holds none: tests build theirs in memory (`lightcraft_raw::dcp::write_dcp`).

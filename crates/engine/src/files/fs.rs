@@ -1,7 +1,7 @@
 use super::load::{load_vec, load_vec_pair, load_vec_reduced};
 use super::preview::{fit_box, fs_preview_loader, preview_orientation};
 use super::probe::probe_bytes;
-use super::{Arc, DenoiseSpec, FileLoader, FileProbe, Filter, PairLoader, ReducedLoader, fit};
+use super::{Arc, DcpProfile, DenoiseSpec, FileLoader, FileProbe, Filter, PairLoader, ReducedLoader, fit};
 
 /// The file's first [`lightcraft_raw::PREVIEW_PREFIX`] bytes (or the whole file when it is shorter),
 /// which is what every format [`lightcraft_raw::bounded_preview`] covers keeps its pointer in.
@@ -54,13 +54,13 @@ pub(super) fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, ma
 /// The filesystem-backed [`PairLoader`]: the file is read and decoded once, and developed as usual and from the photo's
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
-    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, dcp: Option<&DcpProfile>| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec_pair(bytes, max_edge, spec);
+        let r = load_vec_pair(bytes, max_edge, spec, dcp);
         crate::memory::release();
         r
     })
@@ -74,7 +74,8 @@ pub fn fs_pair_loader() -> PairLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
+    let loader: FileLoader =
+        Arc::new(|path: &str, max_edge: usize, dcp: Option<&DcpProfile>| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge, dcp)));
     let probe: FileProbe = Arc::new(|path: &str| {
         use std::io::Read;
         // one open, then everything from the open file: its size and modification time are not
@@ -94,7 +95,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge)))
+    Arc::new(|path: &str, max_edge: usize, dcp: Option<&DcpProfile>| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, dcp)))
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.

@@ -1,4 +1,4 @@
-use super::{Arc, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
+use super::{Arc, DcpProfile, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
 pub const RENDER_CACHE_VERSION: u64 = 72;
@@ -75,12 +75,14 @@ pub(super) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_cr
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+/// The third argument is the photo's imported camera profile ([`crate::cmd::dcp_profiles`]): a raw file is developed
+/// with its colour model.
+pub type FileLoader = Arc<dyn Fn(&str, usize, Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
 
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
 /// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -103,7 +105,8 @@ pub struct DenoiseSpec {
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
 /// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+pub type PairLoader =
+    Arc<dyn Fn(&str, usize, &DenoiseSpec, Option<&DcpProfile>) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -133,6 +136,9 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
+    /// The imported camera profile (`dcp:…` id) the raw file was developed with, if any: a cached source made with
+    /// another one (or none) doesn't stand in for it.
+    pub camera_profile: Option<String>,
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
@@ -143,7 +149,7 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false }
+        DecodedSource { image, info, camera_tone: None, denoised: None, camera_profile: None, from_proxy: false, reduced: false }
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -214,6 +220,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
+        /// The photo's imported camera profile (id and profile): its raw file is developed with it.
+        camera_profile: Option<(String, Arc<DcpProfile>)>,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
     },
@@ -241,12 +249,17 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, reduced } => {
+                let dcp = camera_profile.as_ref().map(|(_, p)| p.as_ref());
+                let made_with = camera_profile.as_ref().map(|(id, _)| id.clone());
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
-                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    (Some(l), _) => l(path, *max_edge, dcp).map(|(image, info, reduced)| DecodedSource {
+                        reduced,
+                        camera_profile: made_with.clone(),
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
+                    (None, Some(l)) => l(path, *max_edge, dcp)
+                        .map(|(image, info)| DecodedSource { camera_profile: made_with.clone(), ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -260,7 +273,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, dcp).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -269,6 +282,7 @@ impl SourceRef {
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                                    camera_profile: made_with.clone(),
                                     from_proxy: false,
                                     reduced: false,
                                 })
