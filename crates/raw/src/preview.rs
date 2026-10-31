@@ -16,12 +16,13 @@ pub enum PreviewColorSpace {
 
 /// The colour space the raw says its embedded JPEG is in, for a JPEG that declares none itself (no ICC profile,
 /// no EXIF), first available first: the Nikon maker-note ColorSpace (0x001e: 1 = sRGB, 2 = Adobe RGB, per Nikon
-/// tag documentation); the raw's own EXIF ColorSpace (0xA001: 1 = sRGB), or Uncalibrated (0xFFFF) with the
-/// Interoperability IFD's InteropIndex "R03", the DCF option file for Adobe RGB (as a Sony body shot in Adobe RGB
-/// writes, issue #778; per the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
+/// tag documentation); for a Canon CR2 or CR3, the Canon maker-note ColorSpace (0x00b4: 1 = sRGB, 2 = Adobe RGB);
+/// the raw's own EXIF ColorSpace (0xA001: 1 = sRGB), or Uncalibrated (0xFFFF) with the Interoperability IFD's
+/// InteropIndex "R03", the DCF option file for Adobe RGB (as a Sony body shot in Adobe RGB writes, issue #778; per
+/// the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
 /// declaration takes precedence.
 pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
-    let tiff = Tiff::parse(bytes).ok()?;
+    let Ok(tiff) = Tiff::parse(bytes) else { return cr3_color_space(bytes) };
     let make = tiff.ifds.first()?.string(t::MAKE).unwrap_or_default();
     let exif = tiff.exif()?;
     if make.to_ascii_uppercase().starts_with("NIKON")
@@ -33,9 +34,39 @@ pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
     if tiff.ifds.first()?.contains(t::DNG_VERSION) {
         return None;
     }
+    if make.to_ascii_uppercase().starts_with("CANON")
+        && let Some(e) = exif.get(t::MAKER_NOTE)
+        && let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)
+        && let Some(space) = canon_color_space(&mn.ifd)
+    {
+        return Some(space);
+    }
     match exif.u16(0xA001)? {
         1 => Some(PreviewColorSpace::Srgb),
         0xFFFF if exif.interop.as_deref()?.bytes(0x0001)?.starts_with(b"R03") => Some(PreviewColorSpace::AdobeRgb),
+        _ => None,
+    }
+}
+
+/// A CR3 keeps its EXIF and maker note in `CMT2`/`CMT3` TIFF blocks and its JPEGs carry no EXIF; a body shot in
+/// Adobe RGB writes ColorSpace Uncalibrated (0xFFFF) with no Interoperability IFD (issue #2654), so the Canon
+/// maker note says which, else an EXIF ColorSpace of sRGB is taken.
+fn cr3_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
+    let cr3 = lightcraft_meta::cr3::parse_cr3(bytes)?;
+    let first = |i: usize| cr3.cmt[i].and_then(|b| Tiff::parse(b).ok()).and_then(|t| t.ifds.into_iter().next());
+    if let Some(space) = first(2).and_then(|mn| canon_color_space(&mn)) {
+        return Some(space);
+    }
+    (first(1)?.u16(0xA001)? == 1).then_some(PreviewColorSpace::Srgb)
+}
+
+/// The Canon maker-note ColorSpace (0x00b4: 1 = sRGB, 2 = Adobe RGB, per ExifTool's published Canon tag names).
+/// A Canon body shot in Adobe RGB writes EXIF ColorSpace Uncalibrated (0xFFFF) with InteropIndex "R98" in a CR2
+/// and no Interoperability IFD in a CR3, so the EXIF alone does not say Adobe RGB (issue #2654).
+fn canon_color_space(note: &Ifd) -> Option<PreviewColorSpace> {
+    match note.u16(0x00b4)? {
+        1 => Some(PreviewColorSpace::Srgb),
+        2 => Some(PreviewColorSpace::AdobeRgb),
         _ => None,
     }
 }
