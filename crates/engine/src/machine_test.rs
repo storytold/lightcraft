@@ -180,9 +180,12 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     let mut helper_run = None;
     if helper && one_card.gpu {
         let l = one_card.lanes.saturating_add(helper_jobs).min(crate::export::MAX_EXPORT_LANES);
+        // (the second card's limits as they were set, put back after this round: an applied
+        // test's GPU jobs stay when this one isn't applied or is cancelled)
+        let (bytes, jobs) = crate::gpu::batch_limits_setting_of(crate::gpu::Role::Helper);
         crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, Some(helper_jobs));
         let run = export_round(&mut session, o.cancel.as_ref(), &repeat(&ids, per_run(l)), &opts, l, true, one_card.mix, true);
-        crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, None);
+        crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, bytes, jobs);
         let run = run?;
         tick("Both graphics cards")?;
         helper_run = Some(run.clone());

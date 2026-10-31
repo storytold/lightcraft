@@ -410,6 +410,20 @@ pub fn set_batch_limits_for(role: Role, bytes: Option<u64>, jobs: Option<usize>)
     let _ = (role, bytes, jobs);
 }
 
+/// Card `role`'s budget and most jobs as [`set_batch_limits_for`] set them (`None`: automatic),
+/// to put back after a temporary change.
+pub fn batch_limits_setting_of(role: Role) -> (Option<u64>, Option<usize>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        gate::limits_setting(role)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = role;
+        (None, None)
+    }
+}
+
 /// Batch work on a card now and so far.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BatchUsage {

@@ -290,6 +290,13 @@ pub(crate) fn set_limits(role: Role, bytes: Option<u64>, jobs: Option<usize>) {
     g.cv.notify_all();
 }
 
+/// Card `role`'s budget and most jobs as set ([`set_limits`]; `None`: automatic).
+pub(crate) fn limits_setting(role: Role) -> (Option<u64>, Option<usize>) {
+    let g = gate(role);
+    let (bytes, jobs) = (g.limit.load(Ordering::Relaxed), g.jobs.load(Ordering::Relaxed));
+    ((bytes != 0).then_some(bytes), (jobs != 0).then_some(jobs))
+}
+
 /// The budget and the most jobs in force on card `role` with `vram` bytes. With the interface
 /// tracked and a second card working, the editing card takes one batch job at a time (§8).
 pub(crate) fn limits(role: Role, vram: u64) -> (u64, usize) {
@@ -556,6 +563,23 @@ mod tests {
         // the second card draws no window: a bigger share (decision 5)
         assert_eq!(auto_limit(H, 12 << 30), (12u64 << 30) / 100 * HELPER_SHARE_PERCENT);
         assert!(auto_limit(H, 12 << 30) > auto_limit(P, 12 << 30));
+    }
+
+    /// Review of PR #3506: Test my machine changes the second card's job limit for one round and
+    /// puts back what was set, not Automatic.
+    #[test]
+    fn a_cards_limits_as_set_can_be_put_back() {
+        let _s = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        set_limits(H, None, Some(2));
+        let (bytes, jobs) = limits_setting(H);
+        assert_eq!((bytes, jobs), (None, Some(2)));
+        set_limits(H, None, Some(4));
+        set_limits(H, bytes, jobs);
+        assert_eq!(limits_setting(H), (None, Some(2)), "the earlier setting, not Automatic");
+        set_limits(H, Some(1 << 30), None);
+        assert_eq!(limits_setting(H), (Some(1 << 30), None));
+        set_limits(H, None, None);
+        assert_eq!(limits_setting(H), (None, None));
     }
 
     #[test]

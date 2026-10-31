@@ -1563,6 +1563,9 @@ fn export_lanes_follow_the_setting() {
         return;
     }
     let _serial = crate::export::TUNING_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // (the editing card only: a second card made ready by another test adds its jobs)
+    let cards = crate::export::export_cards();
+    crate::export::set_export_cards(crate::export::ExportCards::Editing);
     set_export_lanes(Some(3));
     assert_eq!(export_lanes_override(), Some(3));
     assert_eq!(export_parallelism(10), 3);
@@ -1570,6 +1573,7 @@ fn export_lanes_follow_the_setting() {
     set_export_lanes(Some(10_000));
     assert_eq!(export_parallelism(1000), MAX_EXPORT_LANES);
     set_export_lanes(None);
+    crate::export::set_export_cards(cards);
     assert_eq!(export_lanes_override(), None);
     assert!(export_parallelism(1000) >= 1);
 }
