@@ -154,6 +154,15 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id == "app.gpu" && p.get("helper").is_some() {
+        // the second card's set-up takes up to ~30 s: never on the UI thread (the reply says
+        // `starting`; scripts poll `app.gpu` until `ready`)
+        let mut p = p.clone();
+        if let Some(o) = p.as_object_mut() {
+            o.insert("waitHelper".into(), json!(false));
+        }
+        return Some(app.session.execute("app.gpu", &p).map_err(|e| e.to_string()));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);

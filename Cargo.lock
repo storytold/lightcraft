@@ -3785,6 +3785,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
+ "lightcraft-sysmem",
  "lightcraft-testkit",
  "log",
  "pollster 1.0.1",

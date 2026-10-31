@@ -1149,6 +1149,10 @@ pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu:
         return Err("GPU rendering is off".into());
     }
     let _work = exit::enter().ok_or("LightCraft is closing")?;
+    // the second card builds its kernels beside the editing card's, below normal priority (both
+    // took ~27 s one after the other on a busy machine: the second card was ready ~56 s after
+    // launch); the screen's card is known now, so it can tell which card is the other one
+    sync_helper();
     let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
     *WINDOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some(WindowDevice { device: device.clone(), queue: queue.clone(), info: info.clone(), declined: false });
@@ -1624,8 +1628,9 @@ fn helper_syncing() -> bool {
 
 /// Make the second card's device match the settings now, on a thread of its own (`lc-gpu-helper`):
 /// made, replaced by another card's, or released. Once at a time; asked again meanwhile, it runs
-/// once more after. Nothing before the editing card's device was tried ([`warm_up`] and
-/// [`adopt_window_device`] call it after).
+/// once more after. Nothing before it is known which card edits: the editing card's device tried
+/// ([`warm_up`] calls it after), or the screen's card told ([`adopt_window_device`] calls it
+/// before building the editing card's kernels, so both cards build theirs at once).
 #[cfg(not(target_arch = "wasm32"))]
 fn sync_helper() {
     {
@@ -1637,6 +1642,8 @@ fn sync_helper() {
         *s = (true, false);
     }
     let spawned = std::thread::Builder::new().name("lc-gpu-helper".into()).spawn(|| {
+        // below normal priority: the editing card's set-up and the window come first
+        lightcraft_sysmem::lower_thread_priority();
         loop {
             if let Some(_work) = exit::enter() {
                 sync_helper_now();
@@ -1679,7 +1686,9 @@ pub fn wait_helper(timeout: std::time::Duration) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn sync_helper_now() {
-    if env_disabled() || !ENABLED.load(Ordering::Relaxed) || !slot::tried(Role::Primary) {
+    // (which card is the editing one must be known: its device tried, or the screen's card told)
+    let editing_known = slot::tried(Role::Primary) || cards::screen().is_some();
+    if env_disabled() || !ENABLED.load(Ordering::Relaxed) || !editing_known {
         return;
     }
     let Some(backends) = backend::compute_backends() else { return };
@@ -1733,10 +1742,15 @@ fn helper_pick(backends: wgpu::Backends) -> Result<(wgpu::Adapter, Option<cards:
         })
         .map_err(|_| "listing the graphics cards panicked".to_string())
     })?;
-    let primary = slot::existing(Role::Primary).and_then(|g| {
-        let key = g.key.clone().unwrap_or_else(|| cards::AdapterKey::of(&g.info, 1));
-        entries.iter().position(|e| e.key == key).or_else(|| entries.iter().position(|e| e.key.same_model(&key)))
-    });
+    let primary = match slot::existing(Role::Primary) {
+        Some(g) => {
+            let key = g.key.clone().unwrap_or_else(|| cards::AdapterKey::of(&g.info, 1));
+            entries.iter().position(|e| e.key == key).or_else(|| entries.iter().position(|e| e.key.same_model(&key)))
+        }
+        // the editing card's device is still being made (its kernels build beside these): the
+        // card it will be on, as it resolves it
+        None => cards::resolve_card(&entries, backend::wanted_adapter().as_deref(), cards::card().as_ref()).index,
+    };
     let Some(i) = cards::resolve_helper(&entries, primary, &choice, pins) else {
         return Err(match &choice {
             cards::HelperChoice::Card(k) => format!("the {} isn't available", k.name),

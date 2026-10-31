@@ -109,8 +109,17 @@ an agent testing on one card never touches the other.
 - **Routing is per thread**, like `on_cpu`: `with_role(role, f)` sends that thread's renders to `role`'s
   device (the CPU when it has none); `on_helper(f)` uses the second card when it is ready. Batch work
   takes `batch_turn_any(src_px, out_px)` (or `wait_batch_turn_any`) inside `as_batch`: a turn on the
-  second card first, else on the editing card, else `None` (render on the CPU). While the turn is held
-  the thread's renders go to its card, so a photo's SDR and HDR renditions stay on one card.
+  card with room that would finish the photo soonest — its photos running now plus this one, at its
+  measured batch speed (`batch_rate_of(role)`: bytes of finished turns per busy second, the last
+  minutes counting most; both cards alike until each finished some; ties to the second card) — else
+  `None` (render on the CPU). So both cards work in proportion to their speed, and a build of two
+  photos at a time puts one on each (before, the second card took every photo while it had room: a
+  2-lane 1:1 build of 24 raws took 69 s on both cards vs 52 s on the RTX 5070 alone). In the desktop
+  app the second card still takes a photo first whenever it has none (§8). `batch_cards()` counts the
+  cards taking batch work and `batch_lanes_hint(per_card)` sizes a caller's lanes for them. While the
+  turn is held the thread's renders go to its card, so a photo's SDR and HDR renditions stay on one
+  card. In the desktop app `app.gpu {helper}` never waits for the card's set-up (its commands run on
+  the UI thread): it answers with `helper.state` `starting`; poll `app.gpu` until `ready`.
 - **The editing card yields to the interface** (`track_interaction(true)`, the desktop app only): batch
   turns there start only after about 1 s without input (`note_interaction`, every frame with input) and
   without a view render; while the second card works, the editing card takes one batch render at a
