@@ -154,6 +154,72 @@ fn double_clicking_a_keyword_edits_it() {
     assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
 }
 
+/// ⌘⇧K (Ctrl+Shift+K) is Edit Keywords: it shows the Keywords panel with its Keyword List open,
+/// and the keyword picked there opens in Edit Keyword Tag.
+#[test]
+fn cmd_shift_k_edits_the_picked_keyword() {
+    let (mut h, _) = keywords_panel();
+    run(&mut h, "keyword.create", json!({"name": "Weddings", "synonyms": ["marriage"]}));
+    find(&mut h, "wedd");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordRow:Weddings"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "section:keywordList"}));
+    assert!(h.app.ui.section_folded("keywordList"));
+    // (K closes the panel; ui.set would reset the pick, which is not saved)
+    ask(&mut h, "ui.key", json!({"key": "K"}));
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::None, "the panel is closed");
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "shift": true}));
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords, "the Keywords panel");
+    assert!(!h.app.ui.section_folded("keywordList"), "the Keyword List is open");
+    let Some(crate::state::Dialog::KeywordTag { editing, name, synonyms, .. }) = h.app.ui.dialog.clone() else { panic!("{:?}", h.app.ui.dialog) };
+    assert_eq!((editing.as_deref(), name.as_str(), synonyms.as_str()), (Some("Weddings"), "Weddings", "marriage"));
+    ask(&mut h, "ui.dialog.cancel", json!({}));
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "shift": true}));
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords, "pressed again: the panel stays");
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::KeywordTag { editing: Some(k), .. }) if k == "Weddings"), "{:?}", h.app.ui.dialog);
+}
+
+/// With no keyword picked in the Keyword List, or with the picked one deleted, ⌘⇧K shows the
+/// Keywords panel and its list and opens no dialog.
+#[test]
+fn cmd_shift_k_without_a_picked_keyword_opens_no_dialog() {
+    let (mut h, _) = keywords_panel();
+    ask(&mut h, "ui.set", json!({"right": "none"}));
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "shift": true}));
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords, "the Keywords panel");
+    assert!(has(&h, "field:keywordFilter"), "the Keyword List is shown");
+    assert_eq!(h.app.ui.dialog, None, "nothing picked");
+    run(&mut h, "keyword.create", json!({"name": "Weddings"}));
+    find(&mut h, "wedd");
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordRow:Weddings"}));
+    run(&mut h, "keyword.delete", json!({"keyword": "Weddings"}));
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "shift": true}));
+    assert_eq!(h.app.ui.dialog, None, "the picked keyword is gone");
+}
+
+/// A keyword picked in one library is not picked in the next one opened, even when that library
+/// has a keyword at the same path: ⌘⇧K there opens no dialog.
+#[test]
+fn opening_another_library_drops_the_picked_keyword() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-keyword-list-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(dir.join("first"), false).unwrap();
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    ask(&mut h, "ui.set", json!({"view": "photoGrid", "right": "keywords"}));
+    run(&mut h, "keyword.create", json!({"name": "Weddings"}));
+    h.app.ui.keyword_list_selected = Some("Weddings".into());
+    let r = h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()}));
+    assert!(r.is_ok(), "{r:?}");
+    h.settle(SETTLE);
+    run(&mut h, "keyword.create", json!({"name": "Weddings"}));
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "shift": true}));
+    assert_eq!(h.app.ui.keyword_list_selected, None, "nothing is picked in the second library");
+    assert_eq!(h.app.ui.dialog, None, "no dialog opens");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The − button deletes the picked keyword after asking how many photos lose it; Cancel keeps it, and undo
 /// brings a deleted one back.
 #[test]

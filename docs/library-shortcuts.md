@@ -6,6 +6,7 @@ Select photos in Photo Grid or Square Grid, then use:
 |---|---|
 | `Enter` | Open the active photo in Detail from Photo Grid or Square Grid |
 | `Cmd+Shift+D` (macOS) / `Ctrl+Shift+D` (Windows/Linux) | Select only the active photo |
+| ⌘⇧K / Ctrl+Shift+K | Edit Keywords: show the Keywords panel and open the keyword picked in its Keyword List in Edit Keyword Tag |
 | `0` | Clear the star rating |
 | `1`–`5` | Set the star rating |
 | `[` / `]` | Decrease / increase each selected photo's rating by one, within 0–5 |

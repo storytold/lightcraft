@@ -152,6 +152,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // the Keywords panel with the cursor in its Add keyword box
     ("panel.addKeywords", "Add Keywords", Some("Cmd+K"), ""),
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
+    // Edit Keyword Tag for the keyword picked in the Keyword List
+    ("panel.editKeywords", "Edit Keywords", Some("Cmd+Shift+K"), ""),
     ("panel.activity", "History", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it

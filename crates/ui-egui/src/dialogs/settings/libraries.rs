@@ -87,6 +87,8 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     app.ui.reference = None;
     app.ui.compare = None;
     app.ui.brief_info = crate::state::BriefInfo::default();
+    // a keyword picked in the Keyword List belongs to the library being left
+    app.ui.keyword_list_selected = None;
     if app.ui.view == crate::state::ViewMode::Reference {
         app.ui.view = crate::state::ViewMode::PhotoGrid;
     }
