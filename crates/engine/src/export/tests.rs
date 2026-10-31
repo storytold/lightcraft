@@ -1,4 +1,4 @@
-use super::batch::auto_lanes;
+use super::batch::{auto_lanes, both_cards_lanes};
 use super::*;
 use serde_json::json;
 
@@ -1551,6 +1551,10 @@ fn a_helper_card_adds_its_renders_to_the_automatic_lanes() {
     assert_eq!(auto_lanes(32, 4), 16);
     assert_eq!(auto_lanes(1, 0), 1);
     assert_eq!(auto_lanes(usize::MAX, usize::MAX), MAX_EXPORT_LANES);
+    // a lanes setting from one card still feeds both: 4 + 4 turns and one beside them
+    assert_eq!(both_cards_lanes(4, 4), 9);
+    assert_eq!(both_cards_lanes(0, 4), 6);
+    assert_eq!(both_cards_lanes(usize::MAX, usize::MAX), MAX_EXPORT_LANES);
 }
 
 #[test]

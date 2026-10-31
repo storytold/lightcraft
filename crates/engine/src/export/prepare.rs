@@ -361,7 +361,8 @@ impl PreparedExport {
                         Some(_turn) => renders(),
                         None => {
                             lap("the GPU is busy: rendering on the processor", &mut t);
-                            lightcraft_gpu::on_cpu(renders)
+                            // (a panic is caught inside `on_cpu`, which then gives the lane the GPU back)
+                            lightcraft_gpu::on_cpu(|| crate::guard::catch("rendering on the processor", renders)).and_then(|r| r)
                         }
                     }
                 } else if self.gpu && uses_helper() {
