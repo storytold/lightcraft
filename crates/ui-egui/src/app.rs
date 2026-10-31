@@ -123,6 +123,7 @@ impl LightcraftApp {
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_card_applied: None,
+            gpu_helper_applied: None,
             gpu_notice: false,
             gpu_event_seen: 0,
             last_screen: egui::Vec2::ZERO,

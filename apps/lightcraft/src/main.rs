@@ -305,6 +305,14 @@ fn main() -> eframe::Result {
     if let Err(e) = lightcraft_engine::gpu::set_card(card) {
         log::warn!("gpu: the graphics card in the settings: {e}");
     }
+    // the second graphics card likewise (one that crashed starting last time: not used)
+    let saved_helper = prefs.as_ref().map(|u| u.settings.gpu_helper.clone()).unwrap_or_default();
+    let helper = if gpu_crash.as_ref().is_some_and(|c| c.helper_off) { "off" } else { saved_helper.as_str() };
+    if let Err(e) = lightcraft_engine::gpu::set_helper(helper) {
+        log::warn!("gpu: the second graphics card in the settings: {e}");
+    }
+    // batch work (exports, previews, AI) leaves the editing card to the interface while it is used
+    lightcraft_engine::gpu::track_interaction(true);
     // the window's renderer: probed (Windows) and with a fallback chain, so a driver that can't
     // build egui's pipeline never kills the start-up
     let compose_window =

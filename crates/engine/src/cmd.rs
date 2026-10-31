@@ -37,6 +37,7 @@ mod preset_files;
 pub mod previews;
 mod print;
 mod query;
+pub use query::{gpu_batch_usage_json, gpu_helper_json};
 pub mod recheck;
 pub mod reload;
 mod slideshow;

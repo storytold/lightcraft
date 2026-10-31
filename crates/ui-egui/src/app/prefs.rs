@@ -41,6 +41,10 @@ impl LightcraftApp {
             }
             self.last_screen = screen;
         }
+        // input this frame: batch work leaves the editing card to the interface for a moment (§8)
+        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            lightcraft_engine::gpu::note_interaction();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         for e in lightcraft_engine::gpu::events_after(self.gpu_event_seen) {
             self.gpu_event_seen = self.gpu_event_seen.max(e.seq);
@@ -54,6 +58,14 @@ impl LightcraftApp {
 
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
+        // the second graphics card (Settings ▸ Performance), before the warm-up below sets it up
+        if self.gpu_helper_applied.as_deref() != Some(self.ui.settings.gpu_helper.as_str()) {
+            self.gpu_helper_applied = Some(self.ui.settings.gpu_helper.clone());
+            let helper = if self.ui.settings.gpu_helper.is_empty() { "auto".to_string() } else { self.ui.settings.gpu_helper.clone() };
+            if let Err(e) = self.session.execute("app.gpu", &serde_json::json!({"helper": helper, "wait": false})) {
+                log::warn!("second graphics card: {e}");
+            }
+        }
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);
             let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu, "wait": false}));

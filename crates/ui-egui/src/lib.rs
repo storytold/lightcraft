@@ -348,6 +348,8 @@ pub struct LightcraftApp {
     gpu_applied: Option<bool>,
     /// The graphics card for editing last applied (`app.gpu {card}`).
     gpu_card_applied: Option<String>,
+    /// The second graphics card's setting last applied.
+    gpu_helper_applied: Option<String>,
     /// Say once, when the GPU device has been tried, that no graphics processor was found
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,

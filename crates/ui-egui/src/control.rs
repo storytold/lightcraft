@@ -121,6 +121,16 @@ fn rect_json(r: egui::Rect) -> Value {
 }
 
 pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
+    let mut v = inspect_main(app, ctx);
+    // the second graphics card and each card's batch work (here: the reply's macro is at its depth limit)
+    if let Some(perf) = v.get_mut("perf").and_then(Value::as_object_mut) {
+        perf.insert("gpuHelper".into(), lightcraft_engine::gpu_helper_json());
+        perf.insert("batchUsage".into(), lightcraft_engine::gpu_batch_usage_json());
+    }
+    v
+}
+
+fn inspect_main(app: &LightcraftApp, ctx: &egui::Context) -> Value {
     let r = ctx.content_rect();
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
