@@ -516,7 +516,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
 /// and rebuilds the stale ones from their originals — one whose stored pixels are an older encoding
 /// (every photo), or, for a raw that takes the per-file camera look or a DNG, one written by an older fit.
 /// One whose original can't be read (offline) is kept as it is, still marked stale in its header:
-/// Build Smart Previews rebuilds it once the original is back. Only existing proxies are touched:
+/// A later library opening or Build Smart Previews retries once the original is back. Only existing proxies are touched:
 /// none is built, and a missing folder is never created. Returns the thread, if started.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::thread::JoinHandle<()>> {
@@ -548,7 +548,13 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
         match smart_run(dir, true, false, stale, None) {
-            Ok(n) => log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept),
+            Ok(n) => {
+                log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept);
+                // Keep the refresh pending until every stale proxy can be rebuilt.
+                if n.stale_kept != 0 || !n.failed.is_empty() {
+                    return;
+                }
+            }
             Err(e) => {
                 // not marked: the next opening tries again
                 log::warn!("smart previews: look refresh: {e}");
