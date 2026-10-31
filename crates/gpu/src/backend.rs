@@ -220,10 +220,52 @@ fn marker_owned_by(text: &str, owner: &str) -> bool {
     text.lines().any(|l| l.trim().strip_prefix(OWNER_PREFIX) == Some(owner))
 }
 
+/// The lock file beside `marker` (`gpu-init.marker.lock`) that every LightCraft sharing the
+/// configuration folder holds while it writes, checks or removes the marker. The scope mutexes
+/// only order this process's threads; this orders the processes, so no instance can overwrite
+/// the marker between another one's ownership check and its removal.
+fn marker_lock_path(marker: &std::path::Path) -> PathBuf {
+    let mut name = marker.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
+    name.push(".lock");
+    marker.with_file_name(name)
+}
+
+/// Hold the cross-process marker lock (see [`marker_lock_path`]) until the returned file is
+/// dropped. `None` (logged) when the lock file can't be opened or locked: the caller goes on
+/// without it, as before the lock existed, rather than failing the GPU start or the quit.
+fn lock_marker(marker: &std::path::Path) -> Option<std::fs::File> {
+    let path = marker_lock_path(marker);
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let file = match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("gpu: could not open {}: {e}", path.display());
+            return None;
+        }
+    };
+    match file.lock() {
+        Ok(()) => Some(file),
+        Err(e) => {
+            log::warn!("gpu: could not lock {}: {e}", path.display());
+            None
+        }
+    }
+}
+
 /// Remove `marker` if this launch still owns it. Another LightCraft using the same configuration
 /// may have overwritten it while starting its own GPU device; that marker is left for it to clear
-/// (or, if it dies in the driver, for the next launch to report). I/O errors are logged.
+/// (or, if it dies in the driver, for the next launch to report). The check and the removal run
+/// under the cross-process marker lock, which every marker write also takes. I/O errors are logged.
 fn remove_if_owned(marker: &std::path::Path) {
+    remove_if_owned_then(marker, || {});
+}
+
+/// [`remove_if_owned`], running `between` after the ownership check and before the removal (the
+/// tests start another instance's write there).
+fn remove_if_owned_then(marker: &std::path::Path, between: impl FnOnce()) {
+    let _lock = lock_marker(marker);
     let text = match std::fs::read_to_string(marker) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
@@ -236,10 +278,22 @@ fn remove_if_owned(marker: &std::path::Path) {
         log::info!("gpu: leaving {} in place: another LightCraft wrote it", marker.display());
         return;
     }
+    between();
     if let Err(e) = std::fs::remove_file(marker)
         && e.kind() != std::io::ErrorKind::NotFound
     {
         log::warn!("gpu: could not remove {}: {e}", marker.display());
+    }
+}
+
+/// Write `text` to `marker` under the cross-process marker lock.
+fn write_marker(marker: &std::path::Path, text: &str) {
+    if let Some(d) = marker.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _lock = lock_marker(marker);
+    if let Err(e) = std::fs::write(marker, text) {
+        log::warn!("gpu: could not write {}: {e}", marker.display());
     }
 }
 
@@ -252,13 +306,8 @@ fn arm(marker: &std::path::Path, active: &Mutex<u32>, what: &str) {
 /// [`arm`] with the scope counter `n` already locked.
 fn arm_locked(marker: &std::path::Path, n: &mut u32, what: &str) {
     if *n == 0 {
-        if let Some(d) = marker.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        if let Err(e) = std::fs::write(marker, marker_text(what, secs, owner_token())) {
-            log::warn!("gpu: could not write {}: {e}", marker.display());
-        }
+        write_marker(marker, &marker_text(what, secs, owner_token()));
     }
     *n += 1;
 }
@@ -336,6 +385,7 @@ pub(crate) fn with_init_marker<T>(backends: Backends, f: impl FnOnce() -> T) -> 
 /// If the init marker `path` is present — the last process died while creating the GPU device —
 /// remove it and return what it recorded.
 pub fn take_init_marker(path: &std::path::Path) -> Option<String> {
+    let _lock = lock_marker(path);
     let text = read_init_marker(path)?;
     let _ = std::fs::remove_file(path);
     Some(text)
@@ -589,6 +639,38 @@ mod tests {
         let (slot, active) = (Mutex::new(Some(m.clone())), Mutex::new(0));
         with_marker_in(&slot, &active, "device creation", || release_on(&slot, &active));
         assert!(!m.exists(), "A's own marker is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The race the ownership check alone left open: instance A reads the marker and finds its own
+    /// token, instance B then writes its marker, and A removes the file, B's marker with it. B's
+    /// write now waits for the cross-process lock A holds from the check to the removal, so B's
+    /// marker is written after A's removal and stays. Before the lock, B's write landed in between
+    /// (the thread signals it within the wait below) and A deleted it.
+    #[test]
+    fn another_instance_writing_between_the_check_and_the_removal_keeps_its_marker() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-race-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let _ = std::fs::remove_dir_all(&dir);
+        let b_text = marker_text("device creation", 1, "99999-00000000deadbeef");
+        let active = Mutex::new(0);
+        arm(&m, &active, "device creation");
+        assert!(marker_owned_by(&std::fs::read_to_string(&m).unwrap(), owner_token()), "A wrote its token");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut b = None;
+        remove_if_owned_then(&m, || {
+            // instance B arms on its own handle of the lock file (a separate process in real use)
+            let (m, b_text) = (m.clone(), b_text.clone());
+            b = Some(std::thread::spawn(move || {
+                write_marker(&m, &b_text);
+                let _ = tx.send(());
+            }));
+            // without the lock B's write lands now; with it, B waits until A's removal is done
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(300));
+        });
+        b.unwrap().join().unwrap();
+        assert_eq!(std::fs::read_to_string(&m).unwrap(), b_text, "B's marker, written after A's check, stays");
+        assert!(marker_lock_path(&m).ends_with("gpu-init.marker.lock"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

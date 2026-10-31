@@ -101,7 +101,9 @@ normally removes the marker even when device creation has not returned yet (a la
 seconds in, while a large library was still opening): an orderly quit proves the process was not killed
 inside the driver (`backend::release_init_marker_on_quit`, called last in `App::on_exit`). The marker
 names the launch that wrote it (process id and a per-launch random token), and a launch removes it only
-while it still names that launch, so quitting one instance never clears another instance's marker. Killing the app during
+while it still names that launch, so quitting one instance never clears another instance's marker. Every write, check
+and removal holds an exclusive lock on `gpu-init.marker.lock` beside it, so another instance cannot write its marker
+between one launch's check and its removal. Killing the app during
 the ~0.3 s of device creation, or two instances starting at the same moment, can trip it falsely —
 harmless: rendering is then on the CPU until the box is checked again. The sentinel covers the compute
 device and every kernel build; a crash while the window's renderer starts is avoided by the backend defaults above

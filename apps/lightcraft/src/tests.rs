@@ -590,9 +590,15 @@ fn the_writer_follows_the_window_from_frame_to_frame() {
 
 /// #1331: on macOS the process ends inside `on_exit`, before eframe would tear the window down.
 /// The check runs in a child (this test binary again), since on macOS it ends the process.
+/// `on_exit` also removes the GPU start-up marker this launch armed (an orderly quit while the
+/// device is still being created is not a crash): the parent checks the file after the child ended.
 #[test]
 fn on_exit_ends_the_process_on_macos() {
-    if std::env::var_os("LIGHTCRAFT_TEST_ON_EXIT").is_some() {
+    if let Some(marker) = std::env::var_os("LIGHTCRAFT_TEST_ON_EXIT") {
+        let m = std::path::PathBuf::from(marker);
+        // armed at launch, and device creation started and has not returned
+        assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
+        std::fs::write(&m, lightcraft_engine::gpu::backend::this_launch_marker_text("device and kernel creation (backends DX12)")).unwrap();
         let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
         let mut app = App(
             app,
@@ -605,9 +611,11 @@ fn on_exit_ends_the_process_on_macos() {
         println!("on_exit returned");
         return;
     }
+    let d = dir("on-exit-gpu-marker");
+    let m = d.join("gpu-init.marker");
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "tests::on_exit_ends_the_process_on_macos", "--nocapture"])
-        .env("LIGHTCRAFT_TEST_ON_EXIT", "1")
+        .env("LIGHTCRAFT_TEST_ON_EXIT", &m)
         .env("LIGHTCRAFT_NO_PREFS", "1")
         .output()
         .unwrap();
@@ -615,6 +623,8 @@ fn on_exit_ends_the_process_on_macos() {
     assert!(out.status.success(), "{stdout}");
     assert!(stdout.contains("calling on_exit"), "the child didn't run the test: {stdout}");
     assert_eq!(stdout.contains("on_exit returned"), !cfg!(target_os = "macos"), "{stdout}");
+    assert!(!m.exists(), "the orderly quit removed the GPU start-up marker");
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// Quitting leaves no `catalog.lock.owner` behind, though the process ends without running
