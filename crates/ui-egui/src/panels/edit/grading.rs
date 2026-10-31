@@ -142,16 +142,16 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, Color32::BLACK));
     ui.painter().text(pos2(c.x, c.y + rad + 12.0), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(12.0), t.text_label);
     if resp.drag_started() {
-        let _ = app.run("develop.beginInteraction", json!({"label": crate::i18n::tr_format!("{label} Grading", label = label)}));
+        app.act("develop.beginInteraction", json!({"label": crate::i18n::tr_format!("{label} Grading", label = label)}));
     }
     if (resp.dragged() || resp.clicked())
         && let Some(q) = pointer
     {
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));
-        let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
+        app.act("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
     }
     if resp.drag_stopped() || resp.clicked() {
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
     // released, or Esc (egui ends a drag on it)
     if resp.drag_stopped()
@@ -161,7 +161,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
         give_pointer_back(ui.ctx(), held.origin);
     }
     if resp.double_clicked() {
-        let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
+        app.act("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
     }
     // hue and saturation readout: centred above the wheel, shown like the eye (no fade)
     if readout && (hovering || resp.dragged()) {

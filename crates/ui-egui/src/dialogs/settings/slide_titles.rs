@@ -45,7 +45,7 @@ pub fn preview_choice(ui: &mut egui::Ui) {
 
 /// Change `key` of screen `t` (and show that screen in the preview).
 fn set(app: &mut LightcraftApp, ctx: &egui::Context, t: Title, key: &str, v: Value) {
-    let _ = app.run("slideshow.titles", json!({ t.id(): { key: v } }));
+    app.act("slideshow.titles", json!({ t.id(): { key: v } }));
     set_preview_shows(ctx, Some(t));
 }
 
@@ -73,7 +73,7 @@ fn slider(
         set_preview_shows(ui.ctx(), Some(t));
     }
     if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        let _ = app.run("slideshow.titles", p);
+        app.act("slideshow.titles", p);
     }
 }
 

@@ -91,7 +91,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("picks", Icon::FlagPick, "Picks", Some(picks), LibrarySource::Picks),
             ] {
                 if Row::new(id, icon, label).count(count).selected(src == s).show(app, ui).clicked() {
-                    let _ = app.run("library.source", json!({"kind": id}));
+                    app.act("library.source", json!({"kind": id}));
                 }
             }
             // photos whose files can't be found (checked every few seconds, not every frame)
@@ -103,7 +103,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     .show(app, ui)
                     .clicked()
             {
-                let _ = app.run("library.source", json!({"kind": "missing"}));
+                app.act("library.source", json!({"kind": "missing"}));
             }
             if Row::new("recentlyDeleted", Icon::Trash, "Recently Deleted")
                 .count(Some(deleted))
@@ -111,7 +111,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .show(app, ui)
                 .clicked()
             {
-                let _ = app.run("library.source", json!({"kind": "recentlyDeleted"}));
+                app.act("library.source", json!({"kind": "recentlyDeleted"}));
             }
             // the album just made: the folders down to it open, once (also when the section is shut)
             let reveal = app.ui.reveal_album.take();

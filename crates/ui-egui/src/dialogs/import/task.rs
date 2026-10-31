@@ -442,13 +442,17 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         quiet_finish(app, ctx, &task);
         return;
     }
+    // the reasons the view can't be switched or the first photo selected (it went before the import
+    // ended, or the edited photo on screen can't be saved): the report below would write over their
+    // toasts, so they are kept for the report
+    let mut refusals = Vec::new();
     if let Some(f) = task.first.filter(|_| !task.moved_on) {
         // a view the new photos aren't in (an album, Picks, a Local folder) would leave the active
         // photo off screen: show All Photos, as Lightroom shows the import's own collection (#1446)
         if !app.session.visible().contains(&lightcraft_catalog::PhotoId(f)) {
-            let _ = app.run("library.source", json!({"kind": "all"}));
+            act_keeping_the_reason(app, "library.source", json!({"kind": "all"}), &mut refusals);
         }
-        let _ = app.run("library.select", json!({"ids": [f]}));
+        act_keeping_the_reason(app, "library.select", json!({"ids": [f]}), &mut refusals);
     }
     // nothing new, only files the library already has: show where they are (Recently Deleted is
     // easy to miss, and the side panel that lists it starts collapsed)
@@ -462,12 +466,28 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         return;
     }
     let mut msg = import_summary(app, &task);
-    if task.warnings.is_empty() {
+    let refused = !refusals.is_empty();
+    for why in refusals {
+        msg.push_str("\n\n");
+        msg.push_str(&why);
+    }
+    if task.warnings.is_empty() && refused {
+        // as long as the refusal's own toast stays, so the reason can be read
+        app.toast_for(ctx, msg, crate::REFUSAL_SECONDS);
+    } else if task.warnings.is_empty() {
         app.toast(ctx, msg);
     } else {
         msg.push_str("\n\n");
         msg.push_str(&xmp_warnings_text(&task.warnings));
         app.toast_for(ctx, msg, 8.0);
+    }
+}
+
+/// [`LightcraftApp::act`] for a command whose refusal goes into a report written right after:
+/// the reason is taken off the toast it made and added to `refusals`.
+fn act_keeping_the_reason(app: &mut LightcraftApp, id: &str, params: Value, refusals: &mut Vec<String>) {
+    if app.act(id, params).is_none() {
+        refusals.extend(app.ui.toast.take().map(|toast| toast.0));
     }
 }
 
@@ -533,7 +553,10 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     if ids.is_empty() || app.run("library.source", json!({"kind": kind})).is_err() {
         return false;
     }
-    let _ = app.run("library.select", json!({"ids": ids}));
+    // refused: `act` said why, and a toast of ours would write over it
+    if app.act("library.select", json!({"ids": ids})).is_none() {
+        return true;
+    }
     app.ui.left_panel = true;
     let n = ids.len();
     let plural = if n == 1 { "" } else { "s" };
@@ -548,4 +571,60 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     };
     app.toast_for(ctx, msg, 6.0);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn done_with_first(first: u64) -> ImportTask {
+        ImportTask { imported: 1, first: Some(first), ..Default::default() }
+    }
+
+    fn toast_text(app: &LightcraftApp) -> String {
+        app.ui.toast.as_ref().map(|toast| toast.0.clone()).unwrap_or_default()
+    }
+
+    /// The first photo is gone by the time the import ends: selecting it is refused, and the report
+    /// says that too, not only what was imported.
+    #[test]
+    fn a_first_photo_that_went_keeps_the_reason_it_could_not_be_selected_in_the_report() {
+        let new_app = || LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        // the reason the refused selection gives on its own
+        let mut other = new_app();
+        assert!(other.act("library.select", json!({"ids": [u64::MAX]})).is_none(), "selecting a photo that is not there is refused");
+        let reason = toast_text(&other);
+        let mut app = new_app();
+        let summary = import_summary(&app, &done_with_first(u64::MAX));
+        finish(&mut app, &egui::Context::default(), done_with_first(u64::MAX));
+        assert_eq!(toast_text(&app), format!("{summary}\n\n{reason}"));
+        // and it stays as long as a refusal does, so the reason can be read
+        let left = app.ui.toast.as_ref().map(|toast| toast.1).unwrap_or_default() - app.tick_now();
+        assert!(left > crate::REFUSAL_SECONDS - 1.0, "the toast stays {left} s");
+    }
+
+    /// The other branch: a first photo that is there is selected, and the report is only the summary.
+    #[test]
+    fn a_first_photo_that_is_there_is_selected_and_the_report_is_only_the_summary() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let first = app.session.visible().first().map(|photo| photo.0).expect("the demo library has photos");
+        let summary = import_summary(&app, &done_with_first(first));
+        finish(&mut app, &egui::Context::default(), done_with_first(first));
+        assert_eq!(toast_text(&app), summary);
+        assert_eq!(app.session.active().map(|photo| photo.0), Some(first));
+    }
+
+    /// Both refusals a finished import can meet (switching the view, selecting the photo) are kept
+    /// for the report, in the order they happened, and no toast of theirs is left to be written over.
+    #[test]
+    fn the_reasons_of_the_commands_a_finished_import_runs_are_all_kept() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let mut refusals = Vec::new();
+        act_keeping_the_reason(&mut app, "library.select", json!({"ids": [u64::MAX]}), &mut refusals);
+        act_keeping_the_reason(&mut app, "library.select", json!({"ids": [u64::MAX - 1]}), &mut refusals);
+        act_keeping_the_reason(&mut app, "library.source", json!({"kind": "all"}), &mut refusals);
+        assert_eq!(refusals.len(), 2, "a command that goes through adds nothing: {refusals:?}");
+        assert!(refusals[0].contains(&u64::MAX.to_string()) && refusals[1].contains(&(u64::MAX - 1).to_string()), "{refusals:?}");
+        assert!(app.ui.toast.is_none(), "their toasts are taken");
+    }
 }

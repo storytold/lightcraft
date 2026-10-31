@@ -515,7 +515,7 @@ fn brush_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
         let erase = app.ui.brush_erase != alt;
         // a ⇧-click draws a straight line from where the last stroke ended, as in Lightroom
         let connect = shift && resp.clicked() && pts.len() == 1;
-        let _ = app.run(
+        app.act(
             "mask.brushStroke",
             json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
                    "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
@@ -548,7 +548,7 @@ fn grip_gestures(
         && let Some((mid, ..)) = hit(q)
         && Some(mid) != active
     {
-        let _ = app.run("mask.select", json!({"id": mid}));
+        app.act("mask.select", json!({"id": mid}));
     }
     if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
@@ -568,9 +568,9 @@ fn grip_gestures(
             && let Some(original_shape) = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone())
         {
             if Some(mask) != active {
-                let _ = app.run("mask.select", json!({"id": mask}));
+                app.act("mask.select", json!({"id": mask}));
             }
-            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+            app.act("develop.beginInteraction", json!({"label": "Edit Mask"}));
             app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape });
         }
     }
@@ -583,11 +583,11 @@ fn grip_gestures(
         let dn = Point::new(n.x - n0.x, n.y - n0.y);
         let alt = ui.input(|i| i.modifiers.alt);
         let new_shape = moved_shape(&original_shape, handle, dn, n, map, alt);
-        let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
+        app.act("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
     }
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
         app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
 }
 
@@ -619,17 +619,17 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         let name = mask_handle_name(&mask_name, shape, handle);
         let keys = crate::canvas_keys::handle(ui, &format!("mask:{mid}:{ci}:{handle}"), &name, crate::canvas_keys::position_text(at.x, at.y), q);
         if keys.activated && app.session.active_mask != Some(mid) {
-            let _ = app.run("mask.select", json!({"id": mid}));
+            app.act("mask.select", json!({"id": mid}));
         }
         let Some((dx, dy)) = keys.delta else { continue };
         if app.session.active_mask != Some(mid) {
-            let _ = app.run("mask.select", json!({"id": mid}));
+            app.act("mask.select", json!({"id": mid}));
         }
         let to = Point::new(at.x + dx, at.y + dy);
         let new_shape = moved_shape(shape, handle, Point::new(dx, dy), to, map, false);
-        let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
-        let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": new_shape}));
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.beginInteraction", json!({"label": "Edit Mask"}));
+        app.act("mask.update", json!({"id": mid, "component": ci, "shape": new_shape}));
+        app.act("develop.endInteraction", json!({}));
     }
 }
 

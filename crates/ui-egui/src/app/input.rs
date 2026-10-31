@@ -85,7 +85,7 @@ impl LightcraftApp {
             if panels::library_problem::holds_drops(self) {
                 self.toast(ctx, crate::i18n::tr("Open a library first, then drop the presets again"));
             } else {
-                let _ = self.run("file.importPresets", serde_json::json!({"paths": drop.presets}));
+                self.act("file.importPresets", serde_json::json!({"paths": drop.presets}));
             }
         }
         if drop.photos.is_empty() {

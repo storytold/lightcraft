@@ -362,7 +362,7 @@ fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoI
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
                 if ui.button(crate::i18n::tr(label)).clicked() {
-                    let _ = app.run(cmd, json!({}));
+                    app.act(cmd, json!({}));
                 }
             }
         });
@@ -413,14 +413,14 @@ fn face_boxes(
             super::faces::take_step(app, ui.ctx(), setup);
         }
         Some(RegionEdit::Remove(index)) => {
-            let _ = app.run("photo.removeRegion", json!({"id": id.0, "index": index}));
+            app.act("photo.removeRegion", json!({"id": id.0, "index": index}));
         }
         Some(RegionEdit::Name(index, name)) => {
             app.ui.name_edit = None;
-            let _ = app.run("faces.setName", json!({"id": id.0, "index": index, "name": name}));
+            app.act("faces.setName", json!({"id": id.0, "index": index, "name": name}));
         }
         Some(RegionEdit::Resize(index, r)) => {
-            let _ = app.run("photo.setRegion", json!({"id": id.0, "index": index, "rect": {"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}}));
+            app.act("photo.setRegion", json!({"id": id.0, "index": index, "rect": {"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1}}));
         }
         None => {}
     }
@@ -887,7 +887,7 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     if resp.drag_started()
         && let Some(q) = resp.interact_pointer_pos()
     {
-        let _ = app.run("develop.beginInteraction", json!({"label": "Targeted Adjustment"}));
+        app.act("develop.beginInteraction", json!({"label": "Targeted Adjustment"}));
         app.gesture = Some(Gesture::Targeted { at: map.norm(q), acc: 0.0 });
     }
     if resp.dragged()
@@ -902,12 +902,12 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
             if target == "curve" && app.ui.curve_channel != "parametric" {
                 p["channel"] = json!(app.ui.curve_channel);
             }
-            let _ = app.run("develop.targeted", p);
+            app.act("develop.targeted", p);
         }
     }
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::Targeted { .. })) {
         app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
 }
 
@@ -1003,7 +1003,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             && let Some(q) = resp.interact_pointer_pos()
         {
             let n = map.norm(q);
-            let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
+            app.act("develop.wbPick", json!({"x": n.x, "y": n.y}));
             app.ui.tool.clear();
         }
         return;
@@ -1021,7 +1021,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             && let Some(q) = resp.interact_pointer_pos()
         {
             let n = map.norm(q);
-            if let Ok(r) = app.run("pointColor.pick", json!({"x": n.x, "y": n.y})) {
+            if let Some(r) = app.act("pointColor.pick", json!({"x": n.x, "y": n.y})) {
                 app.ui.point_color = r["index"].as_u64().unwrap_or(0) as usize;
             }
             app.ui.tool.clear();

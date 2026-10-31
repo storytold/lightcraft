@@ -54,7 +54,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
                 .on_hover_text(crate::i18n::tr("Set the mix from the photo's colours"))
                 .clicked()
             {
-                let _ = app.run("develop.autoBwMix", json!({}));
+                app.act("develop.autoBwMix", json!({}));
             }
         });
         control(app, ui, d, &format!("bw.{b}"), true);
@@ -138,7 +138,7 @@ pub(super) fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develo
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, "pointColorDelete", crate::i18n::tr("Delete"), false).clicked() {
-                    let _ = app.run("pointColor.delete", json!({"index": sel}));
+                    app.act("pointColor.delete", json!({"index": sel}));
                 }
             });
         });

@@ -77,9 +77,9 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         && let Some((spot, source, ..)) = press.and_then(hit)
     {
         if Some(spot) != active {
-            let _ = app.run("spot.select", json!({"index": spot}));
+            app.act("spot.select", json!({"index": spot}));
         }
-        let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
+        app.act("develop.beginInteraction", json!({"label": "Edit Spot"}));
         app.gesture = Some(Gesture::SpotMove { spot, source });
     }
     if let Some(Gesture::SpotMove { spot, source }) = app.gesture.clone() {
@@ -89,19 +89,19 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             let (n, n0) = (map.norm(q), map.norm(q - resp.drag_delta()));
             let dn = [n.x - n0.x, n.y - n0.y];
             if dn != [0.0, 0.0] {
-                let _ = app.run("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: dn}));
+                app.act("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: dn}));
             }
         }
         if resp.drag_stopped() {
             app.gesture = None;
-            let _ = app.run("develop.endInteraction", json!({}));
+            app.act("develop.endInteraction", json!({}));
         }
         return;
     }
     if resp.clicked()
         && let Some((spot, ..)) = press.and_then(hit)
     {
-        let _ = app.run("spot.select", json!({"index": spot}));
+        app.act("spot.select", json!({"index": spot}));
         return;
     }
     if let Some(q) = resp.interact_pointer_pos()
@@ -128,7 +128,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let _ = app.run(
+        app.act(
             "spot.add",
             json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
         );
@@ -147,12 +147,12 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         let value = format!("{}, {} {:.0}%", crate::canvas_keys::position_text(at.x, at.y), crate::i18n::tr("size"), size * 100.0);
         let keys = crate::canvas_keys::handle(ui, &format!("spot:{spot}:{}", if source { "source" } else { "target" }), &name, value, q);
         if (keys.activated || keys.delta.is_some()) && app.session.active_spot != Some(spot) {
-            let _ = app.run("spot.select", json!({"index": spot}));
+            app.act("spot.select", json!({"index": spot}));
         }
         if let Some((dx, dy)) = keys.delta {
-            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
-            let _ = app.run("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: [dx, dy]}));
-            let _ = app.run("develop.endInteraction", json!({}));
+            app.act("develop.beginInteraction", json!({"label": "Edit Spot"}));
+            app.act("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: [dx, dy]}));
+            app.act("develop.endInteraction", json!({}));
         }
     }
     // where a new spot goes: the photo's centre at first, then wherever the arrows took it
@@ -181,7 +181,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             "fill" => "fill",
             _ => "remove",
         };
-        let _ = app.run(
+        app.act(
             "spot.add",
             json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
         );
@@ -231,8 +231,8 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         let half = ((sb - sa) / 2.0).abs() / per_long;
         if half.x > 0.002 && half.y > 0.002 {
             let c = map.norm(sa.lerp(sb, 0.5));
-            let r = app.run("redeye.add", json!({"center": [c.x, c.y], "rx": half.x, "ry": half.y, "pet": app.ui.eye_pet}));
-            if let Ok(v) = r {
+            let r = app.act("redeye.add", json!({"center": [c.x, c.y], "rx": half.x, "ry": half.y, "pet": app.ui.eye_pet}));
+            if let Some(v) = r {
                 app.ui.eye = v["index"].as_u64().unwrap_or(0) as usize;
             }
         }

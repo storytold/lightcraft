@@ -45,7 +45,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         let opts = [(512u32, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (8192, "8 GB")];
         let mut v = if CACHE_SIZES.contains(&cur) { cur } else { 2048 };
         if choices(ui, "settingsCache", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"cacheMb": v}));
+            app.act("library.preferences", json!({"cacheMb": v}));
         }
     });
     let used = app.session.media.rendered.disk().map(|d| d.size());
@@ -57,7 +57,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         let r = ui.button(crate::i18n::tr("Clear Cache"));
         register(ui, "button:settingsClearCache", r.rect);
         if r.clicked() {
-            let _ = app.run("library.clearPreviews", json!({}));
+            app.act("library.clearPreviews", json!({}));
         }
     });
     heading(ui, t, crate::i18n::tr("Local folders"));
@@ -65,7 +65,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];
         let mut v = app.session.forget_local_days;
         if choices(ui, "settingsForgetLocal", &opts, &mut v) {
-            let _ = app.run("library.preferences", json!({"forgetLocalDays": v}));
+            app.act("library.preferences", json!({"forgetLocalDays": v}));
         }
     });
     hint(

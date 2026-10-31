@@ -373,7 +373,7 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if app.session.catalog.album_children_are_ordered(None) {
         ui.separator();
         if ui.button(crate::i18n::tr("Sort Albums A–Z")).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked() {
-            let _ = app.run("album.sort", json!({}));
+            app.act("album.sort", json!({}));
         }
     }
 }

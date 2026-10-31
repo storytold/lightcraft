@@ -97,6 +97,36 @@ fn select_only_active_without_active_photo_does_not_change_selection() {
     assert!(h.app.session.selection.ids.is_empty());
 }
 
+/// Given two keys in one frame, the first of which (Shift+E) opens the Export dialog, when the
+/// frame is handled, then the second (a rating) is not a command behind the dialog: no rating,
+/// no toast.
+#[test]
+fn a_key_after_one_that_opens_a_dialog_in_the_same_frame_does_nothing() {
+    use lightcraft_catalog::PhotoId;
+    let mut h = library();
+    h.app.ui.toast = None;
+    let press = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.events.push(press(egui::Key::E, egui::Modifiers::SHIFT));
+    h.events.push(press(egui::Key::Num3, egui::Modifiers::NONE));
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "Shift+E opens Export");
+    assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().rating, 0, "the rating key was the dialog's");
+    assert!(h.app.ui.toast.is_none());
+}
+
+/// The same for a second alias (Shift+Z flags a Pick) after Shift+E in one frame.
+#[test]
+fn an_alias_after_one_that_opens_a_dialog_in_the_same_frame_does_nothing() {
+    use lightcraft_catalog::{Flag, PhotoId};
+    let mut h = library();
+    let press = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.events.push(press(egui::Key::E, egui::Modifiers::SHIFT));
+    h.events.push(press(egui::Key::Z, egui::Modifiers::SHIFT));
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "Shift+E opens Export");
+    assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::None, "the flag key was the dialog's");
+}
+
 #[test]
 fn library_rating_labels_flags_and_undo() {
     use lightcraft_catalog::{ColorLabel, Flag, PhotoId};

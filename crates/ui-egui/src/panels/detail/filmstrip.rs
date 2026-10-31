@@ -159,7 +159,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     crate::icons::paint(p, Rect::from_min_size(br.min + vec2(4.0, 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Stack, Color32::WHITE);
                     p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
                     if badge.clicked() {
-                        crate::panels::grid::toggle_stack(app, ui.ctx(), *id);
+                        crate::panels::grid::toggle_stack(app, *id);
                     }
                 }
             }

@@ -31,15 +31,15 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
     if resp.clicked() {
         let v = if sel { serde_json::Value::Null } else { json!(n.path) };
         browse_all_photos(app, !sel);
-        let _ = app.run("library.filter", json!({"keyword": v}));
+        app.act("library.filter", json!({"keyword": v}));
     }
     crate::widgets::context_menu(&resp, |ui| {
         let has_sel = app.session.active().is_some();
         if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Add to Selected Photos"))).clicked() {
-            let _ = app.run("photo.setMeta", json!({"addKeywords": [n.path]}));
+            app.act("photo.setMeta", json!({"addKeywords": [n.path]}));
         }
         if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Remove from Selected Photos"))).clicked() {
-            let _ = app.run("photo.setMeta", json!({"removeKeywords": [n.path]}));
+            app.act("photo.setMeta", json!({"removeKeywords": [n.path]}));
         }
         ui.separator();
         if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
@@ -49,7 +49,7 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
             app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec![n.path.clone()], into: String::new() });
         }
         if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
-            let _ = app.run("keyword.delete", json!({"keyword": n.path}));
+            app.act("keyword.delete", json!({"keyword": n.path}));
         }
     });
 }

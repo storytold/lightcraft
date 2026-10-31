@@ -206,7 +206,7 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         ));
     }
     if clicked {
-        let _ = app.run("view.clipping", json!({}));
+        app.act("view.clipping", json!({}));
     }
     // the tonal zone the pointer is on replaces the EXIF strip while it is there
     if let Some(text) = zone.as_ref().and_then(|a| a.readout()) {
@@ -254,7 +254,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
                     .on_hover_text(crate::i18n::tr("Show display gamut warning"));
                 register(ui, "button:proofDisplayWarning", r2.rect);
                 if dest != app.ui.proof.dest_warning || disp != app.ui.proof.display_warning {
-                    let _ = app.run("view.softProof", json!({"destWarning": dest, "displayWarning": disp}));
+                    app.act("view.softProof", json!({"destWarning": dest, "displayWarning": disp}));
                 }
             });
         });
@@ -267,7 +267,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
                 for s in OutputSpace::ALL {
                     if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
-                        let _ = app.run("view.softProof", json!({"space": s}));
+                        app.act("view.softProof", json!({"space": s}));
                     }
                 }
                 if let Some(n) = &device {
@@ -293,7 +293,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
                     let r = ui.selectable_label(app.ui.proof_intent == i, crate::i18n::tr(label));
                     register(ui, format!("button:proofIntent-{}", i.name()), r.rect);
                     if r.clicked() && app.ui.proof_intent != i {
-                        let _ = app.run("view.softProof", json!({"intent": i.name()}));
+                        app.act("view.softProof", json!({"intent": i.name()}));
                     }
                 }
             });
@@ -301,7 +301,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let r = ui.checkbox(&mut paper, crate::i18n::tr("Simulate Paper & Ink"));
             register(ui, "button:proofPaperInk", r.rect);
             if r.changed() {
-                let _ = app.run("view.softProof", json!({"paperInk": paper}));
+                app.act("view.softProof", json!({"paperInk": paper}));
             }
         }
         let r = ui.button(crate::i18n::tr("Create Proof Copy"));

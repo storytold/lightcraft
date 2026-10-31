@@ -57,6 +57,7 @@ pub fn enter_compare(app: &mut LightcraftApp) -> Result<Value, String> {
 
 fn select_pair(app: &mut LightcraftApp, a: PhotoId, b: PhotoId, active: PhotoId) {
     app.ui.compare = Some((a.0, b.0));
+    // refusal expected: a step of view.compare and its arrow keys, which answer for themselves; the pair is from the view
     let _ = app.session.execute("library.select", &json!({"ids": [a.0, b.0], "active": active.0}));
 }
 
@@ -167,6 +168,7 @@ pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
 /// else the next photo in the view. `was` is the active photo before the rating: a rating that took
 /// it out of the view made the photo after it active already, and that is the next one (#2312).
 pub fn advance(app: &mut LightcraftApp, was: Option<PhotoId>) {
+    // refusal expected: moving on by itself after a rating that went through and was said; a step that can't be taken is no news
     let _ = match app.ui.view {
         ViewMode::Compare => compare_step(app, 1),
         ViewMode::Survey => survey_step(app, 1),
@@ -573,7 +575,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.session.selection.active = Some(*id);
         }
         if resp.double_clicked() {
-            let _ = app.run("library.select", json!({"ids": [id.0]}));
+            app.act("library.select", json!({"ids": [id.0]}));
             app.ui.view = ViewMode::Detail;
         }
         // remove from the survey (deselect) on hover
@@ -584,7 +586,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.painter().circle_filled(xr.center(), 10.0, Color32::from_black_alpha(if xresp.hovered() { 230 } else { 160 }));
             paint(ui.painter(), xr.shrink(4.0), Icon::Close, t.text);
             if xresp.clicked() {
-                let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
+                app.act("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }
         }
         crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));

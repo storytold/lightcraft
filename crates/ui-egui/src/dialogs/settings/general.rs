@@ -25,12 +25,12 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
         register(ui, "button:settingsOpenLibrary", r.rect);
         if r.clicked() {
-            let _ = app.run("app.openLibrary", json!({}));
+            app.act("app.openLibrary", json!({}));
         }
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("New Library…")));
         register(ui, "button:settingsNewLibrary", r.rect);
         if r.clicked() {
-            let _ = app.run("app.newLibrary", json!({}));
+            app.act("app.newLibrary", json!({}));
         }
         if !can {
             hint(ui, t, crate::i18n::tr("not available here"));

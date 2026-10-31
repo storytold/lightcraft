@@ -404,7 +404,7 @@ cargo run --release -p lightcraft -- --memory           # a throwaway in-memory 
 cargo run --release -p lightcraft -- --control 7980     # with the automation channel
 cargo xtask web --serve                                 # the same app in the browser: http://127.0.0.1:8080/
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
-cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
+cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, refusals, assets, WASM
 cargo xtask ci --quick                                  # only what your branch's changes can break (minutes)
 ```
 

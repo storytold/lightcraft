@@ -27,7 +27,7 @@ enum Unit {
 }
 
 fn set(app: &mut LightcraftApp, p: Value) {
-    let _ = app.run("slideshow.overlays", p);
+    app.act("slideshow.overlays", p);
 }
 
 /// The span of a slider and how its value is shown.

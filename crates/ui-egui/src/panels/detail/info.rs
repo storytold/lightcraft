@@ -197,7 +197,7 @@ pub(super) fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     p.line_segment([c - vec2(m, m), c + vec2(m, m)], cross);
     p.line_segment([c - vec2(m, -m), c + vec2(m, -m)], cross);
     if resp.on_hover_text(crate::i18n::tr("Click to clear these filters")).clicked() {
-        let _ = app.run("library.clearFilter", json!({}));
+        app.act("library.clearFilter", json!({}));
     }
 }
 

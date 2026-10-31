@@ -117,7 +117,7 @@ pub(super) fn crop_overlay(
         && inside(q)
         && !handles.iter().any(|h| h.distance(q) < 12.0)
     {
-        let _ = app.run("tool.done", json!({}));
+        app.act("tool.done", json!({}));
         return;
     }
     // egui reports a drag only once the pointer has moved a few px: the zone is where the button
@@ -152,7 +152,7 @@ pub(super) fn crop_overlay(
                 let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
                 // Shift keeps the current proportions for this drag only; the Lock toggle is untouched.
                 let keep_ratio = ui.input(|i| i.modifiers.shift);
-                let _ = app.run(
+                app.act(
                     "crop.drag",
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1], "keepRatio": keep_ratio}),
                 );
@@ -162,14 +162,14 @@ pub(super) fn crop_overlay(
                 let a = (q - c).angle();
                 let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
-                let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
+                app.act("crop.straighten", json!({"angle": shown_angle}));
             }
             _ => {}
         }
     }
     if resp.drag_stopped() {
         app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
     if let Some(at) = readout_at {
         // the canvas (the loupe's own rect), not the photo: rotating happens in the margin around it
@@ -211,7 +211,7 @@ fn crop_keys(
         let Some(at) = handles.get(i).copied().or_else(|| (i == 8).then_some(centre)) else { continue };
         let keys = crate::canvas_keys::handle(ui, &format!("crop:{i}"), crate::i18n::tr(name), value.clone(), at);
         if keys.activated {
-            let _ = app.run("tool.done", json!({}));
+            app.act("tool.done", json!({}));
             return true;
         }
         let Some((dx, dy)) = keys.delta else { continue };
@@ -226,11 +226,11 @@ fn crop_keys(
             let _ = app.session.cancel_interaction();
             return false;
         }
-        let _ = app.run(
+        app.act(
             "crop.drag",
             json!({"handle": i, "from": [from.x, from.y], "to": [to.x, to.y], "start": [r.x0, r.y0, r.x1, r.y1], "keepRatio": false}),
         );
-        let _ = app.run("develop.endInteraction", json!({}));
+        app.act("develop.endInteraction", json!({}));
     }
     false
 }
@@ -435,7 +435,7 @@ fn guided_overlay(
                                 [x.x, x.y, y.x, y.y]
                             })
                             .collect();
-                        let _ = app.run("geometry.guides", json!({"guides": all}));
+                        app.act("geometry.guides", json!({"guides": all}));
                     }
                 }
             }
@@ -445,7 +445,7 @@ fn guided_overlay(
                 {
                     let b = map.norm(q);
                     let (ca, cb) = (frame.transformed_to_corrected(a), frame.transformed_to_corrected(b));
-                    let _ = app.run("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
+                    app.act("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
                 }
             }
             other => app.gesture = other,
@@ -575,7 +575,7 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
             while deg < -45.0 {
                 deg += 90.0;
             }
-            let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
+            app.act("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
         }
         if !held {
             app.ui.tool.clear();
