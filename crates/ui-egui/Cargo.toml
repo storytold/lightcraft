@@ -28,7 +28,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+[target.'cfg(any(unix, windows))'.dependencies]
+fs4 = { version = "1.1", default-features = false }
+
 [dev-dependencies]
+# Exercise the format generator with catalogs that have no translated plural entry.
+toml = "1"
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # The model-setup tests install and resume a real denoise model. Without this the engine's

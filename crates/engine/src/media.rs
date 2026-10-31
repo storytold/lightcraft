@@ -22,6 +22,11 @@ use std::sync::{Arc, Weak};
 use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
+#[cfg(not(target_arch = "wasm32"))]
+mod invalidation;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use invalidation::{Change, Invalidation, interrupted_runs};
+
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
 use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
@@ -34,6 +39,8 @@ mod settings_hash;
 mod source;
 
 pub use cache::DenoiseIndex;
+#[cfg(test)]
+pub(crate) use cache::thumbnail_folder;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 pub use render::{RenderJob, RenderResult, develop, develop_reporting, fit_for_display};
 #[cfg(test)]
@@ -71,12 +78,19 @@ pub struct MediaCache {
     pub file_bytes: Option<crate::merge::ByteReader>,
     /// The library's smart previews folder (originals offline: render from the proxy).
     pub smart_dir: Option<std::path::PathBuf>,
+    pub(crate) smart_status: crate::smart::UsabilityCache,
+    source_generation: u64,
+    #[cfg(test)]
+    clear_after_source: bool,
     /// Whether originals (and smart previews) are on disk: cached and checked off the UI thread
     /// in the app (see [`crate::availability`]).
     pub availability: crate::availability::Availability,
     scenes: Vec<lightcraft_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,
+    /// Proxy workers' handle on `rendered` (smart previews are native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    invalidation: Invalidation,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
 }

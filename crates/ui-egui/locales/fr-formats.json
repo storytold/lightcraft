@@ -141,7 +141,6 @@
   "the {n} selected photos": "les {n} photos sélectionnées",
   "the {} photos in view": "les {} photos affichées",
   "these {count} photos": "ces {count} photos",
-  "{count} smart preview{} · {:.1} MB": "{count} aperçu{0} dynamique{0} · {1:.1} Mo",
   "{f} folders (and their subfolders)": "{f} dossier(s) (et leurs sous-dossiers)",
   "{label} Grading": "Étalonnage de {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} sur chaque photo sélectionnée",
@@ -317,5 +316,37 @@
   "Panel layout could not be restored: {error}": "La disposition des panneaux n'a pas pu être restaurée : {error}",
   "Panel move was not applied: {error}": "Le déplacement du panneau n'a pas été appliqué : {error}",
   "{name} is installed": "{name} est installé",
-  "{name} is installed and in use: face recognition is on": "{name} est installé et utilisé : la reconnaissance des visages est activée"
+  "{name} is installed and in use: face recognition is on": "{name} est installé et utilisé : la reconnaissance des visages est activée",
+  "Photos: {count}": {
+    "one": "Photo : {count}",
+    "few": "Photos : {count}",
+    "many": "Photos : {count}",
+    "other": "Photos : {count}"
+  },
+  "Estimated total size: {size}": "Taille totale estimée : {size}",
+  "Destination: {path}": "Destination : {path}",
+  "Free space: {size}": "Espace libre : {size}",
+  ". {kept} existing previews kept unchanged": ". {kept} aperçus existants conservés sans modification",
+  "{count} smart preview{} · {:.1} MiB": "{count} aperçu{0} dynamique{0} · {1:.1} Mio",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Dossier des aperçus dynamiques modifié. {count} fichier source n'a pas pu être supprimé.",
+    "few": "Dossier des aperçus dynamiques modifié. {count} fichiers sources n'ont pas pu être supprimés.",
+    "many": "Dossier des aperçus dynamiques modifié. {count} fichiers sources n'ont pas pu être supprimés.",
+    "other": "Dossier des aperçus dynamiques modifié. {count} fichiers sources n'ont pas pu être supprimés."
+  },
+  "Smart preview folder change failed: {error}": "Échec du changement du dossier des aperçus dynamiques : {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} aperçu existant conservé sans modification",
+    "few": ". {count} aperçus existants conservés sans modification",
+    "many": ". {count} aperçus existants conservés sans modification",
+    "other": ". {count} aperçus existants conservés sans modification"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} aperçu dynamique · {size:.1} Mio",
+    "few": "{count} aperçus dynamiques · {size:.1} Mio",
+    "many": "{count} aperçus dynamiques · {size:.1} Mio",
+    "other": "{count} aperçus dynamiques · {size:.1} Mio"
+  },
+  "could not check smart preview storage: {e}": "Impossible de vérifier le stockage des aperçus dynamiques : {e}",
+  "free space is unavailable for {path} on this platform": "L'espace libre de {path} est indisponible sur cette plateforme."
 }

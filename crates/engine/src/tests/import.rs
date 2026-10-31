@@ -1026,6 +1026,85 @@ fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
     assert_eq!(differing, 0, "the local tone map is kept offline");
 }
 
+#[test]
+fn lossless_smart_previews_migrate_persist_and_invalidate_old_renders() {
+    let src = temp_dir("lossless-source");
+    let lib = temp_dir("lossless-library");
+    write_png(&src.join("a.png"), 7);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("a.png")]})).unwrap();
+    let id = s.active().unwrap();
+    assert_eq!(s.execute("library.smartPreviewsFormat", &json!({})).unwrap()["format"], "compact");
+    s.execute("library.smartPreviews", &json!({})).unwrap();
+    let file = crate::smart::file_path(s.media.smart_dir.as_ref().unwrap(), s.catalog.photo(id).unwrap());
+    assert_eq!(crate::smart::header(&file).unwrap().0, crate::smart::Format::Compact);
+    let online = s.render_now(id, 48, 32).unwrap().image;
+    let old_job = s.thumb_job(id, 48).unwrap();
+    let old_key = old_job.key;
+    s.execute("library.smartPreviewsFormat", &json!({"format": "lossless"})).unwrap();
+    assert_eq!(crate::smart::header(&file).unwrap().0, crate::smart::Format::Compact, "the preference alone never rewrites files");
+    let built = s.execute("library.smartPreviews", &json!({})).unwrap();
+    assert_eq!(built["refreshed"], 1);
+    assert_eq!(crate::smart::header(&file).unwrap().0, crate::smart::Format::Lossless);
+    assert_ne!(s.thumb_job(id, 48).unwrap().key, old_key);
+    s.media.clear_sources();
+    s.accept(&old_job.run());
+    assert!(!s.media.has_source(id, crate::media::SourceLevel::Thumb), "a pending old render cannot repopulate the source cache");
+    let location = s.execute("library.smartPreviewsLocation", &json!({})).unwrap();
+    assert_eq!(location["bytes"], std::fs::metadata(&file).unwrap().len());
+    assert_eq!(location["count"], 1);
+    std::fs::rename(&src, src.with_extension("offline")).unwrap();
+    s.media.forget(id);
+    assert_eq!(s.render_now(id, 48, 32).unwrap().image.data, online.data, "lossless source renders identically offline");
+    let old = std::fs::read(&file).unwrap();
+    let kept = s.execute("library.smartPreviews", &json!({"format": "compact"})).unwrap();
+    assert_eq!(kept["staleKept"], 1);
+    assert_eq!(std::fs::read(&file).unwrap(), old, "an offline proxy is never converted from itself");
+    s.persist().unwrap();
+    drop(s);
+    let mut reopened = Session::new().with_fs();
+    reopened.open_library(&lib, false).unwrap();
+    assert_eq!(reopened.smart_previews_format, crate::smart::Format::Lossless);
+    assert_eq!(reopened.render_now(id, 48, 32).unwrap().image.data, online.data);
+    std::fs::rename(src.with_extension("offline"), &src).unwrap();
+    reopened.execute("library.smartPreviews", &json!({"ids": [id.0], "format": "compact"})).unwrap();
+    assert_eq!(crate::smart::header(&file).unwrap().0, crate::smart::Format::Compact);
+    assert_eq!(reopened.smart_previews_format, crate::smart::Format::Lossless, "a build override keeps the library preference");
+    assert!(reopened.execute("library.smartPreviews", &json!({"format": "unknown"})).is_err());
+    drop(reopened);
+    std::fs::remove_dir_all(src).unwrap();
+    std::fs::remove_dir_all(lib).unwrap();
+}
+
+#[test]
+fn regression709_build_repairs_checksum_damaged_lossless_proxy() {
+    let src = temp_dir("checksum-source");
+    let lib = temp_dir("checksum-library");
+    write_png(&src.join("a.png"), 7);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("a.png")]})).unwrap();
+    let id = s.active().unwrap();
+    s.execute("library.smartPreviews", &json!({"format": "lossless"})).unwrap();
+    let path = crate::smart::file_path(s.media.smart_dir.as_ref().unwrap(), s.catalog.photo(id).unwrap());
+    let good = std::fs::read(&path).unwrap();
+    let mut corrupt = good.clone();
+    let byte = corrupt.len() - 9;
+    corrupt[byte] ^= 0x40;
+    std::fs::write(&path, &corrupt).unwrap();
+    assert!(crate::smart::load(&path).is_err());
+    let built = s.execute("library.smartPreviews", &json!({"format": "lossless"})).unwrap();
+    assert_eq!(built["repaired"], 1, "{built}");
+    assert_eq!(built["built"], 1);
+    assert_eq!(built["failed"], json!([]));
+    assert_eq!(std::fs::read(&path).unwrap(), good);
+    assert!(crate::smart::load(&path).is_ok());
+    drop(s);
+    std::fs::remove_dir_all(src).unwrap();
+    std::fs::remove_dir_all(lib).unwrap();
+}
+
 /// Issue #106: a smart preview cut short (crash, full drive) counted as built forever and failed
 /// exactly when the original went offline. Writes are atomic now, and a damaged proxy is not
 /// reported as present and is rebuilt.
@@ -1051,11 +1130,11 @@ fn damaged_smart_previews_are_rebuilt_and_failed_writes_leave_none() {
 
     let r = s.execute("library.smartPreviews", &json!({})).unwrap();
     assert_eq!((r["built"].as_u64(), r["repaired"].as_u64()), (Some(1), Some(0)), "{r}");
-    assert!(crate::smart::is_valid(&file));
+    assert!(crate::smart::is_complete(&file));
     // cut short, as by a crash before the fix
     let full = std::fs::read(&file).unwrap();
     std::fs::write(&file, &full[..full.len() / 2]).unwrap();
-    assert!(!crate::smart::is_valid(&file));
+    assert!(!crate::smart::is_complete(&file));
     assert_eq!(s.execute("photo.smartPreview", &json!({})).unwrap()["smartPreview"], false, "not counted as there");
     let r = s.execute("library.smartPreviews", &json!({})).unwrap();
     assert_eq!((r["built"].as_u64(), r["repaired"].as_u64()), (Some(1), Some(1)), "{r}");
@@ -1543,6 +1622,7 @@ fn smart_previews_folder_is_chosen_per_library() {
     drop(s); // one session per library (issue #99)
     let mut again = Session::new().with_fs();
     again.open_library(&lib, false).unwrap();
+    crate::cmd::previews::wait_for_smart_refresh(&again);
     assert_eq!(again.execute("library.smartPreviewsLocation", &json!({})).unwrap()["path"], to.to_string_lossy().as_ref());
 
     // offline original: the render comes from the proxy in the chosen folder
@@ -2321,7 +2401,10 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |path, _max_edge| {
+        std::fs::metadata(path).map_err(|e| e.to_string())?;
+        Ok((p.clone(), i.clone()))
+    }));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     // a raw that takes the per-file camera look, so an older fit makes its proxy stale
@@ -2352,6 +2435,63 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     assert_eq!(std::fs::read(&file).unwrap(), stale_bytes, "the offline proxy is preserved");
     assert!(crate::smart::is_stale(&file), "still stale: the original was not read");
     let _ = std::fs::remove_dir_all(src.with_extension("offline"));
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// The encode version (JPEG quality and mapping) is Compact's: a Compact proxy from an older
+/// encoding is rebuilt like one from an older look, but a Lossless proxy, whose header uses the same
+/// `enc` field for its own format version, is current and is never rebuilt for it, by Build Smart
+/// Previews or by the opening scan.
+#[test]
+fn the_compact_encode_version_does_not_rebuild_lossless_smart_previews() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let src = temp_dir("smartenc-src");
+    let lib = temp_dir("smartenc-lib");
+    write_png(&src.join("a.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    // a raw that takes the per-file camera look: the only photos whose proxies go stale
+    let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+    raw.format = "ARW".into();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    let dir = s.media.smart_dir.clone().unwrap();
+    let file = crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap());
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let plain = s.media.file_loader.clone().unwrap();
+    s.media.file_loader = Some(look_loader(plain, test_tone(2.0), calls.clone()));
+    // Compact from before the encode version is rebuilt once
+    s.execute("library.smartPreviews", &json!({"format": "compact"})).unwrap();
+    edit_smart_header(&file, |h| {
+        h.as_object_mut().unwrap().remove("enc");
+    });
+    assert!(crate::smart::is_stale(&file));
+    let r = s.execute("library.smartPreviews", &json!({"format": "compact"})).unwrap();
+    assert_eq!(r["refreshed"], json!(1), "{r}");
+    assert_eq!(smart_header(&file)["enc"], json!(crate::smart::ENCODE_VERSION));
+    // Lossless keeps its own version, which reads lower than Compact's
+    s.execute("library.smartPreviews", &json!({"format": "lossless"})).unwrap();
+    let (storage, head) = crate::smart::header(&file).unwrap();
+    assert_eq!(storage, crate::smart::Format::Lossless);
+    assert!(head["enc"].as_u64().is_some_and(|enc| enc < crate::smart::ENCODE_VERSION), "{head}");
+    assert!(!crate::smart::is_stale(&file), "a current Lossless proxy is not out of date");
+    let lossless = std::fs::read(&file).unwrap();
+    calls.store(0, Ordering::SeqCst);
+    let r = s.execute("library.smartPreviews", &json!({"format": "lossless"})).unwrap();
+    assert_eq!((r["built"].as_u64(), r["refreshed"].as_u64()), (Some(1), Some(0)), "{r}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the original is not read again");
+    // and the opening scan, which a folder checked before the encode version runs once, keeps it
+    std::fs::write(dir.join("look-version"), format!("{}\n", crate::camera_preview::LOOK_VERSION)).unwrap();
+    assert!(!crate::smart::look_checked(&dir));
+    crate::cmd::previews::refresh_stale_smart_previews(&mut s).unwrap().join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(std::fs::read(&file).unwrap() == lossless, "the Lossless proxy is untouched");
+    assert!(crate::smart::look_checked(&dir));
+    let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
 
@@ -2398,7 +2538,7 @@ fn malformed_smart_preview_look_versions_are_handled() {
     for bad in [json!("1"), json!(-1), json!(1.5), json!(null), json!([]), json!({}), json!(true), json!(1e30), json!(-0.0)] {
         let shown = bad.to_string();
         edit_smart_header(&file, |h| h["look_version"] = bad);
-        assert!(crate::smart::is_valid(&file), "{shown}");
+        assert!(crate::smart::is_complete(&file), "{shown}");
         assert!(crate::smart::is_stale(&file), "{shown} counts as version 0");
         assert!(crate::smart::decode(&std::fs::read(&file).unwrap()).is_ok(), "{shown}");
     }

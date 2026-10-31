@@ -317,5 +317,35 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "Destination: {path}": "Cíl: {path}",
+  "Estimated total size: {size}": "Odhadovaná celková velikost: {size}",
+  "Free space: {size}": "Volné místo: {size}",
+  "Smart preview folder change failed: {error}": "Změna složky inteligentních náhledů se nezdařila: {error}",
+  "could not check smart preview storage: {e}": "úložiště inteligentních náhledů nelze zkontrolovat: {e}",
+  "free space is unavailable for {path} on this platform": "na této platformě nelze zjistit volné místo pro {path}",
+  "Photos: {count}": {
+    "one": "Fotografie: {count}",
+    "few": "Fotografie: {count}",
+    "many": "Fotografie: {count}",
+    "other": "Fotografie: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "Inteligentní náhledy: {count} · {size:.1} MiB",
+    "few": "Inteligentní náhledy: {count} · {size:.1} MiB",
+    "many": "Inteligentní náhledy: {count} · {size:.1} MiB",
+    "other": "Inteligentní náhledy: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". Ponechané existující náhledy: {count}",
+    "few": ". Ponechané existující náhledy: {count}",
+    "many": ". Ponechané existující náhledy: {count}",
+    "other": ". Ponechané existující náhledy: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}.",
+    "few": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}.",
+    "many": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}.",
+    "other": "Složka inteligentních náhledů byla změněna. Neodstraněné zdrojové soubory: {count}."
+  }
 }
