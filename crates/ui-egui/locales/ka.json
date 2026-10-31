@@ -3659,5 +3659,20 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "Open in Compare": "შედარებაში გახსნა",
+  "Open in Survey": "მიმოხილვაში გახსნა",
+  "Edit Settings": "რედაქტირების პარამეტრები",
+  "Rotate & Flip": "შემობრუნება და არეკვლა",
+  "Copy File Path": "ფაილის მისამართის კოპირება",
+  "Copied the file path": "ფაილის მისამართი დაკოპირდა",
+  "The selected photos have no file on disk": "არჩეულ ფოტოებს დისკზე ფაილი არ აქვთ",
+  "Select 2 or more photos": "აირჩიეთ 2 ან მეტი ფოტო",
+  "Copy edit settings first": "ჯერ დააკოპირეთ რედაქტირების პარამეტრები",
+  "Copy metadata first": "ჯერ დააკოპირეთ მეტამონაცემები",
+  "This version of LightCraft can't open the file manager": "LightCraft-ის ამ ვერსიას ფაილების მენეჯერის გახსნა არ შეუძლია",
+  "This photo has no file on disk": "ამ ფოტოს დისკზე ფაილი არ აქვს",
+  "This photo is not in a folder of the library": "ეს ფოტო ბიბლიოთეკის საქაღალდეში არ არის",
+  "Opening other programs needs the desktop app": "სხვა პროგრამების გასახსნელად საჭიროა სამუშაო მაგიდის აპი",
+  "Only a photo file LightCraft reads can be opened this way": "ასე მხოლოდ ისეთი ფოტოს ფაილი იხსნება, რომელსაც LightCraft კითხულობს"
 }

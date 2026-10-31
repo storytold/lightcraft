@@ -320,5 +320,6 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "Copied {n} file paths": "{n} jalur file disalin"
 }

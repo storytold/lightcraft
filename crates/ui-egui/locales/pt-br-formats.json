@@ -317,5 +317,6 @@
   "Panel layout could not be restored: {error}": "Não foi possível restaurar a disposição dos painéis: {error}",
   "Panel move was not applied: {error}": "A movimentação do painel não foi aplicada: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
+  "Copied {n} file paths": "{n} caminhos de arquivo copiados"
 }

@@ -2684,5 +2684,20 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "Open in Compare": "Mở so sánh",
+  "Open in Survey": "Mở khảo sát",
+  "Edit Settings": "Cài đặt chỉnh sửa",
+  "Rotate & Flip": "Xoay và lật",
+  "Copy File Path": "Sao chép đường dẫn tệp",
+  "Copied the file path": "Đã sao chép đường dẫn tệp",
+  "The selected photos have no file on disk": "Các ảnh đã chọn không có tệp trên đĩa",
+  "Select 2 or more photos": "Chọn từ 2 ảnh trở lên",
+  "Copy edit settings first": "Hãy sao chép cài đặt chỉnh sửa trước",
+  "Copy metadata first": "Hãy sao chép siêu dữ liệu trước",
+  "This version of LightCraft can't open the file manager": "Phiên bản LightCraft này không mở được trình quản lý tệp",
+  "This photo has no file on disk": "Ảnh này không có tệp trên đĩa",
+  "This photo is not in a folder of the library": "Ảnh này không nằm trong thư mục của thư viện",
+  "Opening other programs needs the desktop app": "Mở chương trình khác cần ứng dụng máy tính",
+  "Only a photo file LightCraft reads can be opened this way": "Chỉ mở được theo cách này tệp ảnh mà LightCraft đọc được"
 }
