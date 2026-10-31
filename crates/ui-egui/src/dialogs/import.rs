@@ -8,7 +8,7 @@
 //! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
 //! one undo step.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_engine::import::{
     ImportCandidate, ImportUprightMode, ImportWarning, ImportWarningCode, ScanInput, ScanOutput, ScanProgress, scan_with,
 };
@@ -29,9 +29,11 @@ mod task;
 #[cfg(test)]
 pub(crate) use body::grid_height;
 #[cfg(test)]
+pub(crate) use body::thumb_edge;
+#[cfg(test)]
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
-pub(crate) use body::{DIALOG_SIZE, note_dialog_bottom};
+pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
 pub use scan::{ScanTask, browse, open, poll_scan, running};
@@ -195,6 +197,13 @@ impl ImportDialog {
             }
         }
         self.last_clicked = Some(i);
+    }
+    /// How many of the checked files come back as the photo Recently Deleted holds: the import restores
+    /// those without copying or moving their files (only "Import as new" imports them like any other file).
+    pub fn restored_count(&self) -> usize {
+        let restoring = self.on_deleted != "fresh";
+        let checked = self.checked.iter().enumerate().filter(|(i, on)| **on && self.importable(*i));
+        checked.filter(|(i, _)| restoring && self.is_trashed(*i)).count()
     }
     pub fn selected_paths(&self) -> Vec<String> {
         self.candidates
