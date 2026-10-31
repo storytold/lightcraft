@@ -104,9 +104,14 @@ fn base64_encode(bytes: &[u8]) -> String {
 fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
     let (mut acc, mut bits) = (0u32, 0u32);
+    let mut padded = false;
     for c in s.bytes().filter(|c| !c.is_ascii_whitespace()) {
         if c == b'=' {
-            break;
+            padded = true;
+            continue;
+        }
+        if padded {
+            return None;
         }
         let v = B64.iter().position(|b| *b == c)? as u32;
         acc = (acc << 6) | v;
@@ -116,6 +121,9 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
             out.push((acc >> bits) as u8);
             acc &= (1 << bits) - 1;
         }
+    }
+    if bits == 6 {
+        return None;
     }
     Some(out)
 }
@@ -133,6 +141,10 @@ mod tests {
         assert_eq!(base64_encode(b"Man"), "TWFu");
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert!(base64_decode("TW!u").is_none());
+        assert!(base64_decode("Z").is_none());
+        assert!(base64_decode("Zm9vY").is_none());
+        assert!(base64_decode("Zg==!!!not-base64").is_none());
+        assert_eq!(base64_decode("Zg==\n").unwrap(), b"f");
     }
 
     #[test]

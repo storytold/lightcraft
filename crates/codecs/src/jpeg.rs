@@ -24,6 +24,8 @@ pub(crate) struct Markers {
     pub exif_offset: usize,
     pub xmp: Option<String>,
     pub icc: Option<Vec<u8>>,
+    /// An ICC_PROFILE APP2 segment was present but its sequence was invalid.
+    pub icc_invalid: bool,
     pub adobe_transform: Option<u8>,
     /// Offset of the MPF TIFF header within the file and its bytes.
     pub mpf: Option<(usize, Vec<u8>)>,
@@ -45,7 +47,8 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
         return None;
     }
     let mut m = Markers::default();
-    let mut icc_chunks: Vec<(u8, &[u8])> = Vec::new();
+    let mut icc_chunks: [Option<&[u8]>; 255] = [None; 255];
+    let mut icc_total = None;
     let mut p = 2;
     while p + 4 <= b.len() {
         if b[p] != 0xFF {
@@ -73,9 +76,11 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
         if len < 2 {
             return None;
         }
-        let start = p + 4;
-        let end = (p + 2 + len).min(b.len());
-        let seg = &b[start..end];
+        let start = p.checked_add(4)?;
+        let declared_end = p.checked_add(2)?.checked_add(len)?;
+        let complete = declared_end <= b.len();
+        let end = declared_end.min(b.len());
+        let seg = b.get(start..end)?;
         match marker {
             0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC && seg.len() >= 6 && m.components == 0 => {
                 m.precision = seg[0];
@@ -96,8 +101,30 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
                 }
             }
             0xE2 => {
-                if seg.starts_with(b"ICC_PROFILE\0") && seg.len() >= 14 {
-                    icc_chunks.push((seg[12], &seg[14..]));
+                if seg.starts_with(b"ICC_PROFILE\0") {
+                    if !complete || seg.len() < 14 {
+                        m.icc_invalid = true;
+                    } else if let (Some(&sequence), Some(&total)) = (seg.get(12), seg.get(13)) {
+                        if sequence == 0 || total == 0 || sequence > total || icc_total.is_some_and(|expected| expected != total) {
+                            m.icc_invalid = true;
+                        } else {
+                            icc_total = Some(total);
+                            let Some(slot) = icc_chunks.get_mut(usize::from(sequence - 1)) else {
+                                m.icc_invalid = true;
+                                p = declared_end;
+                                continue;
+                            };
+                            if slot.is_some() {
+                                m.icc_invalid = true;
+                            } else if let Some(data) = seg.get(14..) {
+                                *slot = Some(data);
+                            } else {
+                                m.icc_invalid = true;
+                            }
+                        }
+                    } else {
+                        m.icc_invalid = true;
+                    }
                 } else if seg.starts_with(b"MPF\0") && m.mpf.is_none() {
                     m.mpf = Some((start + 4, seg[4..].to_vec()));
                 } else if let Some(p) = seg.strip_prefix(crate::gainmap::ISO_URN)
@@ -111,11 +138,32 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
             }
             _ => {}
         }
-        p += 2 + len;
+        p = declared_end;
     }
-    if !icc_chunks.is_empty() {
-        icc_chunks.sort_by_key(|c| c.0);
-        m.icc = Some(icc_chunks.iter().flat_map(|c| c.1.iter().copied()).collect());
+    if let Some(total) = icc_total {
+        let mut profile_len = 0usize;
+        for chunk in icc_chunks.iter().take(usize::from(total)) {
+            let Some(bytes) = chunk else {
+                m.icc_invalid = true;
+                break;
+            };
+            let Some(next_len) = profile_len.checked_add(bytes.len()) else {
+                m.icc_invalid = true;
+                break;
+            };
+            profile_len = next_len;
+        }
+        let maximum_len = usize::from(total).checked_mul(65_519);
+        if maximum_len.is_none_or(|maximum| profile_len > maximum) {
+            m.icc_invalid = true;
+        }
+        if !m.icc_invalid {
+            let mut profile = Vec::with_capacity(profile_len);
+            for bytes in icc_chunks.iter().take(usize::from(total)).flatten() {
+                profile.extend_from_slice(bytes);
+            }
+            m.icc = Some(profile);
+        }
     }
     Some(m)
 }
@@ -131,6 +179,7 @@ const MAX_APP1: u32 = 128;
 /// type or component count, or when its markers don't run to an end-of-image marker after the
 /// image data (a truncated file). Damage *inside* the entropy-coded data can't be seen this way.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
+    let bytes = &*without_sef_trailer(bytes);
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
         return Err(Error::Malformed(F, "no frame header".into()));
@@ -177,7 +226,62 @@ fn reaches_eoi(b: &[u8]) -> bool {
     }
 }
 
+/// A Samsung panorama whose scan runs straight into its SEF trailer, with no EOI marker (issue
+/// #3350), as the file it stands for: the bytes before the trailer's earliest data block plus an
+/// EOI. Every other file, a genuinely truncated one included, is borrowed unchanged.
+fn without_sef_trailer(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    use std::borrow::Cow;
+    // The trailer is checked first: it reads only the file's last bytes, not the scan data.
+    let Some(image) = sef_image_end(bytes).and_then(|end| bytes.get(..end)) else { return Cow::Borrowed(bytes) };
+    // the image before the trailer: an FF D9 inside the SEF data doesn't end the scan
+    if reaches_eoi(image) {
+        return Cow::Borrowed(bytes);
+    }
+    let mut fixed = Vec::with_capacity(image.len().saturating_add(2));
+    fixed.extend_from_slice(image);
+    fixed.extend_from_slice(&[0xFF, 0xD9]);
+    // The cut must leave the scan data, not a segment or anything before the first scan, open.
+    let in_scan = parse_markers(&fixed).is_some_and(|m| m.first_scan_components > 0) && reaches_eoi(&fixed);
+    if in_scan { Cow::Owned(fixed) } else { Cow::Borrowed(bytes) }
+}
+
+/// Where the image ends in a file carrying a Samsung SEF trailer: the start of its earliest data
+/// block. The trailer is the file's last bytes: `SEFH`, a u32 LE version and entry count, 12-byte
+/// entries (u16 padding, u16 type, u32 LE offset of the block back from `SEFH`, u32 LE length),
+/// then the u32 LE length of that directory and `SEFT`. Each block starts with the same padding
+/// and type as its entry. `None` unless every entry's block is nonempty, starts with its entry's
+/// type and lies inside the file, before `SEFH`.
+fn sef_image_end(b: &[u8]) -> Option<usize> {
+    let le32 = |at: usize| b.get(at..at.checked_add(4)?)?.try_into().ok().map(|v| u32::from_le_bytes(v) as usize);
+    let tail = b.len().checked_sub(8)?;
+    if b.get(tail.checked_add(4)?..)? != b"SEFT" {
+        return None;
+    }
+    let dir = tail.checked_sub(le32(tail)?)?;
+    if b.get(dir..dir.checked_add(4)?)? != b"SEFH" {
+        return None;
+    }
+    let count = le32(dir.checked_add(8)?)?;
+    let entries = dir.checked_add(12)?;
+    if count == 0 || count > tail.checked_sub(entries)? / 12 {
+        return None;
+    }
+    let mut start = dir;
+    for i in 0..count {
+        let entry = entries.checked_add(i.checked_mul(12)?)?;
+        let block = dir.checked_sub(le32(entry.checked_add(4)?)?)?;
+        let len = le32(entry.checked_add(8)?)?;
+        let kind = |at: usize| b.get(at.checked_add(2)?..at.checked_add(4)?);
+        if len < 4 || block.checked_add(len)? > dir || kind(block)? != kind(entry)? {
+            return None;
+        }
+        start = start.min(block);
+    }
+    Some(start)
+}
+
 pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
+    let bytes = &*without_sef_trailer(bytes);
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
         return Err(Error::Malformed(F, "no frame header".into()));
@@ -201,8 +305,10 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
     };
     // A raw container may carry the colour declaration of an otherwise untagged preview.
     // Apply it before linearization/resizing; existing JPEG metadata always wins.
-    let hint = fallback.filter(|_| m.icc.is_none() && m.exif.is_none()).map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
-    let meta = Meta { icc: m.icc, exif: m.exif, xmp: m.xmp, hint, ..Default::default() };
+    let hint = fallback
+        .filter(|_| m.icc.is_none() && !m.icc_invalid && m.exif.is_none())
+        .map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
+    let meta = Meta { icc: m.icc, icc_invalid: m.icc_invalid, exif: m.exif, xmp: m.xmp, hint, ..Default::default() };
     finish(F, raw, meta, (m.width, m.height), opts)
 }
 
@@ -448,6 +554,110 @@ mod tests {
             assert_eq!(with.orientation, expected.orientation);
         }
         assert!(crate::decode_jpeg_with_fallback(b"bad JPEG", DecodeOptions::default(), NamedSpace::AdobeRgb).is_err());
+    }
+
+    fn app2_icc(sequence: u8, total: u8, data: &[u8]) -> Vec<u8> {
+        let mut payload = b"ICC_PROFILE\0".to_vec();
+        payload.extend_from_slice(&[sequence, total]);
+        payload.extend_from_slice(data);
+        let mut segment = vec![0xff, 0xe2];
+        segment.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&payload);
+        segment
+    }
+
+    fn jpeg_with_icc_chunks(chunks: &[Vec<u8>]) -> Vec<u8> {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = [180, 60, 40, 180, 60, 40, 180, 60, 40, 180, 60, 40];
+        let base = encode_jpeg(&EncodeImage::new(2, 2, 3, Samples::U8(&pixels)), 100, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let mut jpeg = base.get(..2).unwrap_or_default().to_vec();
+        for chunk in chunks {
+            jpeg.extend_from_slice(chunk);
+        }
+        jpeg.extend_from_slice(base.get(2..).unwrap_or_default());
+        jpeg
+    }
+
+    #[test]
+    fn jpeg_icc_accepts_reordered_chunks_and_preserves_pixels() {
+        use crate::{NamedSpace, SpaceOrigin, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let (first, second) = profile.split_at(profile.len() / 2);
+        let single = jpeg_with_icc_chunks(&[app2_icc(1, 1, &profile)]);
+        let reordered = jpeg_with_icc_chunks(&[app2_icc(2, 2, second), app2_icc(1, 2, first)]);
+
+        let one = crate::decode(&single, DecodeOptions::default()).unwrap();
+        let two = crate::decode(&reordered, DecodeOptions::default()).unwrap();
+        assert_eq!(one.icc.as_deref(), Some(profile.as_slice()));
+        assert_eq!(two.icc.as_deref(), Some(profile.as_slice()));
+        assert!(!parse_markers(&reordered).unwrap().icc_invalid);
+        assert_eq!(one.space, two.space);
+        assert_eq!(two.space.origin, SpaceOrigin::IccMatrixTrc);
+        let (a, b) = (one.to_working(), two.to_working());
+        assert_eq!(a.data.len(), b.data.len());
+        for (left, right) in a.data.iter().zip(&b.data) {
+            assert!(left.iter().zip(right).all(|(x, y)| (x - y).abs() < 0.00001), "{left:?} != {right:?}");
+        }
+    }
+
+    #[test]
+    fn jpeg_icc_rejects_incoherent_chunks_and_uses_unsupported_fallback() {
+        use crate::{NamedSpace, SpaceOrigin, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let (first, second) = profile.split_at(profile.len() / 2);
+        let base = jpeg_with_icc_chunks(&[]);
+        let reference = crate::decode(&base, DecodeOptions::default()).unwrap();
+        let cases = [
+            ("missing", vec![app2_icc(1, 2, &profile)]),
+            ("duplicate", vec![app2_icc(1, 2, first), app2_icc(1, 2, second)]),
+            ("zero sequence", vec![app2_icc(0, 1, &profile)]),
+            ("zero total", vec![app2_icc(1, 0, &profile)]),
+            ("out of range", vec![app2_icc(2, 1, &profile)]),
+            ("gap", vec![app2_icc(1, 3, first), app2_icc(3, 3, second)]),
+            ("inconsistent totals", vec![app2_icc(1, 2, first), app2_icc(2, 3, second)]),
+            ("short header", {
+                let mut segment = vec![0xff, 0xe2];
+                segment.extend_from_slice(&15u16.to_be_bytes());
+                segment.extend_from_slice(b"ICC_PROFILE\0\x01");
+                vec![segment]
+            }),
+        ];
+        for (name, chunks) in cases {
+            let jpeg = jpeg_with_icc_chunks(&chunks);
+            let markers = parse_markers(&jpeg).unwrap();
+            let decoded = crate::decode(&jpeg, DecodeOptions::default()).unwrap();
+            assert_eq!(decoded.space.origin, SpaceOrigin::IccUnsupported, "{name}: invalid profile must not be applied");
+            assert!(markers.icc.is_none(), "{name}: invalid ICC must not be assembled");
+            assert!(markers.icc_invalid, "{name}: invalid ICC presence must be retained");
+            assert_eq!(decoded.icc, None, "{name}: invalid ICC bytes must not escape decode");
+            assert_eq!(decoded.space.origin, SpaceOrigin::IccUnsupported, "{name}");
+            assert_eq!(decoded.space.named, Some(NamedSpace::Srgb), "{name}");
+            assert_eq!(decoded.to_working(), reference.to_working(), "{name}: fallback pixels");
+        }
+    }
+
+    #[test]
+    fn jpeg_icc_invalid_sequence_prevents_raw_colour_hint() {
+        use crate::{NamedSpace, SpaceOrigin, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let jpeg = jpeg_with_icc_chunks(&[app2_icc(1, 2, &profile)]);
+        let decoded = crate::decode_jpeg_with_fallback(&jpeg, DecodeOptions::default(), NamedSpace::AdobeRgb).unwrap();
+        assert_eq!(decoded.space.origin, SpaceOrigin::IccUnsupported);
+        assert_eq!(decoded.space.named, Some(NamedSpace::Srgb));
+    }
+
+    #[test]
+    fn jpeg_icc_rejects_truncated_app2_segment() {
+        use crate::{NamedSpace, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let mut segment = app2_icc(1, 1, &profile);
+        let declared = u16::from_be_bytes([segment[2], segment[3]]).saturating_add(1);
+        segment[2..4].copy_from_slice(&declared.to_be_bytes());
+        let mut jpeg = vec![0xff, 0xd8];
+        jpeg.extend_from_slice(&segment);
+        let markers = parse_markers(&jpeg).unwrap();
+        assert!(markers.icc.is_none());
+        assert!(markers.icc_invalid);
     }
 
     #[test]
