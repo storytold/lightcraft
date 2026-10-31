@@ -2,6 +2,14 @@
 
 ## 2026-10-30
 
+### A Lightroom catalog's edits win over the settings saved in its raws
+- Importing a Lightroom Classic catalog gives every photo it adds, and every photo only browsed and not changed
+  since, the catalog's develop settings. Before, a raw whose file held XMP settings (embedded in a DNG, or in a
+  `.xmp` sidecar) kept those instead, so any edit made in Lightroom since its metadata was last saved to the file
+  was lost, and the import report counted the photo as one whose existing edits it had preserved. A photo edited in
+  the library still keeps its settings, and so does a browsed one changed in any way since browsing (a rating or a
+  keyword counts), unless `library.importLightroom` is run with `updateExisting`.
+
 ### A keyboard shortcut for Clear Color Label
 - Clear Color Label is now a command of its own in Help ▸ Keyboard Shortcuts, so it can have a key like Set Rating or
   Set Flag; before, only the red, yellow, green and blue labels (6–9) had keys and clearing a label was menu-only. It has

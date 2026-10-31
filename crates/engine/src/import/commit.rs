@@ -212,6 +212,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     ops.push(Op::SetLocal { id, local: false });
                 }
                 report.imported.push(id.0);
+                if s.catalog.photo(id).is_some_and(|p| !p.untouched_local()) {
+                    report.promoted_changed.push(id.0);
+                }
             }
             PreparedItem::Duplicate { path, existing, reason, hash, file } => {
                 let existing = existing.or_else(|| {
