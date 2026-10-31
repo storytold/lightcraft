@@ -616,3 +616,238 @@ fn the_analysis_cache_tells_lenses_and_optics_apart() {
     assert!(!off.section_enabled("optics"));
     assert_ne!(key(&src, &plain, &s), key(&src, &plain, &off), "the optics section off");
 }
+
+/// A ceremony aisle under a pavilion, shot from below and slightly rolled. Two thick white posts,
+/// left and right, clipped by the frame's top and bottom, converge; a level hedge line; in the middle, people and
+/// a dress whose edges are near-vertical but point nowhere in common; tree texture behind. Upright Vertical / Auto
+/// did nothing on such a photo.
+fn pavilion(w: usize, h: usize, fwd: lightcraft_geom::Homography) -> Rgb32f {
+    let l = w.max(h) as f64 / 2.0;
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    // cheap deterministic noise
+    let noise = |x: f64, y: f64| {
+        let n = ((x * 12.9898 + y * 78.233).sin() * 43758.5453).fract().abs();
+        n as f32
+    };
+    synth(
+        w,
+        h,
+        move |p| {
+            let q = fwd.apply(Point::new((p.x - cx) / l, (p.y - cy) / l));
+            Point::new(q.x, q.y)
+        },
+        move |q| {
+            let (x, y) = (q.x, q.y);
+            // posts: thick, bright, the whole height
+            for px in [-0.78, 0.8] {
+                if (x - px).abs() < 0.045 {
+                    return [0.95; 3];
+                }
+            }
+            // people in the middle: tilted shapes (a dress, suits), near-vertical edges in every direction
+            let people: [(f64, f64, f64, f64, f32); 6] = [
+                (-0.32, 0.25, 0.09, 9.0, 0.08),
+                (-0.12, 0.2, 0.13, -11.0, 0.92),
+                (0.05, 0.22, 0.08, 14.0, 0.1),
+                (0.22, 0.28, 0.07, -7.0, 0.85),
+                (0.38, 0.3, 0.06, 18.0, 0.15),
+                (-0.5, 0.33, 0.05, -16.0, 0.12),
+            ];
+            for (px, py, half_w, tilt, v) in people {
+                let (s, c) = tilt.to_radians().sin_cos();
+                let (dx, dy) = (x - px, y - py);
+                let (u, t) = (dx * c - dy * s, dx * s + dy * c);
+                // a body from py − 0.35 (head) to py + 0.35, wider at the bottom (a dress)
+                if t.abs() < 0.35 && u.abs() < half_w * (1.0 + 0.8 * (t + 0.35)) {
+                    return [v; 3];
+                }
+            }
+            if y < -0.12 {
+                // sky (bright, but not as bright as the white posts)
+                [0.62 - 0.05 * y.abs() as f32; 3]
+            } else if y < 0.08 {
+                // trees: dark, textured
+                [0.18 + 0.12 * noise((x * 90.0).floor(), (y * 90.0).floor()); 3]
+            } else {
+                // lawn, below a level hedge line
+                [0.42 + 0.06 * noise((x * 140.0).floor(), (y * 140.0).floor()); 3]
+            }
+        },
+    )
+}
+
+#[test]
+fn upright_corrects_converging_posts_among_people() {
+    let (w, h) = (900usize, 600usize);
+    let shot = lightcraft_develop::Geometry { vertical: 30.0, rotate: -1.5, ..Default::default() };
+    let src = pavilion(w, h, crate::transform::manual(&shot));
+    let a = crate::upright::analyze_source(&src, &SourceInfo::default(), &DevelopSettings::default());
+    assert!(a.vertical_vp.is_some(), "the posts give a vertical vanishing point: {:?}", a.vertical_why);
+    // the middle of the bright post in a quarter of the frame, on a row (centroid of the white pixels)
+    let post_x = |img: &Rgba8, y: usize, right: bool| {
+        let (a, b) = if right { (img.width * 3 / 4, img.width) } else { (0, img.width / 4) };
+        let (mut s, mut n) = (0.0f64, 0.0f64);
+        for x in a..b {
+            if img.get(x, y)[1] > 225 {
+                s += x as f64;
+                n += 1.0;
+            }
+        }
+        s / n.max(1.0)
+    };
+    let lean = |img: &Rgba8, right: bool| post_x(img, img.height / 6, right) - post_x(img, img.height * 5 / 6, right);
+    let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    assert!(lean(&raw, false).abs() > 8.0 && lean(&raw, true).abs() > 8.0, "the posts lean in the photo: {} {}", lean(&raw, false), lean(&raw, true));
+    for mode in [Upright::Vertical, Upright::Auto] {
+        let img = upright_render(&src, mode);
+        for right in [false, true] {
+            assert!(
+                lean(&img, right).abs() < 2.5,
+                "{mode:?}: the {} post still leans {} px",
+                if right { "right" } else { "left" },
+                lean(&img, right)
+            );
+        }
+    }
+}
+
+/// A ceremony under a white gazebo, shot level with a long lens but rolled 1.6°
+/// (portrait). Two white posts stand up the whole frame; the deck's boards run away to the horizon (they meet
+/// inside the photo); two drapes hang diagonally from the roof; a couple stands between the posts. Upright
+/// Vertical said "the straight lines point in different directions" and did nothing.
+fn gazebo(w: usize, h: usize, fwd: lightcraft_geom::Homography) -> Rgb32f {
+    let l = w.max(h) as f64 / 2.0;
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    synth(
+        w,
+        h,
+        move |p| fwd.apply(Point::new((p.x - cx) / l, (p.y - cy) / l)),
+        move |q| {
+            let (x, y) = (q.x, q.y);
+            for px in [-0.47, 0.47] {
+                if (x - px).abs() < 0.035 {
+                    return [0.95; 3];
+                }
+            }
+            // drapes from the roof's middle out and down, thin bright bands
+            for (x0, x1) in [(-0.05, -0.3), (0.05, 0.3)] {
+                let (y0, y1) = (-1.0, 0.25);
+                if y > y0 && y < y1 {
+                    let t = (y - y0) / (y1 - y0);
+                    if (x - (x0 + (x1 - x0) * t)).abs() < 0.02 {
+                        return [0.7; 3];
+                    }
+                }
+            }
+            // the couple: a dark suit and a white gown, a little tilted
+            for (px, half_w, tilt, v) in [(-0.1, 0.07, 6.0f64, 0.85f32), (0.1, 0.06, -5.0, 0.08)] {
+                let (s, c) = tilt.to_radians().sin_cos();
+                let (dx, dy) = (x - px, y - 0.25);
+                let (u, t) = (dx * c - dy * s, dx * s + dy * c);
+                if t.abs() < 0.4 && u.abs() < half_w * (1.0 + 0.8 * (t + 0.4)) {
+                    return [v; 3];
+                }
+            }
+            if y > 0.3 {
+                // deck boards running to a point on the horizon (inside the photo)
+                let a = x.atan2(y + 0.1);
+                if (a * 14.0).rem_euclid(1.0) < 0.12 {
+                    return [0.15; 3];
+                }
+                return [0.55; 3];
+            }
+            // sky, a railing line
+            if (y - 0.05).abs() < 0.01 { [0.3; 3] } else { [0.62; 3] }
+        },
+    )
+}
+
+#[test]
+fn upright_vertical_follows_the_posts_not_the_deck_or_the_drapes() {
+    let (w, h) = (600usize, 900usize);
+    let shot = lightcraft_develop::Geometry { rotate: 1.6, ..Default::default() };
+    let src = gazebo(w, h, crate::transform::manual(&shot));
+    let a = crate::upright::analyze_source(&src, &SourceInfo::default(), &DevelopSettings::default());
+    assert!(a.vertical_vp.is_some(), "the posts give a vertical vanishing point: {:?}", a.vertical_why);
+    let post_x = |img: &Rgba8, y: usize, right: bool| {
+        let (a, b) = if right { (img.width * 3 / 4, img.width) } else { (0, img.width / 4) };
+        let (mut s, mut n) = (0.0f64, 0.0f64);
+        for x in a..b {
+            if img.get(x, y)[1] > 235 {
+                s += x as f64;
+                n += 1.0;
+            }
+        }
+        s / n.max(1.0)
+    };
+    let lean = |img: &Rgba8, right: bool| post_x(img, img.height / 8, right) - post_x(img, img.height * 5 / 8, right);
+    let raw = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    assert!(lean(&raw, false).abs() > 6.0 && lean(&raw, true).abs() > 6.0, "the posts lean: {} {}", lean(&raw, false), lean(&raw, true));
+    for mode in [Upright::Vertical, Upright::Auto] {
+        let img = upright_render(&src, mode);
+        for right in [false, true] {
+            assert!(
+                lean(&img, right).abs() < 2.0,
+                "{mode:?}: the {} post still leans {} px",
+                if right { "right" } else { "left" },
+                lean(&img, right)
+            );
+        }
+    }
+}
+
+/// Do no harm: a gown's folds spreading to the floor point at a far point too, but they are short and there is
+/// no post, wall or door among them: Upright Vertical leaves such a photo alone.
+#[test]
+fn upright_vertical_leaves_a_gown_without_structure_alone() {
+    let (w, h) = (600usize, 900usize);
+    let l = 450.0;
+    let src = synth(
+        w,
+        h,
+        |p| Point::new((p.x - 300.0) / l, (p.y - 450.0) / l),
+        |q| {
+            let (x, y) = (q.x, q.y);
+            // the gown: from the waist (y = −0.1) to the floor (y = 0.9), widening
+            if y > -0.1 && y < 0.9 && x.abs() < 0.08 + 0.45 * (y + 0.1) {
+                // folds: soft, wavy dark lines that all aim at a point far below (y = 3)
+                let a = x.atan2(3.0 - y) + 0.012 * (y * 23.0).sin();
+                let band = (a * 40.0).rem_euclid(1.0) < 0.15;
+                let piece = ((y * 9.0).floor() as i64 + (a * 40.0).floor() as i64).rem_euclid(3) == 0;
+                return if band && piece { [0.55; 3] } else { [0.92; 3] };
+            }
+            // a plain, soft background
+            [0.35 + 0.05 * (x as f32); 3]
+        },
+    );
+    let a = crate::upright::analyze_source(&src, &SourceInfo::default(), &DevelopSettings::default());
+    assert!(a.vertical_vp.is_none(), "folds are not structure: {:?}", a.vertical_vp);
+    assert!(crate::upright::shortfall(Upright::Vertical, &a).is_some(), "and it says why");
+}
+
+/// Auto's note follows what Auto did: a tilted horizon it won't fix (over 5°) and a vertical correction too steep
+/// to make both say why, while a level horizon it accepts says nothing.
+#[test]
+fn upright_auto_says_why_whenever_it_leaves_the_photo_alone() {
+    use crate::upright::{Analysis, Reject, Segment, shortfall, solve};
+    use lightcraft_develop::Upright;
+    use lightcraft_geom::Homography;
+    let line = |deg: f64, y: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        Segment { a: Point::new(-0.4 * c, y - 0.4 * s), b: Point::new(0.4 * c, y + 0.4 * s) }
+    };
+    // a level horizon: Auto accepts a zero-degree correction, so it has nothing to explain
+    let level = Analysis { horizontal: vec![line(0.0, -0.2), line(0.0, 0.2)], ..Analysis::default() };
+    assert_eq!(shortfall(Upright::Auto, &level), None);
+    // a horizon 10° off: Auto leaves it alone, and says so
+    let tilted = Analysis { horizontal: vec![line(10.0, -0.2), line(10.0, 0.2)], ..Analysis::default() };
+    assert_eq!(solve(Upright::Auto, &tilted), Homography::IDENTITY);
+    assert_eq!(shortfall(Upright::Auto, &tilted), Some(Reject::TooFew.message()));
+    // lines meeting just below the photo: too steep for Auto, which says so; Vertical still corrects them
+    let steep = Analysis { vertical_vp: Some([0.0, 0.3, 1.0]), ..Analysis::default() };
+    assert_eq!(solve(Upright::Auto, &steep), Homography::IDENTITY);
+    assert_eq!(shortfall(Upright::Auto, &steep), Some(Reject::TooSteep.message()));
+    assert_ne!(solve(Upright::Vertical, &steep), Homography::IDENTITY);
+    // Level with no lines at all says there are too few, not that they disagree
+    assert_eq!(shortfall(Upright::Level, &Analysis::default()), Some(Reject::TooFew.message()));
+}
