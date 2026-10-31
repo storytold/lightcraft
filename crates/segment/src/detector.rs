@@ -333,6 +333,31 @@ pub fn merge(out: &Output, threshold: f32) -> Option<Prediction> {
     merged.map(|logits| Prediction { logits, score: best })
 }
 
+/// One detected instance: its mask logits (`MASK_SIDE²`), score (as for [`merge`]) and box.
+#[derive(Clone, Debug)]
+pub struct Instance {
+    pub logits: Vec<f32>,
+    pub score: f32,
+    /// (x0, y0, x1, y1), normalized.
+    pub bbox: [f32; 4],
+}
+
+/// The instances of `out` scoring above `threshold`, each on its own (best first).
+pub fn instances(out: &Output, threshold: f32) -> Result<Vec<Instance>> {
+    let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+    let presence = s(out.presence);
+    let mut found = Vec::new();
+    for (i, l) in out.logits.iter().enumerate() {
+        let score = s(*l) * presence;
+        if score > threshold {
+            let logits = to_vec(&out.masks.i(i)?)?;
+            found.push(Instance { logits, score, bbox: out.boxes.get(i).copied().unwrap_or([0.0, 0.0, 1.0, 1.0]) });
+        }
+    }
+    found.sort_by(|a, b| b.score.total_cmp(&a.score));
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
