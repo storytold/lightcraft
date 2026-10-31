@@ -305,5 +305,13 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Backed up the library to {}": "Biblioteket säkerhetskopierades till {}",
+  "The library was not backed up: {}": "Biblioteket säkerhetskopierades inte: {}",
+  "Restored the library. What it held before is in {}": "Biblioteket återställdes. Det som fanns i det tidigare finns i {}",
+  "The library was not restored: {}": "Biblioteket återställdes inte: {}",
+  "Older backups removed: {}": "Äldre säkerhetskopior borttagna: {}",
+  "Older backups that could not be removed: {}": "Äldre säkerhetskopior som inte kunde tas bort: {}",
+  "Folders of what restores replaced, removed: {}": "Mappar med det som återställningar ersatt, borttagna: {}",
+  "Folders of what restores replaced that could not be removed: {}": "Mappar med det som återställningar ersatt som inte kunde tas bort: {}"
 }

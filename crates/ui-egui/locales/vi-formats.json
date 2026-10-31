@@ -305,5 +305,13 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Backed up the library to {}": "Đã sao lưu thư viện vào {}",
+  "The library was not backed up: {}": "Thư viện chưa được sao lưu: {}",
+  "Restored the library. What it held before is in {}": "Đã khôi phục thư viện. Nội dung trước đó nằm trong {}",
+  "The library was not restored: {}": "Thư viện chưa được khôi phục: {}",
+  "Older backups removed: {}": "Đã xóa các bản sao lưu cũ: {}",
+  "Older backups that could not be removed: {}": "Các bản sao lưu cũ không thể xóa: {}",
+  "Folders of what restores replaced, removed: {}": "Đã xóa các thư mục chứa những gì lần khôi phục đã thay thế: {}",
+  "Folders of what restores replaced that could not be removed: {}": "Các thư mục chứa những gì lần khôi phục đã thay thế không thể xóa: {}"
 }
