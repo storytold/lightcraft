@@ -1,14 +1,5 @@
 # What's new in LightCraft
 
-## 2026-10-31
-
-### Shadows no longer brightens blocks beside lettering
-- Raising Shadows on a photo with dark lettering on a bright panel, such as the number on a bus, brightened rectangles
-  beside the letters: the gaps between them, their insides and the corners where they nearly touch, while the letters
-  themselves turned uneven. Highlights could do the same to light lettering on a darker panel. The gaps now keep the
-  panel's tone and the letters lift evenly. Photos on process 2 with Highlights or Shadows set change slightly in fine
-  detail such as lettering, grilles and foliage against the sky; nothing else changes.
-
 ## 2026-10-30
 
 ### A keyboard shortcut for Clear Color Label
