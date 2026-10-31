@@ -50,15 +50,43 @@ Overrides (read once at launch):
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
 - `LIGHTCRAFT_GPU_ADAPTER=<part of a card's name>` (any case, e.g. `4070`, `radeon`, `"rtx 4070 super"`):
-  the graphics card for GPU rendering, AI Denoise and the face models, on a machine with more than one
-  (`backend::pick_adapter`). The first hardware card whose name contains it wins, in wgpu's order;
-  software adapters (WARP, llvmpipe) never. A name that matches no card is logged
-  (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and
-  the default high-performance card is used. The window stays on the card that drives the screen,
-  and rendering runs on a device of its own on the chosen card (the photo is copied to the screen's
-  card); a build that lets rendering share the window's device does so only when the variable names
-  the window's card (`backend::may_adopt_window_device`). The log's `gpu: LIGHTCRAFT_GPU_ADAPTER=…: using …` line names the card
-  used. Handy to keep test runs or a long export off the card the screens hang on.
+  the graphics card for editing renders, AI Denoise and the face and mask models, on a machine with more
+  than one; it wins over the card chosen in Settings (below). The first usable card whose name contains it
+  wins, in wgpu's order; software adapters (WARP, llvmpipe) never. A name that matches no card is logged
+  (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and the
+  default choice is used. While it is set, Automatic uses no second card (agents and test runs stay on the
+  one card they name; `LIGHTCRAFT_GPU_HELPER` still names one outright). Handy to keep test runs or a long
+  export off the card the screens hang on.
+
+### Choosing the graphics card (two or more cards)
+
+Settings ▸ Performance ▸ **Graphics card for editing** (`gpuCard` in `ui.json`, `app.gpu {card}`) lists
+Automatic and every card that can render (`lightcraft_gpu::adapters`; `app.gpu` → `adapters`). A card is
+saved by its key, `dx12:10de:2f04:NVIDIA GeForce RTX 5070#1` (backend, PCI vendor and device ids, the
+driver's name, and `#n` for identical cards: `device_pci_bus_id` isn't unique on DX12), parsed leniently
+(text that isn't a key means Automatic). The editing card is, in order (`cards::resolve_card`):
+`LIGHTCRAFT_GPU_ADAPTER`, the saved card (exactly, else the same model under another `#n`), the card the
+screen is connected to (Automatic), wgpu's high-performance pick.
+
+- **Automatic and the screen's card** render on the window's own device: finished views are drawn without a
+  copy (*Drawing renders straight from the GPU*). **Another card** renders on a device of its own and the
+  loupe's renders come back as pixels and are uploaded to the screen's card (a few ms per draft). The
+  window itself always stays on the card that drives the display: drawing it on another card would make
+  Windows copy every frame.
+- **Changing it applies at once** (`lightcraft_gpu::set_card`): a thread builds the device and kernels on
+  the new card (FXC can take up to ~30 s) while renders keep using the current one; then they move over
+  (stages cached on the old device are dropped by generation) and a notice says "Photos now render on the
+  …". Switching back to Automatic renders on the window's device again. A switch that fails leaves
+  renders where they were, with a notice.
+- **A saved card that isn't there** (taken out, driver missing): Automatic renders, the choice is kept, and
+  a notice says so once per session ("The graphics card chosen in Settings (…) isn't available, so
+  LightCraft uses Automatic (…)"); Settings lists it as "(not found)". A chosen card that can't render
+  (device or kernels fail) falls back to Automatic the same way, then to the CPU as before.
+- **A crash while starting a chosen card** (the process dies in the driver): the crash marker names each
+  device being started (`[card=<key>; role=editing|helper]`, one line per driver-work scope running), so
+  the next launch drops only that choice — the editing card back to Automatic, or the second card off —
+  and keeps the GPU on (`apps/lightcraft/src/gpu_crash.rs` `gpu_crash_from`). A crash in any other driver work
+  (Automatic's card, listing the cards, AI kernels) turns GPU rendering off as before.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's

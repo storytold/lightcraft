@@ -315,19 +315,19 @@ fn memory_session_leaves_the_gpu_marker_and_folder_alone() {
     let _ = std::fs::remove_dir_all(&d);
     let m = d.join("gpu-init.marker");
     // nothing left behind: no notice, and the folder is not created
-    assert_eq!(gpu_crash_check_at(Some(m.clone()), true), None);
+    assert_eq!(gpu_crash_check_at(Some(m.clone()), true, ""), None);
     assert!(!d.exists(), "a --memory session must not create the settings folder");
     // a marker left by a crashed launch: reported, kept
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(&m, "GPU device creation started (backends METAL)").unwrap();
-    let notice = gpu_crash_check_at(Some(m.clone()), true).unwrap();
-    assert!(notice.contains("GPU rendering is now off"), "{notice}");
+    let crash = gpu_crash_check_at(Some(m.clone()), true, "").unwrap();
+    assert!(crash.gpu_off && crash.notice.contains("GPU rendering is now off"), "{crash:?}");
     assert!(m.exists(), "the marker stays for the next ordinary launch");
     // the next ordinary launch reports it once and removes it
-    assert!(gpu_crash_check_at(Some(m.clone()), false).is_some());
+    assert!(gpu_crash_check_at(Some(m.clone()), false, "").is_some());
     lightcraft_engine::gpu::backend::set_init_marker(None);
     assert!(!m.exists());
-    assert_eq!(gpu_crash_check_at(Some(m.clone()), false), None);
+    assert_eq!(gpu_crash_check_at(Some(m.clone()), false, ""), None);
     lightcraft_engine::gpu::backend::set_init_marker(None);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -375,6 +375,35 @@ fn gpu_crash_marker_is_reported_once() {
     assert!(notice.contains("GPU rendering is now off") && notice.contains("Use the GPU for rendering"), "{notice}");
     assert!(!m.exists());
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A crash while starting a card chosen for editing, or the second card, costs only that
+/// choice next time; any other crash in the driver turns the GPU off as before.
+#[test]
+fn a_crash_starting_a_chosen_card_drops_only_that_choice() {
+    let k4070 = "dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1";
+    let k5070 = "dx12:10de:2f04:NVIDIA GeForce RTX 5070#1";
+    let line =
+        |key: &str, role: &str| format!("GPU device and kernel creation (backends DX12) [card={key}; role={role}] started (unix time 1)
+");
+    // the card chosen for editing: back to Automatic, the GPU stays on
+    let c = gpu_crash_from(&line(k4070, "editing"), k4070);
+    assert!(!c.gpu_off && c.reset_card && !c.helper_off, "{c:?}");
+    assert!(c.notice.contains("NVIDIA GeForce RTX 4070 SUPER") && c.notice.contains("Graphics card for editing"), "{}", c.notice);
+    // Automatic's own card (nothing chosen, or another card chosen): the GPU goes off
+    assert!(gpu_crash_from(&line(k5070, "editing"), "").gpu_off);
+    assert!(gpu_crash_from(&line(k5070, "editing"), k4070).gpu_off);
+    // the second card: only it goes
+    let c = gpu_crash_from(&line(k4070, "helper"), "");
+    assert!(!c.gpu_off && !c.reset_card && c.helper_off && c.notice.contains("Second graphics card"), "{c:?}");
+    // both chosen cards at once
+    let c = gpu_crash_from(&(line(k4070, "editing") + &line(k5070, "helper")), k4070);
+    assert!(!c.gpu_off && c.reset_card && c.helper_off, "{c:?}");
+    // anything else alongside (listing the cards, an older marker): the GPU goes off
+    assert!(gpu_crash_from(&(line(k4070, "helper") + "GPU graphics card listing started (unix time 1)
+"), "").gpu_off);
+    assert!(gpu_crash_from("GPU device creation started (backends DX12)", k4070).gpu_off);
+    assert!(gpu_crash_from("", k4070).gpu_off);
 }
 
 /// Issue #136: Windows windows render with DX12 alone (no Vulkan driver loaded) by default.

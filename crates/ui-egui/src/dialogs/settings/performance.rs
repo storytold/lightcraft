@@ -59,6 +59,58 @@ fn exports_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     hint(ui, t, &text);
 }
 
+/// The graphics cards to choose from for editing: Automatic (the screen's card), each card that can
+/// render, and a saved card that isn't there (kept: decision 4, 31 Oct 2026), as (setting, label).
+pub(crate) fn gpu_card_choices(cards: &[lightcraft_engine::gpu::CardInfo], saved: &str) -> Vec<(String, String)> {
+    let usable: Vec<&lightcraft_engine::gpu::CardInfo> = cards.iter().filter(|c| c.usable).collect();
+    let auto = match usable.iter().find(|c| c.drives_screen) {
+        Some(c) => format!("{} ({} — {})", crate::i18n::tr("Automatic"), c.name, crate::i18n::tr("your screen's card")),
+        None => crate::i18n::tr("Automatic").to_string(),
+    };
+    let mut opts = vec![(String::new(), auto)];
+    for c in &usable {
+        // identical cards: numbered
+        let twins = usable.iter().filter(|o| o.name == c.name).count();
+        let n = usable.iter().take_while(|o| o.key != c.key).filter(|o| o.name == c.name).count() + 1;
+        opts.push((c.key.clone(), if twins > 1 { format!("{} ({n})", c.name) } else { c.name.clone() }));
+    }
+    if !saved.is_empty() && !opts.iter().any(|(k, _)| k == saved) {
+        let name = lightcraft_engine::gpu::card_name(saved).unwrap_or_else(|| saved.to_string());
+        opts.push((saved.to_string(), format!("{name} ({})", crate::i18n::tr("not found"))));
+    }
+    opts
+}
+
+/// Settings ▸ Performance ▸ Graphics card for editing: shown when there are cards to choose from
+/// (two or more, or a saved one).
+fn gpu_card_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let cards = lightcraft_engine::gpu::adapters().unwrap_or_default();
+    let saved = app.ui.settings.gpu_card.clone();
+    if cards.iter().filter(|c| c.usable).count() < 2 && saved.is_empty() {
+        return;
+    }
+    let opts = gpu_card_choices(&cards, &saved);
+    let mut at = opts.iter().position(|(k, _)| *k == saved).unwrap_or(0);
+    row(ui, t, crate::i18n::tr("Graphics card for editing"), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let labels: Vec<(usize, &str)> = opts.iter().enumerate().map(|(i, (_, l))| (i, l.as_str())).collect();
+            if choices(ui, "settingsGpuCard", &labels, &mut at)
+                && let Some((key, _)) = opts.get(at)
+            {
+                app.ui.settings.gpu_card = key.clone();
+            }
+        });
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "The card that renders the photo you're working on. Automatic uses the card your screen is connected to, so photos appear without being copied between cards.",
+        ),
+    );
+}
+
+
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
@@ -78,6 +130,8 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             Some(why) => crate::i18n::tr_format!("Rendering on the CPU: {why}", why = why),
             None => "No usable GPU found: rendering on the CPU".to_string(),
         }
+    } else if gpu::switching_card() {
+        format!("GPU: {} — {}", gpu::adapter_name().unwrap_or_default(), crate::i18n::tr("moving to the newly chosen card…"))
     } else {
         format!("GPU: {}", gpu::adapter_name().unwrap_or_else(|| "starting…".into()))
     };
@@ -85,6 +139,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     // among the backends …), and the GPU state is process-wide, so it may change between frames;
     // a hint that wrapped would move every control below it under the pointer.
     ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
+    gpu_card_row(app, ui, t);
     row(ui, t, crate::i18n::tr("Preview size"), |ui| {
         let opts: Vec<(u32, String)> =
             PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();
@@ -247,4 +302,48 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+#[cfg(test)]
+mod tests {
+    fn card(key: &str, name: &str, screen: bool, usable: bool) -> lightcraft_engine::gpu::CardInfo {
+        lightcraft_engine::gpu::CardInfo {
+            key: key.into(),
+            name: name.into(),
+            kind: "dedicated",
+            memory: Some(12 << 30),
+            backend: "dx12".into(),
+            drives_screen: screen,
+            usable,
+            why_not: (!usable).then(|| "a software renderer".into()),
+        }
+    }
+
+    /// Graphics card for editing: Automatic names the screen's card, then every card that can
+    /// render (identical ones numbered); a saved card that isn't there stays a choice, marked.
+    #[test]
+    fn graphics_card_choices_name_the_cards() {
+        let cards = [
+            card("dx12:10de:2f04:NVIDIA GeForce RTX 5070#1", "NVIDIA GeForce RTX 5070", true, true),
+            card("dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1", "NVIDIA GeForce RTX 4070 SUPER", false, true),
+            card("dx12:1414:008c:Microsoft Basic Render Driver#1", "Microsoft Basic Render Driver", false, false),
+        ];
+        let o = super::gpu_card_choices(&cards, "");
+        let labels: Vec<&str> = o.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(labels, ["Automatic (NVIDIA GeForce RTX 5070 — your screen's card)", "NVIDIA GeForce RTX 5070", "NVIDIA GeForce RTX 4070 SUPER"]);
+        assert_eq!(o[0].0, "", "Automatic saves as empty");
+        assert_eq!(o[2].0, "dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1");
+        // a saved card that isn't there
+        let gone = "dx12:10de:2b85:NVIDIA GeForce RTX 5090#1";
+        let o = super::gpu_card_choices(&cards, gone);
+        assert_eq!(o.last().map(|(k, l)| (k.as_str(), l.as_str())), Some((gone, "NVIDIA GeForce RTX 5090 (not found)")));
+        // identical cards, and no screen known (Automatic alone)
+        let twins = [
+            card("dx12:10de:2684:NVIDIA GeForce RTX 4090#1", "NVIDIA GeForce RTX 4090", false, true),
+            card("dx12:10de:2684:NVIDIA GeForce RTX 4090#2", "NVIDIA GeForce RTX 4090", false, true),
+        ];
+        let labels: Vec<String> = super::gpu_card_choices(&twins, "").into_iter().map(|(_, l)| l).collect();
+        assert_eq!(labels, ["Automatic", "NVIDIA GeForce RTX 4090 (1)", "NVIDIA GeForce RTX 4090 (2)"]);
+        assert_eq!(super::gpu_card_choices(&[], "").len(), 1);
+    }
 }

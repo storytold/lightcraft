@@ -398,6 +398,8 @@ pub struct Gpu {
     pub generation: u64,
     /// The adapter's own memory (bytes), when the system tells ([`crate::vram`]).
     pub vram: Option<u64>,
+    /// The card it runs on, when the listing knows it ([`crate::cards`]).
+    pub key: Option<crate::cards::AdapterKey>,
 }
 
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
@@ -453,18 +455,8 @@ fn module_source(m: &Module, consts: &str) -> String {
 }
 
 impl Gpu {
-    /// Create a device on the best available adapter (no software fallback), or why there is none.
-    pub fn new(backends: wgpu::Backends) -> Result<Gpu, String> {
-        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        // only these drivers are loaded (`crate::backend`: never Vulkan on Windows unless asked)
-        desc.backends = backends;
-        // DX12 shaders compile with FXC (issue #471)
-        desc.backend_options = crate::backend::backend_options();
-        // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
-        desc.flags = crate::backend::instance_flags_from_env(desc.flags);
-        let instance = wgpu::Instance::new(desc);
-        // the card LIGHTCRAFT_GPU_ADAPTER names, else the high-performance one
-        let adapter = crate::backend::pick_adapter(&instance, backends)?;
+    /// Create a device on `adapter` (card `key`, when the listing knows it), or why not.
+    pub fn on_adapter(adapter: wgpu::Adapter, key: Option<crate::cards::AdapterKey>) -> Result<Gpu, String> {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::Cpu {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
@@ -482,7 +474,9 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
-        Gpu::with_device(device, queue, info, limits, false)
+        let mut g = Gpu::with_device(device, queue, info, limits, false)?;
+        g.key = key;
+        Ok(g)
     }
 
     /// The renderer on the window's device ([`crate::adopt_window_device`]), within its limits
@@ -555,7 +549,7 @@ impl Gpu {
             if window { ", the window's device" } else { "" }
         );
         let vram = crate::vram::adapter_memory(&info);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, generation, vram })
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, generation, vram, key: None })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).

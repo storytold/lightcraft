@@ -11,10 +11,16 @@ pub(crate) fn adapter_memory(info: &wgpu::AdapterInfo) -> Option<u64> {
     if info.device_type != wgpu::DeviceType::DiscreteGpu {
         return None;
     }
+    // asked once per card name: the listing of the cards and each device on them ask again
+    static SEEN: std::sync::Mutex<Vec<(String, Option<u64>)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, b)) = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(n, _)| *n == info.name) {
+        return *b;
+    }
     let found = probe(&info.name);
     if let Some(b) = found {
         log::info!("gpu: {} has {} MiB of memory", info.name, b >> 20);
     }
+    SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((info.name.clone(), found));
     found
 }
 

@@ -346,6 +346,8 @@ pub struct LightcraftApp {
     pub window_is_fullscreen: bool,
     /// The GPU preference last applied (`app.gpu`), to apply Settings changes once.
     gpu_applied: Option<bool>,
+    /// The graphics card for editing last applied (`app.gpu {card}`).
+    gpu_card_applied: Option<String>,
     /// Say once, when the GPU device has been tried, that no graphics processor was found
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,

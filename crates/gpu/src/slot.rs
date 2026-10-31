@@ -223,6 +223,24 @@ pub(crate) fn adopt(make: impl FnOnce() -> Result<Gpu, String>) -> Result<Arc<Gp
     }
 }
 
+/// Hold while making a device for the slot outside [`get`] / [`adopt`] (a switch to another
+/// card): one device is made at a time.
+pub(crate) fn creating() -> std::sync::MutexGuard<'static, ()> {
+    CREATING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Use `g` from now on (another card was chosen): renders that hold the old device finish on it;
+/// a loss waiting to be replaced is over. Hold [`creating`] while making `g`.
+pub(crate) fn put(g: Gpu) {
+    let old = {
+        let mut s = slot();
+        s.lost = None;
+        std::mem::replace(&mut s.state, State::Ready(Arc::new(g)))
+    };
+    // (the old device goes once its last render lets go of it, outside the lock)
+    drop(old);
+}
+
 fn due(l: &Lost, recoveries: u32) -> bool {
     recoveries.saturating_add(l.attempts) < MAX_RECOVERIES && l.at.elapsed() >= backoff(l.attempts)
 }
@@ -300,6 +318,11 @@ pub enum EventKind {
     Recovered,
     /// No more attempts: the CPU renders for the rest of the session.
     GaveUp,
+    /// The graphics card chosen in Settings isn't there (or can't render): Automatic is used.
+    CardMissing,
+    /// Photos render on another graphics card now (a new choice in Settings), or the switch
+    /// failed and they stay where they were.
+    CardSwitched,
 }
 
 static EVENTS: Mutex<(u64, Vec<GpuEvent>)> = Mutex::new((0, Vec::new()));

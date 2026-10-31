@@ -31,6 +31,10 @@ use lightcraft_raster::Rgb32f;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
+/// The graphics cards, and which one renders what.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cards;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -533,13 +537,50 @@ pub(crate) fn device() -> Option<Arc<ctx::Gpu>> {
     slot::get(new_device)
 }
 
-/// A device of our own on the best adapter (see [`ctx::Gpu::new`]), under the crash sentinel.
+/// A device of our own on the editing card ([`cards::resolve_card`]), under the crash sentinel
+/// (which names the card: a crash there costs the next launch only that choice). When the card
+/// chosen in the settings can't render, Automatic is used instead and a notice says why.
 #[cfg(not(target_arch = "wasm32"))]
 fn new_device() -> Result<ctx::Gpu, String> {
     let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
-    backend::with_init_marker(backends, || {
-        std::panic::catch_unwind(|| ctx::Gpu::new(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
+    match new_device_on(backends, false) {
+        Err((why, true)) => {
+            log::warn!("gpu: the card chosen in the settings can't render ({why}); using Automatic");
+            let auto = new_device_on(backends, true).map_err(|(e, _)| e);
+            if let Ok(g) = &auto {
+                slot::event(
+                    EventKind::CardMissing,
+                    format!("LightCraft couldn't use the graphics card chosen in Settings ({why}), so it uses Automatic ({}).", g.info.name),
+                );
+            }
+            auto
+        }
+        r => r.map_err(|(e, _)| e),
+    }
+}
+
+/// A device on the editing card (`automatic`: ignoring the setting). `Err((why, chosen))`:
+/// `chosen` when it was the card chosen in the settings that failed.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_device_on(backends: wgpu::Backends, automatic: bool) -> Result<ctx::Gpu, (String, bool)> {
+    let (_instance, p) = backend::with_marker("graphics card listing", || {
+        std::panic::catch_unwind(|| {
+            let instance = backend::compute_instance(backends);
+            backend::pick_editing(&instance, backends, automatic).map(|p| (instance, p))
+        })
+        .unwrap_or_else(|_| Err("listing the graphics cards panicked".into()))
     })
+    .map_err(|e| (e, false))?;
+    if !automatic {
+        report_missing(&p.resolution, &p.entries);
+    }
+    let chosen = p.resolution.how == cards::How::Chosen;
+    let (adapter, key) = (p.adapter, p.key);
+    backend::with_init_marker_for(backends, key.as_ref(), "editing", || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::on_adapter(adapter, key.clone())))
+            .unwrap_or_else(|_| Err("device creation panicked".into()))
+    })
+    .map_err(|e| (e, chosen))
 }
 
 /// The device if it has been created, even one that failed (never creates one).
@@ -786,23 +827,27 @@ pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu:
         }
     }
     let _done = Done;
+    set_screen_card(&info);
     if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
         return Err("GPU rendering is off".into());
     }
     let _work = exit::enter().ok_or("LightCraft is closing")?;
+    let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+    *WINDOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(WindowDevice { device: device.clone(), queue: queue.clone(), info: info.clone(), declined: false });
     let mut declined = None;
     let g = slot::adopt(|| {
-        let adopted = if info.device_type == wgpu::DeviceType::Cpu {
-            Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name))
-        } else {
-            // (building the kernels is a long call into the driver: the crash sentinel covers it)
-            backend::with_init_marker(wgpu::Backends::from(info.backend), || {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::adopt(device, queue, info)))
-                    .unwrap_or_else(|_| Err("kernel setup panicked".into()))
-            })
-        };
-        adopted.or_else(|e| {
+        // another card chosen for editing (decision 2): a device of its own there
+        let target = editing_target(backends);
+        if !target.window {
+            declined = Some(format!("the graphics card for editing ({}) isn't the screen's: renders come back as pixels", target.name));
+            return new_device();
+        }
+        adopt_on(device, queue, info, target.key.clone()).or_else(|e| {
             log::warn!("gpu: not rendering on the window's device ({e}); creating one");
+            if let Some(w) = WINDOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+                w.declined = true;
+            }
             declined = Some(e);
             new_device()
         })
@@ -813,6 +858,321 @@ pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu:
         (Ok(_), None) => Err("a device of its own was created first".into()),
         (Err(e), None) => Err(e),
     }
+}
+
+// ------------------------------------------------------------------------- choosing the card
+
+/// A graphics card as Settings ▸ Performance lists it ([`adapters`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CardInfo {
+    /// What the settings save for it (`dx12:10de:2f04:NVIDIA GeForce RTX 5070#1`): pass it to
+    /// [`set_card`].
+    pub key: String,
+    pub name: String,
+    /// `dedicated`, `builtIn`, `virtual`, `software`, `other`.
+    pub kind: &'static str,
+    /// Its own memory (bytes), when the system says.
+    pub memory: Option<u64>,
+    /// wgpu's backend (`dx12`, `vulkan`, `metal`).
+    pub backend: String,
+    /// The screen is connected to it (the window is drawn on it).
+    pub drives_screen: bool,
+    /// LightCraft can render on it; else why not.
+    pub usable: bool,
+    pub why_not: Option<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<cards::AdapterEntry> for CardInfo {
+    fn from(e: cards::AdapterEntry) -> CardInfo {
+        CardInfo {
+            key: e.key.to_string(),
+            name: e.name,
+            kind: e.kind.id(),
+            memory: e.memory,
+            backend: e.backend,
+            drives_screen: e.drives_screen,
+            usable: e.usable,
+            why_not: e.why_not,
+        }
+    }
+}
+
+/// The graphics cards found so far, without looking now (never blocks: for the settings); `None`
+/// until they were listed ([`list_adapters`]; the GPU's warm-up lists them).
+pub fn adapters() -> Option<Vec<CardInfo>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cards::listed().map(|l| l.into_iter().map(CardInfo::from).collect())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// List the graphics cards now (a call into each driver: never on the UI thread). While the GPU is
+/// turned off (preference, environment) no driver is loaded: what was found before, else nothing.
+pub fn list_adapters() -> Vec<CardInfo> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
+            return adapters().unwrap_or_default();
+        }
+        let Some(backends) = backend::compute_backends() else { return Vec::new() };
+        let Some(_work) = exit::enter() else { return adapters().unwrap_or_default() };
+        let listed = backend::with_marker("graphics card listing", || {
+            std::panic::catch_unwind(|| backend::enumerate(&backend::compute_instance(backends), backends).1).unwrap_or_default()
+        });
+        listed.into_iter().map(CardInfo::from).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Vec::new()
+    }
+}
+
+/// The graphics card for editing (Settings ▸ Performance ▸ Graphics card for editing): `""`,
+/// `auto` or `automatic` for Automatic (the screen's card), a card's key ([`CardInfo::key`]), or
+/// part of the name of a card found ([`adapters`]). Applied at once: renders keep using the card
+/// they are on until the new one is ready (its kernels can take up to ~30 s to build), then move
+/// over. A key of a card that isn't there is kept: Automatic renders meanwhile, and a notice says
+/// so once per session. `Err`: text that names no card.
+pub fn set_card(setting: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let key = card_key_for(setting)?;
+        if cards::set_card(key) {
+            switch_editing_card();
+        }
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = setting;
+        Ok(())
+    }
+}
+
+/// The key [`set_card`] makes of `setting` (`None`: Automatic).
+#[cfg(not(target_arch = "wasm32"))]
+fn card_key_for(setting: &str) -> Result<Option<cards::AdapterKey>, String> {
+    let t = setting.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") || t.eq_ignore_ascii_case("automatic") {
+        return Ok(None);
+    }
+    if let Some(k) = cards::AdapterKey::parse(t) {
+        return Ok(Some(k));
+    }
+    let listed = cards::listed().unwrap_or_default();
+    listed
+        .iter()
+        .find(|e| e.usable && backend::adapter_name_matches(t, &e.name))
+        .map(|e| Some(e.key.clone()))
+        .ok_or_else(|| format!("no graphics card found is called like \"{t}\" (app.gpu lists them under adapters)"))
+}
+
+/// The editing card's setting in force: a key, or `""` for Automatic.
+pub fn card_setting() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cards::card().map(|k| k.to_string()).unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+/// The name in a card's key (`dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1` → the name), for a
+/// card that isn't there; `None` for text that isn't a key.
+pub fn card_name(key: &str) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cards::AdapterKey::parse(key).map(|k| k.name)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = key;
+        None
+    }
+}
+
+/// The name of the card photos are edited on now (the render device's), without creating it.
+pub fn card_in_use() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        existing_device().map(|g| g.info.name.clone())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+/// Whether renders are moving to another card ([`set_card`]) now.
+pub fn switching_card() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        SWITCHES.load(Ordering::Relaxed) > 0
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Switches to another card running now.
+#[cfg(not(target_arch = "wasm32"))]
+static SWITCHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The card the window is drawn on (the screen's: Automatic edits there). The desktop app tells it
+/// as soon as its window has a renderer, whether or not GPU rendering is on.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_screen_card(info: &wgpu::AdapterInfo) {
+    if info.device_type != wgpu::DeviceType::Cpu {
+        cards::set_screen(cards::ScreenCard::of(info));
+    }
+}
+
+/// The window's device, kept so a switch back to the screen's card renders on it again.
+#[cfg(not(target_arch = "wasm32"))]
+struct WindowDevice {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    info: wgpu::AdapterInfo,
+    /// Rendering on it failed once (its kernels didn't build): not tried again.
+    declined: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static WINDOW: Mutex<Option<WindowDevice>> = Mutex::new(None);
+
+/// Where editing renders go now: the window's device, or a device of its own on card `key`.
+#[cfg(not(target_arch = "wasm32"))]
+struct Target {
+    key: Option<cards::AdapterKey>,
+    window: bool,
+    name: String,
+}
+
+/// The editing card now (see [`cards::resolve_card`]), and whether that is the window's device:
+/// Automatic and the screen's card render there; another card renders on a device of its own and
+/// its renders come back as pixels (decision 2).
+#[cfg(not(target_arch = "wasm32"))]
+fn editing_target(backends: wgpu::Backends) -> Target {
+    let entries = backend::with_marker("graphics card listing", || {
+        std::panic::catch_unwind(|| backend::enumerate(&backend::compute_instance(backends), backends).1).unwrap_or_default()
+    });
+    let r = cards::resolve_card(&entries, backend::wanted_adapter().as_deref(), cards::card().as_ref());
+    report_missing(&r, &entries);
+    let window_ok = WINDOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|w| !w.declined);
+    let entry = r.index.and_then(|i| entries.get(i));
+    Target {
+        key: entry.map(|e| e.key.clone()),
+        window: window_ok && entry.is_none_or(|e| e.drives_screen),
+        name: entry.map_or_else(|| "the default graphics card".to_string(), |e| e.name.clone()),
+    }
+}
+
+/// The notice for a chosen card that isn't there, once per session (decision 4: the choice is
+/// kept, Automatic renders).
+#[cfg(not(target_arch = "wasm32"))]
+fn report_missing(r: &cards::Resolution, entries: &[cards::AdapterEntry]) {
+    let Some(k) = &r.missing else { return };
+    if !cards::first_report_of_missing(k) {
+        return;
+    }
+    let auto = r.index.and_then(|i| entries.get(i)).map_or_else(|| "the default graphics card".to_string(), |e| e.name.clone());
+    log::warn!("gpu: the card chosen in the settings ({k}) isn't there; using {auto}");
+    slot::event(
+        EventKind::CardMissing,
+        format!("The graphics card chosen in Settings ({}) isn't available, so LightCraft uses Automatic ({auto}).", k.name),
+    );
+}
+
+/// Move editing renders to the card chosen now, on a thread of its own (building the kernels takes
+/// seconds): renders stay on the current device until the new one is ready. Nothing to do before
+/// the device exists (the choice applies when it is made) or while GPU rendering is off.
+#[cfg(not(target_arch = "wasm32"))]
+fn switch_editing_card() {
+    if env_disabled() || !ENABLED.load(Ordering::Relaxed) || !slot::tried() {
+        return;
+    }
+    SWITCHES.fetch_add(1, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new().name("lc-gpu-switch".into()).spawn(|| {
+        if let Some(_work) = exit::enter() {
+            let _one = slot::creating();
+            switch_now();
+        }
+        SWITCHES.fetch_sub(1, Ordering::Relaxed);
+    });
+    if let Err(e) = spawned {
+        log::warn!("gpu: can't switch cards: {e}");
+        SWITCHES.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn switch_now() {
+    let Some(backends) = backend::compute_backends() else { return };
+    let target = editing_target(backends);
+    let current = slot::existing();
+    let there = current.as_ref().is_some_and(|g| g.window == target.window && (target.window || g.key == target.key));
+    if there && slot::lost_reason().is_none() {
+        return;
+    }
+    let from = current.as_ref().map_or_else(|| "the processor".to_string(), |g| format!("the {}", g.info.name));
+    drop(current);
+    let made = if target.window { adopt_stored_window(&target) } else { new_device() };
+    match made {
+        Ok(g) => {
+            let name = g.info.name.clone();
+            log::info!("gpu: editing renders move to {name}{}", if g.window { " (the window's device)" } else { "" });
+            slot::put(g);
+            slot::event(EventKind::CardSwitched, format!("Photos now render on the {name}."));
+        }
+        Err(why) => {
+            log::warn!("gpu: switching to {} failed: {why}", target.name);
+            slot::event(
+                EventKind::CardSwitched,
+                format!("LightCraft couldn't switch to the {} ({why}); photos keep rendering on {from}.", target.name),
+            );
+        }
+    }
+}
+
+/// The renderer on the window's device kept by [`adopt_window_device`] (a switch back to the
+/// screen's card), under the crash sentinel.
+#[cfg(not(target_arch = "wasm32"))]
+fn adopt_stored_window(target: &Target) -> Result<ctx::Gpu, String> {
+    let w = WINDOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|w| (w.device.clone(), w.queue.clone(), w.info.clone()));
+    let Some((device, queue, info)) = w else { return Err("the window's device is gone".into()) };
+    let made = adopt_on(device, queue, info, target.key.clone());
+    if made.is_err()
+        && let Some(w) = WINDOW.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut()
+    {
+        w.declined = true;
+    }
+    made
+}
+
+/// The renderer on the window's device (`info`'s card `key`), under the crash sentinel; never a
+/// panic.
+#[cfg(not(target_arch = "wasm32"))]
+fn adopt_on(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo, key: Option<cards::AdapterKey>) -> Result<ctx::Gpu, String> {
+    if info.device_type == wgpu::DeviceType::Cpu {
+        return Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name));
+    }
+    // (building the kernels is a long call into the driver: the crash sentinel covers it)
+    backend::with_init_marker_for(wgpu::Backends::from(info.backend), key.as_ref(), "editing", || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::adopt(device, queue, info)))
+            .unwrap_or_else(|_| Err("kernel setup panicked".into()))
+            .map(|mut g| {
+                g.key = key.clone();
+                g
+            })
+    })
 }
 
 /// The pixels of a texture on `device` (a [`DisplayFrame`]'s, or any `Rgba8Unorm` texture with

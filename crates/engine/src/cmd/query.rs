@@ -230,13 +230,36 @@ pub fn specs() -> Vec<CommandSpec> {
                 "versions": ph.versions.iter().map(|v| json!({"name": v.name, "created": v.created})).collect::<Vec<_>>(),
             }))
         }),
-        cmd!(query "app.gpu", "GPU Rendering", [], None, "{enabled?: bool, wait?: bool} — allow/forbid GPU rendering (CPU fallback; LIGHTCRAFT_GPU=0 forbids it for the process); returns {enabled, available, adapter, reason (why the GPU is off), lastFallback (latest render redone on the CPU, and why)}. wait: false never waits for a device still being created (available, adapter and reason are then null and the device is created in the background; with GPU rendering off they say so at once)", always, |_, p| {
+        cmd!(query "app.gpu", "GPU Rendering", [], None, "{enabled?: bool, card?: string, wait?: bool} — allow/forbid GPU rendering (CPU fallback; LIGHTCRAFT_GPU=0 forbids it for the process); card: the graphics card for editing, \"auto\" (the screen's card) or a card's key from `adapters` (or part of its name), applied at once (renders stay on the current card until the new one is ready). Returns {enabled, available, adapter, card (the card photos render on), cardChoice (key or \"auto\"), switching, adapters: [{key, name, kind, memoryMb, backend, drivesScreen, usable, whyNot}], reason (why the GPU is off), lastFallback (latest render redone on the CPU, and why)}. wait: false never waits for a device still being created nor lists the cards (available, adapter and reason are then null and the device is created in the background, adapters what was found so far; with GPU rendering off they say so at once)", always, |_, p| {
             if let Some(on) = p.get("enabled").and_then(Value::as_bool) {
                 lightcraft_gpu::set_enabled(on);
             }
+            if let Some(c) = p.get("card") {
+                let c = c.as_str().ok_or_else(|| bad("app.gpu", "card must be \"auto\" or a graphics card's key (see adapters)"))?;
+                lightcraft_gpu::set_card(c).map_err(|e| bad("app.gpu", &e))?;
+            }
+            let wait = p.get("wait").and_then(Value::as_bool) != Some(false);
+            let adapters = if wait { Some(lightcraft_gpu::adapters().unwrap_or_else(lightcraft_gpu::list_adapters)) } else { lightcraft_gpu::adapters() };
+            let adapters = adapters.map(|l| {
+                l.into_iter()
+                    .map(|a| {
+                        json!({"key": a.key, "name": a.name, "kind": a.kind, "memoryMb": a.memory.map(|m| m >> 20), "backend": a.backend,
+                               "drivesScreen": a.drives_screen, "usable": a.usable, "whyNot": a.why_not})
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let choice = lightcraft_gpu::card_setting();
+            let mut reply = json!({
+                "enabled": lightcraft_gpu::enabled(),
+                "card": lightcraft_gpu::card_in_use(),
+                "cardChoice": if choice.is_empty() { "auto".to_string() } else { choice },
+                "switching": lightcraft_gpu::switching_card(),
+                "adapters": adapters,
+                "lastFallback": lightcraft_gpu::last_fallback(),
+            });
             // the UI applies the setting on its first frame: it must not wait seconds for the
             // device there (issue #136; `warm_up` creates it off the UI thread)
-            if p.get("wait").and_then(Value::as_bool) == Some(false) && !lightcraft_gpu::ready() {
+            if !wait && !lightcraft_gpu::ready() {
                 // off (preference, environment): known at once, and asking the adapter would
                 // create the device; on: still being created, so nothing is known yet
                 let on = lightcraft_gpu::enabled();
@@ -245,21 +268,15 @@ pub fn specs() -> Vec<CommandSpec> {
                     // starts at most once)
                     lightcraft_gpu::warm_up();
                 }
-                return Ok(json!({
-                    "enabled": on,
-                    "available": if on { Value::Null } else { Value::Bool(false) },
-                    "adapter": null,
-                    "reason": if on { None } else { lightcraft_gpu::unavailable_reason() },
-                    "lastFallback": lightcraft_gpu::last_fallback(),
-                }));
+                reply["available"] = if on { Value::Null } else { Value::Bool(false) };
+                reply["adapter"] = Value::Null;
+                reply["reason"] = if on { Value::Null } else { json!(lightcraft_gpu::unavailable_reason()) };
+            } else {
+                reply["available"] = json!(lightcraft_gpu::available());
+                reply["adapter"] = json!(lightcraft_gpu::adapter_name());
+                reply["reason"] = json!(lightcraft_gpu::unavailable_reason());
             }
-            Ok(json!({
-                "enabled": lightcraft_gpu::enabled(),
-                "available": lightcraft_gpu::available(),
-                "adapter": lightcraft_gpu::adapter_name(),
-                "reason": lightcraft_gpu::unavailable_reason(),
-                "lastFallback": lightcraft_gpu::last_fallback(),
-            }))
+            Ok(reply)
         }),
         cmd!(query "library.memory", "Memory Usage", [], None, "{} — bytes held by each cache (decoded sources, rendered previews, GPU buffers; heap when instrumented)", always, |s, _| {
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
@@ -292,5 +309,29 @@ mod pagination_tests {
         assert_eq!(pagination_usize(u64::MAX), usize::MAX);
         #[cfg(target_pointer_width = "32")]
         assert_eq!(pagination_usize(u64::from(u32::MAX) + 1), usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod gpu_card_tests {
+    use crate::Session;
+    use serde_json::json;
+
+    /// `app.gpu` names the card choice and takes a new one: Automatic, a card's key (kept even
+    /// when that card isn't in this computer), never text that names no card.
+    #[test]
+    fn app_gpu_reports_and_takes_the_graphics_card_for_editing() {
+        let mut s = Session::with_demo();
+        let r = s.execute("app.gpu", &json!({"wait": false})).unwrap();
+        assert_eq!(r["cardChoice"], "auto", "{r}");
+        assert!(r.get("adapters").is_some() && r.get("card").is_some() && r["switching"].is_boolean(), "{r}");
+        let gone = "dx12:10de:2b85:NVIDIA GeForce RTX 5090#1";
+        let r = s.execute("app.gpu", &json!({"card": gone, "wait": false})).unwrap();
+        assert_eq!(r["cardChoice"], gone, "a card that isn't here is kept: {r}");
+        let err = s.execute("app.gpu", &json!({"card": "no such card anywhere", "wait": false})).unwrap_err().to_string();
+        assert!(err.contains("no graphics card"), "{err}");
+        assert!(s.execute("app.gpu", &json!({"card": 3, "wait": false})).is_err());
+        let r = s.execute("app.gpu", &json!({"card": "auto", "wait": false})).unwrap();
+        assert_eq!(r["cardChoice"], "auto", "{r}");
     }
 }
