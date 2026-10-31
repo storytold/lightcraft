@@ -244,19 +244,25 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 }
 
 /// The plane a sharpening view draws ([`Overlay::reads_detail`]), from the render's log luminance
-/// `log_l` and its texture blur (`None` when the render didn't need it: blurred here with the same
-/// sigma). [`Overlay::SharpenDetail`]: the detail band (log luminance minus its blur, in EV);
+/// `log_l` and its process-specific sharpening blur (`None` when the render didn't need it:
+/// blurred here with the same kernel and sigma). [`Overlay::SharpenDetail`]: the detail band (log luminance minus its blur, in EV);
 /// [`Overlay::SharpenMask`]: the sharpening weight under the photo's Masking. Both renderers call
 /// this with their own planes.
-pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, texture: Option<&Plane>, px_per_long: f64) -> Option<Plane> {
+pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, band: Option<&Plane>, px_per_long: f64, native_long: f64) -> Option<Plane> {
     if !o.reads_detail() {
         return None;
     }
     let own;
-    let blur = match texture.filter(|b| (b.width, b.height) == (log_l.width, log_l.height)) {
+    let pixel = crate::local::pixel_sharpen(s);
+    let blur = match band.filter(|b| (b.width, b.height) == (log_l.width, log_l.height)) {
         Some(b) => b,
         None => {
-            own = lightcraft_raster::blur::gaussian(log_l, crate::local::texture_sigma(px_per_long));
+            own = if pixel {
+                let sigma = crate::local::sharpen_sigma(crate::local::sharpen_sigma_raw(s, px_per_long, native_long));
+                lightcraft_raster::blur::gaussian_taps(log_l, &lightcraft_raster::blur::gauss_taps(sigma))
+            } else {
+                lightcraft_raster::blur::gaussian(log_l, crate::local::texture_sigma(px_per_long))
+            };
             &own
         }
     };
@@ -268,7 +274,13 @@ pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, texture: Op
         .zip(&blur.data)
         .map(|(l, b)| {
             let det = l - b;
-            if mask { crate::finish::sharpen_mask_weight(masking, det) } else { det }
+            if !mask {
+                det
+            } else if pixel {
+                crate::finish::pixel_sharpen_mask_weight(masking, det)
+            } else {
+                crate::finish::sharpen_mask_weight(masking, det)
+            }
         })
         .collect();
     Some(Plane { width: log_l.width, height: log_l.height, data })
@@ -594,6 +606,48 @@ mod tests {
         // a preview only: the histogram is the photo's
         assert_eq!(hi.histogram, plain.histogram);
         assert_eq!(render(&src, &info, &s, &req(Overlay::None)).image, plain.image);
+    }
+
+    #[test]
+    fn sharpening_preview_follows_the_process_radius_and_render_planes() {
+        use lightcraft_develop::Process;
+        use lightcraft_raster::blur::{gaussian, gaussian_taps};
+        let l = Plane { width: 80, height: 16, data: (0..1280).map(|i| ((i % 80) as f32 * 0.73).sin() * 0.3).collect() };
+        let mut s = DevelopSettings::default();
+        let mut bands = Vec::new();
+        for process in Process::ALL {
+            s.process = process.version();
+            s.detail.sharpen_radius = 3.0;
+            s.detail.sharpen_masking = 70.0;
+            let pixel = crate::local::pixel_sharpen(&s);
+            let blur = if pixel {
+                let sigma = crate::local::sharpen_sigma(crate::local::sharpen_sigma_raw(&s, 80.0, 160.0));
+                gaussian_taps(&l, &lightcraft_raster::blur::gauss_taps(sigma))
+            } else {
+                gaussian(&l, crate::local::texture_sigma(80.0))
+            };
+            for o in [Overlay::SharpenDetail, Overlay::SharpenMask] {
+                let cached = sharpen_plane(o, &s, &l, Some(&blur), 80.0, 160.0).unwrap();
+                let fresh = sharpen_plane(o, &s, &l, None, 80.0, 160.0).unwrap();
+                assert_eq!(cached.data, fresh.data, "{process:?} {o:?}");
+                for ((&actual, &log), &base) in fresh.data.iter().zip(&l.data).zip(&blur.data) {
+                    let det = log - base;
+                    let expected = if o == Overlay::SharpenDetail {
+                        det
+                    } else if pixel {
+                        crate::finish::pixel_sharpen_mask_weight(0.7, det)
+                    } else {
+                        crate::finish::sharpen_mask_weight(0.7, det)
+                    };
+                    assert_eq!(actual, expected);
+                }
+            }
+            bands.push(sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 160.0).unwrap().data);
+        }
+        assert_eq!(bands[0], bands[1], "the legacy previews stay unchanged");
+        assert_ne!(bands[1], bands[2], "V3 previews use the pixel-scale band");
+        s.detail.sharpen_radius = 1.0;
+        assert_ne!(bands[2], sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 160.0).unwrap().data);
     }
 
     #[test]

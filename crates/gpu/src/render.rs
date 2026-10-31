@@ -44,6 +44,7 @@ struct Planes {
     base: Option<(local::BaseKey, Arc<Buf>)>,
     clarity: Option<(u32, Arc<Buf>)>,
     texture: Option<(u32, Arc<Buf>)>,
+    sharpen: Option<(local::SharpenKey, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
 }
@@ -105,6 +106,7 @@ impl GpuStages {
             p.base.iter().for_each(|(_, b)| add(b));
             p.clarity.iter().for_each(|(_, b)| add(b));
             p.texture.iter().for_each(|(_, b)| add(b));
+            p.sharpen.iter().for_each(|(_, b)| add(b));
             p.dark.iter().for_each(|(_, b, _)| add(b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -261,6 +263,18 @@ pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize
     let last = (passes.len() - 1) % 2;
     let [a, b] = std::mem::replace(&mut bufs, [cx.gpu.buffer(0), cx.gpu.buffer(0)]);
     if last == 0 { a } else { b }
+}
+
+/// Exact Gaussian (`lightcraft_raster::blur::gaussian_taps`) of a one-channel plane.
+pub(crate) fn gaussian_fir(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, sigma: f32) -> Buf {
+    let taps = lightcraft_raster::blur::gauss_taps(sigma);
+    let taps_buf = cx.gpu.upload(&taps);
+    let r = (taps.len() / 2) as u32;
+    let (tmp, out) = (cx.gpu.buffer(w * h), cx.gpu.buffer(w * h));
+    let p = [w as u32, h as u32, r];
+    cx.run("gauss_h", &p, &[Some(src), Some(&taps_buf), Some(&tmp)], groups2(w, h, [16, 16]));
+    cx.run("gauss_v", &p, &[Some(&tmp), Some(&taps_buf), Some(&out)], groups2(w, h, [16, 16]));
+    out
 }
 
 /// Resample taps of `lightcraft_raster::resample::resize`, packed for the `resize_*` kernels.
@@ -692,8 +706,21 @@ pub fn render(
     let present = Present {
         clarity: prep.clarity.is_some(),
         texture: prep.texture.is_some(),
+        sharpen: prep.sharpen.is_some(),
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
+    };
+    // the finish kernel's `tex` binding: the texture plane, then the sharpening plane (one binding
+    // for both keeps the kernel within the storage-buffer count every supported device has)
+    let tex_buf: Option<Arc<Buf>> = match (&prep.texture, &prep.sharpen) {
+        (Some(t), Some(sh)) => {
+            let both = cx.gpu.buffer(2 * n);
+            cx.copy_into(t, &both, 0);
+            cx.copy_into(sh, &both, n);
+            Some(Arc::new(both))
+        }
+        (Some(b), None) | (None, Some(b)) => Some(b.clone()),
+        (None, None) => None,
     };
     let (p, aux) = finish_block(&fp, &terms, &present);
     let aux = gpu.upload(&aux);
@@ -717,7 +744,7 @@ pub fn render(
                 Some(&prep.log_l),
                 Some(&prep.base),
                 prep.clarity.as_deref(),
-                prep.texture.as_deref(),
+                tex_buf.as_deref(),
                 prep.dark.as_deref(),
                 masks.as_ref(),
                 Some(&aux),
@@ -794,8 +821,9 @@ pub fn render(
     let overlay_mask = overlay_mask.or_else(|| {
         req.overlay.reads_detail().then(|| {
             let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
-            let tex = prep.texture.as_deref().map(|b| cx.read_plane(b, w, h));
-            lightcraft_pipeline::visualize::sharpen_plane(req.overlay, &plan.settings, &l, tex.as_ref(), plan.px_per_long)
+            let band = if local::pixel_sharpen(&plan.settings) { &prep.sharpen } else { &prep.texture };
+            let blur = band.as_deref().map(|b| cx.read_plane(b, w, h));
+            lightcraft_pipeline::visualize::sharpen_plane(req.overlay, &plan.settings, &l, blur.as_ref(), plan.px_per_long, plan.native_long as f64)
         })?
     });
     lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
@@ -874,6 +902,7 @@ struct Prep {
     base: Arc<Buf>,
     clarity: Option<Arc<Buf>>,
     texture: Option<Arc<Buf>>,
+    sharpen: Option<Arc<Buf>>,
     dark: Option<Arc<Buf>>,
     /// Blurred chromaticity (local Moiré / Noise).
     chroma: Option<Arc<Buf>>,
@@ -884,7 +913,7 @@ struct Prep {
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, req.quality);
+    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, plan.native_long as f64, req.quality);
     let log_l = match &planes.log_l {
         Some(b) => b.clone(),
         None => {
@@ -904,6 +933,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
     };
     let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg.to_bits(), || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
     let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg.to_bits(), || gaussian(cx, &log_l, w, h, 1, sg)));
+    let sharpen = sig.sharpen.map(|sg| plane_at(&mut planes.sharpen, local::sharpen_key(&plan.settings, sg), || gaussian_fir(cx, &log_l, w, h, sg)));
     let (dark, air) = match sig.dark {
         None => (None, 1.0),
         Some(sg) => match &planes.dark {
@@ -931,7 +961,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
             gaussian(cx, &ch, w, h, 3, sg)
         })
     });
-    Prep { log_l, base, clarity, texture, dark, chroma, air }
+    Prep { log_l, base, clarity, texture, sharpen, dark, chroma, air }
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).

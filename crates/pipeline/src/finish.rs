@@ -29,6 +29,31 @@ pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
     if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
 }
 
+/// Masking weight for the V3 pixel-scale sharpening band, also used by its Alt-drag preview.
+#[inline]
+pub fn pixel_sharpen_mask_weight(masking: f32, det: f32) -> f32 {
+    if masking > 0.0 { smooth(masking * 0.1, masking * 0.1 + 0.06, det.abs()) } else { 1.0 }
+}
+
+/// Gain of the sharpening detail term (per unit of `Amount / 150`), in stops of luminance per stop of detail.
+pub const SHARPEN_GAIN: f32 = 7.0;
+
+/// Soft-clip limit (stops) of the sharpening detail term for Detail `0..=100`: 0.03 stops (large
+/// edge detail is flattened so halos stay small) up to 1.5 stops (practically linear).
+pub fn sharpen_limit(detail: f64) -> f32 {
+    let d = (detail / 100.0).clamp(0.0, 1.0) as f32;
+    0.03 * 50f32.powf(d)
+}
+
+/// The sharpening boost (stops) for pixel-scale detail `det` (log luminance minus its blur at the
+/// sharpen radius): linear for small detail, soft-clipped at `limit`, and gated by the Masking edge
+/// mask (`mask` = Masking / 100) so flat areas and noise can be left alone.
+#[inline]
+pub fn sharpen_term(det: f32, limit: f32, mask: f32) -> f32 {
+    let m = pixel_sharpen_mask_weight(mask, det);
+    SHARPEN_GAIN * m * det / (1.0 + det.abs() / limit)
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -178,6 +203,12 @@ pub struct FinishParams {
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// V1/V2 retain their texture-band sharpening; V3 uses the pixel-scale plane.
+    pub pixel_sharpen: bool,
+    /// Soft-clip limit (stops) of the sharpening detail term: small damps halos (Detail 0), large keeps all (100).
+    pub sharpen_limit: f32,
+    /// Response compensation for a sharpening radius below one output pixel.
+    pub sharpen_gain: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -256,6 +287,13 @@ impl FinishParams {
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            pixel_sharpen: crate::local::pixel_sharpen(s),
+            sharpen_limit: sharpen_limit(s.detail.sharpen_detail),
+            sharpen_gain: crate::local::sharpen_gain(crate::local::sharpen_sigma_raw(
+                s,
+                px_per_long,
+                info.native_long.unwrap_or(0).max(frame.ow.max(frame.oh) as usize).max(1) as f64,
+            )),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -292,7 +330,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -662,17 +700,26 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta += clarity * 0.85 * detail * (0.35 + 0.65 * midtone);
     }
     let texture = fp.tex + l_tex;
-    let sharpen = l_sharp * 0.6 + fp.sharpen;
-    if (texture != 0.0 || sharpen != 0.0)
+    if texture != 0.0
         && let Some(blur) = &p.texture_blur
     {
         let detail = p.log_l.data[index] - blur.data[index];
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
-        if sharpen != 0.0 {
-            let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
-            delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
+    }
+    let sharpen = l_sharp * 0.6 + fp.sharpen;
+    if fp.pixel_sharpen {
+        if sharpen != 0.0
+            && let Some(blur) = &p.sharpen_blur
+        {
+            delta += sharpen * fp.sharpen_gain * sharpen_term(p.log_l.data[index] - blur.data[index], fp.sharpen_limit, fp.sharpen_mask);
         }
+    } else if sharpen != 0.0
+        && let Some(blur) = &p.texture_blur
+    {
+        let detail = p.log_l.data[index] - blur.data[index];
+        let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
+        delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
     }
     if l_noise != 0.0
         && let Some(blur) = &p.texture_blur
