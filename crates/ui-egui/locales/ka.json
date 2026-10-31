@@ -624,6 +624,8 @@
   "Download Place Names (GeoNames)": "ადგილების სახელების ჩამოტვირთვა (GeoNames)",
   "Download the SAM 3 Model?": "ჩამოიტვირთოს SAM 3 მოდელი?",
   "Downloaded and checked. Installing…": "ჩამოტვირთულია და შემოწმებულია. ინსტალირდება…",
+  "No containing albums": "ეს ფოტო არცერთ ალბომში არ არის",
+  "Show in Album": "ალბომში ჩვენება",
   "The download failed": "ჩამოტვირთვა ვერ მოხერხდა",
   "Downloading model": "მოდელი იტვირთება",
   "Downloading place names": "ადგილების სახელები იტვირთება",

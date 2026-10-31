@@ -1,4 +1,4 @@
-use super::files::{edit_in, open_log_folder, open_original_in, show_in_finder, show_in_folders};
+use super::files::{edit_in, open_log_folder, open_original_in, show_in_album, show_in_finder, show_in_folders};
 use super::ui_commands::{UI_COMMANDS, language_from_command};
 use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel, Value, ViewMode, Zoom, json, thumb_size_view};
 
@@ -1477,6 +1477,7 @@ fn ui_commands_12(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "app.export" => crate::control::export_active(app, p),
         "app.showInFinder" => show_in_finder(app),
         "app.showInFolders" => show_in_folders(app, p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId)),
+        "app.showInAlbum" => show_in_album(app, ctx, p),
         "app.openLogFolder" => open_log_folder(app),
         "app.discord" | "app.website" | "app.github" | "app.artcraft" | "app.help" | "app.feedback" => {
             let url = crate::links::url_of(id).unwrap_or(crate::links::WEBSITE);
