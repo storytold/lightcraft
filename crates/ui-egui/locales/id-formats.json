@@ -320,5 +320,37 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  "Photos: {count}": {
+    "one": "Foto: {count}",
+    "few": "Foto: {count}",
+    "many": "Foto: {count}",
+    "other": "Foto: {count}"
+  },
+  "Estimated total size: {size}": "Perkiraan ukuran total: {size}",
+  "Destination: {path}": "Tujuan: {path}",
+  "Free space: {size}": "Ruang kosong: {size}",
+  ". {kept} existing previews kept unchanged": ". {kept} pratinjau yang ada dipertahankan tanpa perubahan",
+  "{count} smart preview{} · {:.1} MiB": "Pratinjau pintar: {count} · {1:.1} MiB{0:.0}",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Folder pratinjau pintar diubah. {count} berkas sumber tidak dapat dihapus.",
+    "few": "Folder pratinjau pintar diubah. {count} berkas sumber tidak dapat dihapus.",
+    "many": "Folder pratinjau pintar diubah. {count} berkas sumber tidak dapat dihapus.",
+    "other": "Folder pratinjau pintar diubah. {count} berkas sumber tidak dapat dihapus."
+  },
+  "Smart preview folder change failed: {error}": "Gagal mengubah folder pratinjau pintar: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} pratinjau yang ada dipertahankan tanpa perubahan",
+    "few": ". {count} pratinjau yang ada dipertahankan tanpa perubahan",
+    "many": ". {count} pratinjau yang ada dipertahankan tanpa perubahan",
+    "other": ". {count} pratinjau yang ada dipertahankan tanpa perubahan"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} pratinjau pintar · {size:.1} MiB",
+    "few": "{count} pratinjau pintar · {size:.1} MiB",
+    "many": "{count} pratinjau pintar · {size:.1} MiB",
+    "other": "{count} pratinjau pintar · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "Tidak dapat memeriksa penyimpanan pratinjau pintar: {e}",
+  "free space is unavailable for {path} on this platform": "Ruang kosong tidak tersedia untuk {path} pada platform ini"
 }

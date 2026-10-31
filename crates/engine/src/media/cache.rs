@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::invalidation::Invalidation;
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
 use super::{Arc, DevelopSettings, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
@@ -51,6 +53,7 @@ impl DenoiseIndex {
 impl Default for MediaCache {
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
+        let rendered = Arc::new(PreviewCache::memory(rendered_budget(budget)));
         MediaCache {
             settings_hashes: SettingsHashes::default(),
             thumbs: Lru::new(THUMB_SOURCE_BYTES.min(budget)),
@@ -66,11 +69,31 @@ impl Default for MediaCache {
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,
+            smart_status: Default::default(),
+            source_generation: 0,
+            #[cfg(test)]
+            clear_after_source: false,
             availability: Default::default(),
             scenes: Vec::new(),
-            rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
+            #[cfg(not(target_arch = "wasm32"))]
+            invalidation: Invalidation::new(rendered.clone()),
+            rendered,
             denoise: DenoiseIndex::default(),
         }
+    }
+}
+
+/// The thumbnail folder `dir`, spelled one way however its library was reached (a symlink, `..`
+/// or a relative path), so that the caches, proxy workers' invalidation and markers of one
+/// library meet. A folder that does not exist yet resolves through its parent; one that cannot
+/// be resolved stays as given.
+pub(crate) fn thumbnail_folder(dir: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(resolved) = std::fs::canonicalize(dir) {
+        return resolved;
+    }
+    match (dir.parent(), dir.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent).map_or_else(|_| dir.to_path_buf(), |parent| parent.join(name)),
+        _ => dir.to_path_buf(),
     }
 }
 
@@ -80,21 +103,48 @@ fn rendered_budget(share: usize) -> usize {
 }
 
 impl MediaCache {
-    /// Keep rendered thumbnails on disk in `dir` as well. The cache this replaces is retired
-    /// (its files stay): render jobs still holding it can't write through it any more, even
-    /// into a directory a later clear emptied (`dir` may be the same one).
-    pub fn attach_disk_cache(&mut self, dir: &std::path::Path, disk_bytes: u64) {
-        self.rendered.retire();
-        self.rendered = Arc::new(PreviewCache::with_disk(rendered_budget(self.budget), dir, disk_bytes));
+    /// Captured by proxy workers, follows cache replacement for this library only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn invalidation(&self) -> Invalidation {
+        self.invalidation.clone()
     }
 
-    /// Change the disk budget of the cache in `dir`: in place when that cache is attached (its
-    /// thumbnails are keyed by content, so they and the textures shown from them stay valid,
-    /// and the same cache object keeps its generation), else attach it.
+    /// Keep rendered thumbnails on disk in `dir` as well, in the namespace of libraries from
+    /// before namespaces (tests; libraries attach theirs with [`Self::attach_disk_cache_namespace`]).
+    /// A cache in the same namespace is retired (its files stay): render jobs still holding it
+    /// can't write through it any more, even into a directory a later clear emptied (`dir` may
+    /// be the same one).
+    #[cfg(test)]
+    pub(crate) fn attach_disk_cache(&mut self, dir: &std::path::Path, disk_bytes: u64) {
+        self.attach_disk_cache_namespace(dir, disk_bytes, 0);
+    }
+
+    /// Folder switches and reopening use the namespace saved with the library preferences.
+    /// This resolves the folder's path ([`thumbnail_folder`]) and replaces memory state; it reads
+    /// or deletes no cache file (render workers read and prune them).
+    pub(crate) fn attach_disk_cache_namespace(&mut self, dir: &std::path::Path, disk_bytes: u64, namespace: u64) {
+        let dir = &thumbnail_folder(dir);
+        // A different namespace isolates late disk writes without waiting for their I/O.
+        // Session::accept and the UI also compare cache identity before accepting results.
+        if !self.rendered.disk().is_some_and(|disk| disk.dir() == dir && disk.namespace() != namespace) {
+            self.rendered.retire();
+        }
+        self.rendered = Arc::new(PreviewCache::with_disk_namespace(rendered_budget(self.budget), dir, disk_bytes, namespace));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.invalidation = Invalidation::for_disk(dir, self.rendered.clone());
+        }
+        self.clear_sources();
+    }
+
+    /// Change the disk budget of the cache attached in `dir`, in place: its thumbnails are keyed
+    /// by content, so they and the textures shown from them stay valid, and the same cache
+    /// object keeps its generation. Nothing is attached here: a library attaches its cache when
+    /// it opens or changes its smart preview folder, in the namespace saved with it.
     pub fn set_disk_cache_bytes(&mut self, dir: &std::path::Path, disk_bytes: u64) {
-        match self.rendered.disk().filter(|d| d.dir() == dir) {
-            Some(d) => d.set_budget(disk_bytes),
-            None => self.attach_disk_cache(dir, disk_bytes),
+        let dir = thumbnail_folder(dir);
+        if let Some(d) = self.rendered.disk().filter(|d| d.dir() == dir) {
+            d.set_budget(disk_bytes);
         }
     }
 
@@ -296,15 +346,41 @@ impl MediaCache {
         self.source_ref_with(p, level, false)
     }
 
+    /// Pair a source with its cache generation. Source acquisition does no I/O, so retry
+    /// when a worker clears the cache during the lookup rather than losing the photo.
+    pub(super) fn current_source(&mut self, p: &Photo, level: SourceLevel) -> (u64, SourceRef) {
+        loop {
+            let generation = self.rendered.generation();
+            let source = self.source_ref(p, level);
+            if self.rendered.generation() == generation {
+                return (generation, source);
+            }
+        }
+    }
+
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
         let mut r = self.source_ref_plain(p, level, cached);
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
+        // Deterministically reproduce a worker clearing the cache after source acquisition.
+        #[cfg(test)]
+        if std::mem::take(&mut self.clear_after_source) {
+            self.rendered.clear();
+        }
+        #[cfg(test)]
+        if let Some(then) = super::AFTER_SOURCE.with(|h| h.borrow_mut().take()) {
+            then();
+        }
         r
     }
 
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
+        let generation = self.rendered.generation();
+        if self.source_generation != generation {
+            self.clear_sources();
+            self.source_generation = generation;
+        }
         if cached && let Some(a) = self.get_source(p.id, level) {
             return SourceRef::Loaded(Box::new(a));
         }
@@ -331,7 +407,7 @@ impl MediaCache {
             let legacy = dir.join(crate::smart::file_name(p));
             let sp = if self.availability.exists(&sharded.to_string_lossy()) == Some(true) { sharded } else { legacy };
             // (a proxy cut short fails to load, like the offline original; the worker's fallback
-            // in `SourceRef::load` only uses a proxy that passes `smart::is_valid`)
+            // in `SourceRef::load` only uses a proxy that passes `smart::is_complete`)
             if self.availability.is_offline(path) && self.availability.exists(&sp.to_string_lossy()) == Some(true) {
                 return SourceRef::Smart { path: sp };
             }

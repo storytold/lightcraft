@@ -1,6 +1,6 @@
 use super::*;
 
-fn temp(tag: &str) -> PathBuf {
+pub(super) fn temp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-smart-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -24,9 +24,10 @@ fn migrate_moves_leaves_or_discards() {
     let (a, b) = (base.join("a"), base.join("b"));
     std::fs::create_dir_all(&a).unwrap();
     std::fs::create_dir_all(&b).unwrap();
-    std::fs::write(a.join("1.lcsp"), b"one").unwrap();
+    let proxy = encode(&Rgb32f::new(2, 2), None).unwrap();
+    std::fs::write(a.join("1.lcsp"), &proxy).unwrap();
     std::fs::write(a.join("note.txt"), b"keep").unwrap();
-    assert_eq!(stats(&a), (1, 3));
+    assert_eq!(stats(&a), (1, proxy.len() as u64));
     assert_eq!(migrate(&a, &b, Existing::Leave).0, 0);
     assert_eq!(stats(&a).0, 1);
     assert_eq!(migrate(&a, &b, Existing::Move).0, 1);
@@ -46,17 +47,18 @@ fn sharded_and_legacy_proxies_are_counted_and_moved() {
     std::fs::create_dir(&to).unwrap();
     let old = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2.lcsp";
     let new = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1.lcsp";
-    std::fs::write(from.join(old), b"legacy").unwrap();
-    std::fs::write(from.join("a1").join(new), b"sharded").unwrap();
+    let proxy = encode(&Rgb32f::new(2, 2), None).unwrap();
+    std::fs::write(from.join(old), &proxy).unwrap();
+    std::fs::write(from.join("a1").join(new), &proxy).unwrap();
     std::fs::write(from.join("a1").join("notes.txt"), b"user file").unwrap();
     std::fs::write(from.join("notes.lcsp.txt"), b"keep").unwrap();
-    assert_eq!(stats(&from), (2, 13));
+    assert_eq!(stats(&from), (2, 2 * proxy.len() as u64));
     let (moved, failed) = migrate(&from, &to, Existing::Move);
     assert_eq!((moved, failed), (2, Vec::<String>::new()));
     assert_eq!(stats(&from), (0, 0));
-    assert_eq!(stats(&to), (2, 13));
-    assert_eq!(std::fs::read(to.join("b2").join(old)).unwrap(), b"legacy");
-    assert_eq!(std::fs::read(to.join("a1").join(new)).unwrap(), b"sharded");
+    assert_eq!(stats(&to), (2, 2 * proxy.len() as u64));
+    assert_eq!(std::fs::read(to.join("b2").join(old)).unwrap(), proxy);
+    assert_eq!(std::fs::read(to.join("a1").join(new)).unwrap(), proxy);
     assert!(from.join("a1").join("notes.txt").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -70,12 +72,12 @@ fn damaged_proxies_are_invalid_and_never_kept_over_good_ones() {
     let img = lightcraft_scenes::demo_library()[0].render(64, 40);
     let good = encode(&img, None).unwrap();
     std::fs::write(a.join("1.lcsp"), &good).unwrap();
-    assert!(is_valid(&a.join("1.lcsp")));
+    assert!(is_complete(&a.join("1.lcsp")));
     for cut in [good.len() - 1, good.len() / 2, 10, 0] {
         std::fs::write(b.join("1.lcsp"), &good[..cut]).unwrap();
-        assert!(!is_valid(&b.join("1.lcsp")), "cut at {cut}");
+        assert!(!is_complete(&b.join("1.lcsp")), "cut at {cut}");
     }
-    assert!(!is_valid(&b.join("missing.lcsp")));
+    assert!(!is_complete(&b.join("missing.lcsp")));
     // moving onto a damaged copy replaces it instead of deleting the good one
     assert_eq!(migrate(&a, &b, Existing::Move).0, 1);
     assert_eq!(std::fs::read(b.join("1.lcsp")).unwrap(), good);
@@ -97,7 +99,7 @@ fn camera_tone_travels_with_the_proxy() {
     let path = dir.join("t.lcsp");
     std::fs::write(&path, &bytes).unwrap();
     // the longer header is still read by the validity check, and the curve by `load`
-    assert!(is_valid(&path));
+    assert!(is_complete(&path));
     let loaded = load(&path).unwrap();
     assert_eq!(loaded.camera_tone, Some(tone));
     let header = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
@@ -138,7 +140,7 @@ fn facts_and_mattes_travel_with_the_proxy() {
     let dir = temp("facts");
     let path = dir.join("f.lcsp");
     std::fs::write(&path, &bytes[..bytes.len() - 8]).unwrap();
-    assert!(!is_valid(&path));
+    assert!(!is_complete(&path));
     let _ = std::fs::remove_dir_all(&dir);
     // an old proxy (no tail) has no facts, and neither has one with a malformed tail
     assert!(decode(&encode(&img, None).unwrap()).unwrap().2.is_none());
@@ -337,7 +339,7 @@ fn a_proxy_from_an_older_encode_is_stale() {
     old.extend_from_slice(serde_json::Value::Object(older).to_string().as_bytes());
     old.extend_from_slice(&bytes[nl..]);
     std::fs::write(&path, &old).unwrap();
-    assert!(is_valid(&path), "losing the field keeps the file readable");
+    assert!(is_usable(&path), "losing the field keeps the file readable");
     assert!(is_stale(&path), "an older encoding is rebuilt");
     // the marker records both versions, and one from before the encode version forces a scan
     assert!(!look_checked(&dir));

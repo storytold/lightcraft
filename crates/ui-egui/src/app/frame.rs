@@ -2,6 +2,7 @@ use super::{
     LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
     shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
+use crate::smart_previews;
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -59,6 +60,7 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
+        smart_previews::poll(self, ctx);
         sync::poll_run(self, ctx);
         // Import commits batches and must not run twice in one host frame. The first layout pass
         // and a hidden logic tick both report pass index 0; a second pass reports 1. A wall-clock

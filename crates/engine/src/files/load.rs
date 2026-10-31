@@ -124,7 +124,10 @@ fn load_bytes_now(
             Some((img, mask)) => (img, Some(mask)),
             None => {
                 let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                (raw.develop(method).map_err(|e| e.to_string())?, None)
+                // demosaiced white balanced (the as-shot white the colour model below applies), camera RGB after it
+                // (demosaiced on the sensor's own scale, neutral edges get coloured outlines), and which channels
+                // were interpolated from clipped samples (issue #1328)
+                raw.develop_balanced_masked(method, t.wb, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised
