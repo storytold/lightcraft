@@ -30,6 +30,8 @@ pub mod color;
 pub mod demosaic;
 mod dng;
 pub mod dngwrite;
+#[cfg(feature = "flashraw")]
+pub mod flashraw_backend;
 pub mod gaintable;
 pub mod highlight;
 #[cfg(feature = "jxl")]
@@ -409,7 +411,29 @@ pub(crate) enum Mode {
 }
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
-    match probe(bytes).ok_or(RawError::NotRaw)? {
+    let format = probe(bytes).ok_or(RawError::NotRaw)?;
+
+    #[cfg(feature = "flashraw")]
+    if matches!(
+        format,
+        RawFormat::Cr2
+            | RawFormat::Cr3
+            | RawFormat::Nef
+            | RawFormat::Nrw
+            | RawFormat::Arw
+            | RawFormat::Raf
+            | RawFormat::Rw2
+            | RawFormat::Pef
+            | RawFormat::Orf
+            | RawFormat::Srw
+            | RawFormat::OtherTiff
+    ) {
+        if let Ok(img) = flashraw_backend::decode(bytes, format, mode) {
+            return Ok(img);
+        }
+    }
+
+    match format {
         RawFormat::Dng => dng::decode(bytes, mode).map(lift_clipped),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
