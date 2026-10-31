@@ -598,6 +598,41 @@ fn auto_straighten_takes_the_roll_from_converging_verticals() {
     assert!((deg + 3.0).abs() < 0.3, "{deg}");
 }
 
+/// A bird in an empty sky whose gradient runs at 3°: with nothing sharper in the frame, the
+/// gradient scored like a horizon and turned the photo (#2686). It is far too faint to be one.
+#[test]
+fn auto_straighten_takes_no_horizon_from_a_sky_gradient() {
+    let (w, h) = (900usize, 600usize);
+    let t = 3f32.to_radians().tan();
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let (x, y) = (x as f32, y as f32);
+        if (x - 600.0).hypot((y - 250.0) * 3.0) < 14.0 {
+            return [0.1, 0.1, 0.1];
+        }
+        let g = 0.55 + 0.1 * (y - h as f32 / 2.0 - (x - w as f32 / 2.0) * t) / h as f32;
+        [g, g, g * 1.1]
+    });
+    assert_eq!(auto_level(&src), None);
+}
+
+/// Texture that converges like plumb lines (the ribs of a blossom, bamboo): ten short strokes
+/// meeting above the frame, rolled 4°. Too little line length for a building's verticals; it
+/// turned straight photos (#2686).
+#[test]
+fn auto_straighten_takes_no_roll_from_a_few_short_strokes() {
+    let roll = 4f32.to_radians();
+    let vp = (3.0 * roll.sin(), -3.0 * roll.cos());
+    let lines: Vec<_> = (0..10)
+        .map(|i| {
+            let x = -0.45 + i as f32 * 0.1;
+            let bottom = (x, 0.4);
+            let top_t = 0.1 / (0.4 - vp.1);
+            (bottom, (x + (vp.0 - x) * top_t, 0.4 + (vp.1 - 0.4) * top_t))
+        })
+        .collect();
+    assert_eq!(auto_level(&line_drawing(&lines)), None);
+}
+
 /// The Upright analysis cache tells apart what changes the analysis image: another lens (`info.lens`)
 /// or the optics section switched off (review of #2809).
 #[test]

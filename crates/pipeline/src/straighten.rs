@@ -12,9 +12,10 @@
 //!
 //! Nothing past [`MAX_DEGREES`] is levelled.
 //!
-//! Measured on 113 photos straightened by hand in Lightroom Classic, against the long lines alone:
-//! 50 instead of 29 come out straighter, 10 (as before) more tilted, and the mean error is 0.82°
-//! instead of 1.01°. Of 300 photos left as shot, 11 instead of 8 are turned by more than 3°.
+//! Measured on 113 photos straightened by hand in Lightroom Classic: 50 come out straighter and
+//! 10 more tilted (the long lines alone: 27 and 9), and the mean error is 0.83° instead of 1.24°
+//! untouched (1.07° with the long lines alone). Of 300 photos left as shot, 21 are turned by more
+//! than 1° (the long lines alone: 20), and of 300 taken at ISO 3200 or more, 49 (47).
 
 use lightcraft_raster::Plane;
 
@@ -35,18 +36,23 @@ const VETO_DEGREES: f64 = 1.0;
 
 /// Plumb lines: fewest inliers of the vertical vanishing point, their least total length and the
 /// least spread across the frame (both in half long edges), and the most a vertical may lean.
-const PLUMB_MIN_LINES: usize = 8;
-const PLUMB_MIN_LENGTH: f64 = 1.5;
+/// Fewer or shorter inliers came from texture (branches, bamboo, the ribs of a blossom) more often
+/// than from buildings.
+const PLUMB_MIN_LINES: usize = 10;
+const PLUMB_MIN_LENGTH: f64 = 2.2;
 const PLUMB_MIN_SPREAD: f64 = 0.6;
 const PLUMB_MAX_LEAN: f64 = 20.0;
 
 /// Horizon: blur (px), rows averaged on each side of the line, the share of columns that may be
-/// weaker than the score, the least score (relative to the image's strongest edges), and the
-/// share of the height at the top and bottom a horizon doesn't lie in.
+/// weaker than the score, the least score (relative to the image's strongest edges) and contrast
+/// (in perceptual lightness: an empty sky's gradient or vignetting, where the strongest edges are
+/// faint too, is no horizon), and the share of the height at the top and bottom a horizon doesn't
+/// lie in.
 const HORIZON_SIGMA: f32 = 1.5;
 const HORIZON_ROWS: usize = 4;
 const HORIZON_QUANTILE: f64 = 0.3;
 const HORIZON_MIN_SCORE: f64 = 0.3;
+const HORIZON_MIN_CONTRAST: f64 = 0.02;
 const HORIZON_MARGIN: f64 = 0.05;
 /// Horizon search: the angles tried (degrees) before the limit applies, and their steps.
 const HORIZON_SEARCH: f64 = 10.0;
@@ -182,5 +188,5 @@ fn horizon(lum: &Plane) -> Option<f64> {
     }
     let (s, deg) = (best.0 / norm, best.1);
     // a line descending `deg` to the right is levelled by the crop angle −deg
-    (s >= HORIZON_MIN_SCORE && deg.abs() <= MAX_DEGREES).then_some(-deg)
+    (s >= HORIZON_MIN_SCORE && best.0 >= HORIZON_MIN_CONTRAST && deg.abs() <= MAX_DEGREES).then_some(-deg)
 }
