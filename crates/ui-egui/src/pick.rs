@@ -152,9 +152,23 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.pending_picks = waiting;
     for (p, paths) in answered {
         let params = with_answer(&p.params, p.key, p.kind, &paths);
-        if let Err(e) = app.run(&p.command, params) {
-            app.toast_error(ctx, e);
+        match app.run(&p.command, params) {
+            Ok(r) => {
+                if let Some(text) = answered_message(&p.command, &r) {
+                    app.toast(ctx, text);
+                }
+            }
+            Err(e) => app.toast_error(ctx, e),
         }
+    }
+}
+
+/// What `command`, run with a dialog's answer, says when it worked (`None`: its result shows
+/// for itself). The same words whether the dialog answered at once or later.
+pub fn answered_message(command: &str, result: &Value) -> Option<String> {
+    match command {
+        "folder.move" => Some(crate::i18n::tr_format!("Moved; {} photo(s) relinked", result["relinked"])),
+        _ => None,
     }
 }
 

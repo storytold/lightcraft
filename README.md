@@ -259,7 +259,8 @@ lightcraft --control 7980 ~/Pictures/trip
 - **Command registry.** `engine.commands` lists the available commands; `develop.controls` lists every slider's
   range, default and current value.
 - **MCP server.** `lightcraft-cli mcp` exposes the command registry to Claude (or any MCP client), alongside
-  helpers for import, query, develop, mask, render (returned as an image) and export. It runs headless, or attached
+  helpers for import, query, develop, render (returned as an image) and export. Masks have no helper of their own:
+  create and edit them through `run_command` (e.g. `mask.add`). It runs headless, or attached
   to the running app with screenshots, clicks and gestures. See [docs/mcp.md](docs/mcp.md).
 
   ```sh
@@ -451,6 +452,36 @@ information combined with LTO and one codegen unit on low-memory builders. A PKG
 its own profile settings can override inherited variables; adjust the packaging recipe locally or
 contact its maintainer rather than assuming an environment prefix on `makepkg` will take precedence.
 
+**Linux/Arch build troubleshooting: rustc SIGILL with ThinLTO.**
+In [#2811](https://github.com/storytold/lightcraft/issues/2811), an Arch Linux x86_64 build on an
+AMD Ryzen 9 7900X3D with 64 GB RAM failed with rustc 1.99.0 / LLVM 23.1.1, AUR `lightcraft`
+`0.7.1-1` and `0.13.0-1`, `RUSTFLAGS="-C opt-level=3 -C target-cpu=native"`, and release settings
+`opt-level=3`, `lto=thin`, `codegen-units=1`. `cargo build --frozen --release` reached the executable
+crates before rustc crashed with signal 4 (`SIGILL` / `ILL_ILLOPN`). The core dumps point into LLVM's
+SelectionDAG / vector-combine optimization path; the exact compiler root cause has not been isolated.
+This does not mean every machine with that hardware or toolchain will fail. It is a different observed
+failure from the 16 GB OOM kills in [#1196](https://github.com/storytold/lightcraft/issues/1196) above;
+there is no evidence establishing a shared root cause.
+
+For a direct Cargo source build, the equivalent command-local LTO override is:
+
+```sh
+CARGO_PROFILE_RELEASE_LTO=off cargo build --frozen --release
+```
+
+Reporter @rwarmstr verified the workaround by exporting `CARGO_PROFILE_RELEASE_LTO=off` **inside the
+AUR PKGBUILD's `_srcenv()` function** and rebuilding both package versions, without changing
+`RUSTFLAGS`. The reporter tested the AUR recipe, not the direct Cargo invocation above.
+A variable prefixed to `makepkg` alone may be overwritten by the PKGBUILD's own exports; the recipe
+must honor or set the override. The AUR `!lto` opt-out behavior is tracked separately in
+[#2813](https://github.com/storytold/lightcraft/issues/2813).
+
+[Cargo's LTO documentation](https://doc.rust-lang.org/cargo/reference/profiles.html#lto) distinguishes
+`false` from `off`: `false` can still perform thin local LTO across codegen units (unless
+`codegen-units=1` or `opt-level=0`); `off` disables LTO explicitly. The low-memory recipe above is
+unchanged. This workaround is for affected builds, not a new default; disabling LTO may change
+performance, binary size and build behavior.
+
 Tests that need a GPU, the corpus, the craft-fonts faces or a model pass without checking anything when
 those are missing (libtest has no "skipped" status), so `cargo xtask ci` lists them: tests record a skip
 with `lightcraft_testkit::skip!`, and the run ends with what the machine offered (OS, CPUs, RAM, GPU
@@ -466,7 +497,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 ```
 
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
-repo — the standard for what goes there lives with it: see the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
+repo — what goes there is described in the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
 **Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).

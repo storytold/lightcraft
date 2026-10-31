@@ -21,15 +21,25 @@ headless snapshots or `lightcraft-cli mcp` without `--connect`. A request that h
 
 Connections close after five minutes without incoming bytes while the server is waiting for
 input, including in the middle of an unfinished request line. This allows pauses between
-automation commands while releasing abandoned connection slots. An idle read timeout gets an
-`ok: false` error saying the connection is closing; incomplete input is never dispatched.
+automation commands while releasing abandoned connection slots. An idle read timeout gets one
+reply without an `id`, then the connection closes; incomplete input is never dispatched:
+
+```text
+← {"ok": false, "error": "control connection idle read timed out; closing the connection", "closed": "idle"}
+```
+
 This is a socket read inactivity limit, not a total connection lifetime: a peer that keeps
 sending bytes can keep it open. Waiting for an already-dispatched command's reply does not
 count as idle reading and retains the request timeout above.
 
-Reconnect before sending another request after an idle close. MCP connect mode detects closed
-connections before sending and reconnects; if a connection is lost after sending a request,
-its outcome remains unknown and the client must not blindly replay it.
+Reconnect before sending another request after an idle close. A request sent just as the
+connection expires crosses the notice: the client reads the notice where it expects the reply.
+The server reads nothing after its idle timeout, so that request never ran, and `"closed": "idle"`
+(only on this notice) says it is safe to send it again, once, on a new connection. Apps from
+before the marker send the same notice without it; match its exact `error` text for them. MCP
+connect mode does both: it detects closed connections before sending and reconnects, and
+resends a request that crossed the idle notice once. Any other lost connection after sending a
+request leaves its outcome unknown, and the client must not blindly replay it.
 
 **Only requests are read.** Every line must be a JSON object with a string `method` (`id` and `params` are
 optional; blank lines are skipped). Anything else — text that isn't JSON, a JSON array or number, an object without
@@ -82,9 +92,9 @@ filmstrip is visible.
 | `ui.inspect` | — | UI state, window, `loupe` (`source`, `pending`, `failed` = why its render failed, else `null`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
 | `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
 | `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks; `count` is capped at 16) / `{id, toX?, toY?, dx?, dy?, steps?}` (steps are capped at 1000) / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews). `fx`/`fy` are fractions of the registered rect and may lie outside `[0,1]`; the resulting point must still be inside egui's clipped interaction rect, and a non-finite fraction or resolved point is rejected before any input is queued. Geometry comes from the latest completed layout; if the widget moves before the first event or before a press, or its latest clipped rect no longer contains the point, the request fails with an error instead of clicking another widget or retargeting. A target below an ordinary modal dialog may succeed as a no-op or a backdrop click, because egui routes that input to the dialog; a target covered by a non-modal overlay fails. The blocking library-problem/launch-list window is explicit: its dim takes the modal layer, but a background target fails instead of reporting a no-op success, and only that window's own controls (`button:library…`) pass. Its creation frame is shielded and redrawn with empty input like a prompt's, so background text/pointer input cannot act while the new modal areas settle. A quit prompt or settings notice is a real egui modal scope with a foreground backdrop. Only its own buttons (`button:quit…`, `button:noticeOk`) accept a `ui.clickWidget`; background targets fail, and background keystrokes, text/clipboard input, wheel/zoom input and AccessKit actions are dropped before panels see them. The prompt itself takes Tab/Shift+Tab, Enter/Space on the focused button, and Escape/Enter for the safe default Cancel; AccessKit Focus/Click works when targeted at a prompt button. Its first creation frame (including a Tasks→Unsaved or notice→next-notice transition) is shielded and redrawn with empty input, so a press/release in that frame, or a held press from before it, cannot act underneath it; a synthetic drag already in progress is canceled. Once settled, raw `ui.click`/`ui.drag`/`ui.pointer` and backdrop clicks are still delivered to the prompt backdrop as no-ops, and the prompt's own button clicks work normally. The area/layer check cannot see a different widget covering the point in the same layer. A `ui.clickWidget` whose widget disappears before its release also fails, after canceling the pointer press without a click or drag (the same rules apply when a click spans several host frames) |
-| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points (the same click and step caps apply) |
+| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points (the same click and step caps apply). In every pointer and scroll gesture a number other than `count` and `steps` must lie between −1,000,000 and 1,000,000, or the request is refused and queues nothing |
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
-| `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press; while a prompt is up only its Tab/Shift+Tab, Enter, Space and Escape are delivered, every other key is dropped |
+| `ui.key` | `{key, action?: press\|down\|up, cmd?, shift?, alt?, ctrl?}` | Key press (default), or the key going `down` and staying held until an `up` (Space held over a `ui.pointer` drag); while a prompt is up only its Tab/Shift+Tab, Enter, Space and Escape are delivered, every other key is dropped |
 | `ui.text` | `{text}` | Text input |
 | `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`). In the desktop app cut and copy write the system clipboard. Refused while a prompt or the blocking library window owns input, including a window in its creation frame. A `paste` without `text` queues egui's `RequestPaste` viewport command for the host: egui 0.37 gives that command no completion/correlation id, and egui-winit emits a later `Event::Paste` only for non-empty text (or a `PasteImage` fallback; asynchronous clipboard reads finish later), so the reply confirms the request was queued in egui, not that the host dispatched it or that it was delivered; a barrier created after the request can drop that later event. `paste` with `text` is synthetic and is canceled like other injected input. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
 | `ui.scroll` | `{dx, dy, source?, unit?, phase?, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms. `source` is `unknown` (default), `wheel`, `trackpad` or `momentum`; `unit` is `point` (default), `line` or `page`; `phase` is `move` (default), `start`, `end` or `cancel`. Wheel/line events drive the grid/filmstrip one-third wheel step and the loupe's notch zoom; trackpad/momentum phases drive kinetic scrolling and rubber-band boundaries. Invalid values are refused and queue nothing |
@@ -117,9 +127,19 @@ raws with colour matrices — in the file (DNG) or measured for the camera model
 #730) — and on raws whose white-balance presets give the scale (`lightcraft_raw::kelvin_presets`), where As Shot
 reads the file's as-shot white; rendered files and raws without matrices use a relative scale
 whose 6500 K / 0 is the as-shot look (the Edit panel shows it as −100..+100). The stored `wb` of such a Kelvin raw
-says `"scale": "kelvin"`; a partial settings JSON given to `develop.merge` or a preset whose `wb` sets `temp` / `tint`
-**without** `scale` keeps the relative meaning it always had (6500 = as shot) on every raw, so agents that mean
-Kelvin on a Kelvin raw pass `"scale": "kelvin"` or use `develop.set` / `develop.wb`.
+says `"scale": "kelvin"`; a partial settings JSON given to `develop.merge`, to a preset's `wb`, or to
+`lightcraft-cli render --settings` and which sets `temp` / `tint` **without** `scale` keeps the relative meaning it
+always had (6500 = as shot) on every raw, so agents that mean Kelvin on a Kelvin raw pass `"scale": "kelvin"` or use
+`develop.set` / `develop.wb`. A partial that names only one of `temp` / `tint` is resolved against the photo
+(issue #2910): the photo's white balance is first brought onto the partial's scale with the photo's own as-shot
+white, so the field the partial does not name keeps the look it had instead of being re-read on the partial's scale,
+and the stored result is back on the scale the photo is edited on (`"scale": "kelvin"` on a Kelvin raw). The same
+holds for `preset.apply` when the preset names only one of the two numbers; a preset written by the app, or imported
+from crs / XMP, names `mode`, `temp`, `tint` and `scale` together and behaves exactly as before. A photo whose white
+balance mode answers its own white — `As Shot`, or a named preset on a raw edited in Kelvin — has that white written
+out as `Custom` values first, because a number merged into such a mode would otherwise be stored where no render
+reads it (the panel would show 5800 while the photo stayed at as shot); a partial that names a `mode` itself stays
+authoritative. Partials naming both fields mean the same as before.
 
 Image navigation is also available directly as the UI command `view.navigate`, with
 `{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
@@ -311,6 +331,16 @@ For MCP, use `lightcraft-cli mcp --connect 127.0.0.1:7980`: `run_command` reache
 `lightcraft://library`, `lightcraft://photo/active`, `lightcraft://develop/active` and
 `lightcraft://controls` ([mcp.md](mcp.md#resources)). Headless CLI/MCP mode owns a separate engine
 session; use connect mode for feedback from edits in the desktop app.
+
+The import review's **Thumbnail size** slider is `slider:importThumbSize` in `ui.widgets`.
+`engine.execute {command: "view.importThumbSize", params: {size: 240}}` sets its size in points
+(80–320, clamped); omitting `size` reads it. Both return `{size}`. Non-numeric or non-finite
+values are refused. The preference is `importThumbSize` in the UI state, independent of the
+library grid's `thumbSize`; resizing keeps the import checkboxes and duplicate markers.
+The shared slider also exposes `sliderValue:importThumbSize` for exact entry and
+`sliderLabel:importThumbSize` for double-click reset to 116 pt. Up/Down nudges the selected
+slider by 1 pt; Return commits typed values and Escape cancels them. Slider and command
+labels, including edit/reset feedback, are localized in every shipped catalog. Previews use bounded physical-pixel buckets through 1024 px. A smaller source is tried once per bucket; scrolling releases offscreen textures, queued work and request identities. A renderable raw uses a render when its camera JPEG cannot cover the tile; preview-only raws, unavailable renders and failed renders retain the available camera JPEG.
 
 ## Headless rendering (no window, no GPU)
 

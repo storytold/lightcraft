@@ -196,6 +196,61 @@ fn the_painters_field_pastes_and_return_paints() {
     assert_eq!(h.app.ui.keyword_painter.as_deref(), Some("Weddings"));
 }
 
+/// ⌘⌥K (Ctrl+Alt+K) is Enable Painting: with the painter's box empty it shows the Keywords panel to
+/// type a keyword in (unfolding the Keywords section when it was folded shut), with a keyword in the
+/// box it paints that keyword, and pressed again it stops.
+#[test]
+fn cmd_alt_k_paints_the_painters_keyword_and_stops() {
+    let (mut h, _) = two_selected();
+    let key = json!({"key": "K", "cmd": true, "alt": true});
+    ask(&mut h, "ui.set", json!({"right": "none"}));
+    h.app.ui.toggle_folded("keywording");
+    ask(&mut h, "ui.key", key.clone());
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords, "an empty box: the Keywords panel");
+    assert!(!h.app.ui.section_folded("keywording") && has(&h, "field:keywordPainter"), "the painter's box shows");
+    assert!(h.app.ui.keyword_painter.is_none(), "nothing to paint yet");
+    h.view.clipboard = "Weddings".into();
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordPainter", "button": "right"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordPainter:paste"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:keywords"}));
+    ask(&mut h, "ui.key", key.clone());
+    assert_eq!(h.app.ui.keyword_painter.as_deref(), Some("Weddings"), "the box's keyword");
+    ask(&mut h, "ui.key", key);
+    assert!(h.app.ui.keyword_painter.is_none(), "pressed again: painting stops");
+    assert_eq!(h.app.ui.keyword_painter_text, "Weddings", "the box keeps the keyword");
+}
+
+/// In the full-screen preview, ⌘⌥K leaves the preview first: with an empty box the Keywords panel
+/// shows, and with a keyword in the box the grid shows to paint on.
+#[test]
+fn cmd_alt_k_leaves_the_full_screen_preview() {
+    let (mut h, _) = two_selected();
+    let key = json!({"key": "K", "cmd": true, "alt": true});
+    h.app.run("view.fullScreenPreview", json!({})).unwrap();
+    assert!(h.app.ui.fullscreen);
+    ask(&mut h, "ui.key", key.clone());
+    assert!(!h.app.ui.fullscreen, "an empty box: the preview ends");
+    assert!(has(&h, "field:keywordPainter"), "the painter's box shows");
+    h.app.ui.keyword_painter_text = "Weddings".into();
+    h.app.run("view.fullScreenPreview", json!({})).unwrap();
+    assert!(h.app.ui.fullscreen);
+    ask(&mut h, "ui.key", key);
+    assert!(!h.app.ui.fullscreen, "a keyword in the box: the preview ends");
+    assert_eq!(h.app.ui.keyword_painter.as_deref(), Some("Weddings"));
+}
+
+/// ⌘⌥K with an empty box turns off a targeted-adjustment tool as it opens the Keywords panel, as
+/// opening the panel any other way does.
+#[test]
+fn cmd_alt_k_turns_off_a_targeted_adjustment_tool() {
+    let (mut h, _) = two_selected();
+    ask(&mut h, "ui.set", json!({"view": "detail", "right": "edit"}));
+    h.app.ui.tool = "tat:curve".into();
+    ask(&mut h, "ui.key", json!({"key": "K", "cmd": true, "alt": true}));
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Keywords);
+    assert!(h.app.ui.tool.is_empty(), "the tool is off: {:?}", h.app.ui.tool);
+}
+
 /// Suggestions follow the selection: a keyword only some selected photos have is suggested, to give
 /// it to all of them; one every selected photo has isn't.
 #[test]

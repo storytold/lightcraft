@@ -490,6 +490,12 @@ fn pass_answer(id: crate::AlbumId, photo: crate::PhotoId) -> Option<bool> {
 
 #[cfg(test)]
 thread_local! {
+    /// Tests: test rules in the order they were written, as before [`RuleSet::by_cost`].
+    pub(crate) static WRITTEN_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// How many times a smart album's rules were worked out on this thread (tests count them).
     pub(crate) static EVALUATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -514,9 +520,11 @@ pub(crate) fn smart_album_holds(id: crate::AlbumId, photo: crate::PhotoId, match
             }
         }
     }
-    let _forget = Forget(EVALUATING.with_borrow(Vec::is_empty));
+    let outermost = EVALUATING.with_borrow(Vec::is_empty);
+    let _forget = Forget(outermost);
     let answer = evaluating(id, matches);
-    if let Some(a) = answer {
+    // (the outermost answer would be forgotten as this returns: only what a nested question worked out is kept)
+    if let (Some(a), false) = (answer, outermost) {
         ANSWERS.with_borrow_mut(|known| known.insert((id, photo), a));
     }
     answer.unwrap_or(false)
@@ -901,9 +909,11 @@ fn path_bytes_contains(hay: &[u8], needle: &[u8]) -> bool {
     tail.iter().enumerate().any(|(j, &c)| at(tail_from + j, c))
 }
 
-/// A `filePath` rule. The common case (an ASCII path and an ASCII text) is compared in place, folding
-/// case and `\` as it goes, with nothing allocated per photo; any other text takes
-/// [`file_path_matches_slow`], so Unicode lower-casing (ß, İ, final sigma…) behaves as it always did.
+/// A `filePath` rule. An ASCII path and an ASCII text are compared as bytes, a path or text with other
+/// characters folded into stack buffers ([`file_path_matches_folded`]); both fold case and `\` as they
+/// go, with nothing allocated per photo. Only what that can't reproduce (a text that is not a string, a
+/// path or text longer than the buffers, or a capital sigma, whose lower case depends on its neighbors)
+/// takes [`file_path_matches_slow`], so Unicode lower-casing (ß, İ, final sigma…) behaves as it always did.
 fn file_path_matches(op: &str, source: &Source, value: &Value) -> bool {
     let path = match source {
         Source::File { path } => path.as_str(),
@@ -911,7 +921,7 @@ fn file_path_matches(op: &str, source: &Source, value: &Value) -> bool {
     };
     let Value::String(want) = value else { return file_path_matches_slow(op, path, value) };
     if !path.is_ascii() || !want.is_ascii() {
-        return file_path_matches_slow(op, path, value);
+        return file_path_matches_folded(op, path, want).unwrap_or_else(|| file_path_matches_slow(op, path, value));
     }
     let (path, want) = (path.trim().as_bytes(), want.trim().as_bytes());
     match op {
@@ -926,6 +936,70 @@ fn file_path_matches(op: &str, source: &Source, value: &Value) -> bool {
         "isNotEmpty" => !path.is_empty(),
         _ => false,
     }
+}
+
+/// Room for a folded path (a path of 1 KiB; the fold of a character is at most 1.5 times its bytes) and a folded text.
+const FOLDED_PATH_BYTES: usize = 1536;
+const FOLDED_TEXT_BYTES: usize = 384;
+/// The pair tried first.
+const SMALL_PATH_BYTES: usize = 256;
+const SMALL_TEXT_BYTES: usize = 96;
+
+/// `s` as the `filePath` rules compare it, written into `buf`: `\` as `/`, every character lower-cased
+/// the way [`str::to_lowercase`] does (`İ` becomes `i` and U+0307). `None` when it doesn't fit, or for a
+/// capital sigma, which `to_lowercase` writes as `ς` at the end of a word and `σ` elsewhere, by Unicode
+/// tables this module can't reach; the caller takes the allocating comparison.
+fn fold_path<'b>(s: &str, buf: &'b mut [u8]) -> Option<&'b str> {
+    let (mut n, mut at) = (0, 0);
+    while at < s.len() {
+        // an ASCII run is copied and folded as one block
+        let run = s.as_bytes()[at..].iter().position(|b| !b.is_ascii()).unwrap_or(s.len() - at);
+        if run > 0 {
+            let out = buf.get_mut(n..n + run)?;
+            out.copy_from_slice(&s.as_bytes()[at..at + run]);
+            out.iter_mut().for_each(|b| *b = fold_path_byte(*b));
+            (n, at) = (n + run, at + run);
+            continue;
+        }
+        let c = s[at..].chars().next()?;
+        if c == '\u{3a3}' {
+            return None;
+        }
+        for l in c.to_lowercase() {
+            n += l.encode_utf8(buf.get_mut(n..)?.get_mut(..l.len_utf8())?).len();
+        }
+        at += c.len_utf8();
+    }
+    std::str::from_utf8(&buf[..n]).ok()
+}
+
+/// [`file_path_matches`] for a path or text with non-ASCII characters: both folded into stack buffers, then
+/// compared as the allocating comparison does, so the answers are the same by construction (a match may
+/// begin inside one character's several lower-case characters, `İ` then U+0307, as it does there).
+/// Photo paths are short, so a small pair of buffers goes first (clearing a big one costs more than a
+/// short path's fold); `None` where [`fold_path`] can't fold them in the large pair either.
+fn file_path_matches_folded(op: &str, path: &str, want: &str) -> Option<bool> {
+    file_path_matches_folded_in::<{ SMALL_PATH_BYTES }, { SMALL_TEXT_BYTES }>(op, path, want)
+        .or_else(|| file_path_matches_folded_in::<{ FOLDED_PATH_BYTES }, { FOLDED_TEXT_BYTES }>(op, path, want))
+}
+
+fn file_path_matches_folded_in<const PATH: usize, const TEXT: usize>(op: &str, path: &str, want: &str) -> Option<bool> {
+    if matches!(op, "isEmpty" | "isNotEmpty") {
+        return Some((op == "isEmpty") == path.trim().is_empty());
+    }
+    let mut want_buf = [0u8; TEXT];
+    let mut path_buf = [0u8; PATH];
+    let want = fold_path(want.trim(), &mut want_buf)?;
+    Some(match op {
+        // the whole string, spaces included (not word by word like the other text fields)
+        "contains" => !want.is_empty() && fold_path(path, &mut path_buf)?.contains(want),
+        "notContains" => want.is_empty() || !fold_path(path, &mut path_buf)?.contains(want),
+        "is" => fold_path(path.trim(), &mut path_buf)? == want,
+        "isNot" => fold_path(path.trim(), &mut path_buf)? != want,
+        "startsWith" => fold_path(path.trim(), &mut path_buf)?.starts_with(want),
+        "endsWith" => fold_path(path.trim(), &mut path_buf)?.ends_with(want),
+        _ => false,
+    })
 }
 
 /// [`file_path_matches`] for any text: the path and the text are normalised into new strings.
@@ -1048,6 +1122,48 @@ impl Rule {
     }
 }
 
+/// How much work one rule is, in tiers: [`RuleSet::by_cost`] tests the cheaper first.
+const COST_SCALAR: u8 = 0;
+const COST_SMALL: u8 = 1;
+const COST_TEXT: u8 = 2;
+const COST_ALBUM: u8 = 3;
+
+impl Rule {
+    /// A rule's tier: 0 numbers, choices and yes/no questions about one photo's own record (and
+    /// anything that is settled at once: an unknown field or a missing album); 1 dates, keyword and
+    /// people lists, short single fields, an index lookup and a plain album's list (a folder holds no photos here: an empty lookup); 2 text built
+    /// from several fields and file paths (long strings, matched for each photo); 3 a smart album,
+    /// which runs a whole rule set for the photo. A group costs as much as its dearest rule.
+    fn cost(&self, cat: &Catalog) -> u8 {
+        match self {
+            Rule::Group { group } => group.rules.iter().map(|r| r.cost(cat)).max().unwrap_or(COST_SCALAR),
+            Rule::Field { field, value, .. } => match field.as_str() {
+                "album" => album_rule_id(value).map_or(COST_SCALAR, |id| match cat.albums.get(&id) {
+                    None => COST_SCALAR,
+                    Some(a) if a.smart.is_some() => COST_ALBUM,
+                    Some(_) => COST_SMALL,
+                }),
+                "text" | "filePath" | "location" => COST_TEXT,
+                "keywords" | "person" | "personCount" | "stacked" | "copyName" | "fileName" | "extension" | "format" | "title" | "caption"
+                | "altText" | "city" | "state" | "country" | "camera" | "lens" | "creator" | "copyright" | "captureDate" | "importDate"
+                | "editDate" | "shutterSpeed" | "aspect" => COST_SMALL,
+                _ => COST_SCALAR,
+            },
+        }
+    }
+
+    /// This rule with its nested groups ordered by cost, and its tier.
+    fn by_cost(&self, cat: &Catalog) -> (u8, Rule) {
+        match self {
+            Rule::Group { group } => {
+                let group = group.by_cost(cat);
+                (group.rules.iter().map(|r| r.cost(cat)).max().unwrap_or(COST_SCALAR), Rule::Group { group })
+            }
+            field => (field.cost(cat), field.clone()),
+        }
+    }
+}
+
 impl RuleSet {
     pub fn matches(&self, p: &Photo, cat: &Catalog) -> bool {
         if self.rules.is_empty() {
@@ -1058,6 +1174,22 @@ impl RuleSet {
             Match::Any => self.rules.iter().any(|r| r.matches(p, cat)),
             Match::None => !self.rules.iter().any(|r| r.matches(p, cat)),
         }
+    }
+
+    /// This rule set with its rules (and those of nested groups) in the order to test them: the
+    /// cheapest first ([`Rule::cost`]), the user's order among equals. Rules are pure (they read
+    /// the photo and the catalog; a smart album's answer is the same however it is reached as long
+    /// as no smart album tests itself and no chain is cut by the depth limit, which callers check first: [`Catalog::keeps_written_order`]),
+    /// so for all, any and none the photos that match are the same in any order; only the work
+    /// differs. Worked out once for a pass, never per photo. The saved rules are untouched.
+    pub(crate) fn by_cost(&self, cat: &Catalog) -> RuleSet {
+        #[cfg(test)]
+        if WRITTEN_ORDER.get() {
+            return self.clone();
+        }
+        let mut rules: Vec<(u8, Rule)> = self.rules.iter().map(|r| r.by_cost(cat)).collect();
+        rules.sort_by_key(|(cost, _)| *cost);
+        RuleSet { mode: self.mode, rules: rules.into_iter().map(|(_, r)| r).collect() }
     }
 
     /// Whether matches depend on the clock ("in the last…" rules, nested groups included): the
@@ -1180,3 +1312,5 @@ impl RuleSet {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_path_fold;
