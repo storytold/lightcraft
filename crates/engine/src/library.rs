@@ -4,6 +4,7 @@
 //! ```text
 //! LightCraft Library/
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
+//!   segments/      (the snapshot's photos: JSON files that catalog.snap lists)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
@@ -271,9 +272,21 @@ fn presets_json(s: &Session) -> String {
 /// Finish a background compaction that is done (cheap otherwise). A failed one lost nothing (the
 /// log is kept whole) and is retried later; it is reported like other persistence errors.
 fn poll_compaction(lib: &mut Library) {
-    if let Err(e) = lib.journal.poll() {
+    let polled = lib.journal.poll();
+    note_upgrade_kept(lib);
+    if let Err(e) = polled {
         log::error!("library: compaction: {e}");
         lib.last_error = Some(format!("compaction: {e}"));
+    }
+}
+
+/// A snapshot that upgraded a library left in an older format at open kept the files it was:
+/// tell so once, like the open does ([`kept_note`]). Cheap when nothing was kept.
+fn note_upgrade_kept(lib: &mut Library) {
+    let kept = lib.journal.take_kept();
+    if let Some(note) = kept_note(&kept, None) {
+        lib.settings_warnings.push(note);
+        lib.report.kept.extend(kept);
     }
 }
 
@@ -307,6 +320,20 @@ struct SettingsLoad {
     warnings: Vec<String>,
     /// Files not to overwrite this session.
     blocked: Vec<&'static str>,
+}
+
+/// What to tell the person when opening the library upgraded it: the files it was are kept
+/// beside it (as large as it was), and are theirs to delete.
+fn kept_note(kept: &[String], damaged: Option<&String>) -> Option<String> {
+    if kept.is_empty() && damaged.is_none() {
+        return None;
+    }
+    // (a library whose log was damaged: that log is the other half of what it was)
+    let kept: Vec<&str> = kept.iter().chain(damaged).map(String::as_str).collect();
+    Some(format!(
+        "This library was upgraded for this version of LightCraft, and earlier versions can't open it now. The library as it was is kept beside it as {}: delete it once the earlier version is no longer wanted (docs/catalog-persistence.md, \"Going back to an older version\").",
+        kept.join(" and ")
+    ))
 }
 
 impl SettingsLoad {
@@ -468,6 +495,11 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
         let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        if lock.as_ref().is_some_and(|l| l.held()) {
+            // (only with the library's lock actually held, not one the file system could not give:
+            // see `Journal::remove_unlisted_segments`)
+            journal.remove_unlisted_segments();
+        }
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
         // in this process its own range: otherwise an empty library opened after one that was
@@ -575,6 +607,8 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
+        // (a damaged log is only part of "what the library was" when opening upgraded it: a library in this format that lost its log's tail was not upgraded)
+        let kept = kept_note(&report.kept, report.damaged.as_ref().filter(|_| report.upgraded_from.is_some()));
         self.library = Some(Library {
             dir,
             on_disk,
@@ -588,7 +622,7 @@ impl Session {
             forgot_local: None,
             presets_saved,
             view_written,
-            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
+            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(kept).chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
             lock: lock.take(),
@@ -712,6 +746,7 @@ impl Session {
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
+        let saved = unlogged == 0 && persisted.is_ok();
         let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
         if unlogged > 0 && lib.journal.seq() == before + unlogged {
             // the snapshot holds the queued ops: they are saved, never append them again
@@ -723,6 +758,14 @@ impl Session {
         }
         let result = match (persisted, snapshot) {
             (_, Ok(())) => Ok(()),
+            // everything is in the log and only the compaction failed (a library whose upgrade is
+            // put off, with no room to keep its old files): the next open replays the log, so
+            // closing (also to switch libraries) is not refused for it
+            (_, Err(s)) if saved => {
+                log::warn!("library: closed without compacting: {s}");
+                lib.last_error = Some(format!("compaction: {s}"));
+                Ok(())
+            }
             // neither the log nor the snapshot took the queued ops
             (Err(EngineError::NotSaved(e)), Err(s)) if lib.journal.seq() == before => Err(EngineError::NotSaved(format!("{e}; snapshot: {s}"))),
             (_, Err(s)) => Err(s.into()),
@@ -842,6 +885,7 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        note_upgrade_kept(lib);
     }
 
     /// Compact the log into a snapshot now.
@@ -851,7 +895,9 @@ impl Session {
             return Err(EngineError::Other("can't compact during an interaction".into()));
         }
         if let Some(lib) = self.library.as_mut() {
-            lib.journal.snapshot(&self.catalog)?;
+            let snapshot = lib.journal.snapshot(&self.catalog);
+            note_upgrade_kept(lib);
+            snapshot?;
         }
         Ok(())
     }
