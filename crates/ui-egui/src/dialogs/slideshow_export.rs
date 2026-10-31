@@ -79,35 +79,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::slideshow_export::ExportSettings) {
     use lightcraft_engine::slideshow_export::{ExportSettings, Format};
     let t = Tokens::get(ui.ctx());
-    let photos = app.session.visible_cloned().len();
-    let slide = app.session.slideshow.slide_duration;
-    let (intro, ending) = app.session.slide_titles.durations(slide);
-    let titles = usize::from(intro.is_some()) + usize::from(ending.is_some());
-    let seconds = photos as f64 * slide + intro.unwrap_or(0.0) + ending.unwrap_or(0.0);
-    let summary = crate::i18n::tr_format!(
-        "{n} photos in view · {slides} slides · {time}",
-        n = photos,
-        slides = photos + titles,
-        time = format!("{}:{:02}", (seconds / 60.0).floor() as u64, (seconds % 60.0).round() as u64)
-    );
-    ui.label(egui::RichText::new(summary).color(t.text_dim));
+    ui.label(egui::RichText::new(slideshow_summary(app)).color(t.text_dim));
     let before = settings.format;
     choices(ui, "Format", "slideshowExportFormat", &[(Format::Pdf, "PDF"), (Format::Jpeg, "JPEG"), (Format::Video, "Video")], &mut settings.format);
     if settings.format != before {
         *settings = ExportSettings { full_screen: settings.full_screen, ..ExportSettings::for_format(settings.format) };
     }
-    match settings.format {
-        Format::Video => {
-            choices(ui, "Size", "slideshowExportSize", &[(720, "720p"), (1080, "1080p")], &mut settings.size);
-            choices(ui, "Frame rate", "slideshowExportFps", &[(24, "24 fps"), (30, "30 fps")], &mut settings.fps);
-            let mut webm = settings.container == "webm";
-            choices(ui, "Container", "slideshowExportContainer", &[(false, "MP4"), (true, "WebM")], &mut webm);
-            settings.container = if webm { "webm".into() } else { "mp4".into() };
-        }
-        _ => {
-            choices(ui, "Size", "slideshowExportSize", &[(1024, "1024 px"), (1920, "1920 px"), (3840, "3840 px")], &mut settings.size);
-        }
-    }
+    slideshow_size_rows(ui, settings);
     field(ui, "Quality", |ui| {
         let r = ui.add(egui::Slider::new(&mut settings.quality, 1..=100));
         crate::widgets::register(ui, "slider:slideshowExportQuality", r.rect);
@@ -126,6 +104,46 @@ pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, 
         egui::RichText::new(crate::i18n::tr("Slides use the slideshow's layout, overlays and intro and ending screens, in view order."))
             .color(t.text_dim),
     );
+}
+
+/// How many photos are in view, how many slides they make with the intro and ending screens, and how long it plays.
+fn slideshow_counts(app: &mut LightcraftApp) -> (usize, usize, f64) {
+    let photos = app.session.visible_cloned().len();
+    let slide = app.session.slideshow.slide_duration;
+    let (intro, ending) = app.session.slide_titles.durations(slide);
+    let titles = usize::from(intro.is_some()) + usize::from(ending.is_some());
+    (photos, photos + titles, photos as f64 * slide + intro.unwrap_or(0.0) + ending.unwrap_or(0.0))
+}
+
+/// "N photos in view · M slides · m:ss".
+fn slideshow_summary(app: &mut LightcraftApp) -> String {
+    let (photos, slides, seconds) = slideshow_counts(app);
+    let time = format!("{}:{:02}", (seconds / 60.0).floor() as u64, (seconds % 60.0).round() as u64);
+    crate::i18n::tr_format!(
+        "{n} photo{} in view · {slides} slide{} · {time}",
+        crate::i18n::plural_s(photos),
+        crate::i18n::plural_s(slides),
+        n = photos,
+        slides = slides,
+        time = time
+    )
+}
+
+/// The size choices of the chosen format, and a video's frame rate and container.
+fn slideshow_size_rows(ui: &mut egui::Ui, settings: &mut lightcraft_engine::slideshow_export::ExportSettings) {
+    use lightcraft_engine::slideshow_export::Format;
+    match settings.format {
+        Format::Video => {
+            choices(ui, "Size", "slideshowExportSize", &[(720, "720p"), (1080, "1080p")], &mut settings.size);
+            choices(ui, "Frame rate", "slideshowExportFps", &[(24, "24 fps"), (30, "30 fps")], &mut settings.fps);
+            let mut webm = settings.container == "webm";
+            choices(ui, "Container", "slideshowExportContainer", &[(false, "MP4"), (true, "WebM")], &mut webm);
+            settings.container = if webm { "webm".into() } else { "mp4".into() };
+        }
+        _ => {
+            choices(ui, "Size", "slideshowExportSize", &[(1024, "1024 px"), (1920, "1920 px"), (3840, "3840 px")], &mut settings.size);
+        }
+    }
 }
 
 #[cfg(test)]
