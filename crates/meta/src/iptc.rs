@@ -8,8 +8,8 @@ use crate::{DateTime, Metadata};
 fn decode(b: &[u8], utf8: bool) -> String {
     match std::str::from_utf8(b) {
         Ok(s) => s.trim_end_matches('\0').trim().to_string(),
-        Err(_) if utf8 => String::from_utf8_lossy(b).trim().to_string(),
-        Err(_) => b.iter().map(|&c| c as char).collect::<String>().trim().to_string(),
+        Err(_) if utf8 => String::from_utf8_lossy(b).trim_end_matches('\0').trim().to_string(),
+        Err(_) => b.iter().map(|&c| c as char).collect::<String>().trim_end_matches('\0').trim().to_string(),
     }
 }
 
@@ -104,6 +104,20 @@ pub(crate) mod tests {
         assert_eq!(m.copyright.as_deref(), Some("CC0"));
         assert_eq!(m.caption.as_deref(), Some("A caption"));
         assert_eq!(m.capture_time.unwrap().to_iso(), "2021-03-04T10:11:12+01:00");
+    }
+
+    #[test]
+    fn non_utf8_text_drops_trailing_nul() {
+        let mut v = Vec::new();
+        ds(&mut v, 2, 5, &[0x43, 0xe9, 0x00]);
+        ds(&mut v, 2, 25, &[0x6b, 0xe9, 0x00]);
+        let m = parse_iptc(&v);
+        assert_eq!(m.title.as_deref(), Some("Cé"));
+        assert_eq!(m.keywords, vec!["ké".to_string()]);
+        let mut u = Vec::new();
+        ds(&mut u, 1, 90, b"\x1b%G");
+        ds(&mut u, 2, 5, &[0x43, 0xff, 0x00]);
+        assert_eq!(parse_iptc(&u).title.as_deref(), Some("C\u{fffd}"));
     }
 
     #[test]

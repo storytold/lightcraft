@@ -9,6 +9,9 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
     use lightcraft_pipeline::Overlay as O;
     match overlay {
         O::None | O::Mask { .. } | O::AllMasks { .. } | O::PointColorRange(_) | O::HdrRange | O::Spots(_) => true,
+        // clipping and greyscale previews act pixel by pixel on the finished image
+        o if o.per_pixel() => true,
+        _ => false,
     }
 }
 

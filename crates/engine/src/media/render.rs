@@ -302,10 +302,14 @@ impl RenderJob {
                 // side by side (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay free for
                 // decoding - but never wait for it: at startup they render on the CPU.
                 let gpu = self.cache.is_none() || lightcraft_gpu::ready();
+                // a clipping preview tests sRGB values, like the histogram: rendered in sRGB, then
+                // converted for the display below
+                let clip_view = self.request.overlay.is_clipping();
+                let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
                 let pixels_needed =
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
                 let frame = (self.on_screen && !pixels_needed && gpu)
-                    .then(|| develop_on_screen(src, &info, &self.settings, &self.request, self.stages.as_deref()));
+                    .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
                 let (mut rendered, gpu_fallback) = match frame {
                     Some(OnScreen::Frame(frame, histogram)) => {
                         return RenderResult {
@@ -327,12 +331,21 @@ impl RenderJob {
                         };
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
-                    None => develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu),
+                    None => develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu),
                 };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
                 let display = match (&self.display, self.request.display) {
+                    // a diagnostic view: the histogram stays the photo's (taken before the overlay
+                    // was drawn), and nothing goes to the view cache
+                    (Some(d), Some(_)) if self.request.overlay != lightcraft_pipeline::Overlay::None => {
+                        let converted = if clip_view { d.profile.from_srgb(&mut rendered.image) } else { d.profile.correct(&mut rendered.image) };
+                        if let Err(e) = converted {
+                            log::warn!("display profile: {e}");
+                        }
+                        Some(d.id())
+                    }
                     (Some(d), Some(_)) => {
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
                         let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
