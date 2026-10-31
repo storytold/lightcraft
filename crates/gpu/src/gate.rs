@@ -494,13 +494,14 @@ pub(crate) fn usage(role: Role) -> (usize, u64, usize, u64, u64, u64, u64) {
 /// Between a batch render's submissions on card `role`: wait for its previous one (`prev`) to
 /// finish first, so the queue stays short for the window, and on the editing card wait while the
 /// interface is busy ([`yield_to_interaction`]). `false`: the wait failed (timeout, a lost device,
-/// the app closing): the caller fails the render.
-pub(crate) fn throttle(device: &wgpu::Device, prev: Option<wgpu::SubmissionIndex>, role: Role) -> bool {
+/// the app closing): the caller fails the render. The wait goes through [`crate::ctx::Gpu::poll`],
+/// which never panics and records a lost device.
+pub(crate) fn throttle(gpu: &crate::ctx::Gpu, prev: Option<wgpu::SubmissionIndex>, role: Role) -> bool {
     if !is_batch() {
         return true;
     }
     if let Some(prev) = prev
-        && device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: Some(THROTTLE_TIMEOUT) }).is_err()
+        && gpu.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: Some(THROTTLE_TIMEOUT) }).is_err()
     {
         return false;
     }

@@ -92,7 +92,7 @@ impl LightcraftApp {
         self.memory_applied = Some(mb);
         // export lanes and the GPU's share for exports (Settings ▸ Performance, "Test my machine")
         let st = &self.ui.settings;
-        let tuning = (st.export_lanes, st.export_cpu_only, st.gpu_export_mb, st.gpu_export_jobs);
+        let tuning = crate::machine_test::tuning(st);
         if self.export_tuning_applied != Some(tuning) {
             crate::machine_test::apply(st);
             self.export_tuning_applied = Some(tuning);

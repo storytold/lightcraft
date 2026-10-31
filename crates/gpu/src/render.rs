@@ -183,7 +183,7 @@ impl<'a> Cx<'a> {
         self.pending = 0;
         if let Some(enc) = self.enc.take() {
             // an export keeps one submission queued at a time: the window's frames slot in between
-            if !crate::gate::throttle(&self.gpu.device, self.last.take(), self.gpu.role) {
+            if !crate::gate::throttle(self.gpu, self.last.take(), self.gpu.role) {
                 fail(FailKind::Busy, "the GPU did not finish an earlier step in time (busy)".into());
                 return;
             }

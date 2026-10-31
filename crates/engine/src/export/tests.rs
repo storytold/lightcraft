@@ -1562,6 +1562,7 @@ fn export_lanes_follow_the_setting() {
     if std::env::var_os("LIGHTCRAFT_EXPORT_LANES").is_some() {
         return;
     }
+    let _serial = crate::export::TUNING_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_export_lanes(Some(3));
     assert_eq!(export_lanes_override(), Some(3));
     assert_eq!(export_parallelism(10), 3);

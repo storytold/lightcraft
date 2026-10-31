@@ -573,7 +573,7 @@ pub fn unavailable_reason() -> Option<String> {
     {
         let role = current_role();
         if let Some(r) = slot::lost_reason(role) {
-            return Some(if slot::recoveries(role) >= slot::MAX_RECOVERIES {
+            return Some(if slot::gave_up(role) {
                 format!("stopped after a GPU failure: {r}")
             } else {
                 format!("paused after a GPU failure, restarting the graphics card: {r}")

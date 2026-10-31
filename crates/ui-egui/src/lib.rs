@@ -360,7 +360,7 @@ pub struct LightcraftApp {
     /// The window's size last frame: a resize asks the GPU's batch work (exports) to make room.
     last_screen: egui::Vec2,
     /// The export lanes, processor-only switch and GPU share last applied (install settings).
-    export_tuning_applied: Option<(u32, bool, u32, u32)>,
+    export_tuning_applied: Option<machine_test::Tuning>,
     /// "Test my machine" while it runs (Settings ▸ Performance).
     pub machine: Option<machine_test::MachineTask>,
     /// The memory budget setting last applied (MB, 0 = automatic).

@@ -88,6 +88,9 @@ pub struct TestOptions {
     pub quick: bool,
     /// Export at this long edge instead of full size (tests).
     pub long_edge: Option<u32>,
+    /// Set to stop the test: the export running stops within a second ([`crate::export::run_batch_cancellable`]),
+    /// as `progress` returning `false` does between steps.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// The lanes to try on a computer with `cores` threads: an eighth, a quarter and half of them
@@ -155,19 +158,19 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     // (as many photos as lanes, so every lane works: at least 4 or 6)
     let per_run = |l: usize| l.max(if o.quick { 4 } else { 6 });
     // warm up (not counted): the decoder, the caches, the GPU's kernels; and one photo's peak on the GPU
-    let warm = export_round(&mut session, &ids[..1], &opts, 1, gpu, false, false)?;
+    let warm = export_round(&mut session, o.cancel.as_ref(), &ids[..1], &opts, 1, gpu, false, false)?;
     let peak = warm.gpu_peak;
     tick("Warming up")?;
     let mut runs = Vec::new();
     for &l in &lanes {
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, gpu, false, false)?);
+        runs.push(export_round(&mut session, o.cancel.as_ref(), &repeat(&ids, per_run(l)), &opts, l, gpu, false, false)?);
         tick(&format!("{l} photos side by side"))?;
     }
     if gpu && let Some(best) = best_run(&runs).cloned() {
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, false, false, false)?);
+        runs.push(export_round(&mut session, o.cancel.as_ref(), &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, false, false, false)?);
         tick("The processor alone")?;
         // photos the GPU is too busy for render on the processor meanwhile (note 28's hybrid)
-        runs.push(export_round(&mut session, &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, true, true, false)?);
+        runs.push(export_round(&mut session, o.cancel.as_ref(), &repeat(&ids, per_run(best.lanes)), &opts, best.lanes, true, true, false)?);
         tick("The graphics card and the processor together")?;
     }
     let one_card = best_run(&runs).cloned().ok_or("no measurement")?;
@@ -178,7 +181,7 @@ pub fn run_test(o: &TestOptions, progress: &mut dyn FnMut(usize, usize, &str) ->
     if helper && one_card.gpu {
         let l = one_card.lanes.saturating_add(helper_jobs).min(crate::export::MAX_EXPORT_LANES);
         crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, Some(helper_jobs));
-        let run = export_round(&mut session, &repeat(&ids, per_run(l)), &opts, l, true, one_card.mix, true);
+        let run = export_round(&mut session, o.cancel.as_ref(), &repeat(&ids, per_run(l)), &opts, l, true, one_card.mix, true);
         crate::gpu::set_batch_limits_for(crate::gpu::Role::Helper, None, None);
         let run = run?;
         tick("Both graphics cards")?;
@@ -252,6 +255,7 @@ fn repeat(ids: &[lightcraft_catalog::PhotoId], n: usize) -> Vec<lightcraft_catal
 #[allow(clippy::too_many_arguments)]
 fn export_round(
     session: &mut crate::Session,
+    cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ids: &[lightcraft_catalog::PhotoId],
     o: &ExportOptions,
     lanes: usize,
@@ -270,7 +274,7 @@ fn export_round(
     let cards = crate::export::export_cards();
     crate::export::set_export_cards(if helper { ExportCards::Both } else { ExportCards::Editing });
     let t = Instant::now();
-    let files = crate::export::export_batch_tuned(session, ids, o, lanes, gpu, mix);
+    let files = crate::export::export_batch_tuned(session, ids, o, lanes, gpu, mix, cancel.cloned());
     crate::export::set_export_cards(cards);
     let files = files?;
     let seconds = t.elapsed().as_secs_f64().max(1e-3);
@@ -382,7 +386,7 @@ pub(crate) fn specs() -> Vec<crate::cmd::CommandSpec> {
             let quick = p.get("quick").and_then(Value::as_bool).unwrap_or(false);
             let guard = s.activity.start("benchmark", "Testing this computer", crate::activity::Cancel::Yes);
             let cancel = guard.cancel_flag();
-            let r = run_test(&TestOptions { paths, quick, ..Default::default() }, &mut |done, total, what| {
+            let r = run_test(&TestOptions { paths, quick, cancel: cancel.clone(), ..Default::default() }, &mut |done, total, what| {
                 guard.progress(done as u64, total as u64);
                 guard.detail(what);
                 !cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
@@ -518,6 +522,7 @@ mod tests {
     /// choice applied only when asked, the settings it changed put back.
     #[test]
     fn a_quick_test_reports_and_restores() {
+        let _serial = crate::export::TUNING_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = (crate::export::export_lanes_override(), crate::export::export_gpu());
         let mut steps = Vec::new();
         let r = run_test(&TestOptions { lanes: vec![2], quick: true, long_edge: Some(800), ..Default::default() }, &mut |d, t, what| {
@@ -534,5 +539,20 @@ mod tests {
         let stopped = run_test(&TestOptions { lanes: vec![1], quick: true, long_edge: Some(400), ..Default::default() }, &mut |_, _, _| false);
         assert_eq!(stopped.err().as_deref(), Some("cancelled"));
         assert_eq!((crate::export::export_lanes_override(), crate::export::export_gpu()), before);
+    }
+
+    /// Review of PR #3499: the activity row's ✕ stops the export running inside a step, not only
+    /// between steps (`progress` says go on throughout here).
+    #[test]
+    fn a_cancel_flag_stops_the_test_inside_a_step() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut steps = 0;
+        let r =
+            run_test(&TestOptions { lanes: vec![2], quick: true, long_edge: Some(400), cancel: Some(flag), ..Default::default() }, &mut |_, _, _| {
+                steps += 1;
+                true
+            });
+        assert_eq!(r.err().as_deref(), Some("cancelled"));
+        assert_eq!(steps, 0, "stopped in the first export, before any step ended");
     }
 }

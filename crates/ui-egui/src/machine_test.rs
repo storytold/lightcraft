@@ -29,6 +29,16 @@ pub fn apply(st: &AppSettings) {
     lightcraft_engine::gpu::set_batch_limits(Some(u64::from(st.gpu_export_mb) << 20).filter(|b| *b > 0), gpu_jobs(st));
 }
 
+/// What [`apply`] reads from the settings: a change in any of it is applied (the four export
+/// settings, and what the last test found, which `ui.set` may change alone).
+pub type Tuning = (u32, bool, u32, u32, Option<(usize, bool, usize)>);
+
+/// The settings' [`Tuning`].
+pub fn tuning(st: &AppSettings) -> Tuning {
+    let tested = st.machine_test.as_ref().map(|m| (m.lanes, m.mix, m.gpu_jobs));
+    (st.export_lanes, st.export_cpu_only, st.gpu_export_mb, st.gpu_export_jobs, tested)
+}
+
 /// Photos side by side in exports: the number chosen, else (Automatic) what the last test found
 /// (note 28: Automatic showed and used half the threads, 12, though the test had found 4 fastest);
 /// `None`: the engine's automatic number (no test yet).
@@ -90,8 +100,9 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
     let cancel = guard.cancel_flag();
     let row = guard.handle();
     let (tx, rx) = channel();
+    let stop = cancel.clone();
     let work = move || {
-        let r = run(paths, &mut |done, total, what| {
+        let r = run(paths, stop, &mut |done, total, what| {
             row.progress(done as u64, total as u64);
             row.detail(what);
             !cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
@@ -106,10 +117,16 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
     Ok(())
 }
 
-fn run(paths: Vec<String>, progress: &mut dyn FnMut(usize, usize, &str) -> bool) -> Result<MachineReport, String> {
+fn run(
+    paths: Vec<String>,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    progress: &mut dyn FnMut(usize, usize, &str) -> bool,
+) -> Result<MachineReport, String> {
     let what = || "the test".to_string();
-    lightcraft_engine::guard::catch(&what(), || lightcraft_engine::machine_test::run_test(&TestOptions { paths, ..Default::default() }, progress))
-        .and_then(|r| r)
+    lightcraft_engine::guard::catch(&what(), || {
+        lightcraft_engine::machine_test::run_test(&TestOptions { paths, cancel, ..Default::default() }, progress)
+    })
+    .and_then(|r| r)
 }
 
 /// When the test has ended: keep and use its choice, and say what it found.
@@ -169,5 +186,37 @@ mod tests {
         assert_eq!(lanes(&back), Some(4));
         let old: AppSettings = serde_json::from_value(serde_json::json!({"gpu": true, "machineTest": "garbage", "exportLanes": "x"})).unwrap();
         assert_eq!((old.export_lanes, old.machine_test.is_none()), (0, true));
+    }
+
+    /// Review of PR #3499: a new test report alone (`ui.set` of `settings.machineTest`) changes
+    /// what is applied, though the four export settings stay as they were.
+    #[test]
+    fn a_new_report_alone_is_applied() {
+        let mut st = AppSettings::default();
+        let before = tuning(&st);
+        st.machine_test = Some(MachineReport { lanes: 4, mix: true, gpu_jobs: 2, ..Default::default() });
+        assert_ne!(tuning(&st), before);
+        let first = tuning(&st);
+        if let Some(m) = st.machine_test.as_mut() {
+            m.lanes = 6;
+        }
+        assert_ne!(tuning(&st), first, "another report's lanes");
+    }
+
+    /// Review of PR #3499: a test that ends while the full-screen preview is up is applied then,
+    /// not when the preview closes.
+    #[test]
+    fn a_test_that_ends_in_the_full_screen_preview_is_applied() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.app.ui.fullscreen = true;
+        let (tx, rx) = channel();
+        let _guard = h.app.session.activity.start("benchmark", "Testing this computer", Cancel::Yes);
+        let _ = tx.send(Ok(MachineReport { lanes: 3, summary: "Exports about 9 photos a minute".into(), ..Default::default() }));
+        h.app.machine = Some(MachineTask { rx, _guard });
+        // (the first frames load the fonts and draw nothing)
+        let taken = h.step_until(std::time::Duration::from_secs(20), |h| h.app.machine.is_none());
+        assert!(taken && h.app.ui.fullscreen, "the finished test was taken in full screen");
+        assert_eq!(h.app.ui.settings.machine_test.as_ref().map(|m| m.lanes), Some(3));
     }
 }
