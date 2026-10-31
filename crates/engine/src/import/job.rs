@@ -1,7 +1,7 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
 use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
-use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::scan::index_hash;
+use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// Import files/folders. See the module docs.
@@ -358,8 +358,11 @@ impl ImportJob {
                 }
             }
             // same bytes as a library photo: skipped below, once its capture time is known
-            let duplicate_of =
-                info.content_hash.as_ref().filter(|_| !opts.local && !anyway).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
+            let duplicate_of = info
+                .content_hash
+                .as_ref()
+                .filter(|_| !opts.local && !anyway)
+                .and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none (a duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
