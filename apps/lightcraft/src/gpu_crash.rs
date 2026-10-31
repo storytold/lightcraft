@@ -62,11 +62,10 @@ pub(crate) fn gpu_lost_marker_path() -> Option<std::path::PathBuf> {
     gpu_marker_path().map(|p| p.with_file_name("gpu-lost.marker"))
 }
 
-/// Why the GPU was lost, when the GPU pipeline stopped after a device failure in this process (a
-/// driver reset, a hang, the Windows watchdog): `None` for other reasons it is off, or when it
-/// never failed.
+/// Why the GPU was lost, when the device failed in this process (a driver reset, a hang, the
+/// Windows watchdog), even if a new device replaced it since: `None` when it never failed.
 pub(crate) fn gpu_lost_reason() -> Option<String> {
-    lightcraft_engine::gpu::unavailable_reason().and_then(|r| r.strip_prefix("stopped after a GPU failure: ").map(str::to_string))
+    lightcraft_engine::gpu::last_loss()
 }
 
 /// Record that LightCraft stopped after the GPU was lost, for the next launch.

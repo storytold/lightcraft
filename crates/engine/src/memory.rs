@@ -19,7 +19,7 @@ use serde::Serialize;
 /// - an eighth for the GPU renderer's pool of recycled buffers (trimmed when the app is idle).
 ///
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
-/// batch may, in addition, hold up to twice the budget in photos rendering side by side
+/// batch may, in addition, hold up to twice the budget (or 45 % of the RAM, if more) in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
 /// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
@@ -33,8 +33,24 @@ pub fn default_budget() -> usize {
     }
 }
 
-/// Physical memory (bytes), when the platform tells us without native calls.
-pub(crate) fn total_ram() -> Option<usize> {
+/// Where the platform tells its memory only through a system call (Windows): the apps install
+/// `lightcraft_sysmem::total_physical_memory` before anything asks (first call wins).
+static RAM_PROBE: OnceLock<fn() -> Option<u64>> = OnceLock::new();
+
+/// Install the probe [`total_ram`] uses on platforms that need a system call (see [`RAM_PROBE`]).
+pub fn set_ram_probe(f: fn() -> Option<u64>) {
+    let _ = RAM_PROBE.set(f);
+}
+
+/// Physical memory (bytes): read from the system where that needs no native call, else from the
+/// probe the app installed ([`set_ram_probe`]); `None` when unknown.
+pub fn total_ram() -> Option<usize> {
+    // (read once: on macOS it is a process to run, and an export asks for every photo)
+    static RAM: OnceLock<Option<usize>> = OnceLock::new();
+    *RAM.get_or_init(read_total_ram)
+}
+
+fn read_total_ram() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
         let s = std::fs::read_to_string("/proc/meminfo").ok()?;
@@ -53,7 +69,7 @@ pub(crate) fn total_ram() -> Option<usize> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "freebsd")))]
     {
-        None
+        RAM_PROBE.get().and_then(|f| f()).and_then(|b| usize::try_from(b).ok())
     }
 }
 
@@ -104,6 +120,10 @@ pub struct WorkGate {
     /// releasing one in any order leaves the others counted (issue #2576).
     state: Mutex<(u128, usize)>,
     cv: Condvar,
+    /// Acquires that had to wait, and their total wait (ms): what a benchmark reports as memory
+    /// holding work back.
+    waits: std::sync::atomic::AtomicU64,
+    waited_ms: std::sync::atomic::AtomicU64,
 }
 
 /// Bytes held from a [`WorkGate`] until dropped.
@@ -114,7 +134,7 @@ pub struct Permit<'a> {
 
 impl WorkGate {
     pub fn new(limit: usize) -> WorkGate {
-        WorkGate { state: Mutex::new((0, limit)), cv: Condvar::new() }
+        WorkGate { state: Mutex::new((0, limit)), cv: Condvar::new(), waits: Default::default(), waited_ms: Default::default() }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, (u128, usize)> {
@@ -124,6 +144,11 @@ impl WorkGate {
     pub fn set_limit(&self, limit: usize) {
         self.lock().1 = limit;
         self.cv.notify_all();
+    }
+
+    /// Acquires that waited so far, and their total wait (ms).
+    pub fn waits(&self) -> (u64, u64) {
+        (self.waits.load(Ordering::Relaxed), self.waited_ms.load(Ordering::Relaxed))
     }
 
     /// Bytes held now (at most `usize::MAX`) and the limit.
@@ -136,8 +161,14 @@ impl WorkGate {
     /// a gate whose limit is `usize::MAX` make the next holder wait.
     pub fn acquire(&self, bytes: usize) -> Permit<'_> {
         let mut g = self.lock();
-        while g.0 > 0 && g.0.saturating_add(bytes as u128) > g.1 as u128 {
+        let fits = |g: &(u128, usize)| g.0 == 0 || g.0.saturating_add(bytes as u128) <= g.1 as u128;
+        let start = (!fits(&g)).then(web_time::Instant::now);
+        while !fits(&g) {
             g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+        if let Some(t) = start {
+            self.waits.fetch_add(1, Ordering::Relaxed);
+            self.waited_ms.fetch_add(t.elapsed().as_millis() as u64, Ordering::Relaxed);
         }
         g.0 = g.0.saturating_add(bytes as u128);
         Permit { gate: self, bytes }
@@ -193,8 +224,20 @@ pub fn export_gate() -> &'static WorkGate {
 }
 
 fn export_share(budget: usize) -> usize {
-    budget.saturating_mul(2)
+    export_share_of(budget, total_ram())
 }
+
+/// Twice the budget, or (when the computer's memory `ram` is known) [`EXPORT_RAM_PERCENT`] of it
+/// if that is more: the budget is the caches' (at most 1.5 GiB by default), and an export's photos
+/// are transient. With only 3 GiB, a 45 MP gain map export (~4 GB of working memory each) ran one
+/// photo at a time however many lanes there were.
+fn export_share_of(budget: usize, ram: Option<usize>) -> usize {
+    let by_ram = ram.map_or(0, |r| r / 100 * EXPORT_RAM_PERCENT);
+    budget.saturating_mul(2).max(by_ram)
+}
+
+/// Share of the computer's memory an export batch may hold in photos side by side.
+const EXPORT_RAM_PERCENT: usize = 45;
 
 static EXPORT_GATE: OnceLock<WorkGate> = OnceLock::new();
 
@@ -320,5 +363,23 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod export_share_tests {
+    use super::export_share_of;
+
+    /// The export gate follows the computer's memory, not only the caches' budget.
+    #[test]
+    fn exports_may_use_a_share_of_the_ram() {
+        let gb = 1usize << 30;
+        // 64 GB, the default 1.5 GiB budget: ~28.8 GB of photos side by side, not 3 GiB
+        assert_eq!(export_share_of(3 * gb / 2, Some(64 * gb)), 64 * gb / 100 * 45);
+        // a large budget set by hand still counts double
+        assert_eq!(export_share_of(20 * gb, Some(64 * gb)), 40 * gb);
+        // memory unknown: twice the budget, as before
+        assert_eq!(export_share_of(gb, None), 2 * gb);
+        assert_eq!(export_share_of(usize::MAX, Some(usize::MAX)), usize::MAX, "no overflow");
     }
 }

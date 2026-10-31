@@ -968,6 +968,9 @@ mod tests {
 
     /// The runner, or `None` (with a note) on a machine with no usable GPU.
     fn gpu(net: &Net, tile: usize) -> Option<NetRunner> {
+        // creating the device and building the kernels arms the crash sentinel: take turns with
+        // the tests that set its path (`backend::tests`)
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         match runner(net, tile) {
             Ok(r) => Some(r),
             Err(e) => {
@@ -1087,7 +1090,10 @@ mod tests {
         let net = onnx::read(std::path::Path::new(&model)).unwrap();
         let tile = 512usize;
         let started = Instant::now();
-        let g = runner(&net, tile).unwrap();
+        let g = {
+            let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            runner(&net, tile).unwrap()
+        };
         println!("{}: set up in {:.2} s, {:.0} MB per tile in flight", g.adapter(), started.elapsed().as_secs_f64(), g.bytes_per_tile() as f64 / 1e6);
         println!("kernels: {}", g.build_report());
         let manifest = DenoiserManifest {
