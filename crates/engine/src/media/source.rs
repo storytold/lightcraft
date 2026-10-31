@@ -197,8 +197,9 @@ impl DecodedSource {
 }
 
 /// The lens profile a render uses: the file's own correction as decoded (`decoded`, it is part of the file), else the
-/// catalog's (`catalog`, [`lightcraft_catalog::Photo::embedded_lens`]). A database profile is never taken from the
-/// decode, so a cached render, a fresh decode and the Optics panel all use the one profile the photo holds, and a
+/// catalog's database profile (`catalog`, [`lightcraft_catalog::Photo::embedded_lens`]). A file correction the
+/// catalog still holds but the decode no longer finds (the original was replaced) is not restored. A database profile
+/// is never taken from the decode, so a cached render, a fresh decode and the Optics panel all use the one profile the photo holds, and a
 /// change to it (a database update looked up again, `cmd::lens_refresh`) changes the render keys
 /// ([`super::quick::lens_key`]).
 pub(crate) fn pinned_lens(
@@ -207,7 +208,7 @@ pub(crate) fn pinned_lens(
 ) -> Option<lightcraft_develop::EmbeddedLens> {
     match decoded {
         Some(l) if l.source == lightcraft_develop::LensSource::File => Some(l),
-        _ => catalog,
+        _ => catalog.filter(|c| c.source == lightcraft_develop::LensSource::Database),
     }
 }
 

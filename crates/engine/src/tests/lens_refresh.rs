@@ -218,6 +218,11 @@ fn a_decode_never_overrides_the_photos_database_profile() {
     assert_eq!(decoded(lens(-0.05)).info_or(header(None)).lens, None, "none until the photo is given one");
     let file_lens = EmbeddedLens { source: LensSource::File, ..lens(-0.04) };
     assert_eq!(decoded(file_lens).info_or(header(None)).lens, Some(file_lens), "the file's own correction");
+    // the original was replaced by one without a correction: the decode finds none, and the catalog's old file
+    // correction isn't put back
+    let none = DecodedSource::new(img.clone(), Some(lightcraft_pipeline::SourceInfo { lens: None, ..Default::default() }));
+    assert_eq!(none.info_or(header(Some(file_lens))).lens, None, "no file correction the file no longer has");
+    assert_eq!(none.info_or(header(Some(lens(-0.01)))).lens, Some(lens(-0.01)), "the database profile stays");
 }
 
 /// When a photo's database profile changes (a replaced database looked up again), its render key and its thumbnail
@@ -232,7 +237,7 @@ fn a_new_database_profile_changes_the_render_and_cache_keys() {
         let render = s.render_job(id, 800, 600, false, true).unwrap().key;
         let thumb = s.thumb_job(id, 256).unwrap().cache.unwrap().1;
         let p = s.catalog.photo(id).unwrap().clone();
-        (render, thumb, Session::variant_key(&p, &p.develop, 128))
+        (render, thumb, Session::variant_key(&p, &p.develop, 128), Session::view_key(&p, true))
     };
     let before = keys(&mut s);
     s.catalog.apply(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(-0.03))) }).unwrap();
@@ -240,6 +245,7 @@ fn a_new_database_profile_changes_the_render_and_cache_keys() {
     assert_ne!(before.0, after.0, "render key");
     assert_ne!(before.1, after.1, "thumbnail cache key");
     assert_ne!(before.2, after.2, "variant cache key");
+    assert_ne!(before.3, after.3, "loupe view cache key");
     // correction off: the profile isn't used, so changing it leaves every key (and the cached thumbnails) as they are
     let off = with_lens((**s.catalog.photo(id).unwrap()).clone(), Some(lens(-0.03)), false);
     s.catalog.apply(Op::SetDevelop { id, settings: off.develop.clone(), label: "Lens Corrections".into(), edited: None }).unwrap();
