@@ -43,6 +43,8 @@ pub use params::{
 #[cfg(test)]
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
+#[cfg(test)]
+pub(crate) use prepare::ENCODES_IN_TURN;
 pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };

@@ -840,6 +840,14 @@ fn run(
             }
         };
         let vram = gpu.vram.unwrap_or_else(|| vram::assumed(&gpu.info));
+        // The plan (Upright, the masks' tone ranges, red eye, the settings resolved) is the
+        // CPU's work: made before the turn, so an export waiting for the GPU never holds it with
+        // the processor's part of its render (note 28).
+        let t = render::profiling().then(std::time::Instant::now);
+        let plan = lightcraft_pipeline::plan(src, info, s, req);
+        if let Some(t) = t {
+            eprintln!("  gpu plan (before the turn): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
         let _turn = gate::enter(gate::job_bytes(src.width.saturating_mul(src.height), out_px), vram, &shutting_down).ok_or(Fallback::NotTried)?;
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
@@ -856,7 +864,7 @@ fn run(
             let _scope = ctx::RenderScope::new(&gpu);
             let errors = ctx::ErrorScopes::push(&gpu);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render::render(&gpu, src, info, s, req, ext.as_deref(), stages, fault, display)
+                render::render(&gpu, plan, src, info, req, ext.as_deref(), stages, fault, display)
             }));
             (r, errors.pop())
         };

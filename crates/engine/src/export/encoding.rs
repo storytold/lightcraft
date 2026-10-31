@@ -1,4 +1,5 @@
 use super::options::{ExportFormat, MetadataPolicy, SharpenAmount, SharpenFor};
+use super::prepare::note_encode;
 use super::watermark::{Watermark, draw_watermark, draw_watermark_deep};
 use super::{
     ChromaSubsampling, DateTime, DeepImage, DeepSamples, EncodeImage, EncodeMeta, ExportOptions, Gps, Metadata, NamedSpace, OutputDepth, OutputSpace,
@@ -105,6 +106,7 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    note_encode();
     let img = finish_8bit(img, o);
     let space = o.effective_space();
     let profile = icc::write_named(named_space(space));
@@ -194,6 +196,7 @@ fn finish_deep<'a>(img: &'a DeepImage, o: &ExportOptions) -> Cow<'a, DeepImage> 
 /// against the base as written, so its 8-bit rounding is handed back by the map.
 pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
     use lightcraft_codecs::gainmap;
+    note_encode();
     let mut t = lap_clock();
     let base = finish_8bit(sdr, o);
     let hdr = finish_deep(hdr, o);
