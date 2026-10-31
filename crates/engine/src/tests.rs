@@ -2,6 +2,8 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+mod album_loops;
+mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
@@ -42,6 +44,7 @@ mod process;
 mod recheck;
 mod segment;
 mod settings_files;
+mod shelved_folder;
 mod slide;
 mod slideshow_export;
 mod spots;
@@ -428,6 +431,17 @@ fn a_stroke_sent_again_as_it_grows_replaces_itself() {
         panic!("a brush mask")
     };
     assert_eq!(strokes.iter().map(|s| s.points.len()).collect::<Vec<_>>(), vec![1, 4], "the earlier stroke stays, the live one is replaced");
+}
+
+#[test]
+fn a_mask_id_at_the_limit_does_not_overflow_the_next_masks() {
+    let mut s = demo();
+    s.execute("develop.merge", &json!({"settings": {"masks": [{"id": u32::MAX, "name": "Pasted"}]}})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.duplicate", &json!({})).unwrap();
+    let ids: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.iter().enumerate().all(|(i, id)| !ids[..i].contains(id)), "distinct ids: {ids:?}");
 }
 
 #[test]

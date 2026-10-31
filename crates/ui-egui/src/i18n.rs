@@ -570,6 +570,9 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
 }
 
 #[cfg(test)]
+mod gaps;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
