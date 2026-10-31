@@ -383,9 +383,7 @@ fn gpu_crash_marker_is_reported_once() {
 fn a_crash_starting_a_chosen_card_drops_only_that_choice() {
     let k4070 = "dx12:10de:2783:NVIDIA GeForce RTX 4070 SUPER#1";
     let k5070 = "dx12:10de:2f04:NVIDIA GeForce RTX 5070#1";
-    let line =
-        |key: &str, role: &str| format!("GPU device and kernel creation (backends DX12) [card={key}; role={role}] started (unix time 1)
-");
+    let line = |key: &str, role: &str| format!("GPU device and kernel creation (backends DX12) [card={key}; role={role}] started (unix time 1)\n");
     // the card chosen for editing: back to Automatic, the GPU stays on
     let c = gpu_crash_from(&line(k4070, "editing"), k4070);
     assert!(!c.gpu_off && c.reset_card && !c.helper_off, "{c:?}");
@@ -400,8 +398,7 @@ fn a_crash_starting_a_chosen_card_drops_only_that_choice() {
     let c = gpu_crash_from(&(line(k4070, "editing") + &line(k5070, "helper")), k4070);
     assert!(!c.gpu_off && c.reset_card && c.helper_off, "{c:?}");
     // anything else alongside (listing the cards, an older marker): the GPU goes off
-    assert!(gpu_crash_from(&(line(k4070, "helper") + "GPU graphics card listing started (unix time 1)
-"), "").gpu_off);
+    assert!(gpu_crash_from(&(line(k4070, "helper") + "GPU graphics card listing started (unix time 1)\n"), "").gpu_off);
     assert!(gpu_crash_from("GPU device creation started (backends DX12)", k4070).gpu_off);
     assert!(gpu_crash_from("", k4070).gpu_off);
 }
