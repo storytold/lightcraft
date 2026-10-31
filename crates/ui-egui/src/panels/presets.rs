@@ -113,7 +113,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui, "presetMenu:thumbnails", r.rect);
             ui.separator();
-            if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
+            if ui.button(crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Import Presets…")).clicked() {
                 let _ = app.run("file.importPresets", json!({}));
             }
             let any_user = app.session.presets.iter().any(|p| !p.builtin);
