@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-31
+
+### Find Duplicate Photos
+- Photo ▸ Find Duplicate Photos looks through the library for photos that are the same picture: a file imported from
+  two places, a JPEG kept beside its raw, a resized or re-saved copy. It groups them, keeps the best of each group (a
+  raw over a rendered file, lossless over lossy, more pixels, a larger file, then edits and rating) and selects the
+  rest, so one Delete moves them to Recently Deleted (Edit ▸ Undo brings them back). The view shows the groups alone
+  while you look; Clear Filters brings the library back. It runs in the background with a row in the activity stack
+  and only matches the same picture, never the next frame of a burst. Agents and scripts call `library.findDuplicates`
+  (`wait: true` returns the groups with the reason each copy loses).
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

@@ -278,6 +278,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.readMetadataFromFile",
             "photo.reload",
             "photo.readFocusPoints",
+            "library.findDuplicates",
             "app.showInFinder",
             "app.showInFolders",
             "dialog.rename",

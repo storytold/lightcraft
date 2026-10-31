@@ -750,6 +750,8 @@
   "Find Dust Spots": "ほこりを検出",
   "Find Missing Photos…": "見つからない写真を検索…",
   "Find Similar Photos": "似た写真を検索",
+  "Find Duplicate Photos": "重複した写真を検索",
+  "Finding duplicate photos": "重複した写真を検索中",
   "Fit": "全体を表示",
   "Fit (F)": "全体表示（F）",
   "Flag": "フラグ",

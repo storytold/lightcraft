@@ -731,6 +731,8 @@
   "Find Missing Photos": "Etsi puuttuvat kuvat",
   "Find Missing Photos…": "Etsi puuttuvat kuvat…",
   "Find Similar Photos": "Etsi samankaltaisia kuvia",
+  "Find Duplicate Photos": "Etsi kaksoiskappaleet",
+  "Finding duplicate photos": "Etsitään kaksoiskappaleita",
   "Find photos added to or missing from this folder on disk, and XMP sidecars changed by other apps": "Etsi tähän kansioon levyllä lisätyt tai siitä puuttuvat kuvat sekä muiden sovellusten muuttamat XMP-sivutiedostot",
   "Find tools and commands…": "Etsi työkaluja ja komentoja…",
   "Finding faces": "Etsitään kasvoja",
