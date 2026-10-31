@@ -112,11 +112,13 @@ impl Read for DeadlineReader {
         if buf.is_empty() {
             return Ok(0);
         }
-        let deadline = self.deadline;
-        let timeout = read_timeout_until(deadline, self.idle_timeout, Instant::now())?;
+        let Some(deadline) = self.deadline else {
+            return self.stream.read(buf);
+        };
+        let timeout = read_timeout_until(Some(deadline), self.idle_timeout, Instant::now())?;
         self.stream.set_read_timeout(Some(timeout))?;
         let read = self.stream.read(buf)?;
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if Instant::now() >= deadline {
             return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "authentication header deadline elapsed"));
         }
         Ok(read)
