@@ -3,10 +3,11 @@ use super::services::Services;
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
 use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
-    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
-    SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
-    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, QuitBackup, Receiver,
+    SCREEN_PROFILE, SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session,
+    ShotGeometry, TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import,
+    lightroom_import, menus, merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui,
+    widgets,
 };
 
 mod control;
@@ -40,11 +41,13 @@ impl LightcraftApp {
             recording_shortcut: None,
             text_focus: false,
             headless_host: false,
+            backs_up_by_itself: true,
             notices: vec![],
             updates_rt: Default::default(),
             quit_prompt: None,
             notice_input: Default::default(),
             quit_confirmed: false,
+            quit_backup: QuitBackup::default(),
             control_rx: None,
             pending_screenshots: vec![],
             pending_gestures: vec![],
@@ -359,6 +362,87 @@ impl LightcraftApp {
             }
         }
         panels::slideshow::tick(self, ctx, now);
+    }
+
+    /// Back the library up by itself when its schedule says a backup is due
+    /// (`library.backupPreferences`, `every`). Looked at every few seconds, not every frame; the
+    /// backup has its row in the activity stack, and [`Self::backup_status`] says how it ended.
+    fn backup_schedule(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::backup_schedule::BackupEvery;
+        if !self.backs_up_by_itself || self.session.backup_schedule.every == BackupEvery::Never {
+            return;
+        }
+        const LOOK_EVERY: f64 = 5.0;
+        let id = egui::Id::unique("backup-schedule-looked");
+        let now = ctx.input(|i| i.time);
+        let looked: Option<f64> = ctx.data(|d| d.get_temp(id));
+        if looked.is_none_or(|at| now - at >= LOOK_EVERY || now < at) {
+            ctx.data_mut(|d| d.insert_temp(id, now));
+            // (one that is due and could not even be started: said, like one that failed)
+            if let Err(e) = lightcraft_engine::cmd::backup::back_up_if_due(&mut self.session) {
+                self.toast_for(ctx, crate::i18n::tr_format!("The library was not backed up: {}", e), 8.0);
+            }
+        }
+        // (an idle window still looks: a library left open for days is backed up)
+        ctx.request_repaint_after(std::time::Duration::from_secs(60));
+    }
+
+    /// Announce the end of a library backup: where it went, or why there is none.
+    fn backup_status(&mut self, ctx: &egui::Context) {
+        let Some(b) = self.session.backup.clone() else { return };
+        let key = std::sync::Arc::as_ptr(&b) as usize;
+        if self.ui.backup_seen == Some(key) {
+            return;
+        }
+        match b.outcome() {
+            Some(outcome) => {
+                self.ui.backup_seen = Some(key);
+                let msg = match outcome {
+                    Ok(report) => crate::i18n::tr_format!("Backed up the library to {}", report.dir.display()),
+                    Err(e) => crate::i18n::tr_format!("The library was not backed up: {}", e),
+                };
+                // (long enough to read a path, or what went wrong)
+                self.toast_for(ctx, msg, 8.0);
+            }
+            // The activity stack shows the backup while it runs; poll for the end.
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
+    }
+
+    /// Announce the end of a restore whose backup was copied in the background: where what the
+    /// library held went, or why it was not restored.
+    pub(crate) fn restore_status(&mut self, ctx: &egui::Context) {
+        let Some(r) = self.session.restore.clone() else { return };
+        let key = std::sync::Arc::as_ptr(&r) as usize;
+        if self.ui.restore_seen == Some(key) {
+            return;
+        }
+        // (of the library that is open: one that was given up for another has nothing to say here)
+        if !self.session.library.as_ref().is_some_and(|l| l.dir == r.library) {
+            if !r.running() {
+                self.ui.restore_seen = Some(key);
+            }
+            return;
+        }
+        match r.outcome() {
+            Some(outcome) => {
+                self.ui.restore_seen = Some(key);
+                let msg = match outcome {
+                    Ok(made) => {
+                        crate::menus::library_replaced(self);
+                        match made["restored"]["aside"].as_str() {
+                            Some(aside) => crate::i18n::tr_format!("Restored the library. What it held before is in {}", aside),
+                            None => crate::i18n::tr("Restored the library").to_string(),
+                        }
+                    }
+                    Err(e) => crate::i18n::tr_format!("The library was not restored: {}", e),
+                };
+                self.toast_for(ctx, msg, 10.0);
+            }
+            // The activity stack shows the restore while it runs; the frames this asks for also
+            // move the backup into place once it is copied (`Session::persist_if_dirty`).
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(250)),
+        }
     }
 
     /// Announce the end of a Build Previews run.
