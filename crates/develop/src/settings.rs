@@ -1080,6 +1080,14 @@ pub enum SpotMode {
     Fill,
 }
 
+impl SpotMode {
+    /// Rebuilt from its surroundings rather than copied from a source: Remove (as in Lightroom)
+    /// and Fill, which renders the same and stays for spots saved with it (issue #2359).
+    pub fn content_aware(self) -> bool {
+        matches!(self, SpotMode::Remove | SpotMode::Fill)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Spot {

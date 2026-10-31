@@ -34,7 +34,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         }
         let Some(&t) = s.points.first() else { continue };
         let tq = map.screen(t);
-        if let Some(o) = s.source_offset.filter(|_| sel) {
+        // content-aware spots (Remove) have no source to show
+        if let Some(o) = s.source_offset.filter(|_| sel && !s.mode.content_aware()) {
             let sq = map.screen(Point::new(t.x + o.x, t.y + o.y));
             for q in &s.points {
                 p.circle_stroke(map.screen(Point::new(q.x + o.x, q.y + o.y)), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
