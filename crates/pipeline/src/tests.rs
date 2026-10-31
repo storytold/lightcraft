@@ -888,21 +888,26 @@ fn a_draft_has_the_large_scale_tone_of_the_full_render() {
         adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, shadows: 50.0, ..Default::default() },
         ..Default::default()
     });
-    // mean of absolute differences over 16 px blocks: the low-frequency part the eye saw flicker
+    // the worst 16 px block mean difference of any channel: the low-frequency part the eye saw flicker
     let block_diff = |a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8| {
         assert_eq!((a.width, a.height), (b.width, b.height));
         let mut worst = 0f64;
         for by in 0..a.height / 16 {
             for bx in 0..a.width / 16 {
-                let (mut da, mut db) = (0f64, 0f64);
+                // each channel on its own: a shift of one channel against another (warmer) must show
+                let (mut da, mut db) = ([0f64; 3], [0f64; 3]);
                 for y in by * 16..by * 16 + 16 {
                     for x in bx * 16..bx * 16 + 16 {
                         let (p, q) = (a.get(x, y), b.get(x, y));
-                        da += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0;
-                        db += (q[0] as f64 + q[1] as f64 + q[2] as f64) / 3.0;
+                        for c in 0..3 {
+                            da[c] += f64::from(p[c]);
+                            db[c] += f64::from(q[c]);
+                        }
                     }
                 }
-                worst = worst.max((da - db).abs() / 256.0);
+                for c in 0..3 {
+                    worst = worst.max((da[c] - db[c]).abs() / 256.0);
+                }
             }
         }
         worst
