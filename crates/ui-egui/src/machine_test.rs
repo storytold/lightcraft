@@ -110,9 +110,15 @@ pub fn start(app: &mut LightcraftApp) -> Result<(), String> {
         let _ = tx.send(r);
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::Builder::new().name("machine-test".into()).spawn(work).map_err(|e| e.to_string())?;
+    let started = std::thread::Builder::new().name("machine-test".into()).spawn(work).map(drop).map_err(|e| e.to_string());
+    // the web build has no thread to run it on, and run inline it would hold the page (and its
+    // Cancel) for minutes: Settings doesn't offer it there
     #[cfg(target_arch = "wasm32")]
-    work();
+    let started = {
+        drop(work);
+        Err(crate::i18n::tr("Test my machine runs in the desktop app").to_string())
+    };
+    started?;
     app.machine = Some(MachineTask { rx, _guard: guard });
     Ok(())
 }

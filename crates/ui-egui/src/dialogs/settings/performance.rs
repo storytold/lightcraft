@@ -35,6 +35,14 @@ fn exports_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if check(ui, "settings.exportGpu", &mut gpu_exports, "Use the GPU for exports") {
         app.ui.settings.export_cpu_only = !gpu_exports;
     }
+    // (not in the web build: it has no thread to run the test on, `machine_test::start`)
+    #[cfg(not(target_arch = "wasm32"))]
+    test_machine_row(app, ui, t);
+}
+
+/// Settings ▸ Performance ▸ Test my machine, and what the last test found.
+#[cfg(not(target_arch = "wasm32"))]
+fn test_machine_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Test my machine"), |ui| {
         let running = crate::machine_test::running(app);
         let label = if running { crate::i18n::tr("Testing…") } else { crate::i18n::tr("Test my machine") };
