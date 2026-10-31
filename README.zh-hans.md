@@ -409,7 +409,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 错误；其他值：只记警告和错误），并且优先于 `RUST_LOG`，后者会把默认值替换为
 env_logger 风格的指令，例如 `RUST_LOG=debug` 或 `RUST_LOG=warn,lightcraft_pipeline=trace`（以
 `*` 结尾的指令覆盖所有以它开头的目标，如 `lightcraft*=debug`）。panic 也会记录在那里，
-并且仍然写在临时文件夹里的 `lightcraft-panics.log`。日志器是 `apps/lightcraft/src/logging.rs`。
+并且写在日志文件旁边的 `lightcraft-panics.log`。日志器是 `apps/lightcraft/src/logging.rs`。
 
 网页版需要 `wasm32-unknown-unknown` target 和匹配的 `wasm-bindgen` CLI
 （`cargo xtask web` 会打印确切的安装命令）；见 [docs/web.md](docs/web.md)。

@@ -27,15 +27,20 @@ pub fn catch<T>(what: &str, f: impl FnOnce() -> T) -> Result<T, String> {
 }
 
 /// Install a panic hook that keeps the default report (stderr) and also appends the panic's
-/// location and message to `log` (best effort), so a panic in a GUI session leaves a trace.
-pub fn install_hook(log: PathBuf) {
+/// location and message to `log` (best effort, its folder made when missing), so a panic in a GUI
+/// session leaves a trace. `log` belongs in a folder of the user's own, never a shared one.
+pub fn install_hook(log: Option<PathBuf>) {
     let default = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         default(info);
         let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
+        let Some(log) = &log else { return };
+        if let Some(dir) = log.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
             let _ = writeln!(f, "{secs} [{thread}] panic at {at}: {}", panic_message(info.payload()));
         }
     }));

@@ -55,7 +55,7 @@ use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lo
 use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, window_wgpu_options};
 #[cfg(test)]
 use launch::launch_imports_in;
-use launch::{HELP, control_port_from, launch_imports, log_dir, panic_log_path_with, startup_failed, stopped_text, stopped_while_running};
+use launch::{HELP, control_port_from, launch_imports, log_dir, panic_log_path, startup_failed, stopped_text, stopped_while_running};
 #[cfg(test)]
 use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
 use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
@@ -141,7 +141,7 @@ fn main() -> eframe::Result {
     }
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
-    lightcraft_engine::guard::install_hook(panic_log_path_with(|name| std::env::var_os(name), std::env::temp_dir()));
+    lightcraft_engine::guard::install_hook(panic_log_path());
     if let Some(logger) = logger {
         logging::record_panics(logger);
     }
