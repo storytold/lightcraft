@@ -35,6 +35,36 @@ fn props(x: &str) -> Props {
 }
 
 #[test]
+fn deferred_numbers_are_dropped_before_mapping() {
+    // Synthetic values: exercise direct sliders, legacy arithmetic, enum conversion, relative
+    // white balance and curve normalization, all before catalog-only sentinel stripping.
+    for sentinel in ["-999999", "-999999.0", "-9.99999e5", "-999999/1"] {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+                crs:Exposure="{sentinel}" crs:Contrast="{sentinel}" crs:IncrementalTemperature="{sentinel}"
+                crs:PerspectiveUpright="{sentinel}" crs:PostCropVignetteStyle="{sentinel}" crs:Sharpness="{sentinel}"
+                crs:Vibrance="-20">
+                <crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, {sentinel}</rdf:li></rdf:Seq></crs:ToneCurvePV2012>
+            </rdf:Description>"#
+        );
+        let (partial, skipped) = to_partial_report(&props(&x), None, Target::Rendered, 1.5);
+        assert_eq!(partial, json!({"color": {"vibrance": -20.0}}), "{sentinel}");
+        assert_eq!(
+            skipped,
+            ["Contrast", "Exposure", "IncrementalTemperature", "PerspectiveUpright", "PostCropVignetteStyle", "Sharpness", "ToneCurvePV2012"]
+        );
+    }
+    // Modern fields and absolute white balance must also preserve existing settings.
+    let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-999999" crs:Temperature="-999999" crs:Tint="-999999"/>"#;
+    assert_eq!(to_partial(&props(x), Target::RawAbsolute), json!({}));
+    let legacy = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Contrast="-999999" crs:HighlightRecovery="-999999" crs:Saturation="-10"/>"#;
+    assert_eq!(to_partial(&props(legacy), Target::Any), json!({"color": {"saturation": -10.0}}));
+}
+
+#[test]
 fn identity_crop_without_has_crop_is_read() {
     let x = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
         xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"

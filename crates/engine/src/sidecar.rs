@@ -1096,6 +1096,25 @@ mod tests {
     }
 
     #[test]
+    fn deferred_crs_sidecar_keeps_existing_adjustments() {
+        let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="-999999" crs:IncrementalTemperature="-999999" crs:PerspectiveUpright="-999999" crs:Blacks2012="-22"/>"#;
+        let sc = parse_sidecar(x, crate::crs::Target::Rendered).unwrap();
+        let mut p = photo();
+        let develop = std::sync::Arc::make_mut(&mut p.develop);
+        develop.light.exposure = 1.25;
+        develop.wb.temp = 7000.0;
+        develop.geometry.upright = lightcraft_develop::Upright::Level;
+        assert!(merge_into(&mut p, &sc, "t"));
+        assert_eq!(p.develop.light.exposure, 1.25);
+        assert_eq!(p.develop.wb.temp, 7000.0);
+        assert_eq!(p.develop.geometry.upright, lightcraft_develop::Upright::Level);
+        assert_eq!(p.develop.light.blacks, -22.0);
+        assert!(sc.warnings.iter().any(|w| w.fields.iter().any(|f| f == "Exposure2012")));
+    }
+
+    #[test]
     fn foreign_sidecar_rating_reject_label_and_crs() {
         let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
           <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
