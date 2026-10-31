@@ -318,25 +318,25 @@ fn guided_coeffs(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: 
     gaussian(cx, &ab, w, h, 2, sigma)
 }
 
-/// Separable median of a plane (`local::median_hv`).
-fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
+/// Separable interquartile clamp of a plane (`local::quartile_clamp_hv`).
+fn quartile_clamp_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     if r == 0 || w * h == 0 {
         return cx.copy(p);
     }
     let pr = [w as u32, h as u32, 1, r.min(local::BASE_DETAIL_MAX) as u32];
     let tmp = cx.gpu.buffer(w * h);
-    cx.run("median_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
+    cx.run("quartile_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
     let out = cx.gpu.buffer(w * h);
-    cx.run("median_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
+    cx.run("quartile_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
     out
 }
 
-/// The highlights/shadows base (`local::tone_base`; `detail` 0: V1, no median).
+/// The highlights/shadows base (`local::tone_base`; `detail` 0: V1, no interquartile clamp).
 fn tone_base(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, sigma: f32, detail: usize) -> Buf {
     if detail == 0 {
         return guided_fast(cx, l, w, h, sigma, local::BASE_EPS);
     }
-    let m = median_hv(cx, l, w, h, detail);
+    let m = quartile_clamp_hv(cx, l, w, h, detail);
     guided_fast(cx, &m, w, h, sigma, local::BASE_EPS)
 }
 
