@@ -52,6 +52,14 @@ pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../docs/whats-new.md");
 
+/// A line of What's New as the dialog shows it, in the UI language. The notes are written like the
+/// docs, with symbols Inter lacks (issue #1950): ▸ between menu items shows as → (as in the
+/// translations), the activity stack's ✕ as ×, and the sidebar's full-width ＋, which only the CJK
+/// faces have, as +.
+pub(crate) fn whats_new_line(source: &str) -> String {
+    crate::i18n::tr(source).replace('`', "").replace('▸', "→").replace('✕', "×").replace('＋', "+")
+}
+
 /// The import review and Settings keep window ids of their own, so the size each is given
 /// doesn't carry over to the other dialogs.
 fn window_id(dialog: &Dialog) -> egui::Id {
@@ -746,15 +754,15 @@ fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
             let l = line.trim_end();
             if let Some(h) = l.strip_prefix("### ") {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(12.5)).color(t.text));
             } else if let Some(h) = l.strip_prefix("## ") {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
+                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(14.0)).color(t.text));
             } else if l.starts_with("# ") || l.is_empty() {
             } else if let Some(b) = l.strip_prefix("- ") {
-                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
+                ui.label(egui::RichText::new(format!("•  {}", whats_new_line(b))).color(t.text_label));
             } else {
-                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+                ui.label(egui::RichText::new(whats_new_line(l.trim())).color(t.text_label));
             }
         }
     });

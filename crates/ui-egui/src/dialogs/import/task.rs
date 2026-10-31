@@ -546,7 +546,7 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
         crate::i18n::tr_format!("Already in the library: {} photo{} selected in All Photos", n, plural)
     } else {
         crate::i18n::tr_format!(
-            "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh",
+            "Already in the library, in Recently Deleted: {} photo{} selected · right-click → Restore, or Delete Permanently to import afresh",
             n,
             plural
         )

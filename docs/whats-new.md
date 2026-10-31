@@ -764,6 +764,12 @@
   every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
   for as long as the import ran. Changing one photo's capture time or crop is quicker too.
 
+### Menu paths without boxes
+- Messages that name a menu path, such as "View → Clear Filters to see all" or the External Editing help in
+  Settings, showed a box between the menu names: the interface font has no glyph for the small triangle used
+  there (issue #1950). They use → now, as the translations already did, and so do these notes. The remove
+  mark of each filter under "+N more" was a box too; it is an × now.
+
 ## 2026-10-15
 
 ### Photo Merge takes each photo once

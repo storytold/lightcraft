@@ -368,7 +368,7 @@ async fn boot(opts: Options) -> Boot {
             if !granted {
                 notice(
                     "This browser may delete LightCraft's library when it runs short of space (persistent storage wasn't granted). \
-                     Keep your original photos elsewhere and use File ▸ Back Up Library… now and then.",
+                     Keep your original photos elsewhere and use File → Back Up Library… now and then.",
                 );
             }
         });
@@ -499,7 +499,7 @@ impl WebApp {
         if backend.is_some() {
             notice(
                 "LightCraft in the browser is experimental. Your library is kept in this browser's storage: keep your original photos \
-                 elsewhere and back up with File ▸ Back Up Library….",
+                 elsewhere and back up with File → Back Up Library….",
             );
         }
         // previews are large (≤ 2560 px, f32): keep few in a 32-bit address space
