@@ -250,6 +250,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
             ("Shutter speed", (!m.shutter.is_empty()).then(|| crate::i18n::tr_format!("{} sec", m.shutter))),
             ("Aperture", m.aperture.map(|f| format!("f / {f:.1}").replace(".0", ""))),
             ("ISO", m.iso.map(|i| i.to_string())),
+            ("Film simulation", (!m.film_simulation.is_empty()).then(|| m.film_simulation.clone())),
         ];
         if rows.iter().any(|r| r.1.is_some()) {
             ui.add_space(6.0);
