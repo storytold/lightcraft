@@ -11,6 +11,7 @@
 //! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
 //! ignored with a warning. They hold aggregate colour statistics only, never image content.
 use lightcraft_color::Mat3;
+use lightcraft_pipeline::tone::CameraTone;
 use lightcraft_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,11 +49,21 @@ pub struct CameraProfile {
     matrix: [[f64; 3]; 3],
     /// Hue/saturation/value correction after `matrix` (linear ProPhoto RGB).
     pub hue_sat: Option<HsvTable>,
+    /// The camera's tone curve pooled over the photos (scene luminance after `matrix` → the camera JPEG's): a photo
+    /// follows it past what its own JPEG shows, and takes it whole when its JPEG teaches no curve. Absent in profiles
+    /// fitted before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<CameraTone>,
 }
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat }
+        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None }
+    }
+
+    /// The profile with its pooled tone curve.
+    pub fn with_tone(self, tone: Option<CameraTone>) -> CameraProfile {
+        CameraProfile { tone, ..self }
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -187,31 +198,62 @@ fn cache_key_for(directory: Option<&Path>) -> u64 {
     h.finish().0 as u64
 }
 
-/// Per camera model: the photos read and their pooled colour pairs.
+/// Per camera model: the photos read and their pooled colour pairs and tone samples.
 #[derive(Default)]
 pub struct Pool {
-    models: HashMap<String, (usize, Vec<([f64; 3], [f64; 3])>)>,
+    models: HashMap<String, Model>,
 }
 
-/// Most colour pairs kept per photo, so a few busy photos can't dominate a profile.
+#[derive(Default)]
+struct Model {
+    /// Photos that gave colour pairs (the colour fit's photo count).
+    files: usize,
+    /// Photos that gave tone samples only (too dark or colourless for colour pairs).
+    tone_files: usize,
+    pairs: Vec<([f64; 3], [f64; 3])>,
+    tone: Vec<([f64; 3], f64)>,
+}
+
+/// What [`Pool::add`] took from one raw file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Added {
+    pub model: String,
+    /// Whether it gave colour pairs; `false`: tone samples only, not counted toward a profile's photos.
+    pub colour: bool,
+}
+
+/// Most colour pairs (and, separately, tone samples) kept per photo, so a few busy photos can't dominate a profile.
 const PAIRS_PER_FILE: usize = 4000;
 
+/// Every `n`-th item, `n` chosen to keep at most [`PAIRS_PER_FILE`].
+fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
+    let step = items.len().div_ceil(PAIRS_PER_FILE).max(1);
+    items.into_iter().step_by(step)
+}
+
 impl Pool {
-    /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not an ARW,
-    /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
-    pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
+    /// Add one raw file's colour pairs and tone samples. A photo too dark or colourless for colour pairs still gives
+    /// its tone samples (the shadows the pooled curve needs) without counting toward the profile's photos. `Ok(None)`
+    /// when the file can't contribute (not an ARW, NEF or RAF without colour matrices, no usable or a black-and-white
+    /// camera JPEG).
+    pub fn add(&mut self, bytes: &[u8]) -> Result<Option<Added>, String> {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
         // the warp the camera applied to its JPEG)
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
-        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
-        let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
+        let Some(samples) = crate::camera_preview::profile_samples(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let entry = self.models.entry(model.to_owned()).or_default();
-        entry.0 += 1;
-        entry.1.extend(pairs.into_iter().step_by(step));
-        Ok(Some(model.to_owned()))
+        let colour = !samples.colour.is_empty();
+        if colour {
+            entry.files += 1;
+            entry.pairs.extend(thinned(samples.colour));
+        } else {
+            entry.tone_files += 1;
+        }
+        entry.tone.extend(thinned(samples.tone));
+        Ok(Some(Added { model: model.to_owned(), colour }))
     }
 
     /// Fit a profile per model with at least `min_files` photos.
@@ -220,26 +262,29 @@ impl Pool {
         models.sort_by(|a, b| a.0.cmp(b.0));
         models
             .into_iter()
-            .filter(|(_, (files, _))| *files >= min_files)
-            .map(|(model, (files, pairs))| {
-                let (matrix, hue_sat) = crate::camera_preview::fit_profile(pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
-                Ok(CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat))
+            .filter(|(_, m)| m.files >= min_files)
+            .map(|(model, m)| {
+                let (matrix, hue_sat) = crate::camera_preview::fit_profile(&m.pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
+                let tone = crate::camera_preview::fit_profile_tone(&m.tone, &matrix);
+                Ok(CameraProfile::new(model, m.files, m.pairs.len(), matrix, hue_sat).with_tone(tone))
             })
             .collect()
     }
 
     /// Add another pool's photos and pairs (pools filled on separate threads).
     pub fn merge(&mut self, other: Pool) {
-        for (model, (files, pairs)) in other.models {
+        for (model, m) in other.models {
             let entry = self.models.entry(model).or_default();
-            entry.0 += files;
-            entry.1.extend(pairs);
+            entry.files += m.files;
+            entry.tone_files += m.tone_files;
+            entry.pairs.extend(m.pairs);
+            entry.tone.extend(m.tone);
         }
     }
 
     /// Photos read per model.
     pub fn files(&self) -> Vec<(String, usize)> {
-        let mut v: Vec<_> = self.models.iter().map(|(m, (n, _))| (m.clone(), *n)).collect();
+        let mut v: Vec<_> = self.models.iter().map(|(name, m)| (name.clone(), m.files)).collect();
         v.sort();
         v
     }
@@ -279,6 +324,14 @@ mod tests {
         let mut p = profile();
         p.version = 99;
         assert!(bad(p), "unknown version");
+        // a pooled tone curve round-trips; a broken one (knots going backwards) is a damaged file
+        let toned = profile().with_tone(CameraTone::default_raw());
+        let path = save(&toned, &dir).unwrap();
+        assert_eq!(load(&path).unwrap(), toned);
+        let mut json: serde_json::Value = serde_json::to_value(&toned).unwrap();
+        json["tone"]["knots"][3][0] = serde_json::json!(5.0);
+        std::fs::write(dir.join("bad.json"), serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(load(&dir.join("bad.json")).is_err(), "invalid tone curve");
         std::fs::write(dir.join("junk.json"), b"{not json").unwrap();
         assert!(load(&dir.join("junk.json")).is_err());
         assert!(load(&dir.join("missing.json")).is_err());
