@@ -633,7 +633,13 @@ pub enum Output {
 /// spots grew), and the texture fits the device.
 fn can_display(gpu: &Gpu, plan: &Plan<'_>, req: &RenderRequest) -> bool {
     let max = gpu.device.limits().max_texture_dimension_2d as usize;
-    gpu.window && req.overlay == lightcraft_pipeline::Overlay::None && plan.keep.is_none() && plan.w <= max && plan.h <= max && plan.w * plan.h > 0
+    gpu.window
+        && req.depth == lightcraft_pipeline::OutputDepth::U8
+        && req.overlay == lightcraft_pipeline::Overlay::None
+        && plan.keep.is_none()
+        && plan.w <= max
+        && plan.h <= max
+        && plan.w * plan.h > 0
 }
 
 /// Render on `gpu`, reusing `stages` (if given); with `display`, into a texture when
@@ -773,10 +779,23 @@ pub fn render(
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
-    let (p, aux) = finish_block(&fp, &terms, &present);
+    let (mut p, aux) = finish_block(&fp, &terms, &present);
+    // a float HDR render (`OutputDepth::F32Hdr`): 4 words a pixel out (see `finish.wgsl`)
+    let hdr_out = req.depth == lightcraft_pipeline::OutputDepth::F32Hdr;
+    if hdr_out && let Some(at) = crate::params::index("HDR_OUT") {
+        p[at] = 1;
+    }
+    if hdr_out && plan.keep.is_some() {
+        fail(FailKind::Limit, "a window of an HDR render that spots grew: the CPU cuts it".into());
+        return None;
+    }
+    if hdr_out && !gpu.fits(n * 4) {
+        fail(FailKind::Limit, format!("{w}×{h} HDR output needs {} MiB, over the device's buffer limit", (n * 16).div_ceil(1 << 20)));
+        return None;
+    }
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(n);
+    let out = cx.zeroed(if hdr_out { n * 4 } else { n });
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
@@ -784,7 +803,6 @@ pub fn render(
     // in bands of rows: each dispatch (and submission) stays short on a slow GPU
     let rows = (BAND_PIXELS / w.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
     let y0_at = crate::params::index("Y0").unwrap_or(0);
-    let mut p = p;
     for y0 in (0..h).step_by(rows).filter(|_| fault != Some(crate::Fault::DropWork)) {
         p[y0_at] = y0 as u32;
         cx.run(
@@ -836,6 +854,9 @@ pub fn render(
     } else {
         None
     };
+    if hdr_out {
+        return hdr_image(&mut cx, &out, w, h, req, &mut t);
+    }
     let data: Vec<[u8; 4]> = cx.read(&out, n);
     let image = Rgba8 { width: w, height: h, data };
     lap("finish + readback", &mut t, &mut cx);
@@ -883,6 +904,37 @@ pub fn render(
         image = image.crop(k.x, k.y, k.w, k.h);
     }
     Some(Output::Image(Rendered { image, histogram, deep: None }))
+}
+
+/// The float HDR render's output (`out`: 4 words a pixel, see `finish.wgsl`) read back as the
+/// render's deep samples, with the 8-bit image and histogram the CPU's deep render gives too. Every
+/// pixel must have been written (its fourth word 1.0).
+fn hdr_image(cx: &mut Cx<'_>, out: &Buf, w: usize, h: usize, req: &RenderRequest, t: &mut Option<std::time::Instant>) -> Option<Output> {
+    let n = w * h;
+    let px: Vec<[f32; 4]> = cx.read(out, n * 4);
+    if let Some(t) = t {
+        eprintln!("  gpu finish (HDR) + readback: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        *t = std::time::Instant::now();
+    }
+    if crate::ctx::failed() || px.len() != n {
+        return None;
+    }
+    let unwritten = px.iter().filter(|p| p[3] != 1.0).count();
+    if unwritten > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete HDR image ({unwritten} of {n} pixels unwritten)"));
+        return None;
+    }
+    let mut v = vec![0f32; n * 3];
+    lightcraft_raster::par_rows(&mut v, (w * 3).max(1), |y, row| {
+        let src = px.get(y * w..(y + 1) * w).unwrap_or(&[]);
+        for (o, p) in row.as_chunks_mut::<3>().0.iter_mut().zip(src) {
+            *o = [p[0], p[1], p[2]];
+        }
+    });
+    let deep = lightcraft_pipeline::DeepImage { width: w, height: h, space: req.space, samples: lightcraft_pipeline::DeepSamples::F32(v) };
+    let image = deep.to_rgba8();
+    let histogram = Histogram::of_srgb8(&image);
+    Some(Output::Image(Rendered { image, histogram, deep: Some(deep) }))
 }
 
 /// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its
