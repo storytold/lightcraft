@@ -342,6 +342,29 @@ The shared slider also exposes `sliderValue:importThumbSize` for exact entry and
 slider by 1 pt; Return commits typed values and Escape cancels them. Slider and command
 labels, including edit/reset feedback, are localized in every shipped catalog. Previews use bounded physical-pixel buckets through 1024 px. A smaller source is tried once per bucket; scrolling releases offscreen textures, queued work and request identities. A renderable raw uses a render when its camera JPEG cannot cover the tile; preview-only raws, unavailable renders and failed renders retain the available camera JPEG.
 
+The import review also offers **Preview** (`button:importPreview`) and **Grid**
+(`button:importGrid`). Preview shows the active candidate alone, with its filename, dimensions
+and Included/Excluded state. Left/Right navigate without changing checks; P includes, X excludes,
+and Space toggles the active candidate. E opens Preview; G returns to the grid. Escape in Preview
+returns to the grid first; a later Escape cancels the review. Text fields, sliders and popups keep
+their keys. Previous/Next and Include/Exclude buttons provide the same actions. Clicking a grid
+tile keeps its existing checkbox/Shift-range behavior and makes that tile active. Double-clicking
+opens Preview without changing inclusion (including undoing the first click's checkbox change).
+
+`engine.execute {command: "import.review", params: {action: "preview", index: 3}}` opens the
+fourth candidate. `action` is `get` (the default), `select` (requires a zero-based `index`),
+`preview`, `grid`, `previous`, `next`, `include`, `exclude`, or `toggle`. Preview and inclusion
+actions use the active candidate unless `index` is supplied. Navigation stops at the first/last candidate;
+duplicates and unreadable files can be inspected but cannot be included. Invalid actions or
+indices fail before changing the review. Replies contain `{active, preview, total, path, checked,
+importable, selected}`; without candidates, `active`, `path` and `checked` are null. The command
+requires an open import review. It never imports or modifies source files.
+
+Large previews use physical-pixel buckets through 2048 px, retain only the active candidate,
+and share the grid's decode/error fallbacks. They are fit previews, not original-pixel focus
+checks. Returning to the grid brings the active candidate into view and preserves all checks
+and import options. Confirming imports only the checked, eligible candidates as before.
+
 ## Headless rendering (no window, no GPU)
 
 The egui UI can be rasterized on the CPU (`crates/ui-egui/src/softpaint.rs`, driven by

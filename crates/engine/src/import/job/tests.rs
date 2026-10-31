@@ -19,7 +19,7 @@ fn fixture(preview_edge: Option<usize>, renderable: bool, preview_only: bool) ->
         if !renderable {
             return Err("synthetic raw cannot be rendered".into());
         }
-        let width = edge.min(1024);
+        let width = edge.min(2048);
         let height = width * 3 / 4;
         Ok((lightcraft_raster::Rgb32f { width, height, data: vec![[0.1, 0.2, 0.3]; width * height] }, Default::default()))
     }));
@@ -89,4 +89,20 @@ fn import_preview_retains_the_camera_jpeg_if_the_render_fails_or_is_absent() {
         assert_eq!(result.rendered.unwrap().image.width, 64);
         assert_eq!(reads.load(Ordering::SeqCst), usize::from(!no_render));
     }
+}
+
+#[test]
+fn import_preview_supports_loupe_sizes_without_unbounded_requests() {
+    let (mut session, mut candidate, reads) = fixture(None, true, false);
+    candidate.width = 6000;
+    candidate.height = 4000;
+    assert_ne!(super::candidate_thumb_key(&candidate, 1024), super::candidate_thumb_key(&candidate, 1536));
+    assert_eq!(super::candidate_thumb_key(&candidate, 2048), super::candidate_thumb_key(&candidate, usize::MAX));
+    for (requested, expected) in [(1536, 1536), (2048, 2048), (usize::MAX, 2048)] {
+        let result = session.candidate_thumb_job(&candidate, requested, 0).unwrap().run();
+        let image = result.rendered.unwrap().image;
+        assert_eq!(image.width, expected);
+        assert_eq!(image.height, expected * 3 / 4);
+    }
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
 }

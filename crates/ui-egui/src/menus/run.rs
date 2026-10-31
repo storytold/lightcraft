@@ -717,6 +717,12 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.import_thumb_size = crate::import::thumb_size(size);
             Ok(json!({"size": app.ui.import_thumb_size}))
         }
+        "import.review" => {
+            let Some(Dialog::Import { opts }) = &mut app.ui.dialog else {
+                return Some(Err("import.review: open an import review first".into()));
+            };
+            crate::import::review_command(opts, p)
+        }
         "view.navigate" => {
             // {zoom?: "fit"|"fill"|{percent: number}, pan?: [x, y]} (normalized image centre).
             // Validate the complete request before changing either part of the viewport.

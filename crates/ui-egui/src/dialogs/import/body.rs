@@ -24,8 +24,8 @@ pub(crate) fn thumb_size(size: f32) -> f32 {
     if size.is_finite() { size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX) } else { THUMB_SIZE_DEFAULT }
 }
 
-/// A few physical-pixel sizes avoid decoding on every point of a slider drag. The engine caps
-/// candidate previews at 1024 pixels; this covers the largest tile at up to 3× display density.
+/// A few physical-pixel sizes avoid decoding on every point of a slider drag. Grid tiles request
+/// at most 1024 pixels, covering the largest tile at up to 3× display density (Preview asks for more).
 pub(crate) fn thumb_edge(size: f32, pixels_per_point: f32) -> usize {
     let scale = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
     let pixels = (thumb_size(size) - 8.0) * scale;
@@ -80,6 +80,7 @@ pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
 
 /// The dialog body: options, then the candidate grid.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    super::review::keyboard(ui, d);
     let t = Tokens::get(ui.ctx());
     let n = d.candidates.len();
     let (dups, in_source, trashed) = dup_counts(d);
@@ -107,6 +108,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     });
+    super::review::toolbar(ui, d);
+    if d.preview {
+        super::review::preview(app, ui, d);
+        return;
+    }
     // with more than one file type: a toggle per type checks or unchecks all of its files
     let types = d.file_types();
     if types.len() > 1 {
@@ -142,6 +148,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             for i in 0..n {
                 let (c, r) = (i % cols, i / cols);
                 let local = Rect::from_min_size(pos2(c as f32 * (cell + 6.0), r as f32 * (cell + 26.0)), vec2(cell, cell + 20.0));
+                if d.scroll_to_active && d.active_index() == Some(i) {
+                    ui.scroll_to_rect(local.translate(area.min.to_vec2()), None);
+                    d.scroll_to_active = false;
+                }
                 if !local.intersects(viewport.expand(cell)) {
                     continue;
                 }
@@ -456,6 +466,9 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
+    if d.active_index() == Some(i) {
+        p.rect_stroke(img.shrink(3.0), 2.0, Stroke::new(2.0, t.text), StrokeKind::Inside);
+    }
     // checkbox
     let cb = Rect::from_min_size(img.min + vec2(6.0, 6.0), vec2(16.0, 16.0));
     p.rect(cb, 3.0, if on { t.accent } else { Color32::from_black_alpha(150) }, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
@@ -498,9 +511,9 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
     );
     let resp = resp.on_hover_text(tip);
-    if resp.clicked() && ok {
+    if resp.clicked() {
         let shift = ui.input(|input| input.modifiers.shift);
-        d.click(i, shift);
+        super::review::grid_click(d, i, shift, resp.double_clicked());
     }
 }
 

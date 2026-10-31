@@ -29,6 +29,7 @@ fn thumb_size_view(app: &LightcraftApp) -> bool {
 
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
+        "import.review" => matches!(app.ui.dialog, Some(Dialog::Import { .. })),
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
         "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {

@@ -465,7 +465,7 @@ impl ImportJob {
 
 /// Identity of a candidate preview at the bounded requested edge, without constructing a job.
 pub fn candidate_thumb_key(c: &ImportCandidate, edge: usize) -> u64 {
-    lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge.clamp(64, 1024) as u64).finish().0 as u64
+    lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge.clamp(64, 2048) as u64).finish().0 as u64
 }
 
 impl Session {
@@ -484,7 +484,7 @@ impl Session {
             p.preview_only = info.preview_only.clone();
         }
         p.develop = std::sync::Arc::new(p.import_defaults());
-        let edge = edge.clamp(64, 1024);
+        let edge = edge.clamp(64, 2048);
         let level = crate::media::SourceLevel::for_size(edge);
         let source = self.media.origin_ref(&p.source, level.max_edge());
         let key = candidate_thumb_key(c, edge);
