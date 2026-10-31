@@ -4870,6 +4870,15 @@ fn navigation_rejects_invalid_input_and_preserves_old_zoom_state() {
     assert_eq!(h.app.ui.zoom, Zoom::Percent(200.0));
     h.app.run("view.zoomOut", json!({})).unwrap();
     assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0));
+    h.app.run("view.navigate", json!({"zoom": {"percent": 800.0}})).unwrap();
+    h.app.run("view.zoomIn", json!({})).unwrap();
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
+    h.app.run("view.zoomIn", json!({})).unwrap();
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
+    h.app.run("view.navigate", json!({"zoom": {"percent": crate::state::MAX_ZOOM}})).unwrap();
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
+    assert!(h.app.run("view.navigate", json!({"zoom": {"percent": crate::state::MAX_ZOOM + 1.0}})).is_err());
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(crate::state::MAX_ZOOM));
 
     let area = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(1000.0, 700.0));
     for pan in [(0.0, 0.0), (1.0, 1.0)] {
