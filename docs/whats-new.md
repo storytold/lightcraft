@@ -13,6 +13,11 @@
 
 ## 2026-10-24
 
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved by an earlier version upgrades it, and earlier versions can't open it afterwards. The library
+  as it was is now kept beside it (`catalog.snap.v<format>-<seq>`, `catalog.log.v<format>-<seq>`), and LightCraft says
+  where once: to go back, see `docs/catalog-persistence.md`. A library that can't be kept is not upgraded.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
