@@ -997,3 +997,70 @@ fn soft_proofs_match() {
     };
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
+
+/// A slider draft on the GPU has the large-scale tone of the full render (the
+/// Highlights / Shadows base was narrower in drafts), for a slider drag and a mask stroke, in a
+/// 100 % window of a 6000 px frame and in a whole frame drawn 2000 px wide; and it matches the CPU's
+/// full render as closely.
+#[test]
+fn a_gpu_draft_has_the_large_scale_tone_of_the_full_render() {
+    use lightcraft_pipeline::PixelWindow;
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut slider = DevelopSettings::default();
+    typical(&mut slider);
+    slider.light.shadows = 60.0;
+    slider.light.highlights = -60.0;
+    let mut stroke = DevelopSettings::default();
+    typical(&mut stroke);
+    stroke.masks.push(Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Radial { center: Point::new(0.3, 0.3), rx: 0.1, ry: 0.1, angle: 0.0, feather: 50.0, invert: false },
+        }],
+        adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, shadows: 50.0, ..Default::default() },
+        ..Default::default()
+    });
+    // worst 16 px block mean difference, in 8-bit levels
+    let block_diff = |a: &Rgba8, b: &Rgba8| {
+        assert_eq!((a.width, a.height), (b.width, b.height));
+        let mut worst = 0f64;
+        for by in 0..a.height / 16 {
+            for bx in 0..a.width / 16 {
+                let (mut da, mut db) = (0f64, 0f64);
+                for y in by * 16..by * 16 + 16 {
+                    for x in bx * 16..bx * 16 + 16 {
+                        let (p, q) = (a.get(x, y), b.get(x, y));
+                        da += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0;
+                        db += (q[0] as f64 + q[1] as f64 + q[2] as f64) / 3.0;
+                    }
+                }
+                worst = worst.max((da - db).abs() / 256.0);
+            }
+        }
+        worst
+    };
+    let cases = [
+        RenderRequest { window: Some(PixelWindow { x: 2400, y: 1500, w: 384, h: 256 }), ..RenderRequest::fit(6000, 4000) },
+        RenderRequest::fit(2000, 2000),
+    ];
+    for (name, s) in [("slider", &slider), ("stroke", &stroke)] {
+        for req in cases {
+            let full = lightcraft_gpu::render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }, None).expect("gpu full").image;
+            let draft = lightcraft_gpu::render(&src, &info, s, &RenderRequest { quality: Quality::Draft, ..req }, None).expect("gpu draft").image;
+            let cpu = render(&src, &info, s, &RenderRequest { quality: Quality::Full, ..req }).image;
+            let (d, c) = (block_diff(&full, &draft), block_diff(&cpu, &draft));
+            eprintln!("{name} {:?}: gpu draft vs gpu full {d:.3}/255, vs cpu full {c:.3}/255", req.window);
+            assert!(
+                d <= 0.5 && c <= 0.5,
+                "{name} {:?}: the GPU draft's large-scale tone is {d:.2}/255 off the GPU full render, {c:.2}/255 off the CPU's",
+                req.window
+            );
+        }
+    }
+}
