@@ -73,6 +73,19 @@ pub enum Gesture {
         start: lightcraft_geom::Rect,
         angle: f64,
     },
+    /// Lightroom-style crop: the frame stays put and the image pans under it (the applied rect
+    /// moves opposite the pointer; the display translates by the applied delta).
+    CropPan {
+        /// The crop rect when the pan started (the display offset is measured from it).
+        start_rect: lightcraft_geom::Rect,
+        /// The display offset the pan started from (a pan resumes where the last one left).
+        pan0: egui::Vec2,
+    },
+    /// Lightroom-style crop: a new box drawn in the dimmed area, anchored at `a0`
+    /// (normalized, straightened frame).
+    CropNewBox {
+        a0: Point,
+    },
     /// Straighten tool: a line drawn along something that should be level (or plumb).
     StraightenLine {
         a: Pos2,
@@ -270,8 +283,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
+    let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool);
     let p = ui.painter_at(canvas);
-    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
+    let turn = crop_lr.then_some((crop_pan, crop_angle));
+    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, &SlotDraw { slot, r, clip, turn });
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
     if app.ui.soft_proof && !fullscreen {
         proof_surround(app, &p, &t, canvas);
@@ -310,12 +325,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let line = crate::region::wipe_line(img_rect, canvas);
     draw_wipe_before(app, &p, id, img_rect, line);
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
-    // frame (clipped to their pane, or their side of the line)
-    for (v, view) in &windows {
+    // frame (clipped to their pane, or their side of the line). The Lightroom crop display turns
+    // and slides the photo and the windows don't follow it yet: while that transform is on, the
+    // consistent whole-frame render alone beats tiles that stay behind where the photo was.
+    if !(crop_lr && (crop_angle.abs() > f64::EPSILON || crop_pan != egui::Vec2::ZERO)) {
         // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
         let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
-        let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
-        draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view);
+        draw_windows(app, &p, &window_ctx, &windows, mode, [canvas, img_rect]);
     }
     if let Some((bg, g)) = before_badge {
         paint_badge(&p, bg, g);
@@ -354,6 +370,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
     loupe_context_menu(app, &resp, id);
+}
+
+/// The Lightroom-style crop's display transform, as `(on, pan, angle)`: the image turns with the
+/// angle and slides with the pan under the fixed frame (the offset is the applied rect's own
+/// movement; it survives the release — the photo keeps sitting where the pan left it — and the tool
+/// closing clears it). `on` is false in the Photoshop-style crop, where the image is drawn straight.
+fn crop_display(app: &mut LightcraftApp, d: &DevelopSettings, img_rect: Rect, crop_tool: bool) -> (bool, egui::Vec2, f64) {
+    let lr = crop_tool && app.ui.settings.crop_lightroom();
+    let angle = d.crop.geometry.angle;
+    if !lr {
+        app.ui.crop_pan = egui::Vec2::ZERO;
+        return (false, egui::Vec2::ZERO, angle);
+    }
+    let pan = match &app.gesture {
+        Some(Gesture::CropPan { start_rect, pan0 }) => {
+            let (c0, c1) = (start_rect.center(), d.crop.geometry.rect.center());
+            let (dx, dy) = ((c1.x - c0.x) as f32, (c1.y - c0.y) as f32);
+            *pan0 - vec2(dx * img_rect.width(), dy * img_rect.height())
+        }
+        _ => app.ui.crop_pan,
+    };
+    app.ui.crop_pan = pan;
+    (true, pan, angle)
 }
 
 /// The loupe's right-click menu: zoom commands and the grid's photo menu.
@@ -661,6 +700,22 @@ fn render_coming(app: &LightcraftApp, shown: &str, windows: &[(WindowView, crate
         && whole.iter().chain(windows.iter().map(|(v, _)| &v.slot)).any(|s| app.renderer.is_pending(*s) && !app.renderer.retrying(*s))
 }
 
+/// The window renders over the whole-frame ones, where they belong in the frame (clipped to their
+/// pane, or their side of the line).
+fn draw_windows(
+    app: &LightcraftApp,
+    p: &egui::Painter,
+    ctx: &WindowCtx,
+    windows: &[(WindowView, crate::region::RegionView)],
+    mode: BeforeAfter,
+    [canvas, img_rect]: [Rect; 2],
+) {
+    for (v, view) in windows {
+        let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
+        draw_window(&p.with_clip_rect(clip), app, ctx, v, view);
+    }
+}
+
 /// What the active tool needs to know about the loupe.
 struct ToolView<'a> {
     right: RightPanel,
@@ -773,21 +828,41 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
     }
 }
 
-/// What a view slot shows: its own render of this photo, else the stand-ins (no blank frame
-/// between photos, and the full render replaces them in place). Returns what it drew.
-fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
+/// What a slot shows and what to call it: its own render of this photo, else the stand-ins (no
+/// blank frame between photos, and the full render replaces them in place).
+fn slot_texture(app: &LightcraftApp, id: PhotoId, slot: Slot) -> Option<(&crate::render::Tex, &'static str)> {
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
-    let (tex, what) = if let Some(t) = mine(slot) {
-        (t, "render")
+    if let Some(t) = mine(slot) {
+        Some((t, "render"))
     } else if let Some(t) = mine(Slot::Preview) {
-        (t, t.quick.map(quick_name).unwrap_or("preview"))
-    } else if let Some(t) = app.renderer.thumb(id) {
-        (t, "thumb")
+        Some((t, t.quick.map(quick_name).unwrap_or("preview")))
     } else {
-        return "none";
-    };
-    let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
-    p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        app.renderer.thumb(id).map(|t| (t, "thumb"))
+    }
+}
+
+/// Where a view slot is drawn: the slot, the fitted image rect, what the draw is clipped to, and the
+/// Lightroom-style crop's display transform — (pan, angle) — which turns the image under the fixed
+/// frame instead of drawing it straight.
+struct SlotDraw {
+    slot: Slot,
+    r: Rect,
+    clip: Rect,
+    turn: Option<(egui::Vec2, f64)>,
+}
+
+/// What a view slot shows, else the stand-ins. Returns what it drew.
+fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, v: &SlotDraw) -> &'static str {
+    let Some((tex, what)) = slot_texture(app, id, v.slot) else { return "none" };
+    let image_rect = snap_fit_rect(fit_texture_rect(v.r, tex.size), tex.size, ppp);
+    let painter = p.with_clip_rect(v.clip);
+    match v.turn {
+        // the image turns with the crop angle; the frame around it stays put
+        Some((pan, angle)) => crop::draw_rotated_image(&painter, tex.tex.id(), image_rect.translate(pan), angle),
+        None => {
+            painter.image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+    }
     what
 }
 

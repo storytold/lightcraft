@@ -23,12 +23,38 @@ pub(super) fn crop_overlay(
         guided_overlay(app, ui, resp, map, frame, d, id);
         return;
     }
+    let lr = app.ui.settings.crop_lightroom();
+    let pan = app.ui.crop_pan;
+    let angle = d.crop.geometry.angle;
+    let r = d.crop.geometry.rect;
+    // Lightroom style: the display is the straightened frame, so the box is axis-aligned (the
+    // image, drawn rotated, may reach past it into the margin); Photoshop rotates the box instead
+    let pts: Vec<Pos2> = if lr {
+        let at = |x: f64, y: f64| pos2(map.rect.left() + (x as f32) * map.rect.width(), map.rect.top() + (y as f32) * map.rect.height()) + pan;
+        vec![at(r.x0, r.y0), at(r.x1, r.y0), at(r.x1, r.y1), at(r.x0, r.y1)]
+    } else {
+        frame_crop_quad(d, frame).iter().map(|q| map.screen(*q)).collect()
+    };
+    // hold âŒ˜ and drag: draw a straighten line without leaving the crop tool
+    let cmd_drag = resp.drag_started() && ui.input(|i| i.modifiers.command);
+    // denser guides while straightening â€” a rotate drag or a level line drawn by hand: judge the
+    // level against a 4Ã—4 grid inside the selection (the overlay guides are not on by default)
+    let straighten_active =
+        app.ui.tool == "straighten" || cmd_drag || matches!(app.gesture, Some(Gesture::StraightenLine { .. } | Gesture::CropRotate { .. }));
+    if straighten_active && pts.len() == 4 {
+        let p = ui.painter();
+        let at = |(u, v): (f32, f32)| pts[0] + (pts[1] - pts[0]) * u + (pts[3] - pts[0]) * v;
+        let g = Stroke::new(1.0, Color32::from_white_alpha(200));
+        for t in [0.25, 0.5, 0.75] {
+            p.add(egui::Shape::line(vec![at((t, 0.0)), at((t, 1.0))], g));
+            p.add(egui::Shape::line(vec![at((0.0, t)), at((1.0, t))], g));
+        }
+        register(ui, "cropStraightenGrid", Rect::from_two_pos(pts[0], pts[2]));
+    }
     if app.ui.tool == "straighten" {
         straighten_overlay(app, ui, resp, false);
         return;
     }
-    // hold ⌘ and drag: draw a straighten line without leaving the crop tool
-    let cmd_drag = resp.drag_started() && ui.input(|i| i.modifiers.command);
     if cmd_drag || matches!(app.gesture, Some(Gesture::StraightenLine { .. })) {
         straighten_overlay(app, ui, resp, true);
         return;
@@ -36,14 +62,13 @@ pub(super) fn crop_overlay(
     if resp.hovered() && ui.input(|i| i.modifiers.command) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
-    let quad = frame_crop_quad(d, frame);
-    let pts: Vec<Pos2> = quad.iter().map(|q| map.screen(*q)).collect();
     let p = ui.painter();
-    // darken outside the crop (the box's corners in screen order: a flipped photo shows its
-    // top-left corner elsewhere)
+    // darken outside the crop: around the rotated box in Photoshop; in Lightroom around the
+    // axis-aligned one, over the turned image's bounding box (the corners reach into the margin)
     let quad = flipped_corners(&pts, frame.flip_h, frame.flip_v);
     if pts.len() == 4 {
-        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(150)));
+        let dim = if lr { rotated_image_bbox(map.rect, angle).translate(pan) } else { map.rect };
+        p.add(outside_crop_mesh(dim, &quad, Color32::from_black_alpha(150)));
     }
     p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides
@@ -67,113 +92,261 @@ pub(super) fn crop_overlay(
     if crop_keys(app, ui, map, &handles, &pts, d, frame) {
         return;
     }
-    let inside = |q: Pos2| {
-        let n = map.norm(q);
-        let s = to_straight(n, d.crop.geometry.angle, frame);
-        d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
-    };
-    // a crop drag cut short (the tool closed before the release) leaves its gesture behind: with no
-    // button held it is over
-    if matches!(app.gesture, Some(Gesture::CropRotate { .. } | Gesture::CropHandle { .. }))
-        && !resp.drag_stopped()
-        && !ui.input(|i| i.pointer.any_down())
-    {
-        app.gesture = None;
+    CropView { app, ui, resp, map, frame, d, id, pts, handles, lr, pan, angle }.interact();
+}
+
+/// The crop tool's pointer pass for one frame: the box on screen, how a point maps back into the
+/// crop's own space, and the gesture a press, drag or double-click turns into.
+struct CropView<'a> {
+    app: &'a mut LightcraftApp,
+    ui: &'a mut egui::Ui,
+    resp: &'a egui::Response,
+    map: &'a CanvasMap,
+    frame: &'a Frame,
+    d: &'a DevelopSettings,
+    id: PhotoId,
+    /// The four corners of the box on screen (a rotated quad in the Photoshop style).
+    pts: Vec<Pos2>,
+    /// 0..3 corners, 4..7 edges (top, right, bottom, left), 8 the whole box.
+    handles: Vec<Pos2>,
+    /// Lightroom style: the box is axis-aligned and the image turns under it.
+    lr: bool,
+    /// The display offset of the image under the box (Lightroom style).
+    pan: egui::Vec2,
+    /// The crop's angle, in degrees.
+    angle: f64,
+}
+
+impl CropView<'_> {
+    /// Pointer to the crop's straightened frame: Lightroom draws the image turned and slid under a
+    /// fixed axis-aligned box, so the pointer only slides by the pan (rotating again would skew it);
+    /// Photoshop turns the box itself, so the pointer is unturned the way the quad is turned.
+    fn to_crop_space(&self, q: Pos2, angle: f64) -> Point {
+        if self.lr { self.map.norm(q - self.pan) } else { to_straight(self.map.norm(q), angle, self.frame) }
     }
-    // while rotating, the pointer may leave the canvas: it still shows rotation and the angle
-    let rotating = matches!(app.gesture, Some(Gesture::CropRotate { .. }));
-    let pointer = resp.hover_pos().or_else(|| if rotating { ui.input(|i| i.pointer.latest_pos()) } else { None });
-    // with ⌘ held a drag draws a level line (the straighten crosshair, set above), not a rotation
-    let straightening = !rotating && ui.input(|i| i.modifiers.command);
-    if let Some(hq) = pointer.filter(|_| !straightening) {
-        // a move or resize drag keeps its pointer wherever it goes, even past the box
-        let held = match app.gesture {
+
+    fn inside(&self, q: Pos2) -> bool {
+        let s = self.to_crop_space(q, self.d.crop.geometry.angle);
+        self.d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
+    }
+
+    fn near_handle(&self, q: Pos2) -> bool {
+        self.handles.iter().any(|h| h.distance(q) < 12.0)
+    }
+
+    fn rotating(&self) -> bool {
+        matches!(self.app.gesture, Some(Gesture::CropRotate { .. }))
+    }
+
+    /// The pointer that drives the tool: the hovered one, or, while rotating, wherever it went (it
+    /// may leave the canvas and still shows rotation and the angle).
+    fn pointer(&self) -> Option<Pos2> {
+        self.resp.hover_pos().or_else(|| if self.rotating() { self.ui.input(|i| i.pointer.latest_pos()) } else { None })
+    }
+
+    /// A crop drag cut short (the tool closed before the release) leaves its gesture behind: with no
+    /// button held it is over.
+    fn expire(&mut self) {
+        let stale = matches!(
+            self.app.gesture,
+            Some(Gesture::CropRotate { .. } | Gesture::CropHandle { .. } | Gesture::CropPan { .. } | Gesture::CropNewBox { .. })
+        );
+        if stale && !self.resp.drag_stopped() && !self.ui.input(|i| i.pointer.any_down()) {
+            self.app.gesture = None;
+        }
+    }
+
+    /// The cursor at `q`: a resize on a handle, a move inside the box, a crosshair for a new box
+    /// (Lightroom style), else the rotate glyph (which no system cursor shows, so it is drawn).
+    fn set_cursor(&mut self, q: Pos2) {
+        let held = match self.app.gesture {
             Some(Gesture::CropHandle { handle, .. }) => Some(usize::from(handle)),
+            Some(Gesture::CropPan { .. }) => Some(8),
             _ => None,
         };
-        let near = held.or_else(|| handles.iter().position(|h| h.distance(hq) < 12.0)).filter(|_| !rotating);
-        let cursor = match near {
-            Some(0 | 2) => egui::CursorIcon::ResizeNwSe,
-            Some(1 | 3) => egui::CursorIcon::ResizeNeSw,
-            Some(4 | 6) => egui::CursorIcon::ResizeVertical,
-            Some(5 | 7) => egui::CursorIcon::ResizeHorizontal,
-            // 8: the whole box
-            Some(_) => egui::CursorIcon::Move,
-            None if inside(hq) && !rotating => egui::CursorIcon::Move,
-            // a drag here rotates: no system cursor shows that, so draw a curved double arrow
-            None => {
-                rotate_cursor(ui, hq, rotate_cursor_turn(&pts, hq, inside(hq)));
-                egui::CursorIcon::None
-            }
+        let rotating = self.rotating();
+        let near = held.or_else(|| self.handles.iter().position(|h| h.distance(q) < 12.0)).filter(|_| !rotating);
+        let inside = self.inside(q);
+        let cursor = if matches!(self.app.gesture, Some(Gesture::CropNewBox { .. })) {
+            egui::CursorIcon::Crosshair
+        } else if let Some(handle) = near {
+            handle_cursor(handle)
+        } else if inside && !rotating {
+            egui::CursorIcon::Move
+        } else if self.lr && dist_to_quad(&self.pts, q) < ROTATE_BAND {
+            // Lightroom style: the strip around the box is the straighten zone (a drag rotates)
+            rotate_cursor(self.ui, q, rotate_cursor_turn(&self.pts, q, inside));
+            egui::CursorIcon::None
+        } else if self.lr && self.map.rect.contains(q) {
+            // Lightroom style, in the dimmed area over the image: a drag draws a new box
+            egui::CursorIcon::Crosshair
+        } else {
+            rotate_cursor(self.ui, q, rotate_cursor_turn(&self.pts, q, inside));
+            egui::CursorIcon::None
         };
-        ui.ctx().set_cursor_icon(cursor);
+        self.ui.ctx().set_cursor_icon(cursor);
     }
-    // the angle next to the pointer, drawn once this frame's rotation is applied (below)
-    let readout_at = pointer.filter(|_| rotating);
-    let mut shown_angle = d.crop.geometry.angle;
-    // double-click inside the crop box applies the crop (same as Return / Done)
-    if resp.double_clicked()
-        && let Some(q) = resp.interact_pointer_pos()
-        && inside(q)
-        && !handles.iter().any(|h| h.distance(q) < 12.0)
-    {
-        let _ = app.run("tool.done", json!({}));
-        return;
+
+    /// Whether a double-click at the pointer applies the crop (same as Return / Done): inside the
+    /// box, but not on a handle.
+    fn double_click_applies(&self) -> bool {
+        self.resp.double_clicked() && self.resp.interact_pointer_pos().is_some_and(|q| self.inside(q) && !self.near_handle(q))
     }
-    // egui reports a drag only once the pointer has moved a few px: the zone is where the button
-    // went down, where the cursor showed it, not where the pointer is by then
-    if resp.drag_started()
-        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos())
-    {
-        if let Err(e) = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null))
-        {
-            app.ui.status = e;
-            let _ = app.session.cancel_interaction();
-            return;
+
+    /// Where the button went down, if it did: egui reports a drag only once the pointer has moved a
+    /// few px, so the zone is where it went down, where the cursor showed it, not where it is now.
+    fn press_origin(&self) -> Option<Pos2> {
+        if !self.resp.drag_started() {
+            return None;
         }
-        let d = app.session.develop_of(id).unwrap_or_default();
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
-            Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
-            }
-        });
+        self.ui.input(|i| i.pointer.press_origin()).or_else(|| self.resp.interact_pointer_pos())
     }
-    if resp.dragged()
-        && let Some(q) = resp.interact_pointer_pos()
-    {
-        match app.gesture.clone() {
+
+    /// Start the crop interaction and pick the gesture the press point means. False when the
+    /// interaction could not start (the status says why).
+    fn begin(&mut self, q: Pos2) -> bool {
+        if let Err(e) =
+            self.app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| self.app.begin_crop().map(|_| serde_json::Value::Null))
+        {
+            self.app.ui.status = e;
+            let _ = self.app.session.cancel_interaction();
+            return false;
+        }
+        let d = self.app.session.develop_of(self.id).unwrap_or_default();
+        let rotate = || {
+            let c = self.map.screen(Point::new(0.5, 0.5));
+            Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
+        };
+        let gesture = match self.handles.iter().position(|h| h.distance(q) < 12.0) {
+            Some(handle) => Gesture::CropHandle { handle: handle as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
+            None if self.inside(q) => {
+                if self.lr {
+                    Gesture::CropPan { start_rect: d.crop.geometry.rect, pan0: self.app.ui.crop_pan }
+                } else {
+                    Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle }
+                }
+            }
+            // Lightroom style: a press in the strip around the box rotates â€” the straighten zone
+            // sits next to the selection, not only in the margin beyond the photo
+            None if self.lr && dist_to_quad(&self.pts, q) < ROTATE_BAND => rotate(),
+            // Lightroom style, over the dimmed image: draw a new box from the press point
+            None if self.lr && self.map.rect.contains(q) => {
+                let origin = self.ui.input(|i| i.pointer.press_origin()).unwrap_or(q);
+                Gesture::CropNewBox { a0: self.to_crop_space(origin, d.crop.geometry.angle) }
+            }
+            None => rotate(),
+        };
+        self.app.gesture = Some(gesture);
+        true
+    }
+
+    /// Apply the drag at `q`; the angle to show while rotating, if it rotates.
+    fn drag(&mut self, q: Pos2) -> Option<f64> {
+        let angle = self.angle;
+        match self.app.gesture.clone() {
             Some(Gesture::CropHandle { handle, start, angle }) => {
                 // The crop model decides what the drag does (anchor, aspect lock, image bounds): see
                 // `lightcraft_geom::drag_crop`; the UI only reports where the pointer started and is.
-                let n = to_straight(map.norm(q), angle, frame);
-                let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
+                let n = self.to_crop_space(q, angle);
+                let orig = self.ui.input(|i| i.pointer.press_origin()).map(|q0| self.to_crop_space(q0, angle)).unwrap_or(n);
                 // Shift keeps the current proportions for this drag only; the Lock toggle is untouched.
-                let keep_ratio = ui.input(|i| i.modifiers.shift);
-                let _ = app.run(
+                let keep_ratio = self.ui.input(|i| i.modifiers.shift);
+                let _ = self.app.run(
                     "crop.drag",
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1], "keepRatio": keep_ratio}),
                 );
+                None
+            }
+            Some(Gesture::CropPan { start_rect, .. }) => {
+                // The frame is fixed: the applied rect moves opposite the pointer (the same `move`
+                // drag with the delta inverted), and the display slides by the applied delta, so the
+                // photo follows the pointer under the frame.
+                let n = self.to_crop_space(q, angle);
+                let orig = self.ui.input(|i| i.pointer.press_origin()).map(|q0| self.to_crop_space(q0, angle)).unwrap_or(n);
+                let inv = Point::new(2.0 * orig.x - n.x, 2.0 * orig.y - n.y);
+                let _ = self.app.run(
+                    "crop.drag",
+                    json!({"handle": "move", "from": [orig.x, orig.y], "to": [inv.x, inv.y], "start": [start_rect.x0, start_rect.y0, start_rect.x1, start_rect.y1], "keepRatio": false}),
+                );
+                None
+            }
+            Some(Gesture::CropNewBox { a0 }) => {
+                let n = self.to_crop_space(q, angle);
+                // Shift holds the drawn proportions for this gesture (the Lock toggle is untouched)
+                let keep_ratio = self.ui.input(|i| i.modifiers.shift);
+                let _ = self.app.run("crop.box", json!({"from": [a0.x, a0.y], "to": [n.x, n.y], "keepRatio": keep_ratio}));
+                None
             }
             Some(Gesture::CropRotate { start_angle, a0 }) => {
-                let c = map.screen(Point::new(0.5, 0.5));
+                let c = self.map.screen(Point::new(0.5, 0.5));
                 let a = (q - c).angle();
                 let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
-                shown_angle = (ang * 100.0).round() / 100.0;
-                let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
+                let shown = (ang * 100.0).round() / 100.0;
+                let _ = self.app.run("crop.straighten", json!({"angle": shown}));
+                Some(shown)
             }
-            _ => {}
+            _ => None,
         }
     }
-    if resp.drag_stopped() {
-        app.gesture = None;
-        let _ = app.run("develop.endInteraction", json!({}));
+
+    /// The drag's pointer, when there is one.
+    fn drag_pos(&self) -> Option<Pos2> {
+        if !self.resp.dragged() {
+            return None;
+        }
+        self.resp.interact_pointer_pos()
     }
-    if let Some(at) = readout_at {
-        // the canvas (the loupe's own rect), not the photo: rotating happens in the margin around it
-        angle_readout(ui, at, shown_angle, resp.rect);
+
+    fn stop(&mut self) {
+        if self.resp.drag_stopped() {
+            self.app.gesture = None;
+            let _ = self.app.run("develop.endInteraction", json!({}));
+        }
+    }
+
+    /// The pointer pass: the cursor, the press that starts a gesture, its drag, and the release.
+    fn interact(&mut self) {
+        self.expire();
+        let rotating = self.rotating();
+        // with âŒ˜ held a drag draws a level line (the straighten crosshair, set above), not a rotation
+        let straightening = !rotating && self.ui.input(|i| i.modifiers.command);
+        if let Some(q) = self.pointer().filter(|_| !straightening) {
+            self.set_cursor(q);
+        }
+        // the angle next to the pointer, drawn once this frame's rotation is applied
+        let readout_at = self.pointer().filter(|_| rotating);
+        let mut shown_angle = self.angle;
+        // double-click inside the crop box applies the crop (same as Return / Done)
+        if self.double_click_applies() {
+            let _ = self.app.run("tool.done", json!({}));
+            return;
+        }
+        if let Some(q) = self.press_origin()
+            && !self.begin(q)
+        {
+            return;
+        }
+        if let Some(q) = self.drag_pos()
+            && let Some(angle) = self.drag(q)
+        {
+            shown_angle = angle;
+        }
+        self.stop();
+        if let Some(at) = readout_at {
+            // the canvas (the loupe's own rect), not the photo: rotating happens in the margin around it
+            angle_readout(self.ui, at, shown_angle, self.resp.rect);
+        }
+    }
+}
+
+/// The cursor for a handle: 0..3 corners, 4..7 edges, 8 the whole box.
+fn handle_cursor(handle: usize) -> egui::CursorIcon {
+    match handle {
+        0 | 2 => egui::CursorIcon::ResizeNwSe,
+        1 | 3 => egui::CursorIcon::ResizeNeSw,
+        4 | 6 => egui::CursorIcon::ResizeVertical,
+        5 | 7 => egui::CursorIcon::ResizeHorizontal,
+        _ => egui::CursorIcon::Move,
     }
 }
 
@@ -203,6 +376,7 @@ fn crop_keys(
     d: &DevelopSettings,
     frame: &Frame,
 ) -> bool {
+    let lr = app.ui.settings.crop_lightroom();
     let r = d.crop.geometry.rect;
     let centre = if pts.len() == 4 { pts.iter().fold(Pos2::ZERO, |acc, q| acc + q.to_vec2() / 4.0) } else { return false };
     let pct = |v: f64| if v.is_finite() { (v * 100.0).round() as i64 } else { 0 };
@@ -215,11 +389,13 @@ fn crop_keys(
             return true;
         }
         let Some((dx, dy)) = keys.delta else { continue };
-        // the drag runs in the straightened crop frame, as a pointer drag from the handle would;
-        // the arrows follow the screen
+        // the drag runs in the crop's straightened frame, as a pointer drag from the handle
+        // would: Lightroom's box is axis-aligned on screen (the image is the turned thing), so
+        // the handle is already in the crop frame; Photoshop turns the box itself, so unturn it
         let angle = d.crop.geometry.angle;
         let to_q = at + vec2(dx as f32 * map.rect.width(), dy as f32 * map.rect.height());
-        let (from, to) = (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame));
+        let (from, to) =
+            if lr { (map.norm(at), map.norm(to_q)) } else { (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame)) };
         let started = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null));
         if let Err(e) = started {
             app.ui.status = e;
@@ -459,6 +635,47 @@ fn to_straight(n: Point, angle: f64, frame: &Frame) -> Point {
     let px = Point::new(n.x * w, n.y * h);
     let r = Affine::rotate_about(angle.to_radians(), Point::new(w / 2.0, h / 2.0)).apply(px);
     Point::new(r.x / w, r.y / h)
+}
+
+/// How far from the crop box's outline (screen px) a press still belongs to the straighten zone:
+/// the strip just outside the selection rotates, as the rotate glyph shows.
+const ROTATE_BAND: f32 = 40.0;
+
+/// Distance from `q` to the closed crop outline `pts` (screen px): where a press rotates.
+fn dist_to_quad(pts: &[Pos2], q: Pos2) -> f32 {
+    if pts.len() < 4 {
+        return f32::INFINITY;
+    }
+    (0..4).map(|i| point_segment_dist(q, pts[i], pts[(i + 1) % 4])).fold(f32::INFINITY, f32::min)
+}
+
+/// The bounding box on screen of the photo's rectangle turned by `angle` about its centre (the
+/// Lightroom-style crop's dimmed area: the turned image may reach past the frame into the margin).
+fn rotated_image_bbox(r: Rect, angle: f64) -> Rect {
+    if angle == 0.0 {
+        return r;
+    }
+    let (s, c) = angle.to_radians().sin_cos();
+    let (s, c) = (s as f32, c as f32);
+    let (hw, hh) = (r.width() / 2.0, r.height() / 2.0);
+    let (ex, ey) = (hw * c.abs() + hh * s.abs(), hw * s.abs() + hh * c.abs());
+    Rect::from_center_size(r.center(), vec2(ex * 2.0, ey * 2.0))
+}
+
+/// The photo's texture turned by `angle` about its centre (the Lightroom-style crop: the image
+/// turns, the frame around it stays put). The corners may reach past `r`; the caller clips.
+pub(super) fn draw_rotated_image(p: &egui::Painter, tex: egui::TextureId, r: Rect, angle: f64) {
+    let c = r.center();
+    let xf = Affine::rotate_about(angle.to_radians(), Point::new(c.x as f64, c.y as f64));
+    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+    let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (q, uv) in corners.into_iter().zip(uvs) {
+        let m = xf.apply(Point::new(f64::from(q.x), f64::from(q.y)));
+        mesh.vertices.push(egui::epaint::Vertex { pos: pos2(m.x as f32, m.y as f32), uv, color: Color32::WHITE });
+    }
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    p.add(egui::Shape::mesh(mesh));
 }
 
 /// How far `q` is from the segment `a`–`b` (screen pixels): the click that selects a guide.

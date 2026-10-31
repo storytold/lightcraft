@@ -276,6 +276,75 @@ fn clip_half_plane(poly: &[Vec2], n: Vec2, b: f64) -> Vec<Vec2> {
     out
 }
 
+/// A box drawn from `anchor` to `pointer` (both normalized, in the straightened frame) as a new
+/// crop of the `w × h` image at `angle`: the anchor corner stays put and the opposite corner
+/// follows the pointer (the Lightroom-style drag in the dimmed area). `aspect` is the locked
+/// width/height ratio in pixels, if any. The sides never go below [`MIN_CROP_FRACTION`] and the
+/// result stays inside the rotated image, shrunk about the anchor when it would run past the
+/// edge. Hostile input falls back to the largest crop of that aspect at that angle.
+pub fn crop_box(anchor: Point, pointer: Point, angle: f64, w: f64, h: f64, aspect: Option<f64>) -> CropGeometry {
+    let sane = |v: f64| v.is_finite();
+    let bad = ![anchor.x, anchor.y, pointer.x, pointer.y, w, h, angle].iter().copied().all(sane)
+        || w <= 0.0
+        || h <= 0.0
+        || aspect.is_some_and(|a| !(a.is_finite() && a > 0.0));
+    if bad {
+        if sane(w) && sane(h) && w > 0.0 && h > 0.0 {
+            return crate::crop_fit_angle(w, h, angle, aspect);
+        }
+        return CropGeometry::default();
+    }
+    // Ratios beyond 20:1 make even the minimum frame larger than the image; treat them as 20:1.
+    let aspect = aspect.map(|a| a.clamp(1.0 / MAX_RATIO, MAX_RATIO));
+    let (ax, ay) = (anchor.x * w, anchor.y * h);
+    let (px, py) = (pointer.x * w, pointer.y * h);
+    let (sx, sy) = (if px < ax { -1.0 } else { 1.0 }, if py < ay { -1.0 } else { 1.0 });
+    let min_side = MIN_CROP_FRACTION * w.min(h);
+    let (mut nw, mut nh) = ((px - ax).abs(), (py - ay).abs());
+    if let Some(a) = aspect {
+        // the longer drag axis wins; the other side follows the ratio, still at the anchor
+        let n = ((nw + nh * a) / 2.0).max(min_side.max(min_side * a)).min(2.0 * w.max(h * a));
+        nw = n;
+        nh = n / a;
+    } else {
+        // moving further than twice the image never matters; clamp keeps the searches well-conditioned
+        let cap = |v: f64, lim: f64| if v.is_finite() { v.min(2.0 * lim) } else { lim };
+        nw = cap(nw, w).max(min_side);
+        nh = cap(nh, h).max(min_side);
+    }
+    let at = |t: f64| Rect::from_points(Point::new(ax, ay), Point::new(ax + sx * nw * t, ay + sy * nh * t));
+    let feasible = |t: f64| {
+        let r = at(t);
+        // unrotated, the frame must be exactly inside the image (`is_within_image` tolerates 1e-6,
+        // which would leak out as a sliver past the edge)
+        if angle == 0.0 {
+            r.x0 >= 0.0 && r.y0 >= 0.0 && r.x1 <= w && r.y1 <= h
+        } else {
+            CropGeometry { rect: r.scale(1.0 / w, 1.0 / h), angle }.is_within_image(w, h)
+        }
+    };
+    if !feasible(1.0) {
+        // the anchor itself off the turned photo leaves nothing to shrink towards
+        if !feasible(0.0) {
+            return crate::crop_fit_angle(w, h, angle, aspect);
+        }
+        let t = bisect(0.0, 1.0, feasible);
+        // grow back to the minimum frame when the edge leaves room for it
+        let (min_w, min_h) = match aspect {
+            Some(a) => (min_side.max(min_side * a), min_side.max(min_side / a)),
+            None => (min_side, min_side),
+        };
+        let floor = (min_w / nw).max(min_h / nh).min(1.0);
+        let t = if t < floor && feasible(floor) { floor } else { t };
+        if t < floor {
+            // no room for the minimum frame in this direction: never return a degenerate box
+            return crate::crop_fit_angle(w, h, angle, aspect);
+        }
+        return CropGeometry { rect: at(t).scale(1.0 / w, 1.0 / h), angle };
+    }
+    CropGeometry { rect: at(1.0).scale(1.0 / w, 1.0 / h), angle }
+}
+
 /// Which sides a handle moves: (left, right, top, bottom).
 fn sides(h: CropHandle) -> (bool, bool, bool, bool) {
     use CropHandle::*;

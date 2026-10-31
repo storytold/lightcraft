@@ -44,6 +44,11 @@ pub struct UiState {
     /// (`crate::frame_rate`). A debugging aid, never saved; `LIGHTCRAFT_FPS=1` starts with it on.
     #[serde(skip)]
     pub frame_rate: bool,
+    /// The Lightroom-style crop display offset (screen points): the applied rect's movement
+    /// since the pan began. It survives the release so the photo keeps sitting where the pan
+    /// left it while the tool stays open; the tool closing (or another photo) clears it.
+    #[serde(skip)]
+    pub crop_pan: egui::Vec2,
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
@@ -364,6 +369,7 @@ impl Default for UiState {
             preview_build_seen: None,
             unsaved_seen: false,
             frame_rate: std::env::var("LIGHTCRAFT_FPS").is_ok_and(|v| matches!(v.trim(), "1" | "on" | "true" | "yes")),
+            crop_pan: egui::Vec2::ZERO,
             luminance_map_restore: None,
             view: ViewMode::Detail,
             left_panel: false,

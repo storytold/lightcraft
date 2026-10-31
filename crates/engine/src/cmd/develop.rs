@@ -2,7 +2,7 @@
 
 use lightcraft_catalog::{Op, PhotoId, Version};
 use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
-use lightcraft_geom::{CropGeometry, CropHandle, MIN_CROP_FRACTION, Point, Rect, crop_fit_angle, drag_crop};
+use lightcraft_geom::{CropGeometry, CropHandle, MIN_CROP_FRACTION, Point, Rect, crop_box, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
@@ -604,6 +604,35 @@ pub fn specs() -> Vec<CommandSpec> {
                     // `keepRatio` (Shift held) asks for the same thing for one drag without touching the lock.
                     let ratio = (d.crop.aspect.is_some() || keep_ratio).then(|| start.rect_px(w, h).aspect()).filter(|a| a.is_finite() && *a > 0.0);
                     d.crop.geometry = drag_crop(start, handle, from, to, w, h, ratio);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "crop.box",
+            "Draw Crop Box",
+            [],
+            None,
+            "{from: [x,y], to: [x,y] (normalized, straightened frame), keepRatio?: bool (default false)} — draws a new crop box from the press point (its corner stays put) to the pointer, honouring the aspect lock; stops at the image edge and never goes below the minimum frame",
+            has_active,
+            |s, p| {
+                let id = active(s, "crop.box")?;
+                let (w, h) = crop_dims(s, id);
+                let point = |k: &str| -> Result<Point> {
+                    match numbers(p.get(k)).as_deref() {
+                        Some([x, y]) if x.is_finite() && y.is_finite() => Ok(Point::new(*x, *y)),
+                        _ => Err(bad("crop.box", format!("`{k}` needs [x, y]"))),
+                    }
+                };
+                let (from, to) = (point("from")?, point("to")?);
+                let keep_ratio = bool_or(p, "keepRatio", false);
+                edit(s, "crop.box", "Crop", |d| {
+                    let angle = d.crop.geometry.angle;
+                    // same truth as crop.drag: a locked crop keeps the shape it has; Shift holds it for
+                    // one gesture without touching the lock
+                    let ratio =
+                        (d.crop.aspect.is_some() || keep_ratio).then(|| d.crop.geometry.rect_px(w, h).aspect()).filter(|a| a.is_finite() && *a > 0.0);
+                    d.crop.geometry = crop_box(from, to, angle, w, h, ratio);
                     Ok(())
                 })
             }

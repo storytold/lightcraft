@@ -189,6 +189,11 @@ pub struct AppSettings {
     /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]
     pub loupe_info: LoupeInfo,
+    /// The crop tool's canvas interaction ("lightroom" | "photoshop"): Lightroom keeps the frame
+    /// fixed and pans / rotates the image under it and draws a new box in the dimmed area;
+    /// Photoshop moves the box over a still image (the tool's earlier behaviour). An unknown
+    /// saved value is Lightroom.
+    pub crop_interaction_style: String,
     /// File ▸ Import Lightroom Catalog…: ask whether the catalog merges into the open library or
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
@@ -241,8 +246,19 @@ impl Default for AppSettings {
             focus_point: false,
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
+            crop_interaction_style: "photoshop".to_string(),
             lightroom_import: LightroomImport::Ask,
         }
+    }
+}
+
+impl AppSettings {
+    /// The crop canvas follows Lightroom (the frame stays put; the image pans and rotates under
+    /// it, and a drag in the dimmed area draws a new box) when the saved style is "lightroom";
+    /// anything else — including the default and an unknown value — keeps the Photoshop-style
+    /// canvas (the tool's earlier behaviour).
+    pub fn crop_lightroom(&self) -> bool {
+        self.crop_interaction_style == "lightroom"
     }
 }
 
