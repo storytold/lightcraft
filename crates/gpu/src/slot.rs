@@ -224,7 +224,19 @@ pub(crate) fn adopt(make: impl FnOnce() -> Result<Gpu, String>) -> Result<Arc<Gp
 }
 
 fn due(l: &Lost, recoveries: u32) -> bool {
-    recoveries.saturating_add(l.attempts) < MAX_RECOVERIES && l.at.elapsed() >= backoff(l.attempts)
+    !exhausted(l, recoveries) && l.at.elapsed() >= backoff(l.attempts)
+}
+
+/// No more attempts will be made to replace `l` (`recoveries` so far): successful recoveries and
+/// failed attempts together reached [`MAX_RECOVERIES`].
+fn exhausted(l: &Lost, recoveries: u32) -> bool {
+    recoveries.saturating_add(l.attempts) >= MAX_RECOVERIES
+}
+
+/// The lost device will not be replaced this session ([`exhausted`]): the CPU renders from now on.
+pub(crate) fn gave_up() -> bool {
+    let s = slot();
+    s.lost.as_ref().is_some_and(|l| exhausted(l, s.recoveries))
 }
 
 fn given_up_text() -> String {
@@ -330,6 +342,18 @@ mod tests {
         assert_eq!(backoff(0), Duration::from_secs(3));
         assert_eq!(backoff(1), Duration::from_secs(6));
         assert_eq!(backoff(100), Duration::from_secs(3 << 6));
+    }
+
+    /// Review of PR #3499: five failed attempts to replace a lost device (no recovery at all)
+    /// end the attempts as five recoveries do, and the status says "stopped" then.
+    #[test]
+    fn failed_attempts_end_the_recoveries_too() {
+        let lost = |attempts| Lost { reason: "lost".into(), at: Instant::now(), attempts };
+        assert!(!exhausted(&lost(0), 0));
+        assert!(!exhausted(&lost(4), 0));
+        assert!(exhausted(&lost(MAX_RECOVERIES), 0), "every attempt failed");
+        assert!(exhausted(&lost(2), MAX_RECOVERIES - 2), "recoveries and failed attempts count together");
+        assert!(!due(&lost(MAX_RECOVERIES), 0), "no attempt is due once they are used up");
     }
 
     #[test]

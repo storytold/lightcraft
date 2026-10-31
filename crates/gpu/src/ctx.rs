@@ -1297,6 +1297,35 @@ mod tests {
         println!("CHILD: survived");
     }
 
+    /// Review of PR #3499: a batch render waiting for its previous submission on a lost device
+    /// fails the wait without a panic, records the loss, and doesn't poll the device again.
+    #[test]
+    fn a_batch_wait_on_a_lost_device_fails_without_a_panic() {
+        if run_child("lost_throttle_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_batch_wait_on_a_lost_device_fails_without_a_panic"]
+    fn lost_throttle_child() {
+        let Some(g) = crate::device() else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        let submitted = || Some(g.queue.submit([g.device.create_command_encoder(&Default::default()).finish()]));
+        crate::gate::as_batch(|| {
+            assert!(crate::gate::throttle(&g, submitted()), "a live device's wait succeeds");
+            super::SIMULATED_LOST_POLL.with(|c| c.set(true));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::gate::throttle(&g, submitted())));
+            super::SIMULATED_LOST_POLL.with(|c| c.set(false));
+            assert!(matches!(r, Ok(false)), "the lost device fails the wait without a panic");
+            assert!(super::is_lost(g.generation), "the loss is recorded");
+            assert!(!crate::gate::throttle(&g, submitted()), "a lost device is not polled again");
+        });
+        println!("CHILD: survived");
+    }
+
     /// A Metal device really lost (its command buffers exhausted) is never polled again.
     #[test]
     fn a_really_lost_device_is_not_polled_again() {
