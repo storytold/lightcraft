@@ -213,6 +213,9 @@ fn source_px(full_px: usize, long: usize, level: crate::media::SourceLevel) -> u
     (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize
 }
 
+/// The error of a photo whose export was cancelled before it was done ([`PreparedExport::run_until`]).
+pub const CANCELLED: &str = "export cancelled";
+
 /// Whether an export's render job decodes its original when it runs (no cached picture stands in
 /// for it): [`PreparedExport::run`] then decodes it first, outside the photo's turn at the GPU.
 fn needs_source(job: &crate::media::RenderJob) -> bool {
@@ -254,6 +257,13 @@ pub(super) fn note_encode() {
 
 impl PreparedExport {
     pub fn run(self) -> Result<Exported, String> {
+        self.run_until(&|| false)
+    }
+
+    /// [`Self::run`], giving up ([`CANCELLED`]) between its steps (decode, renders, encode) once
+    /// `stop()` says so: a cancelled export stops within a step, not after the photo.
+    pub fn run_until(self, stop: &dyn Fn() -> bool) -> Result<Exported, String> {
+        let check = || if stop() { Err(CANCELLED.to_string()) } else { Ok(()) };
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
@@ -271,6 +281,7 @@ impl PreparedExport {
                 // at the GPU, on this lane's thread: other photos render on the GPU meanwhile
                 // (note 28: the turn used to cover the decode and the encode too, so photos side
                 // by side took turns at an idle card).
+                check()?;
                 if needs_source(&job) {
                     let src = job.source.load_source()?;
                     if let Some(hj) = &mut hdr_job {
@@ -283,6 +294,8 @@ impl PreparedExport {
                 let renders = || -> Result<(lightcraft_pipeline::Rendered, Option<DeepImage>, Option<String>), String> {
                     let mut t = lap_clock();
                     lap("waiting for the GPU", &mut t);
+                    // (cancelled while it waited for its turn: give the turn back at once)
+                    check()?;
                     let _turn = TurnMark::enter();
                     // A gain map's HDR rendition is the same photo rendered a second time: it starts
                     // from the SDR render's decoded original and its stages (on the device, or when
@@ -302,6 +315,7 @@ impl PreparedExport {
                     let gpu_fallback = result.gpu_fallback;
                     let hdr = match hdr_job {
                         Some(mut hj) => {
+                            check()?;
                             if let Some(src) = loaded {
                                 hj.source = crate::media::SourceRef::Loaded(Box::new(src));
                             }
@@ -322,6 +336,7 @@ impl PreparedExport {
                 };
                 let (r, hdr, gpu_fallback) = if hdr_on_gpu { lightcraft_gpu::in_one_turn(src_px, out_px, renders) } else { renders() }?;
                 lap("renders", &mut t);
+                check()?;
                 // 3. The encode, on this lane's thread after its turn (the next photo renders meanwhile)
                 let bytes = match &hdr {
                     Some(hdr) => encode_gain_map_jpeg(&r.image, hdr, &opts, meta.as_ref())?,

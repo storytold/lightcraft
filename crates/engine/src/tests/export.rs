@@ -1546,3 +1546,50 @@ fn photos_side_by_side_overlap_on_one_gpu_turn() {
     eprintln!("8 HDR exports: 1 lane {one:.2} s, 4 lanes {four:.2} s ({:.1}x)", one / four.max(1e-3));
     assert!(four * 1.3 < one, "4 lanes {four:.2} s vs 1 lane {one:.2} s: lanes must overlap");
 }
+
+/// Note 28: a cancelled export stayed "cancelling" for minutes and kept exporting. It returns
+/// within about a second of the cancel and writes nothing more (its lanes stop at their next step).
+#[test]
+fn a_cancelled_export_stops_within_a_second() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(4).collect();
+    for &id in &ids {
+        s.set_develop(id, crate::machine_test::bench_settings(false, true), "test").unwrap();
+    }
+    let batch: Vec<_> = ids.iter().copied().cycle().take(12).collect();
+    let o = ExportOptions::from_json(&json!({"longEdge": 1600, "hdr": true}));
+    let items = crate::export::prepare_batch(&mut s, &batch, &o).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = cancel.clone();
+    let cancelled_at = Arc::new(std::sync::Mutex::new(None));
+    let at = cancelled_at.clone();
+    // cancel while the first photos are still rendering
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        *at.lock().unwrap() = Some(std::time::Instant::now());
+        flag.store(true, Ordering::Relaxed);
+    });
+    let mut written = 0;
+    let mut write = |_: &str, _: &[u8]| {
+        written += 1;
+        Ok(())
+    };
+    let to = crate::export::Destination::default();
+    let c = cancel.clone();
+    let files = crate::export::run_batch_cancellable(
+        items,
+        &o,
+        &to,
+        &mut write,
+        &|_| false,
+        false,
+        &mut |_, _| !c.load(Ordering::Relaxed),
+        Some(cancel.clone()),
+    )
+    .unwrap();
+    let after = cancelled_at.lock().unwrap().expect("cancelled").elapsed();
+    assert!(after < std::time::Duration::from_millis(1500), "returned {after:?} after the cancel");
+    assert!(files.len() < 12 && written == files.len(), "{} files, {written} written", files.len());
+}

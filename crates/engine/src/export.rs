@@ -24,7 +24,7 @@ mod watermark;
 
 #[cfg(test)]
 use batch::run_batch_with;
-pub use batch::{MAX_EXPORT_LANES, export_lanes_override, export_parallelism, run_batch, set_export_lanes};
+pub use batch::{MAX_EXPORT_LANES, export_lanes_override, export_parallelism, run_batch, run_batch_cancellable, set_export_lanes};
 #[cfg(test)]
 use encoding::linear_of_8bit;
 pub use encoding::{
@@ -45,7 +45,8 @@ pub use place::{write_file, write_file_durable, write_file_new};
 #[cfg(test)]
 pub(crate) use prepare::ENCODES_IN_TURN;
 pub use prepare::{
-    AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
+    AfterExport, CANCELLED, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch,
+    prepare_export,
 };
 #[cfg(test)]
 use prepare::{render_weight, too_big_for_memory};
