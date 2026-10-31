@@ -208,6 +208,12 @@ pub(crate) fn output_px(frame: &Frame) -> [usize; 2] {
     [px(w), px(h)]
 }
 
+/// Render dimensions at a rounded long edge, preserving the frame's aspect to rounding.
+pub(crate) fn render_size(edge: usize, aspect: f32) -> (usize, usize) {
+    let short = |a: f32| ((edge as f32 / a).round() as usize).max(1);
+    if aspect >= 1.0 { (edge, short(aspect)) } else { (short(1.0 / aspect), edge) }
+}
+
 /// The camera's focus point of `photo` in the displayed frame (its crop, rotation and flips), as the
 /// normalized box over the drawn image: `None` when the photo has none or it is cropped away.
 pub(crate) fn focus_box(photo: &lightcraft_catalog::Photo) -> Option<lightcraft_geom::Rect> {
