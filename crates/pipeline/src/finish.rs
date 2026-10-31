@@ -446,16 +446,18 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let t = smooth(v.start, v.start + v.width, dist);
                 if t > 0.0 {
                     let lum = luminance_2020(d).clamp(0.0, 1.0);
-                    if v.amount < 0.0 {
+                    if v.style == VignetteStyle::PaintOverlay {
+                        // Paint is a flat overlay. Color and Highlight Priority stay a multiply
+                        // or a lift, so the style tabs differ once Amount leaves 0 (#905).
+                        let w = v.amount.abs() * t;
+                        let toward = if v.amount < 0.0 { 0.0 } else { 1.0 };
+                        d = d.map(|c| c * (1.0 - w) + toward * w);
+                    } else if v.amount < 0.0 {
                         let mut f = 1.0 + v.amount * t;
                         if v.style == VignetteStyle::HighlightPriority {
                             f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
                         }
-                        if v.style == VignetteStyle::PaintOverlay {
-                            d = d.map(|c| c * (1.0 - (-v.amount) * t) + 0.0);
-                        } else {
-                            d = d.map(|c| c * f);
-                        }
+                        d = d.map(|c| c * f);
                     } else if hdr {
                         // lighten towards SDR white; never pull HDR highlights down to it
                         d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
