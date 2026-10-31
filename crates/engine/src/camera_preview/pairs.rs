@@ -4,7 +4,7 @@ use super::proxy::DARK_FLOOR;
 use super::tone::highlights;
 use super::tone::{HighlightCheck, ToneFit, highlights_hold, keeps, keeps_highlights};
 use super::{CameraLook, CameraTone, HsvTable, Mat3, REC2020, Rgb32f, ToneMap, luminance_2020};
-use lightcraft_color::{ADOBE_RGB, SRGB};
+use lightcraft_codecs::NamedSpace;
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
 pub(super) const MIN_IMPROVEMENT: f64 = 0.7;
@@ -583,19 +583,23 @@ pub(super) fn bright_tone_pairs(bright: &[Pair], jpeg_space: Option<lightcraft_c
     (extra, holdouts)
 }
 
-/// Whether a camera JPEG pixel (linear Rec.2020, as the reference proxy holds it) has a channel at
-/// or near its maximum in the JPEG's own encoding, sRGB or Adobe RGB (camera JPEGs are one or the
-/// other). Such a channel no longer shows the scene's level, while in Rec.2020 it can read as
-/// little as 0.96 (a red channel clipped in sRGB, Codex review of #631's bird).
-/// Check known effective primaries only. If they are unknown, keep the conservative check of both.
-pub(super) fn jpeg_clipped(y: [f64; 3], jpeg_space: Option<lightcraft_codecs::NamedSpace>) -> bool {
-    static SPACES: std::sync::OnceLock<[Mat3; 2]> = std::sync::OnceLock::new();
-    let spaces = SPACES.get_or_init(|| [SRGB.from_xyz().mul(&REC2020.to_xyz()), ADOBE_RGB.from_xyz().mul(&REC2020.to_xyz())]);
+/// Whether a camera JPEG pixel (linear Rec.2020) clips in its decoded source primaries.
+/// Known spaces use their own matrix, including white-point adaptation. Unknown encodings keep
+/// the conservative check of the usual camera sRGB and Adobe RGB spaces.
+pub(super) fn jpeg_clipped(y: [f64; 3], jpeg_space: Option<NamedSpace>) -> bool {
+    static SPACES: std::sync::OnceLock<[(NamedSpace, Mat3); NamedSpace::ALL.len()]> = std::sync::OnceLock::new();
+    let spaces = SPACES.get_or_init(|| {
+        NamedSpace::ALL.map(|name| {
+            let rgb = name.rgb_space();
+            let from_working = rgb.from_xyz().mul(&lightcraft_color::bradford(REC2020.white, rgb.white)).mul(&REC2020.to_xyz());
+            (name, from_working)
+        })
+    });
     let clipped = |m: &Mat3| m.apply(y).iter().any(|v| *v >= 0.98);
-    match jpeg_space {
-        Some(lightcraft_codecs::NamedSpace::Srgb) => spaces.first().is_some_and(clipped),
-        Some(lightcraft_codecs::NamedSpace::AdobeRgb) => spaces.get(1).is_some_and(clipped),
-        _ => spaces.iter().any(clipped),
+    if let Some((_, matrix)) = jpeg_space.and_then(|name| spaces.iter().find(|(known, _)| *known == name)) {
+        clipped(matrix)
+    } else {
+        spaces.iter().filter(|(name, _)| matches!(*name, NamedSpace::Srgb | NamedSpace::AdobeRgb)).any(|(_, matrix)| clipped(matrix))
     }
 }
 

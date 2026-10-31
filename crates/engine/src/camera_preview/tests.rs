@@ -3129,7 +3129,7 @@ fn look_proxies_keep_the_decoders_effective_jpeg_primaries() {
     assert_eq!(proxies(&raw, &tiff, &t, PROXY, 0.0, None, None).unwrap().3, None);
     let pixels = vec![230u8; w * h * 3];
     let image = EncodeImage::new(w as u32, h as u32, 3, Samples::U8(&pixels));
-    for space in [NamedSpace::AdobeRgb, NamedSpace::Srgb] {
+    for space in NamedSpace::ALL {
         let icc = lightcraft_codecs::icc::write_named(space);
         let jpeg =
             lightcraft_codecs::encode_jpeg(&image, 95, ChromaSubsampling::S444, &EncodeMeta { icc: Some(&icc), ..Default::default() }).unwrap();
@@ -3186,4 +3186,75 @@ fn filtered_bright_holdouts_cannot_train_the_chroma_curve() {
     assert_eq!(fit(&holdouts_changed), expected, "a retry holdout changed the trained chroma curve");
     let training_changed = changed(&|i| i % 3 != 0 && !held[i]);
     assert_ne!(fit(&training_changed), expected, "the remaining training samples must still train chroma");
+}
+
+#[test]
+fn known_jpeg_spaces_use_their_own_clipping_bounds() {
+    use lightcraft_codecs::NamedSpace;
+    for space in NamedSpace::ALL {
+        let rgb = space.rgb_space();
+        let to_working = REC2020.from_xyz().mul(&lightcraft_color::bradford(rgb.white, REC2020.white)).mul(&rgb.to_xyz());
+        let valid = to_working.apply([0.97, 0.88, 0.88]);
+        assert!(luma(valid) >= 0.85, "bright fixture in {space:?}");
+        assert!(!jpeg_clipped(valid, Some(space)), "valid {space:?} bright pixel was discarded: {valid:?}");
+        assert!(jpeg_clipped(to_working.apply([1.0, 0.9, 0.8]), Some(space)), "a clipped {space:?} channel must stay out");
+    }
+}
+
+#[test]
+fn dro_bright_retries_keep_their_rendered_midtones() {
+    let (w, h) = (96usize, 64usize);
+    let neutral = ToneMap::new(0.0, 0.0, 0.0);
+    let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
+    let mut accepted = 0;
+    for sky_lo in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2] {
+        for target_lo in [0.86, 0.88, 0.90, 0.92] {
+            for branch_lo in [0.005, 0.01, 0.02, 0.04] {
+                for branch_step in [0.0005, 0.0011, 0.0017] {
+                    let (mut sensor, mut reference) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+                    for (i, (s, r)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+                        if i % 10 != 0 {
+                            let k = (i * 7919 % 5521) as f32 / 5521.0;
+                            *s = [sky_lo + 0.1 * k; 3];
+                            *r = [target_lo + 0.04 * k; 3];
+                        } else {
+                            let ev = branch_lo + (i % 37) as f32 * branch_step;
+                            let tint = if i % 30 == 0 { 1.3 } else { 1.0 };
+                            *s = [ev * tint, ev, ev * (2.0 - tint)];
+                            *r = displayed(s.map(f64::from), &neutral).map(|v| v as f32);
+                        }
+                    }
+                    let check =
+                        HighlightCheck { jpeg_space: None, pairs: highlights(&sensor, &reference), clipped: Vec::new(), dro: true, grey: false };
+                    if [None, Some(EDGE_CONTRAST)].into_iter().any(|edge| fit_partial_on(&sensor, &reference, edge, &check, false).is_some()) {
+                        continue;
+                    }
+                    if fit_pairs(&sensor, &reference).is_some() {
+                        continue;
+                    }
+                    let Some(look) = fit_look_with(&sensor, &reference, &vec![false; w * h], None, true, None) else { continue };
+                    accepted += 1;
+                    let used = super::look_fit::dro_off(&look.tone);
+                    let map = ToneMap::camera(&used, 0.0, 0.0, 0.0);
+                    let (pairs, _) = collect_pairs(&sensor, &reference, 0.005, None, false).unwrap();
+                    let (mut before, mut after, mut n) = (0.0, 0.0, 0.0);
+                    for (x, target) in pairs.iter().step_by(3) {
+                        let fallback = displayed(*x, &neutral);
+                        let rendered = displayed(look.matrix.apply(*x), &map);
+                        for c in 0..3 {
+                            before += (encoded(fallback[c]) - encoded(target[c])).powi(2);
+                            after += (encoded(rendered[c]) - encoded(target[c])).powi(2);
+                            n += 1.0;
+                        }
+                    }
+                    let (before, after) = ((before / n).sqrt(), (after / n).sqrt());
+                    assert!(
+                        after <= before + MAX_MIDTONE_LOSS + 1e-5,
+                        "DRO retry exceeded rendered midtone loss: sky={sky_lo}, target={target_lo}, branches={branch_lo}+i*{branch_step}, rms {before}->{after}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(accepted > 0, "the fixtures must exercise accepted DRO bright retries");
 }
