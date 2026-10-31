@@ -297,6 +297,54 @@ fn work_gate_waits_for_room() {
     drop(g.acquire(1000));
 }
 
+/// Issue #2576: work weighed with saturating maths can ask for `usize::MAX` bytes. Adding to
+/// that overflowed (a panic with the gate's mutex held in a debug build, a wrapped count that
+/// let everything in for a release one). The count is now exact past `usize::MAX`: later work
+/// waits, whichever permit is released first, and even on a gate whose limit is `usize::MAX`.
+#[test]
+fn work_gate_counts_past_usize_max_instead_of_overflowing() {
+    use crate::memory::WorkGate;
+    // a holder of one byte, on its own thread; still waiting 50 ms later
+    let waiting = |g: &Arc<WorkGate>| {
+        let g2 = g.clone();
+        let t = std::thread::spawn(move || {
+            let _b = g2.acquire(1);
+            g2.usage().0
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!t.is_finished(), "the next holder waits");
+        t
+    };
+
+    // the huge permit released first: the urgent one is still counted
+    let g = Arc::new(WorkGate::new(100));
+    let huge = g.acquire(usize::MAX);
+    let urgent = g.acquire_urgent(101);
+    assert_eq!(g.usage().0, usize::MAX, "reported saturated");
+    drop(huge);
+    assert_eq!(g.usage().0, 101);
+    let t = waiting(&g);
+    drop(urgent);
+    assert_eq!(t.join().unwrap(), 1);
+    assert_eq!(g.usage().0, 0);
+
+    // the urgent permit released first
+    let huge = g.acquire(usize::MAX);
+    drop(g.acquire_urgent(1));
+    assert_eq!(g.usage().0, usize::MAX);
+    let t = waiting(&g);
+    drop(huge);
+    assert_eq!(t.join().unwrap(), 1);
+    assert_eq!(g.usage().0, 0);
+
+    // a gate without a practical limit is still full when it holds usize::MAX
+    let g = Arc::new(WorkGate::new(usize::MAX));
+    let huge = g.acquire(usize::MAX);
+    let t = waiting(&g);
+    drop(huge);
+    assert_eq!(t.join().unwrap(), 1);
+}
+
 #[test]
 fn levels_cover_sizes_and_large_exports_use_the_original() {
     assert_eq!(SourceLevel::for_size(256), SourceLevel::Thumb);
@@ -366,6 +414,62 @@ fn a_tight_crop_reads_the_source_level_its_pixels_need() {
     assert_eq!(s.render_job(id, 1600, 1600, false, false).unwrap().level, SourceLevel::Preview);
     // and a crop shown small enough still reads the preview
     assert_eq!(s.render_job(id, 600, 600, false, true).unwrap().level, SourceLevel::Preview);
+}
+
+// Issue #2555: a turned crop reaching far past the photo (from a sidecar or an agent) is rendered
+// bounded to the turned photo, so its source is sized from that bounded crop: shown 1600 px long it
+// needs the preview, not the 512 px thumbnail its rect of 1000 photos across asked for
+#[test]
+fn a_crop_far_past_the_photo_reads_the_source_its_bounded_frame_needs() {
+    let mut s = crate::Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    let wild = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.0, 0.0, 1000.0, 1000.0), angle: 5.0 };
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.crop.geometry = wild;
+    s.set_develop(id, d, "Crop").unwrap();
+    assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview);
+    // bounded in the frame the render bounds it in: the photo's own, or turned a quarter
+    let p = s.catalog.photo(id).unwrap().clone();
+    let (w, h) = (f64::from(p.width), f64::from(p.height));
+    assert_ne!(w, h, "a square photo can't tell the two frames apart");
+    for orientation in [lightcraft_geom::Orientation::Normal, lightcraft_geom::Orientation::Rotate90] {
+        let (ow, oh) = if orientation.swaps_axes() { (h, w) } else { (w, h) };
+        let mut d = lightcraft_develop::DevelopSettings { orientation, ..Default::default() };
+        d.crop.geometry = wild;
+        let r = wild.bounded(ow, oh).rect;
+        let expected = (1600.0 * w.max(h) / (r.width() * ow).max(r.height() * oh)) as usize;
+        assert_eq!(super::source::source_edge_needed(&p, &d, true, 1600), expected, "{orientation:?}");
+    }
+}
+
+// …while every crop the crop tools make, turned or not, on a photo shown upright or turned a
+// quarter, still asks for exactly the source its own rect needs
+#[test]
+fn crops_on_the_photo_keep_the_source_size_they_need() {
+    use lightcraft_geom::{Orientation, crop_fit_angle};
+    let s = crate::Session::with_demo();
+    let p = s.catalog.photos().next().unwrap().clone();
+    let (w, h) = (f64::from(p.width), f64::from(p.height));
+    for orientation in [Orientation::Normal, Orientation::Rotate90] {
+        let (ow, oh) = if orientation.swaps_axes() { (h, w) } else { (w, h) };
+        for angle in [-45.0, -12.5, 0.0, 7.0, 45.0] {
+            for aspect in [None, Some(1.0), Some(3.0), Some(0.25)] {
+                let mut d = lightcraft_develop::DevelopSettings { orientation, ..Default::default() };
+                d.crop.geometry = crop_fit_angle(ow, oh, angle, aspect);
+                // the rect is in the photo as shown, so its pixels are counted in the turned size
+                let r = d.crop.geometry.rect;
+                let expected = (1600.0 * w.max(h) / (r.width() * ow).max(r.height() * oh)) as usize;
+                assert_eq!(super::source::source_edge_needed(&p, &d, true, 1600), expected, "{orientation:?} {angle} {aspect:?}");
+            }
+        }
+    }
+    // a square crop of the photo turned a quarter is the photo's short side across: shown 2000 px
+    // long it needs more than the 2560 px preview (counted in the unturned size, it asked for 2000)
+    let mut d = lightcraft_develop::DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
+    d.crop.geometry = crop_fit_angle(h, w, 0.0, Some(1.0));
+    let needed = super::source::source_edge_needed(&p, &d, true, 2000);
+    assert_eq!(needed, (2000.0 * w.max(h) / w.min(h)) as usize);
+    assert_eq!(SourceLevel::for_size(needed), SourceLevel::Full, "{needed}");
 }
 
 // a window whose spot reads from further away than a render can hold is refused
@@ -516,4 +620,23 @@ fn variant_jobs_have_their_own_keys_and_hit_the_cache() {
     let pv = s.preview_job(id, 800, 600, true, &a).unwrap();
     assert_ne!(pv.key, s.render_job(id, 800, 600, false, true).unwrap().key);
     assert_eq!(*pv.settings, a);
+}
+
+/// An export develops from a source at least twice its long edge (a 2000 px export of a 6000 px
+/// photo from the original, not the 2560 px preview, which for a raw is binned and box-reduced),
+/// while on-screen views keep the cheap preview.
+#[test]
+fn an_export_develops_from_a_source_twice_its_size() {
+    use lightcraft_pipeline::{OutputDepth, OutputSpace};
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert!(p.width.max(p.height) >= 6000, "a camera-sized demo: {}×{}", p.width, p.height);
+    let job = s.export_job(id, 2000, 2000, OutputSpace::Srgb, OutputDepth::U8).unwrap();
+    assert_eq!(job.level, SourceLevel::Full, "2000 px export");
+    for edge in [200, 600, 1280, 1281, 2560] {
+        let job = s.export_job(id, edge, edge, OutputSpace::Srgb, OutputDepth::U8).unwrap();
+        assert!(job.level.max_edge() >= 2 * edge, "{edge} px export from {:?}", job.level);
+    }
+    assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }

@@ -107,6 +107,7 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
         key: 9,
         cached: Vec::new(),
         embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| -> Option<Rgba8> { panic!("preview reader bug") }), 256)),
+        minimum_embedded_edge: None,
         small: None,
     };
     let r = quick.run();
